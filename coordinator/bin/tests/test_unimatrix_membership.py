@@ -247,6 +247,36 @@ def test_authorized_keys_lines_prefix_from_pin(keys):
         M.authorized_keys_lines([bad], relay)
 
 
+PAIR_A = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIpairkeyAxxxxxxxxxxxxxx"
+PAIR_B = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIpairkeyBxxxxxxxxxxxxxx"
+
+
+def test_relay_pubs_is_optional_validated_and_expands_to_one_line_per_distinct_key(keys):
+    relay = lambda body, box: f"relay {box} {body}"
+    plain = member(keys, cidrs=())
+    default = plain["relay_pub"].split()[1]
+    M._validate_member(plain)
+    assert M.member_key_bodies(plain) == [default] and M.pair_key_for(plain, "beta") == plain["relay_pub"]
+    paired = {**plain, "relay_pubs": {"beta": PAIR_A, "gamma": PAIR_B, "delta": plain["relay_pub"]}}
+    M._validate_member(paired)
+    assert M.member_key_bodies(paired) == [default, PAIR_A.split()[1], PAIR_B.split()[1]]
+    assert M.pair_key_for(paired, "beta") == PAIR_A and M.pair_key_for(paired, "unlisted") == plain["relay_pub"]
+    assert [l.split()[2] for l in M.authorized_keys_lines([paired], relay)] == M.member_key_bodies(paired)
+    withfile = {**paired, "file_pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfilekeybodyxxxxxxxxxxxx"}
+    assert [l.split()[0] for l in M.authorized_keys_lines([withfile], relay, lambda b, x: f"file {x} {b}")] == ["relay"] * 3 + ["file"]
+
+
+@pytest.mark.parametrize("bad", [
+    {}, [], {"beta": "ssh-rsa AAAA"}, {"beta": 7}, {"bad box!": PAIR_A},
+    {"beta": PAIR_A, "gamma": PAIR_A},
+    {"beta": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfilekeybodyxxxxxxxxxxxx"},
+])
+def test_relay_pubs_refuses_empty_non_ed25519_duplicate_or_file_pub_clash(keys, bad):
+    base = {**member(keys, cidrs=()), "file_pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfilekeybodyxxxxxxxxxxxx"}
+    with pytest.raises(M.MembershipError):
+        M._validate_member({**base, "relay_pubs": bad})
+
+
 def test_file_pub_is_optional_must_be_a_distinct_ed25519_key_and_gets_its_own_line(keys):
     relay = lambda body, box: f"relay {box} {body}"
     file_ = lambda body, box: f"file {box} {body}"

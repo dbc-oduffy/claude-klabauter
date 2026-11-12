@@ -138,10 +138,82 @@ def test_wake_registry_scan_matches_name_and_session_id(tmp_path, monkeypatch):
     assert [(d["sessionId"], live) for d, live in found] == [("s1", False)]
 
 
-def run_main(cmd, tmp_path):
-    return subprocess.run([sys.executable, str(CONTROL)], capture_output=True, text=True, timeout=30,
-                          env={"SSH_ORIGINAL_COMMAND": cmd, "COORDINATOR_SETTINGS_HOME": str(tmp_path),
-                               "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}, stdin=subprocess.DEVNULL)
+@pytest.mark.parametrize("cmd", [
+    '"/p/python3" "/h/unimatrix/unimatrix-control.py" launch myrepo',
+    "/p/python3 /h/unimatrix/unimatrix-control.py launch myrepo",
+    "'/p/my dir/python3' '/h/my dir/unimatrix-control.py' launch myrepo",
+    '& "C:\\Python\\python.exe" "C:\\Users\\me\\.coordinator-claude-settings\\unimatrix\\unimatrix-control.py" launch myrepo',
+    '"C:\\Python\\python.exe" "C:\\Users\\me\\unimatrix\\unimatrix-control.py" launch myrepo',
+])
+def test_parse_accepts_explicit_prefixed_launch(cmd):
+    assert load().parse_mode(cmd) == ("launch", "myrepo")
+
+
+def test_parse_accepts_explicit_prefixed_wake():
+    c = load()
+    assert c.parse_mode('"/p/python3" "/h/unimatrix/unimatrix-control.py" wake n-1') == ("wake", "n-1")
+    assert c.parse_mode('& "C:\\p\\python.exe" "C:\\h\\unimatrix-control.py" wake n-1') == ("wake", "n-1")
+
+
+@pytest.mark.parametrize("cmd", [
+    '"/p/python3" "/h/unimatrix/other.py" launch myrepo',
+    '"/p/python3" "/h/unimatrix/unimatrix-control.py.bak" launch myrepo',
+    '"/h/unimatrix/unimatrix-control.py" launch myrepo',
+    '& "/h/unimatrix/unimatrix-control.py" launch myrepo',
+    'rm -rf x launch myrepo',
+    '"/p/python3" "/h/unimatrix/unimatrix-control.py" launch /abs',
+    '"/p/python3" "/h/unimatrix/unimatrix-control.py" send 1',
+    '"/p/python3" "/h/unimatrix/unimatrix-control.py" launch a;id',
+    '"/p/python3" "/h/unimatrix/unimatrix-control.py"  launch myrepo',
+    '"/p/python3" "/h/unimatrix/unimatrix-control.py" launch myrepo\nid',
+    '"/p/python3 "/h/unimatrix/unimatrix-control.py" launch myrepo',
+])
+def test_parse_refuses_explicit_prefix_not_naming_the_control_script(cmd):
+    assert load().parse_mode(cmd) is None
+
+
+def test_relay_refuses_the_explicit_form_and_the_bare_form():
+    spec = importlib.util.spec_from_file_location("unimatrix_relay_for_control_pin", CONTROL.parent / "unimatrix-relay.py")
+    relay = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(relay)
+    assert relay.parse_mode("launch myrepo") is None
+    assert relay.parse_mode('"/p/python3" "/h/unimatrix/unimatrix-control.py" launch myrepo') is None
+    assert relay.parse_mode('& "C:\\p\\python.exe" "C:\\h\\unimatrix-control.py" wake n') is None
+
+
+def run_main(cmd, tmp_path, argv=()):
+    env = {"COORDINATOR_SETTINGS_HOME": str(tmp_path), "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
+    if cmd is not None:
+        env["SSH_ORIGINAL_COMMAND"] = cmd
+    return subprocess.run([sys.executable, str(CONTROL), *argv], capture_output=True, text=True, timeout=30,
+                          env=env, stdin=subprocess.DEVNULL)
+
+
+def test_main_argv_form_runs_without_ssh_original_command(tmp_path):
+    r = run_main(None, tmp_path, argv=["launch", "nosuchrepo"])
+    assert r.returncode == 1
+    assert json.loads(r.stdout) == {"ok": False, "error": "unknown repo key nosuchrepo"}
+
+
+def test_main_argv_wins_over_ssh_original_command(tmp_path):
+    r = run_main("roster", tmp_path, argv=["launch", "nosuchrepo"])
+    assert json.loads(r.stdout)["error"] == "unknown repo key nosuchrepo"
+
+
+@pytest.mark.parametrize("argv", [["roster", "x"], ["launch", "/abs"], ["launch", "a b"], ["wake", "a;id"]])
+def test_main_argv_refuses_other_modes_with_usage(argv, tmp_path):
+    r = run_main(None, tmp_path, argv=argv)
+    assert r.returncode != 0 and r.stdout == "" and "usage:" in r.stderr
+
+
+def test_main_explicit_prefixed_ssh_original_command_reaches_the_launch_path(tmp_path):
+    r = run_main('"/p/python3" "/h/unimatrix/unimatrix-control.py" launch nosuchrepo', tmp_path)
+    assert json.loads(r.stdout) == {"ok": False, "error": "unknown repo key nosuchrepo"}
+
+
+def test_main_no_argv_and_no_original_command_is_usage(tmp_path):
+    r = run_main(None, tmp_path)
+    assert r.returncode != 0 and "usage:" in r.stderr
 
 
 @pytest.mark.parametrize("cmd", ["roster", "send 1", "launch /x", "put drop", "launch a b"])

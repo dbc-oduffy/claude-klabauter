@@ -191,6 +191,11 @@ class World:
         monkeypatch.setattr(publish, "dispatch_percolate_pre_ci", lambda *a, **k: None)
         monkeypatch.setattr(publish, "emit_door_name_map_for_publish_row", lambda *a, **k: None)
         monkeypatch.setattr(publish, "_door_emission_is_reportable", lambda target: False)
+        # The post-commit dry-refire gate re-runs the real engine against the committed root; this
+        # fixture mirror carries a stub engine tree, so it is out of scope here (own tests cover it).
+        from coordinator_core.publish import dry_refire_gate
+
+        monkeypatch.setattr(dry_refire_gate, "run", lambda *a, **k: dry_refire_gate.DryRefireVerdict(ok=True))
 
     def _post_rsync(self, engine_ctx, store_path, sync_target, effective_source_dir, *, visited_sink=None, **kwargs):
         if sync_target.name == "engine-row":

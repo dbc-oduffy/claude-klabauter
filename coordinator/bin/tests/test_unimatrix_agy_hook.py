@@ -29,6 +29,20 @@ CONV = "0cf351a3-6538-4a9b-814c-52b1b75a596c"
 posix_rewrite = pytest.mark.skipif(os.name == "nt", reason="the leg-start rewrite is POSIX only; nt passes through")
 
 
+class _NtOs:
+    """The module's `os` with only `name` forced to nt. Patching the real os.name flips
+    pathlib/ctypes to their Windows classes, which cannot be built on a POSIX host."""
+
+    name = "nt"
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
+def as_windows(monkeypatch, mod):
+    monkeypatch.setattr(mod, "os", _NtOs())
+
+
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
@@ -256,7 +270,7 @@ def test_internal_exception_still_emits_decision(home, monkeypatch, capsys):
 
 
 def test_windows_adds_no_cmd_prefix_and_passes_command_through(home, monkeypatch):
-    monkeypatch.setattr(pre.os, "name", "nt")
+    as_windows(monkeypatch, pre)
     monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
     monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: None)
     assert pre.launch_prefix(CONV, 7) is None
@@ -265,7 +279,7 @@ def test_windows_adds_no_cmd_prefix_and_passes_command_through(home, monkeypatch
 
 
 def test_windows_spawns_launcher_detached_when_leg_not_current(home, monkeypatch):
-    monkeypatch.setattr(pre.os, "name", "nt")
+    as_windows(monkeypatch, pre)
     monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
     calls = []
     monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: calls.append((cmd, kw)))
@@ -282,7 +296,7 @@ def test_windows_spawns_launcher_detached_when_leg_not_current(home, monkeypatch
 
 
 def test_windows_second_run_command_within_debounce_window_spawns_nothing(home, monkeypatch):
-    monkeypatch.setattr(pre.os, "name", "nt")
+    as_windows(monkeypatch, pre)
     monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
     calls = []
     monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: calls.append(cmd))
@@ -298,7 +312,7 @@ def test_windows_second_run_command_within_debounce_window_spawns_nothing(home, 
 
 
 def test_windows_does_not_spawn_when_leg_current(home, ls_server, monkeypatch):
-    monkeypatch.setattr(pre.os, "name", "nt")
+    as_windows(monkeypatch, pre)
     write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
     monkeypatch.setattr(pre, "pid_alive", lambda pid: True)
     calls = []
@@ -317,16 +331,16 @@ def test_posix_prefix_still_rewrites(monkeypatch):
 @pytest.mark.parametrize("tmpl,expected", [
     ('"{PY}" "{SEND}" --to a "Reviewed: two issues (a), (b); 100% done"', False),
     ('"{PY}" "{SEND}" --to a "Reviewed: two issues (a), (b); done"', True),
-    ("{PY} {SEND} --to a 'x (y) ; z'", True),
-    ("{PY} {SEND} --to a hi; id", False),
-    ("{PY} {SEND} --to a (id)", False),
-    ("{PY} {SEND} --to a hi | cat", False),
-    ("{PY} {SEND} --to a 'unterminated", False),
-    ("{PY} /elsewhere/unimatrix-send.py --to a hi", False),
-    ("{PY} {SEND}", True),
+    ("\"{PY}\" \"{SEND}\" --to a 'x (y) ; z'", True),
+    ("\"{PY}\" \"{SEND}\" --to a hi; id", False),
+    ("\"{PY}\" \"{SEND}\" --to a (id)", False),
+    ("\"{PY}\" \"{SEND}\" --to a hi | cat", False),
+    ("\"{PY}\" \"{SEND}\" --to a 'unterminated", False),
+    ("\"{PY}\" /elsewhere/unimatrix-send.py --to a hi", False),
+    ("\"{PY}\" \"{SEND}\"", True),
 ])
 def test_windows_peer_reply_is_quote_aware(monkeypatch, tmpl, expected):
-    monkeypatch.setattr(pre.os, "name", "nt")
+    as_windows(monkeypatch, pre)
     cmd = tmpl.format(PY=PY, SEND=SEND)
     assert pre.is_peer_reply(run_payload(cmd=cmd)) is expected
 
@@ -377,7 +391,7 @@ def test_launcher_reads_json_stdin_when_no_args(home, agy_env, monkeypatch):
 
 
 def test_launcher_windows_detaches_by_creationflags(monkeypatch):
-    monkeypatch.setattr(launch.os, "name", "nt")
+    as_windows(monkeypatch, launch)
     monkeypatch.setattr(launch.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
     monkeypatch.setattr(launch.subprocess, "DETACHED_PROCESS", 0x8, raising=False)
     monkeypatch.setattr(launch.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
@@ -469,7 +483,7 @@ def test_discover_ls_address_is_none_without_lsof_or_listeners(monkeypatch):
 
 
 def test_discover_ls_address_is_none_on_windows(monkeypatch):
-    monkeypatch.setattr(launch.os, "name", "nt")
+    as_windows(monkeypatch, launch)
     monkeypatch.setattr(launch.subprocess, "run", lambda *a, **k: pytest.fail("ran lsof on Windows"))
     assert launch.discover_ls_address(42) is None
 
@@ -783,7 +797,8 @@ def test_no_rewrite_text_carries_a_json_literal_or_unquoted_payload(home):
     new = pre.decide(run_payload(cmd="git grep -n zzz -- README.md; New-Item x"), 4242)["overwrite"]["CommandLine"]
     prefix, _, rest = new.partition("; git grep")
     assert rest == " -n zzz -- README.md; New-Item x"
-    assert not any(tok in prefix for tok in ('{"', "false", "true", "null", "<stdin>"))
+    bare = prefix.replace("/dev/null", "")  # the redirect target is a path, not a JSON null
+    assert not any(tok in bare for tok in ('{"', "false", "true", "null", "<stdin>"))
     import shlex
     shlex.split(prefix)
 

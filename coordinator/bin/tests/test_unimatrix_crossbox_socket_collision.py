@@ -47,7 +47,7 @@ def test_bridge_uses_own_registry_pid_even_with_same_endpoint_decoy(tmp_path, mo
         "macSocketPath": FAR, "farPid": 80954, "unimatrixRemote": "user@192.168.0.175"}))
     (tmp_path / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "messagingSocketPath": endpoint,
         "macSocketPath": FAR, "farPid": 62725, "unimatrixRemote": "user@192.168.0.116",
-        "unimatrixFarName": "far", "sessionId": "sid-62725"}))
+        "unimatrixFarName": "far", "name": "far", "sessionId": "sid-62725"}))
     monkeypatch.setattr(bridge, "SESSIONS", str(tmp_path))
     bridge.cfg = SimpleNamespace(endpoint=endpoint, key="key", remote="user@192.168.0.116", tunnel_remote=None)
     bridge.log = io.StringIO()

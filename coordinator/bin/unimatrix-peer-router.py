@@ -22,6 +22,7 @@ Windows uses current-user-only named pipes; POSIX uses private Unix sockets.
 """
 import argparse
 import asyncio
+import errno
 import importlib.util
 import json
 import os
@@ -635,7 +636,7 @@ async def run_face(name, endpoint, forward, sessions_dir, cwd=None, transport=Fa
                         await asyncio.to_thread(deliver, frame["endpoint"],
                                                 (json.dumps(outgoing) + "\n").encode("utf-8"), sessions_dir)
                         response = {"ok": True}
-                    except (OSError, ValueError, KeyError, TypeError) as exc:
+                    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
                         response = {"ok": False, "error": f"face delivery failed: {exc}"}
                     writer.write((json.dumps(response) + "\n").encode("utf-8"))
                     await writer.drain()
@@ -692,7 +693,7 @@ def default_adapters():
         m = mod("unimatrix-peer-grok.py", "grok")
         if not peer.get("cwd"):
             return "delivery failed: grok peer has no cwd to pin the resume to"
-        return await m.grok_turn(peer["target"], peer["cwd"], text)
+        return await m.grok_turn(peer["target"], peer["cwd"], text, runner=m.subprocess.run)
 
     return {"codex": codex, "agy": agy, "grok": grok}
 
@@ -1597,6 +1598,17 @@ def deliver(endpoint, data, sessions_dir=None):
         s.settimeout(10)
         s.connect(endpoint)
         s.sendall(data)
+        try:
+            s.shutdown(socket.SHUT_WR)
+        except OSError as exc:
+            if exc.errno != errno.ENOTCONN:
+                raise
+        s.settimeout(ACCEPT_READ_SECONDS)
+        try:
+            reply = s.recv(4096)
+        except socket.timeout:
+            reply = b""
+        _check_delivery_reply(reply)
     finally:
         s.close()
 

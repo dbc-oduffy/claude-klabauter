@@ -69,13 +69,13 @@ def run(monkeypatch):
 
         def _gate(repo, source_ref=""):
             assert repo == publish._REPO_ROOT
-            assert source_ref
+            assert source_ref  # no --source-ref/--commit given: production resolves "" to HEAD's sha and hands it to the gate
             return real(root, _SHA)
 
         monkeypatch.setattr(publish, "_fold_bar_refusal", _gate)
 
         # The shipped commit is read from the hand-written root, never from the checkout under test.
-        monkeypatch.setattr(publish, "_resolve_round_commit", lambda repo, value: "")
+        monkeypatch.setattr(publish, "_resolve_round_commit", lambda repo, value: _SHA)
 
         def _stub(**_kw):
             raise _PastTheBar

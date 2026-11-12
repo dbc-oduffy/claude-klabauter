@@ -184,8 +184,9 @@ class _ChildReaper:
 
         class _Reaped(real_popen):
             def __init__(self, *args, **kwargs):
+                # `is not None`: an explicit start_new_session=False is the caller's choice and is kept.
                 if sys.platform != "win32" and not any(
-                    kwargs.get(k) for k in ("start_new_session", "process_group", "preexec_fn")
+                    kwargs.get(k) is not None for k in ("start_new_session", "process_group", "preexec_fn")
                 ):
                     kwargs["start_new_session"] = True
                 super().__init__(*args, **kwargs)

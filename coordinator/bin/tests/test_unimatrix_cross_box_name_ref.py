@@ -131,6 +131,8 @@ def test_peer_send_to_a_bare_far_name_reaches_only_that_mirror(tmp_path, eps, mo
     peer = {"name": "agy-a", "vendor": "agy", "target": "conv-1"}
     r = make_router(tmp_path, roster(tmp_path, eps), peers=[peer])
     sent = capture(r, monkeypatch)
+    # Off Windows relay_route refuses a pipe endpoint by design; this test pins name resolution, not relaying.
+    monkeypatch.setattr(router, "_off_windows", lambda: False)
     assert asyncio.run(r._peer_send_to_session("agy-a", TARGET, "hello"))["ok"]
     assert sent == [("agy-a", eps["far"])]
 

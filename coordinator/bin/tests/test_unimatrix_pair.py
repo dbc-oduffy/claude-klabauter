@@ -289,3 +289,114 @@ def test_fetch_adopts_a_valid_snapshot_and_refuses_a_forged_one(rig):
     rc2, _, err2 = rig2.call(["fetch", "u@alpha.local"])
     assert rc2 == 1 and "refused" in err2
     assert mem.load_snapshot(rig2.home)[0] is None
+
+
+def _recorded(tmp_path, *aliases):
+    out = {}
+    for a in aliases:
+        pub = _keygen(tmp_path / f"pair-{a}")
+        out[a] = (tmp_path / f"pair-{a}", pub.split()[1])
+    return out
+
+
+def _no_mint(tmp_path):
+    def boom(*a, **k):
+        raise AssertionError("mint or 1Password path reached")
+    return boom
+
+
+def test_local_member_adopts_every_recorded_key_for_member_boxes_deterministically(tmp_path):
+    rec = _recorded(tmp_path, "alpha", "beta", "zeta")
+    one = up.local_member("alpha", ["10.0.0.0/24"], _no_mint(tmp_path), lambda: rec, {"alpha", "beta"})
+    two = up.local_member("alpha", ["10.0.0.0/24"], _no_mint(tmp_path), lambda: dict(reversed(list(rec.items()))), {"alpha", "beta"})
+    assert json.dumps(one, sort_keys=True) == json.dumps(two, sort_keys=True)
+    assert one["relay_pub"] == f"ssh-ed25519 {rec['alpha'][1]}"
+    assert one["relay_pubs"] == {"alpha": f"ssh-ed25519 {rec['alpha'][1]}", "beta": f"ssh-ed25519 {rec['beta'][1]}"}
+    mem._validate_member(one)
+
+
+def test_local_member_without_own_record_uses_smallest_alias(tmp_path):
+    rec = _recorded(tmp_path, "mini", "example-fleet")
+    m = up.local_member("alpha", [], _no_mint(tmp_path), lambda: rec)
+    assert m["relay_pub"] == f"ssh-ed25519 {rec['example-fleet'][1]}" and set(m["relay_pubs"]) == {"mini", "example-fleet"}
+
+
+def test_local_member_with_no_recorded_key_refuses(tmp_path):
+    with pytest.raises(RuntimeError, match="no recorded pair key for alpha"):
+        up.local_member("alpha", [], _no_mint(tmp_path), lambda: {})
+
+
+def test_first_approve_builds_member_from_two_recorded_keys_and_never_mints(rig):
+    rec = _recorded(rig.tmp, "alpha", "beta")
+    rig.me = None
+    out, err = io.StringIO(), io.StringIO()
+    rc = up.main(["approve", "-"], out=out, err=err, stdin=io.StringIO(json.dumps(rig.beta)), home=rig.home, environ={},
+                 run=rig.run, signer=rig.fake, notifier=rig.notifier, own_key_fn=lambda b: rec[b], recorded_fn=lambda: rec,
+                 authorized_keys=rig.ak, is_admin=lambda: False, box="alpha", self_names={"alpha"})
+    assert rc == 0, err.getvalue()
+    snap, _ = mem.load_snapshot(rig.home)
+    me = next(m for m in snap["members"] if m["box"] == "alpha")
+    assert set(me["relay_pubs"]) == {"alpha", "beta"}
+
+
+def test_approve_with_no_recorded_key_exits_1_naming_record(rig):
+    def missing(box):
+        raise RuntimeError(f"no recorded pair key for {box}: unimatrix.keys.{box} is unset")
+    out, err = io.StringIO(), io.StringIO()
+    signer = Counting(rig.fake)
+    rc = up.main(["approve", "-"], out=out, err=err, stdin=io.StringIO(json.dumps(rig.beta)), home=rig.home, environ={},
+                 run=rig.run, signer=signer, notifier=rig.notifier, own_key_fn=missing, recorded_fn=lambda: {},
+                 authorized_keys=rig.ak, is_admin=lambda: False, box="alpha", self_names={"alpha"})
+    assert rc == 1 and "no recorded pair key" in err.getvalue() and signer.calls == 0
+
+
+def test_push_carries_pin_line_and_per_member_key(rig):
+    rig.seed([rig.me, rig.beta])
+    keys = {"beta": rig.tmp / "k-beta", "gamma": rig.tmp / "k-gamma"}
+    out, err = io.StringIO(), io.StringIO()
+    rc = up.main(["approve", "-"], out=out, err=err, stdin=io.StringIO(json.dumps(_member("gamma", rig.tmp))), home=rig.home,
+                 environ={}, run=rig.run, signer=rig.fake, notifier=rig.notifier, own_key_fn=lambda b: (keys[b], "x"),
+                 authorized_keys=rig.ak, is_admin=lambda: False, box="alpha", self_names={"alpha"})
+    assert rc == 0, err.getvalue()
+    by_host = {next(a for a in c[0] if "@" in a): c for c in rig.pushes}
+    for box in ("beta", "gamma"):
+        cmd, stdin = by_host[f"u@{box}.local"]
+        assert cmd[cmd.index("-i") + 1] == str(keys[box])
+        lines = stdin.decode().splitlines()
+        assert len(lines) == 3 and lines[2] == " ".join(mem.load_pin(rig.home).split()[:2])
+
+
+def test_member_with_no_recorded_pair_key_is_refused_and_not_dialled(rig):
+    rig.seed([rig.me, rig.beta])
+
+    def own(box):
+        if box == "beta":
+            raise RuntimeError("no recorded pair key for beta")
+        return (rig.tmp / "k", "x")
+
+    out, err = io.StringIO(), io.StringIO()
+    rc = up.main(["approve", "-"], out=out, err=err, stdin=io.StringIO(json.dumps(_member("gamma", rig.tmp))), home=rig.home,
+                 environ={}, run=rig.run, signer=rig.fake, notifier=rig.notifier, own_key_fn=own,
+                 authorized_keys=rig.ak, is_admin=lambda: False, box="alpha", self_names={"alpha"})
+    assert rc == 0 and "beta: refused: no recorded pair key for beta" in out.getvalue() and "gamma: pushed" in out.getvalue()
+    assert [next(a for a in c[0] if "@" in a) for c in rig.pushes] == ["u@gamma.local"]
+
+
+def test_fetch_uses_adopt_only_key_for_fetched_box_and_refuses_when_unrecorded(rig):
+    asked = []
+
+    def own(box):
+        asked.append(box)
+        raise RuntimeError(f"no recorded pair key for {box}")
+
+    out, err = io.StringIO(), io.StringIO()
+    rc = up.main(["fetch", "u@example-fleet.local"], out=out, err=err, home=rig.home, run=rig.run, own_key_fn=own,
+                 authorized_keys=rig.ak, is_admin=lambda: False, box="alpha")
+    assert rc == 1 and "no recorded pair key for example-fleet" in err.getvalue() and asked == ["example-fleet"] and rig.pushes == []
+
+
+def test_default_own_key_is_adopt_only(monkeypatch):
+    seen = {}
+    fake = type("I", (), {"pair_key": staticmethod(lambda alias, **kw: seen.update(alias=alias, **kw) or ("p", "b"))})
+    monkeypatch.setitem(up._MODS, "unimatrix-install.py", fake)
+    assert up._default_own_key("x") == ("p", "b") and seen == {"alias": "x", "adopt_only": True}

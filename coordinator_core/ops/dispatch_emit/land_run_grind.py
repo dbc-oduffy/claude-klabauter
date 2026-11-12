@@ -13,7 +13,8 @@ unseen deletion) lands none of its paths, gets no ``Grind-Row:`` trailer, is lis
 keeps its ledger; its on-disk archive move is reversed (``reopened``). A landed row's ledger is
 settled afterwards. The run token is redeemed,
 consumed on a landed commit and released on every other return. A repeat call after a landing is
-answered from the run token's spent receipt and lands nothing.
+answered from the run token's spent receipt; a requested row the receipt lacks lands in one follow-up
+commit under the same rules, and a repeat with nothing new lands nothing.
 """
 
 from __future__ import annotations
@@ -83,7 +84,7 @@ def commit_grind_rows(main_root: Path, repo_root: Path, params: dict, ledger_pat
     if token is not None and not run_token.redeem(main_root, run_id, token, script_path):
         receipt = run_token.spent_receipt(main_root, run_id, token, script_path)
         if receipt is not None:
-            return _already_landed(receipt, grind)
+            return _land_late_rows(main_root, repo_root, receipt, grind, params, run_id, ledger_paths)
         return _error(
             "params.run_token does not match a live, unspent token minted for params.run_id and "
             "this script (a token admits one landed commit)",
@@ -101,6 +102,32 @@ def commit_grind_rows(main_root: Path, repo_root: Path, params: dict, ledger_pat
                 run_token.consume(main_root, run_id, landed=landed)
             else:
                 run_token.release(main_root, run_id, token, script_path)
+
+
+def _land_late_rows(
+    main_root: Path, repo_root: Path, receipt: dict, grind: dict, params: dict, run_id: str,
+    ledger_paths: Sequence[str],
+) -> dict:
+    """A repeat call on a spent token: rows the receipt lacks (finished after the first landing, or
+    omitted from its params) land in one follow-up commit scoped to this run's own requested rows; the
+    token stays spent. Nothing new to land answers from the receipt alone."""
+    landed_ids = {r.get("row_id") for r in receipt.get("rows") or [] if isinstance(r, dict)}
+    late = [r for r in grind["rows"] if r["row_id"] not in landed_ids]
+    if not late:
+        return _already_landed(receipt, grind)
+    reply = _land(main_root, repo_root, {**grind, "rows": late}, params.get("deliverable_id"), run_id, ledger_paths)
+    if reply.get("committed") is not True:
+        answered = _already_landed(receipt, grind)
+        if reply.get("error"):
+            return {**answered, "committed": False, "error": reply["error"], "refused": reply.get("refused")}
+        answered[UNLANDED_KEY] = reply.get(UNLANDED_KEY) or answered[UNLANDED_KEY]
+        answered["dropped"] = reply.get("dropped") or []
+        answered["stranded"] = reply.get("stranded") or []
+        answered["reopened"] = reply.get("reopened") or []
+        return answered
+    earlier = {r.get("row_id"): r for r in receipt.get("rows") or [] if isinstance(r, dict)}
+    by_id = {**earlier, **{r["row_id"]: r for r in reply["rows"]}}
+    return {**reply, "rows": [by_id[r["row_id"]] for r in grind["rows"] if r["row_id"] in by_id]}
 
 
 def _already_landed(receipt: dict, grind: dict) -> dict:

@@ -96,6 +96,17 @@ def test_high_tier_credential_shape_blocks(tmp_path):
     assert result["low"] == []
 
 
+@pytest.mark.parametrize("line, blocks", [
+    ("-----BEGIN " + "RSA PRIVATE KEY-----", True),
+    ('"k": "-----BEGIN ' + 'PRIVATE KEY-----\\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC"', True),
+    ('re.search(r"-----BEGIN ' + 'OPENSSH PRIVATE KEY-----(.*?)-----END")', False),
+])
+def test_private_key_armor_needs_a_body_or_line_end(tmp_path, line, blocks):
+    root = tmp_path / "pub"
+    _write(root, "a.py", line + "\n")
+    assert _scan(root)["blocked"] is blocks
+
+
 def test_medium_tier_internal_path_and_email_do_not_block(tmp_path):
     root = tmp_path / "pub"
     _write(

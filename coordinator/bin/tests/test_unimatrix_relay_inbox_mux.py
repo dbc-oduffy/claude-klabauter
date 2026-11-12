@@ -3,8 +3,10 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import socket
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -39,7 +41,16 @@ class Out:
 
 @pytest.fixture
 def host(tmp_path, monkeypatch):
-    sess, socks = tmp_path / "sess", tmp_path / "s"
+    # Measured: the relay's srv.bind() raises OSError "AF_UNIX path too long" (macOS sun_path cap
+    # 104) for a socket under pytest's tmp_path (~159 bytes), so serve_mux never registers a name.
+    # The socket dir lives in <repo>/scratch (short, doctrine scratch root), removed on teardown.
+    scratch = Path(__file__).resolve().parents[3] / "scratch"
+    scratch.mkdir(exist_ok=True)
+    sock_root = Path(tempfile.mkdtemp(prefix="mx", dir=scratch))
+    if len(str(sock_root / "s" / "unimatrix-face-0.sock")) > 100:
+        shutil.rmtree(sock_root, ignore_errors=True)
+        pytest.skip("repo path too deep for an AF_UNIX socket")
+    sess, socks = tmp_path / "sess", sock_root / "s"
     sess.mkdir()
     monkeypatch.setattr(relay, "SESS", str(sess))
     monkeypatch.setattr(relay, "SOCKS", str(socks))
@@ -58,7 +69,8 @@ def host(tmp_path, monkeypatch):
 
     monkeypatch.setattr(relay, "load_roster", lambda: Helpers)
     monkeypatch.setattr(relay, "check_name_free", lambda name, client="", own_pid=None: [])
-    return sess, socks
+    yield sess, socks
+    shutil.rmtree(sock_root, ignore_errors=True)
 
 
 def start_mux():

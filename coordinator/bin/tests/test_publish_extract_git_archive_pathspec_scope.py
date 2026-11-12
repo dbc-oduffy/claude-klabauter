@@ -65,6 +65,17 @@ def _clear_caches():
     publish._MATERIALIZED_REF_CACHE.clear()
 
 
+@pytest.fixture(autouse=True)
+def _pin_mirror_registry(tmp_path, monkeypatch):
+    """The real portable rows name `publish-mirror:claude_klabauter`, which
+    resolves only through `publish.mirrors.claude_klabauter.path`. Pin that
+    key to a throwaway dir via the registry's env escape hatch so the pins run
+    identically on a box with the key unset; the dest is never written."""
+    dest = tmp_path / "klabauter-mirror"
+    dest.mkdir()
+    monkeypatch.setenv("MACHINE_LOCAL_PUBLISH_MIRRORS_CLAUDE_KLABAUTER_PATH", str(dest))
+
+
 def _resolved_contributing_roots() -> "list[Path]":
     percolate_root, _rung = publish._resolve_percolate_root_and_rung()
     setup_dir = percolate_root / "setup"
@@ -83,13 +94,14 @@ def _resolved_inject_srcs() -> "list[str]":
 
 
 def test_pathspec_covers_every_contributing_root_and_inject_src():
+    contributing_roots = _resolved_contributing_roots()
     pathspec = publish._required_pathspec_for_toplevel(publish._REPO_ROOT)
     assert pathspec, "expected a non-empty pathspec for this repo's own toplevel"
     tracked = publish._tracked_paths_at_sha(
         publish._REPO_ROOT, publish._git_rev_parse(publish._REPO_ROOT, "HEAD")
     )
 
-    for root in _resolved_contributing_roots():
+    for root in contributing_roots:
         if not root.is_dir() or not publish._path_tracked_at_sha(root, publish._REPO_ROOT, tracked):
             continue
         root_toplevel = publish._git_rev_parse(root, "--show-toplevel")
@@ -121,15 +133,8 @@ def test_pathspec_covers_every_contributing_root_and_inject_src():
 
 
 def test_inject_src_not_covered_by_contributing_roots_alone_is_present():
+    contributing_roots = {root.resolve() for root in _resolved_contributing_roots()}
     pathspec = publish._required_pathspec_for_toplevel(publish._REPO_ROOT)
-
-    contributing_roots = {
-        root.resolve()
-        for row in publish.load_targets(
-            (publish._resolve_percolate_root_and_rung()[0] / "setup"), target_filter=""
-        )
-        for root in publish._contributing_roots(publish.parse_target_row(row))
-    }
 
     license_src = None
     for src in _resolved_inject_srcs():
@@ -157,11 +162,12 @@ def test_inject_src_not_covered_by_contributing_roots_alone_is_present():
 
 
 def test_percolate_ignore_named_explicitly_per_covered_root():
+    contributing_roots = _resolved_contributing_roots()
     pathspec = publish._required_pathspec_for_toplevel(publish._REPO_ROOT)
     ignore_entries = [e for e in pathspec if e.endswith(".percolate-ignore")]
     assert ignore_entries, f"expected at least one explicit .percolate-ignore entry: {pathspec}"
 
-    for root in _resolved_contributing_roots():
+    for root in contributing_roots:
         ignore_file = root / ".percolate-ignore"
         if not ignore_file.is_file():
             continue

@@ -83,7 +83,10 @@ def test_second_run_idempotent_with_env_override_and_mismatched_cwd(stamped_engi
 
         env = dict(os.environ)
         env["QUEUE_APPEND_OUTPUT_ROOT"] = output_root
-        env["LESSON_PROMOTE_OUTBOX_ROOT"] = os.path.join(output_root, "state", "lessons-outbox")
+        # The isolation-root guard refuses a temp-resident root that does not exist yet.
+        outbox_root = os.path.join(output_root, "state", "lessons-outbox")
+        os.makedirs(outbox_root)
+        env["LESSON_PROMOTE_OUTBOX_ROOT"] = outbox_root
         env.pop("REPO_DOE_CLAUDE", None)
         env.pop("CLAUDE_KLABAUTER_ROOT", None)
 

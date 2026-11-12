@@ -191,7 +191,7 @@ def write_local(endpoint, data):
     """Deliver `data` to a local endpoint (named pipe on Windows, unix socket elsewhere)."""
     data = _roster().authenticated_data(endpoint, data, os.path.expanduser(SESSIONS))
     if IS_WIN:
-        _, win32file, _ = _win()
+        import win32file
         h = win32file.CreateFile(endpoint, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
                                  0, None, win32file.OPEN_EXISTING, 0, None)
         win32file.WriteFile(h, data)

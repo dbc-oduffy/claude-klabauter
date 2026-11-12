@@ -114,7 +114,8 @@ def test_agy_leg_metadata_wins_over_presence_for_the_same_conversation(tmp_path,
     legs.mkdir()
     presence.mkdir()
     (legs / "conversation.json").write_text(json.dumps({
-        "conversation": "conversation", "pid": os.getpid(), "cwd": "/work/claude-klabauter"}))
+        "conversation": "conversation", "pid": os.getpid(), "cwd": "/work/claude-klabauter",
+        "procStart": router._roster().proc_start(os.getpid())}))
     (presence / "conversation.lock").touch()
     monkeypatch.setattr(router, "lock_held", lambda path: True)
     roster = router.Router([], sessions_dir=tmp_path / "sessions", state_dir=tmp_path / "state",

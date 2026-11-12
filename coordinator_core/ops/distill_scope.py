@@ -31,8 +31,9 @@ migrates up from the library it composes):
     that is both harvest-ripe (status: implemented/shipped) AND not yet logged as
     harvested is the actual Phase-0 scan candidate; a ripe spec already logged
     harvested needs no re-scan.
-  - sidecars cohort = sidecar_sweep's active-reference-guard-cleared deletion
-    candidates (cockpit §6.1 — pre-routed, never entering harvest/skip).
+  - sidecars cohort = sidecar_sweep's candidates, unguarded (cockpit §6.1 — pre-routed,
+    never entering harvest/skip). The active-reference guard runs at delete time in
+    delete_guard, so this op spawns no rg.
   - handoffs / memos / any further cohort (2026-08-06 PM ruling) = DATA-DRIVEN
     ``CohortSpec`` rows ({name, glob, filter, mode} — see the CohortSpec/
     PM_RULING_2026_08_06_COHORT_SPECS docstrings below), never hardcoded scan
@@ -88,7 +89,7 @@ from coordinator_core.distill import harvest_debt as _harvest_debt
 from coordinator_core.distill import manifest_schema as _schema
 from coordinator_core.distill import ripe_filter as _ripe_filter
 from coordinator_core.distill import scan_digest as _scan_digest
-from coordinator_core.distill.sidecar_sweep import sweep_sidecars
+from coordinator_core.distill.sidecar_sweep import sidecar_candidate_ids
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ipc import register_op
 from coordinator_core.memo_corpus import memo_corpus_root
@@ -486,9 +487,7 @@ def compute_scope(
     )
     skip_cohort = sorted(f"{specs_dir_posix}/{r.path}" for r in ripe_result.skip)
 
-    sidecar_result = sweep_sidecars(specs_path, worktree_root)
-    sidecar_cohort = sorted(row["path"] for row in sidecar_result.deletion_manifest)
-    sidecar_retained_cohort = sorted(row["path"] for row in sidecar_result.retained)
+    sidecar_cohort = sorted(sidecar_candidate_ids(specs_path, worktree_root))
 
     memo_archive = _memo_archive_reldir(worktree_root)
     resolved_cohort_specs = (
@@ -548,7 +547,6 @@ def compute_scope(
         "harvest": harvest_cohort,
         "skip": skip_cohort,
         "sidecars": sidecar_cohort,
-        "sidecars_retained": sidecar_retained_cohort,
         **data_driven_cohorts,
     }
     cohort_modes = {"harvest": "harvest", "skip": "check-only", "sidecars": "check-only"}

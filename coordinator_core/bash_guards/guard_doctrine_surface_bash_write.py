@@ -208,12 +208,14 @@ from coordinator_core.bash_guards._command_tokenizer import (
     resolve_command_positions,
 )
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
-from coordinator_core.machine_profile import apply_guard_level, feature_enabled, guard_level
+from coordinator_core.machine_profile import apply_guard_level, feature_enabled
 from coordinator_core.session import record_homes
-from coordinator_core.write_guards._guard_level import (
-    doctrine_surface_advisory,
-    doctrine_surface_risk,
+from coordinator_core.write_guards._doctrine_edit_sentinel import (
+    DENY_REASON,
+    git_dir_for,
+    sentinel_present,
 )
+from coordinator_core.write_guards._guard_level import doctrine_surface_risk
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
     extract_interpreter_payload_write_sink_targets,
     extract_write_sink_targets_for_segment,
@@ -662,28 +664,8 @@ _OPERATION_HEADS = ("MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD")
 _PLAIN_REV_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./^@-]*")
 
 
-def _git_dir_for(cwd: str) -> Optional[Path]:
-    """The git dir governing ``cwd``, read off the filesystem (no spawn); a
-    ``.git`` file (worktree / submodule) is followed to its ``gitdir:`` target."""
-    here = Path(cwd or os.getcwd())
-    for base in (here, *here.parents):
-        dot_git = base / ".git"
-        if dot_git.is_dir():
-            return dot_git
-        if dot_git.is_file():
-            try:
-                text = dot_git.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                return None
-            if text.startswith("gitdir:"):
-                target = Path(text[len("gitdir:"):].strip())
-                return target if target.is_absolute() else base / target
-            return None
-    return None
-
-
 def _operation_in_progress(cwd: str) -> bool:
-    git_dir = _git_dir_for(cwd)
+    git_dir = git_dir_for(cwd)
     return git_dir is not None and any((git_dir / head).exists() for head in _OPERATION_HEADS)
 
 
@@ -2491,6 +2473,9 @@ _PRIVILEGED_KEY_RE = re.compile(
     r"(?<![\w-])[\w-]*(?:_cmd|_reason|_post_command|_shape)\s*:"
 )
 _GUARD_NAME = "guard-doctrine-surface-bash-write"
+#: Level-resolution name for the governed-manifest and sizing legs: unregistered in
+#: ``deny_registry``, so those verdicts stay advisory; only the CLAUDE.md-class leg holds the floor.
+_ADVISORY_LEG_NAME = _GUARD_NAME + "-governed"
 
 
 def _governed_write_targets(cmd: str, identifiers_lower: Tuple[str, ...]) -> List[str]:
@@ -2670,39 +2655,41 @@ def _admitted_edit_target(
 #: CLAUDE.md-class surfaces beyond the governed manifest: the live rules
 #: mirror and its authoring source. Plain-substring identifiers, like the rest.
 _ADVISORY_EXTRA_IDENTIFIERS = (".claude/rules/", "global-doctrine/rules/")
-_UNGOVERNED_FOR_ADVISORY = frozenset({"coordinator.local.md"})
 
 
-def _advisory_identifiers(governed_surfaces: Optional[List[str]]) -> Tuple[str, ...]:
-    """Identifiers for the warn-and-pass leg: every governed surface except
-    ``coordinator.local.md`` (config, not doctrine), plus any repo's
-    ``CLAUDE.md`` and the rules trees. Fixed floor so a missing manifest
-    still leaves the advisory armed."""
-    surfaces = [
-        surface
-        for surface in (governed_surfaces or [])
-        if surface.rsplit("/", 1)[-1].lower() not in _UNGOVERNED_FOR_ADVISORY
-    ]
-    if "CLAUDE.md" not in surfaces:
-        surfaces.append("CLAUDE.md")
-    identifiers = set(_governed_identifiers_lower(surfaces))
-    identifiers.update(_ADVISORY_EXTRA_IDENTIFIERS)
-    return tuple(sorted(identifiers, key=len, reverse=True))
+def _class_write_denied(cmd: str, payload: Dict[str, Any], cwd: str) -> Any:
+    """The verdict for a write to a CLAUDE.md-class or rules file.
 
-
-def _check_advisory(
-    cmd: str, governed_surfaces: Optional[List[str]], cwd: str
-) -> Optional[Dict[str, Any]]:
-    """Warn-and-pass verdict for a Bash-path write to a CLAUDE.md-class
-    surface; the gate deny in ``check`` supersedes it when armed."""
-    identifiers = _advisory_identifiers(governed_surfaces)
+    ``None`` when the command writes no such file (the governed-manifest leg decides);
+    ``""`` when it does and the write is admitted (onboarding, or an EM caller with a fresh
+    sentinel); the deny otherwise. A dispatched caller stays denied whatever the sentinel
+    says, and is not told about it. A fixed floor: independent of the governed manifest.
+    """
+    identifiers = tuple(
+        sorted(
+            {*_governed_identifiers_lower(["CLAUDE.md"]), *_ADVISORY_EXTRA_IDENTIFIERS},
+            key=len,
+            reverse=True,
+        )
+    )
     if not is_denied_bash_write(cmd, identifiers):
         return None
-    if guard_level(_GUARD_NAME) == "off":
-        return None
     if _is_onboarding_write(cmd, identifiers, cwd):
-        return None
-    return _record("advisory", doctrine_surface_advisory()["hookSpecificOutput"]["additionalContext"])
+        return ""
+    dispatched = bool(payload.get("agent_id"))
+    if not dispatched and sentinel_present(cwd):
+        return ""
+    return _levelled_deny(
+        _SUBAGENT_CLASS_DENY if dispatched else DENY_REASON,
+        doctrine_surface_risk("this command writes a CLAUDE.md-class or rules file."),
+        offer_edit=False,
+        floor=True,
+    )
+
+
+_SUBAGENT_CLASS_DENY = (
+    "BLOCKED: writes a CLAUDE.md-class or rules file. Report the change you need to whoever dispatched you."
+)
 
 
 def _record(verdict_kind: str, text: str, *, offer_edit: bool = True) -> Any:
@@ -2738,14 +2725,16 @@ def _record(verdict_kind: str, text: str, *, offer_edit: bool = True) -> Any:
     )
 
 
-def _levelled_deny(message: str, risk: str, *, offer_edit: bool = True) -> Any:
+def _levelled_deny(
+    message: str, risk: str, *, offer_edit: bool = True, floor: bool = False
+) -> Any:
     """The deny record; a non-strict guard level returns the levelled envelope instead."""
     from coordinator_core.guard_messages.alternative_record import Audience
     from coordinator_core.guard_messages.render import render
 
     record = _record("deny", message, offer_edit=offer_edit)
     envelope = render(record, Audience.EM)
-    leveled = apply_guard_level(_GUARD_NAME, envelope, risk=risk)
+    leveled = apply_guard_level(_GUARD_NAME if floor else _ADVISORY_LEG_NAME, envelope, risk=risk)
     return record if leveled == envelope else leveled
 
 
@@ -2774,7 +2763,12 @@ def check(
         )
 
     if not feature_enabled("doctrine_edit_gate"):
-        return _check_advisory(cmd, governed_surfaces, str(payload.get("cwd") or ""))
+        return None
+
+    cwd = str(payload.get("cwd") or "")
+    class_denied = _class_write_denied(cmd, payload, cwd)
+    if class_denied is not None:
+        return class_denied or None
 
     if not governed_surfaces:
         return None
@@ -2784,7 +2778,7 @@ def check(
     if not is_denied_bash_write(cmd, identifiers_lower):
         return None
 
-    if _is_onboarding_write(cmd, identifiers_lower, str(payload.get("cwd") or "")):
+    if _is_onboarding_write(cmd, identifiers_lower, cwd):
         return None
 
     commit_shaped = _looks_commit_shaped(cmd)

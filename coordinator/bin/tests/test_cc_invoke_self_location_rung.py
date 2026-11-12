@@ -281,20 +281,12 @@ def test_explicit_claude_klabauter_root_wins_over_self_location_on_the_locator_a
 def test_dispatch_axis_env_still_wins_but_now_via_delegation_not_verbatim_trust():
     """DISPATCH-axis Rung 1, the half § C6 warns not to silently drop.
 
-    Measured, not assumed: an explicit CLAUDE_KLABAUTER_ROOT still resolves outright
-    over self-location, even against a marker-only directory (no real
-    `coordinator_core/engine_root.py`) — because
-    `coordinator_engine_root_with_class()` (the gate C6's Rung 1 now delegates
-    to) carries its OWN env-first rung, the DR-313 item 5 sanctioned exemption
-    ("CLAUDE_KLABAUTER_ROOT ahead of everything else"), which this chunk's `writes:`
-    scope (cc_invoke.py only) does not touch or override. `_resolve_claude_klabauter_root()`
-    no longer ANSWERS this itself, though: it now only supplies `existing` as a
-    CANDIDATE and lets the gate re-decide — the same exemption, reached through
-    one fewer independent copy of it. `test_terminal_rung_resolves_under_both_
-    home_shapes_with_no_prior_rung` above is Rung 3's contrasting case: when
-    self-location (not env) supplies the candidate, delegation genuinely can
-    raise — see that test's stub coordinator_core/engine_root.py, without which
-    this same delegation would fail loud instead of resolving.
+    An explicit COORDINATOR_ENGINE_ROOT still resolves outright over
+    self-location, but no longer verbatim: `_resolve_claude_klabauter_root()` supplies it
+    as a CANDIDATE and `coordinator_engine_root_with_class()` re-decides, answering
+    an env root only when it carries an engine stamp
+    (`coordinator_core/_engine_stamp`, non-empty). The stub `other_root` is
+    therefore stamped; an unstamped tree is a claude-klabauter shape and is refused.
     """
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -302,6 +294,7 @@ def test_dispatch_axis_env_still_wins_but_now_via_delegation_not_verbatim_trust(
 
         other_root = tmp_path / "other-existing-checkout"
         (other_root / "coordinator_core").mkdir(parents=True)
+        (other_root / "coordinator_core" / "_engine_stamp").write_text("stub-engine\n", encoding="utf-8")
         (other_root / "pyproject.toml").write_text("[project]\nname = \"other\"\n", encoding="utf-8")
 
         isolated_home = tmp_path / "empty-home"
@@ -320,9 +313,8 @@ def test_dispatch_axis_env_still_wins_but_now_via_delegation_not_verbatim_trust(
         assert result.returncode == 0, f"expected success; stderr:\n{result.stderr}"
         resolved = result.stdout.strip()
         assert os.path.realpath(resolved) == os.path.realpath(str(other_root)), (
-            f"expected CLAUDE_KLABAUTER_ROOT ({other_root!r}) to still win outright over "
-            f"self-location ({checkout_root!r}) via the gate's own env rung; "
-            f"got {resolved!r}"
+            f"expected the stamped env root ({other_root!r}) to win over "
+            f"self-location ({checkout_root!r}); got {resolved!r}"
         )
 
 

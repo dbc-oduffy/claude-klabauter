@@ -35,11 +35,31 @@ import pytest
 from coordinator_core.distill._common import active_reference_guard
 from coordinator_core.distill.sidecar_sweep import (
     find_sidecar_candidates,
+    sidecar_candidate_ids,
     sweep_sidecars,
 )
 
+
 _HAS_RG = shutil.which("rg") is not None
 _requires_rg = pytest.mark.skipif(not _HAS_RG, reason="ripgrep (rg) not installed")
+
+
+def test_sidecar_candidate_ids_are_posix_relative_and_spawn_nothing(tmp_path, monkeypatch):
+    scan_root = tmp_path / "archive" / "specs"
+    (scan_root / "sub").mkdir(parents=True)
+    (scan_root / "sub" / "b.review.md").write_text("x\n")
+    (scan_root / "a.review.md").write_text("x\n")
+    (scan_root / "plain.md").write_text("x\n")
+
+    def _no_spawn(*args, **kwargs):
+        raise AssertionError("sidecar_candidate_ids spawned")
+
+    monkeypatch.setattr(subprocess, "run", _no_spawn)
+
+    assert sidecar_candidate_ids(scan_root, tmp_path) == [
+        "archive/specs/a.review.md",
+        "archive/specs/sub/b.review.md",
+    ]
 
 
 # ---------------------------------------------------------------------------

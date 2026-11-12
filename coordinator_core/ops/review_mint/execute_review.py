@@ -37,7 +37,7 @@ from coordinator_core.ops.review_mint.wave_not_run import (
     not_run_entry_js as _not_run_entry_js,
 )
 from coordinator_core.ops.dispatch_emit.ask_contract import GAP_TITLE_PREFIX
-from coordinator_core.ops.dispatch_emit.test_interpreter import interpreter_clause
+from coordinator_core.ops.dispatch_emit.interpreter_pin import interpreter_clause
 from coordinator_core.ops.dispatch_emit.landing_targeted_tests import REVERIFY_INDETERMINATE
 from coordinator_core.ops.dispatch_emit.ue_engine_facts import ue_engine_facts_clause
 from coordinator_core.ops.dispatch_emit.wake_digest import INTEGRATION_NOT_RUN_VAR
@@ -578,6 +578,9 @@ _GROUP_PREP_REFUSAL = (
 )
 
 _PREP_BUSY_RETRIES = 5
+#: A -32004 on the prep call is indeterminate: the op may have stored its reply. The agent re-runs
+#: the same call (it reads the stored record) this many times before returning the error as `prep`.
+_PREP_INDETERMINATE_RETRIES = 2
 PREP_BUSY_HALT = "review.prep stayed busy after retries"
 PREP_MALFORMED_HALT = "review.prep reply carried a non-array slices"
 REVIEW_MISSING_HALT = "review wave reply carried no review beside a successful prep"
@@ -665,8 +668,12 @@ _PREP_FROM_WAVE_JS = (
     "    if (!(r && r._dispatched && r.prep && !r.prep.error && Array.isArray(r.prep.slices) && r.prep.slices['length'])) return false;\n"
     "    return !r.prep.slices.every(s => _allSliceIds.has(_sid(s)));\n"
     "  };\n"
-    "  const _redoAt = (!_truthReply || _collapsed || (typeof _halted !== 'undefined' && _halted)) ? [] "
-    ": _waveRaw.flatMap((r, i) => _isOutOfGroup(r) && r.review ? [i] : []);\n"
+    "  const _isRange = (id) => typeof id === 'string' && id.includes('..');\n"
+    "  const _hasRange = (r) => !!(r && r._dispatched && r.prep && !r.prep.error && Array.isArray(r.prep.slices) && "
+    "(r.prep.slices.some(s => _isRange(_sid(s))) || (!r.prep.slices['length'] && r.review && _isRange(r.review.slice_id))));\n"
+    "  const _checksGroup = !!_truthReply && !_collapsed;\n"
+    "  const _redoAt = (typeof _halted !== 'undefined' && _halted) ? [] "
+    ": _waveRaw.flatMap((r, i) => ((_checksGroup && _isOutOfGroup(r)) || _hasRange(r)) && r.review ? [i] : []);\n"
     "  if (_redoAt.length) {\n"
     "    const _redone = await parallel(_redoAt.map(i => _waveThunks[i]));\n"
     "    _redoAt.forEach((i, k) => {\n"
@@ -676,14 +683,15 @@ _PREP_FROM_WAVE_JS = (
     "_waveRaw[i] = n; _reviewWave[i] = n.review; }\n"
     "    });\n"
     "  }\n"
-    "  const _outOfGroupAt = !_truthReply || _collapsed ? -1 : _waveRaw.findIndex(_isOutOfGroup);\n"
+    "  const _outOfGroupAt = _waveRaw.findIndex(r => (_checksGroup && _isOutOfGroup(r)) || _hasRange(r));\n"
     "  if (_outOfGroupAt >= 0) { "
     f"return {{ halted: {_js_string_literal(SLICE_ID_UNKNOWN_HALT)} + ' (wave agent ' + _outOfGroupAt + "
     "' prep named slices ' + JSON.stringify(_waveRaw[_outOfGroupAt].prep.slices.map(s => s.id)) + "
+    "' with slice_id ' + JSON.stringify(_waveRaw[_outOfGroupAt].review ? _waveRaw[_outOfGroupAt].review.slice_id : null) + "
     "' outside its dispatched group ' + _waveRaw[_outOfGroupAt]._dispatched.i + ' of ' + _waveRaw[_outOfGroupAt]._dispatched.n + "
     "'; a slice id no run slice carries)', "
     f"reason: {_js_string_literal(_SLICE_ID_UNKNOWN_REFUSAL)}, "
-    "prep: _truthReply.prep, wave: null, integration: null }; }\n"
+    "prep: _truthReply ? _truthReply.prep : (_prepReplies[0] ?? null), wave: null, integration: null }; }\n"
     "  const _foreignAdvisories = [];\n"
     "  if (_truthReply) _waveRaw.forEach((r, i) => {\n"
     "    if (!(r && r._dispatched && r.prep && !r.prep.error && Array.isArray(r.prep.slices) && r.prep.slices['length'])) return;\n"
@@ -721,7 +729,7 @@ _PREP_FROM_WAVE_JS = (
     "  })();\n"
     "  const _realSliceIds = new Set((_reviewPrep && Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).map(s => s.id));\n"
     "  const _resolveSliceId = (tok) => {\n"
-    "    if (_realSliceIds.has(tok)) return tok;\n"
+    "    if (_realSliceIds.has(tok) || _isRange(tok)) return tok;\n"
     "    const hits = [..._realSliceIds].filter(real => {\n"
     "      let p = 0; while (p < tok.length && p < real.length && tok[p] === real[p]) p++;\n"
     "      let s = 0; while (s < tok.length - p && s < real.length - p && tok[tok.length - 1 - s] === real[real.length - 1 - s]) s++;\n"
@@ -754,7 +762,9 @@ _WAVE_GROUP_CLAUSE = (
     "sidecar at the first slice's sidecar_path, and return slice_id as the `id` of the first slice the "
     "reply lists, copied verbatim; the wave binds the full list from your `prep` reply itself. Name "
     "each slice by its own full `id` from your group only, never a range such as `prep-1..prep-6` "
-    "and never an id outside your group."
+    "and never an id outside your group. Your group's ids are exactly the `slices[*].id` values of "
+    "your own prep reply, each copied verbatim: a reply naming any other token, a `..` range included, "
+    "is refused and your group is dispatched again."
 )
 
 
@@ -805,7 +815,13 @@ def _wave_prep_instruction(
         f"callers read one stored reply. Return the reply verbatim as `prep`, beside your review as "
         f"`review`. An error beginning `{REVIEW_PREP_BUSY_PREFIX}` is not a refusal: re-run the same "
         f"call, up to {_PREP_BUSY_RETRIES} times, and if it is still busy return `prep` alone. Any other "
-        f"non-null error in the reply is a refusal: return `prep` alone."
+        f"non-null error in the reply is a refusal: return `prep` alone. A JSON-RPC error code -32004 "
+        f"from the call is indeterminate, never a refusal: the op may have stored its reply, so re-run "
+        f"the same call (it reads the stored record), up to {_PREP_INDETERMINATE_RETRIES} times; if it "
+        f"still errors, return `prep` as `{{\"error\": \"<the verbatim error message>\", \"slices\": []}}`. "
+        f"The reply is large: when the shell cut its output short, re-run the same call with its output "
+        f"redirected to a file under your scratchpad and Read that file whole. Never complete, abbreviate "
+        f"or range a `slices` list you did not see in full."
     )
 
 
@@ -945,8 +961,8 @@ def _base_export_file(run_key: str, run_id: str, prep_slice_id: str) -> str:
 
 
 def _base_measure_clause(base_ref: str, owned_red_path: str = "", export_path: str = "") -> str:
-    """Prompt step measuring ``failing_at_base``: one baseline-export run over the failing ids at the
-    snapshot base, its stdout saved to ``export_path`` (revert calls pass it as ``base_export_path``).
+    """Prompt step measuring ``failing_at_base``: one reverify_base_measure run over the failing ids at the
+    snapshot base (and HEAD), writing ``export_path`` (revert calls pass it as ``base_export_path``).
     Empty-set fallback when the base is the unset placeholder.
 
     Its id placeholder must differ from step 4's "<all failing node ids>", which must appear exactly once."""
@@ -960,20 +976,14 @@ def _base_measure_clause(base_ref: str, owned_red_path: str = "", export_path: s
         )
     return owned + _PASSED_ALONE_CLAUSE + (
         "Then measure which of the failing ids also fail at the run base, ONCE for all of them "
-        f"(never per test): `python -m coordinator_core.testing.baseline_export --sha {base_ref} -- "
-        f"python -m pytest -rfE <the failing ids above> > {export_path}` (create `scratch/` first if absent; "
-        "when you re-run it over the remaining ids, overwrite that same file). The ids on its `FAILED`/`ERROR` lines are "
-        "`failing_at_base`, valid only when its trailing JSON line has `export` \"ok\" and "
-        "`runner_exit` 0, 1 or 4. Exit 4 with a \"not found\" line naming ids means the run added "
-        "them: they are never pre_existing; drop them and re-run that same command ONCE over the "
-        "remaining ids. A second exit 4, an export error or any other result: "
-        "`failing_at_base` is `[]`. "
-        "A peer's commit can turn an id red after the run base, so run that same command ONCE more "
-        "with `--sha HEAD` (the HEAD at review start) over the ids still green at the run base; "
-        "the ids red there join `failing_at_base`. "
-        "Return `passed_at_base`: the ids that run actually executed and that are NOT on its "
-        "`FAILED`/`ERROR` lines, only when that run's `export` was \"ok\" and `runner_exit` 0 or 1; "
-        "otherwise `[]`. An id dropped as \"not found\" at base is never in `passed_at_base`: "
+        f"(never per test): `python -m coordinator_core.ops.reverify_base_measure --sha {base_ref} "
+        f"--head-sha HEAD --out {export_path} -- <the failing ids above>` (create `scratch/` first if absent; "
+        "it drops ids the run added and re-measures at HEAD itself, so run it once). "
+        "It writes that file: the ids on its `FAILED` lines are `failing_at_base`, valid only when the "
+        "trailing JSON line's `baseline_export` has `export` \"ok\" and `runner_exit` 0, 1 or 4; "
+        "any other result or a missing file: `failing_at_base` is `[]`. "
+        "Return `passed_at_base` from that trailing line's `passed_at_base` key, under the same "
+        "validity; otherwise `[]`. An id absent from the base is never in it: "
         "absence at base is not a pass. "
     )
 

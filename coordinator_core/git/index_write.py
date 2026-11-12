@@ -55,6 +55,7 @@ import json
 import os
 import stat
 import struct
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -667,10 +668,107 @@ def _recover_dead_writer(lock_path: Path) -> bool:
 _OWNERLESS_RECLAIM_FLOOR_SEC = 2.0
 
 
+def _held_open_linux(path: Path) -> bool:
+    """Scan /proc/<pid>/fd for a link to `path`'s inode. A pid of this uid whose fds cannot be read
+    is held; a pid of another uid or one that vanished mid-scan cannot be this user's writer."""
+    want = os.stat(path)
+    me = os.getuid()
+    for entry in os.scandir("/proc"):
+        if not entry.name.isdigit():
+            continue
+        fd_dir = f"/proc/{entry.name}/fd"
+        try:
+            fds = os.listdir(fd_dir)
+        except FileNotFoundError:
+            continue
+        except PermissionError:
+            try:
+                if os.stat(entry.path).st_uid == me:
+                    return True
+            except FileNotFoundError:
+                pass
+            continue
+        for fd in fds:
+            try:
+                st = os.stat(f"{fd_dir}/{fd}")
+            except OSError:
+                continue  # the fd closed mid-scan, or it is not a file
+            if (st.st_dev, st.st_ino) == (want.st_dev, want.st_ino):
+                return True
+    return False
+
+
+def _held_open_macos(path: Path) -> bool:
+    """libproc scan: every vnode fd of every process, matched by (dev, ino). ~10ms, no spawn.
+    A same-uid process whose fd table cannot be read, or an fd read that fails for any reason but
+    EPERM (a hardened daemon refusing to describe its own vnode) or a vanished fd, reads as held."""
+    import ctypes
+    import ctypes.util
+    import errno
+
+    lib = ctypes.CDLL(ctypes.util.find_library("proc") or "libproc.dylib", use_errno=True)
+    lib.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
+    lib.proc_pidinfo.argtypes = [
+        ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int,
+    ]
+    lib.proc_pidfdinfo.argtypes = [
+        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int,
+    ]
+    proc_all_pids, pidlistfds, pidfdvnodeinfo, pidtbsdinfo, fdtype_vnode = 1, 1, 1, 3, 1
+    fd_entry = struct.Struct("=iI")
+    want = os.stat(path)
+    want_key = (want.st_dev & 0xFFFFFFFF, want.st_ino)
+    me = os.getuid()
+
+    size = lib.proc_listpids(proc_all_pids, 0, None, 0)
+    if size <= 0:
+        return True
+    pids = (ctypes.c_int * (size // 4 + 64))()
+    size = lib.proc_listpids(proc_all_pids, 0, pids, ctypes.sizeof(pids))
+    if size <= 0 or size >= ctypes.sizeof(pids):
+        return True
+    info = ctypes.create_string_buffer(256)
+    for pid in pids[: size // 4]:
+        if pid <= 0:
+            continue
+        need = lib.proc_pidinfo(pid, pidlistfds, 0, None, 0)
+        table = ctypes.create_string_buffer(need + 16 * fd_entry.size) if need > 0 else None
+        got = lib.proc_pidinfo(pid, pidlistfds, 0, table, ctypes.sizeof(table)) if table else -1
+        if got <= 0 or got >= ctypes.sizeof(table):
+            err = ctypes.get_errno()
+            if err == errno.ESRCH:
+                continue
+            seen = lib.proc_pidinfo(pid, pidtbsdinfo, 0, info, ctypes.sizeof(info))
+            if seen >= 24 and struct.unpack_from("=I", info, 20)[0] == me:
+                return True  # a same-uid process whose fd table is closed to us is a doubt
+            continue  # another uid, or opaque even to bsdinfo: not this user's writer
+        for off in range(0, got - fd_entry.size + 1, fd_entry.size):
+            fd, fdtype = fd_entry.unpack_from(table, off)
+            if fdtype != fdtype_vnode:
+                continue
+            ctypes.set_errno(0)
+            if lib.proc_pidfdinfo(pid, fd, pidfdvnodeinfo, info, ctypes.sizeof(info)) < 40:
+                if ctypes.get_errno() in (errno.EPERM, errno.EBADF, errno.ESRCH):
+                    continue
+                return True
+            # proc_fileinfo (24 bytes) then vinfo_stat: vst_dev u32 at 24, vst_ino u64 at 32.
+            if (struct.unpack_from("=I", info, 24)[0], struct.unpack_from("=Q", info, 32)[0]) == want_key:
+                return True
+    return False
+
+
 def _lock_held_open(path: Path) -> bool:
     """True when any process may hold `path` open. Windows: an exclusive-share open succeeds only
-    if nobody holds it. POSIX has no portable probe, so it reads as held. Any doubt is True."""
+    if nobody holds it. Linux: /proc fd scan. macOS: libproc. No spawn. Any doubt or unknown
+    platform is True."""
     if os.name != "nt":
+        try:
+            if sys.platform.startswith("linux"):
+                return _held_open_linux(path)
+            if sys.platform == "darwin":
+                return _held_open_macos(path)
+        except Exception:  # noqa: BLE001 -- doubt reads as held
+            pass
         return True
     try:
         import ctypes
@@ -698,12 +796,19 @@ def _reclaim_ownerless_lock(lock_path: Path) -> bool:
         return False
     try:
         st = lock_path.stat()
-        if time.time() - st.st_mtime < _OWNERLESS_RECLAIM_FLOOR_SEC:
+        # A live writer in its close-to-rename window has already written the whole index, so an
+        # empty, unheld, ownerless lock has no writer at any age; a non-empty one keeps the floor.
+        if st.st_size != 0 and time.time() - st.st_mtime < _OWNERLESS_RECLAIM_FLOOR_SEC:
             return False
         if _lock_held_open(lock_path):
             return False
         if _owner_path(lock_path).exists():
             return False
+        again = lock_path.stat()
+        if (again.st_dev, again.st_ino, again.st_size, again.st_mtime_ns) != (
+            st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns,
+        ):
+            return False  # a fresh lock at the same path is a different writer's
         now = datetime.now(timezone.utc)
         dest = lock_path.with_name(
             f"{lock_path.name}.reclaimed-{now.strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"

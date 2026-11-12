@@ -425,7 +425,7 @@ for (const b of BATCHES) {
   for (const r of b.rows) {
     const _entry = QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r);
     const _path = _entry.path;
-    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, pmRuling: _entry.pm_ruling || '', node: null, declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', origin: '', refuteNote: '', rulingNote: '', fixReported: false, sizingPath: '', undoReason: '', widened: false, verifyRetried: false, dedupeFlipped: false, onFailUsed: false, done: false, sha: '' };
+    _rows[r] = { rowId: r, batchId: b.id, batchKey: _entry.batch_key, path: _path, digest: _entry.digest, pmRuling: _entry.pm_ruling || '', node: null, declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', origin: '', refuteNote: '', rulingNote: '', fixReported: false, sizingPath: '', undoReason: '', widened: false, verifyRetried: false, dedupeFlipped: false, onFailUsed: false, done: false, sha: '' };
   }
 }
 
@@ -576,7 +576,7 @@ async function _triageBatch(batchState) {
       continue;
     }
     const _belowFloor = _tshirtRank(scouted.tshirt) < PLAN_WEIGHT_FLOOR_RANK;
-    const _ownTarget = SIZE_FIX_ENTRIES[String(row.origin).replace(/^triage:/, '')];
+    const _ownTarget = SIZE_FIX_ENTRIES[String(row.origin).replace(/^triage:/, '')] || SIZE_FIX_ENTRIES[Object.keys(SIZE_FIX_ENTRIES).sort()[0]];
     if (_belowFloor && _ownTarget && ROUTING[_ownTarget]) {
       _byTriageCheck.size_collapsed += 1;
       row.origin = 'size:below-plan-weight';

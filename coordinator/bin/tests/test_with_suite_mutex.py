@@ -759,10 +759,12 @@ def test_grandchild_holding_the_pipe_does_not_hang_the_wrapper(tmp_path):
     gc_pid = tmp_path / "gc.pid"
     # Double fork: the orphaned grandchild is no longer a descendant, so the
     # process-tree kill misses it while it still holds the inherited pipe write ends.
+    # It ignores SIGINT so the ceiling's group interrupt cannot end it either.
     child = (
-        "import os, sys, pathlib, time\n"
+        "import os, sys, pathlib, time, signal\n"
         "if os.fork() == 0:\n"
         "    if os.fork() == 0:\n"
+        "        signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
         "        pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
         "        time.sleep(15)\n"
         "    os._exit(0)\n"
@@ -1244,3 +1246,241 @@ def test_interrupt_path_kills_the_whole_child_tree(monkeypatch):
         with pytest.raises(KeyboardInterrupt):
             module.main(["--", sys.executable, "-c", "pass"])
     assert killed == [process]
+
+
+def test_at_argfile_after_separator_reaches_the_child_verbatim(tmp_path):
+    env = _base_env(tmp_path)
+    argfile = tmp_path / "tests.args"
+    argfile.write_text("a.py::test_x\n", encoding="utf-8")
+    out = tmp_path / "argv.json"
+    script = "import json, sys, pathlib; pathlib.Path(sys.argv[1]).write_text(json.dumps(sys.argv[2:]))"
+    result = _run(
+        ["--", sys.executable, "-c", script, str(out), f"@{argfile}", "-q"], env=env
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(out.read_text()) == [f"@{argfile}", "-q"]
+
+
+def test_pytest_at_argfile_through_the_wrapper_runs_exactly_the_listed_tests(tmp_path):
+    env = _base_env(tmp_path)
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "test_a.py").write_text(
+        "def test_one():\n    pass\n\ndef test_two():\n    pass\n", encoding="utf-8"
+    )
+    (suite / "test_b.py").write_text("def test_three():\n    assert False\n", encoding="utf-8")
+    argfile = tmp_path / "tests.args"
+    argfile.write_text(
+        f"{suite / 'test_a.py'}::test_one\n{suite / 'test_a.py'}::test_two\n", encoding="utf-8"
+    )
+    result = _run(
+        [
+            "--",
+            sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-p", "no:randomly",
+            "--rootdir", str(suite), "-v", f"@{argfile}",
+        ],
+        env=env,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "test_a.py::test_one PASSED" in result.stdout
+    assert "test_a.py::test_two PASSED" in result.stdout
+    assert "test_three" not in result.stdout
+    assert "2 passed" in result.stdout
+
+
+_POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32", reason="POSIX SIGINT/process-group branch")
+
+
+@_POSIX_ONLY
+@pytest.mark.deliberate_wall_clock(
+    reason="the ceiling is a wall-clock bound; a hung pytest must be interrupted at it"
+)
+def test_ceiling_interrupts_pytest_first_so_its_junit_is_flushed(tmp_path):
+    """Both sides: the hung run exits 124 AND its junit exists, which only a SIGINT-first kill yields."""
+    env = _base_env(tmp_path / "home")
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "test_slow.py").write_text(
+        "import time\n\ndef test_fast():\n    pass\n\ndef test_hangs():\n    time.sleep(120)\n",
+        encoding="utf-8",
+    )
+    junit = tmp_path / "out" / "junit.xml"
+    junit.parent.mkdir()
+    result = _run(
+        [
+            "--max-runtime", "20", "--",
+            sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-p", "no:randomly",
+            "--rootdir", str(suite), f"--junitxml={junit}", str(suite),
+        ],
+        env=env,
+        timeout=120,
+    )
+    assert result.returncode == 124, (result.stdout, result.stderr)
+    assert junit.is_file(), result.stderr
+    assert "<testcase" in junit.read_text(encoding="utf-8")
+    assert "this is a defect" in result.stderr
+    assert f"Flushed junit output: {junit}" in result.stderr
+
+
+@_POSIX_ONLY
+def test_kill_tree_interrupts_before_it_terminates_and_still_kills_a_sigint_ignorer(
+    tmp_path, monkeypatch
+):
+    module = _load_wrapper_module()
+    monkeypatch.setattr(module, "_INTERRUPT_GRACE_SECS", 3.0)
+    handled = tmp_path / "handled"
+    polite = (
+        "import signal, sys, time, pathlib\n"
+        "def h(*a):\n"
+        "    pathlib.Path(sys.argv[1]).write_text('sigint')\n"
+        "    sys.exit(0)\n"
+        "signal.signal(signal.SIGINT, h)\n"
+        "print('ready', flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    stubborn = (
+        "import signal, time\n"
+        "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+        "print('ready', flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    for script, argv_tail in ((polite, [str(handled)]), (stubborn, [])):
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, *argv_tail], stdout=subprocess.PIPE,
+            **module._own_tree_popen_kwargs(),
+        )
+        assert process.stdout.readline().strip() == b"ready"
+        started = time.monotonic()
+        module._kill_process_tree(process)
+        elapsed = time.monotonic() - started
+        process.stdout.close()
+        assert process.poll() is not None, "the hard-kill escalation must still end a SIGINT ignorer"
+        if script is polite:
+            assert handled.read_text() == "sigint"
+            assert elapsed < 3.0
+        else:
+            assert elapsed >= 3.0
+
+
+def test_interrupt_is_sigint_to_the_group_on_posix_and_ctrl_break_on_windows(monkeypatch):
+    module = _load_wrapper_module()
+    process = mock.Mock(pid=4242)
+
+    killpg = mock.Mock()
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    monkeypatch.setattr(module.os, "killpg", killpg, raising=False)
+    module._interrupt_tree(process)
+    killpg.assert_called_once_with(4242, module.signal.SIGINT)
+    process.send_signal.assert_not_called()
+
+    process = mock.Mock(pid=4242)
+    killpg.reset_mock()
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setattr(module.signal, "CTRL_BREAK_EVENT", 1, raising=False)
+    module._interrupt_tree(process)
+    process.send_signal.assert_called_once_with(1)
+    killpg.assert_not_called()
+
+
+def test_windows_child_gets_its_own_console_process_group(monkeypatch):
+    module = _load_wrapper_module()
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setattr(module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    assert module._own_tree_popen_kwargs()["creationflags"] & 0x200
+
+
+def test_collected_count_reads_pytest_and_xdist_announcements(tmp_path):
+    module = _load_wrapper_module()
+    log = tmp_path / "current.log"
+    assert module._collected_count(str(log)) is None
+    assert module._collected_count(None) is None
+    log.write_bytes(b"noise\n\x1b[1mcollected 59 items\x1b[0m\n")
+    assert module._collected_count(str(log)) == 59
+    log.write_bytes(b"8 workers [5086 items]\n")
+    assert module._collected_count(str(log)) == 5086
+    log.write_bytes(b"running a build, no count here\n")
+    assert module._collected_count(str(log)) is None
+
+
+def test_count_ceiling_scales_with_the_run_and_is_floored():
+    module = _load_wrapper_module()
+    assert module._count_ceiling_secs(1) == module._CEILING_MIN_SECS
+    big = module._count_ceiling_secs(5000)
+    assert big == module._CEILING_BASE_SECS + 5000 * module._CEILING_SECS_PER_TEST
+    assert big > module._DEFAULT_MAX_RUNTIME_SECS
+
+
+def test_ceiling_is_derived_from_the_log_count_not_the_fixed_fallback(tmp_path, monkeypatch, capsys):
+    module = _load_wrapper_module()
+    monkeypatch.setattr(module, "_CEILING_MIN_SECS", 0.0)
+    monkeypatch.setattr(module, "_CEILING_BASE_SECS", 0.0)
+    monkeypatch.setattr(module, "_CEILING_SECS_PER_TEST", 0.0005)
+    log = tmp_path / "current.log"
+    log.write_bytes(b"collected 400 items\n")
+    proc = mock.Mock()
+    proc.wait.side_effect = subprocess.TimeoutExpired("x", 0.25)
+    with mock.patch.object(module, "_dump_process_tree", lambda p: None), \
+         mock.patch.object(module, "_kill_process_tree", lambda p: 1):
+        started = time.monotonic()
+        assert module._wait_interruptible(
+            proc, max_runtime=3600.0, log_path=str(log), derive_ceiling=True
+        ) == module._MAX_RUNTIME_EXIT_CODE
+        assert time.monotonic() - started < 30
+    assert "derived from 400 collected tests" in capsys.readouterr().err
+
+    with mock.patch.object(module, "_dump_process_tree", lambda p: None), \
+         mock.patch.object(module, "_kill_process_tree", lambda p: 1):
+        module._wait_interruptible(proc, max_runtime=0.3, log_path=str(log), derive_ceiling=False)
+    assert "derived from" not in capsys.readouterr().err
+
+
+def test_ceiling_hit_is_a_defect_report_naming_the_missing_junit(tmp_path, capsys):
+    module = _load_wrapper_module()
+    proc = mock.Mock()
+    proc.wait.side_effect = subprocess.TimeoutExpired("x", 0.25)
+    junit = tmp_path / "never.xml"
+    with mock.patch.object(module, "_dump_process_tree", lambda p: None), \
+         mock.patch.object(module, "_kill_process_tree", lambda p: 1):
+        assert module._wait_interruptible(proc, max_runtime=0.01, junit_path=str(junit)) == 124
+    err = capsys.readouterr().err
+    assert "with-suite-mutex: this is a defect" in err
+    assert "No junit was written" in err and str(junit) in err
+
+
+def test_junit_report_ignores_a_stale_file_and_names_a_fresh_one(tmp_path):
+    module = _load_wrapper_module()
+    junit = tmp_path / "j.xml"
+    junit.write_text("<x/>")
+    assert f"Flushed junit output: {junit}" in module._junit_report(str(junit), time.time() - 5)
+    os.utime(junit, (1_000_000, 1_000_000))
+    assert "No junit was written" in module._junit_report(str(junit), time.time() - 5)
+    assert "no --junitxml" in module._junit_report(None, 0.0)
+
+
+def test_junit_path_comes_from_the_commands_own_argument():
+    module = _load_wrapper_module()
+    assert module._junit_path_from(["pytest", "--junitxml=a/b.xml"]) == "a/b.xml"
+    assert module._junit_path_from(["pytest", "--junitxml", "c.xml", "-q"]) == "c.xml"
+    assert module._junit_path_from(["pytest", "--junit-xml=d.xml"]) == "d.xml"
+    assert module._junit_path_from(["pytest", "-q"]) is None
+    assert module._junit_path_from(["pytest", "--junitxml"]) is None
+
+
+def test_main_derives_the_ceiling_only_when_no_max_runtime_is_given(tmp_path, monkeypatch):
+    module = _load_wrapper_module()
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    seen = []
+    real = module._wait_interruptible
+
+    def _spy(process, max_runtime=0.0, **kwargs):
+        seen.append(kwargs["derive_ceiling"])
+        return real(process, max_runtime, **kwargs)
+
+    monkeypatch.setattr(module, "_wait_interruptible", _spy)
+    child = [sys.executable, "-c", "pass"]
+    assert module.main(["--", *child]) == 0
+    assert module.main(["--max-runtime", "50", "--", *child]) == 0
+    assert module.main(["--max-runtime", str(module._DEFAULT_MAX_RUNTIME_SECS), "--", *child]) == 0
+    assert seen == [True, False, False]

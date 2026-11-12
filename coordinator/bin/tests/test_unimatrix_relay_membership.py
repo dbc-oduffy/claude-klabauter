@@ -81,7 +81,8 @@ def _interp(line):
 def test_relay_line_on_darwin_names_homebrew_python_before_the_system_one(monkeypatch):
     brew = "/opt/homebrew/bin/python3"
     monkeypatch.setattr(R.sys, "platform", "darwin")
-    monkeypatch.setattr(R.os.path, "isfile", lambda p: p == brew or Path(p).is_file())
+    real_isfile = R.os.path.isfile
+    monkeypatch.setattr(R.os.path, "isfile", lambda p: p == brew or real_isfile(p))
     monkeypatch.setattr(R.os, "access", lambda p, m: True)
     assert _interp(R.relay_line("AAAA", "alpha", pin_value=None)) == brew
 
@@ -321,3 +322,87 @@ def test_dropping_file_pub_from_a_member_revokes_the_file_line_only(env):
     push(env, s3, g3)
     text = env["ak"].read_text(encoding="utf-8")
     assert body(env, "a") in text and body(env, "afile") not in text
+
+
+def push_pin(env, snap, sig, pin_text):
+    return R.membership_put(env["home"], M.canonical_bytes(snap).decode(), base64.b64encode(sig).decode(), M,
+                            env["ak"], notifier=env["notifier"], is_admin=lambda: False, pin_line=pin_text)
+
+
+def test_a_pinless_receiver_pins_from_a_verifying_push_and_logs_the_fingerprint(env):
+    snap, sig = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
+    reply = push_pin(env, snap, sig, env["keys"]["signer"][1] + "\n")
+    assert reply["ok"] is True
+    assert M.load_pin(env["home"]).split()[1] == body(env, "signer")
+    pinned = [e for e in env["events"] if e["kind"] == "pinned"]
+    assert len(pinned) == 1 and M.fingerprint(env["keys"]["signer"][1]) in pinned[0]["detail"]
+    assert (env["home"] / "unimatrix" / "membership" / "snapshot.json").exists()
+
+
+def test_a_pin_line_the_snapshot_does_not_verify_against_writes_nothing_and_refuses(env):
+    snap, sig = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
+    reply = push_pin(env, snap, sig, env["keys"]["other"][1])
+    assert reply["ok"] is False
+    assert M.load_pin(env["home"]) is None
+    assert not (env["home"] / "unimatrix" / "membership" / "signer.pub").exists()
+    assert not (env["home"] / "unimatrix" / "membership" / "snapshot.json").exists()
+    assert [e["kind"] for e in env["events"]] == ["refused"] and not env["ak"].exists()
+
+
+def test_a_snapshot_that_fails_to_verify_leaves_no_pin_file_behind(env):
+    snap, sig = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")}, which="other")
+    reply = push_pin(env, snap, sig, env["keys"]["signer"][1])
+    assert reply["ok"] is False
+    assert not (env["home"] / "unimatrix" / "membership" / "signer.pub").exists()
+
+
+def test_a_malformed_pin_line_refuses_and_writes_no_pin(env):
+    snap, sig = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
+    assert push_pin(env, snap, sig, "not a key")["ok"] is False
+    assert M.load_pin(env["home"]) is None
+
+
+def test_a_receiver_holding_a_different_pin_ignores_the_pushed_pin_and_refuses(env):
+    M.write_pin(env["home"], env["keys"]["other"][1])
+    snap, sig = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
+    reply = push_pin(env, snap, sig, env["keys"]["signer"][1])
+    assert reply["ok"] is False
+    assert M.load_pin(env["home"]).split()[1] == body(env, "other")
+    assert not [e for e in env["events"] if e["kind"] == "pinned"]
+
+
+def test_a_two_line_push_behaves_as_before_and_an_empty_pin_line_is_a_two_line_push(env):
+    pin(env)
+    snap, sig = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
+    assert push_pin(env, snap, sig, "")["ok"] is True
+    assert [e["kind"] for e in env["events"]] == ["join"]
+    env2 = {**env, "home": env["home"].parent / "home2", "events": []}
+    snap2, sig2 = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
+    assert push_pin(env2, snap2, sig2, "")["ok"] is False and M.load_pin(env2["home"]) is None
+
+
+def test_authorized_keys_gets_one_line_per_relay_key_body_of_each_member(env):
+    pin(env)
+    m = {**member(env, "a", "alpha"), "relay_pubs": {"beta": env["keys"]["b"][1]}}
+    s1, g1 = sign(env, None, {"op": "join", "member": m})
+    assert push(env, s1, g1)["authorized_keys"] == "updated"
+    lines = env["ak"].read_text(encoding="utf-8").splitlines()
+    assert sorted(R.managed_key_body(l) for l in lines) == sorted([body(env, "a"), body(env, "b")])
+    s2, g2 = sign(env, s1, {"op": "revoke", "box": "alpha"})
+    push(env, s2, g2)
+    assert env["ak"].read_text(encoding="utf-8") == ""
+
+
+def test_main_put_reads_an_optional_third_pin_line(env, monkeypatch, capsys):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(env["home"]))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: env["ak"].parent.parent))
+    monkeypatch.setattr(R, "load_membership", lambda: M)
+    monkeypatch.setattr(M, "_desktop_notify", lambda *a, **kw: False)
+    snap, sig = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
+    monkeypatch.setenv("SSH_ORIGINAL_COMMAND", "membership put")
+    monkeypatch.setattr("sys.stdin", io.StringIO(M.canonical_bytes(snap).decode() + "\n" + base64.b64encode(sig).decode()
+                                                 + "\n" + env["keys"]["signer"][1] + "\n"))
+    with pytest.raises(SystemExit) as ok:
+        R.main()
+    assert ok.value.code == 0 and json.loads(capsys.readouterr().out)["ok"] is True
+    assert M.load_pin(env["home"]).split()[1] == body(env, "signer")

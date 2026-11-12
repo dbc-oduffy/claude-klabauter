@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Forced command for the unimatrix CONTROL key on the receiving box: the ONLY thing that key can run.
-It starts or wakes a session and nothing else; the message key's forced command (unimatrix-relay.py)
-and the file key's (unimatrix-file-relay.py) refuse both modes, and this one refuses every other mode.
+"""Control entry on the receiving box: starts or wakes a session and nothing else. The message key's forced
+command (unimatrix-relay.py) and the file key's (unimatrix-file-relay.py) refuse both modes, and this one refuses
+every other mode.
 
-authorized_keys line (restrict = no pty, no forwarding; key body elided; absolute interpreter and script
-paths). `unimatrix-install.py --install` prints the exact form:
-  restrict,command="/usr/bin/python3 /home/me/.coordinator-claude-settings/unimatrix/unimatrix-control.py" ssh-ed25519 <key-body> unimatrix-control
+The control key is full-admin, pinned only by from= (key body elided); `unimatrix-install.py --control-key` prints
+the exact line:
+  from="<cidr>[,<cidr>...]" ssh-ed25519 <key-body> unimatrix-control
+The client runs this script explicitly: `<far interpreter> <this script> launch <repo-key>` (argv form). An older
+forced-command key (`command="<interpreter> <this script>"`) keeps working: it gets the bare `launch <repo-key>`
+or the explicit `[&] <interpreter> <this script> launch <repo-key>` in SSH_ORIGINAL_COMMAND.
 
-Modes, read from SSH_ORIGINAL_COMMAND (stdin is never read):
+Modes, read from argv or SSH_ORIGINAL_COMMAND (stdin is never read):
   launch <repo-key>   resolve <repo-key> through the machine-local `repos.` registry, mint a session name
                       `<repo-key>-<6 hex>` and run `headless-em-launch.py claude --name <name>` there
                       (`claude --bg -n <name>` on every OS); its one JSON line carries the session id. A path
@@ -19,8 +22,10 @@ Reply: one JSON line {"ok": true, "session_name", "session_id", "pid", "family"}
 `claude --bg` owns the background process) or {"ok": false, "error"}; exit 0 only when ok.
 """
 import json
+import ntpath
 import os
 import re
+import shlex
 import subprocess
 import sys
 import uuid
@@ -47,11 +52,37 @@ def _load_sibling(filename, modname):
     return mod
 
 
+_EXPLICIT_RE = re.compile(r"(.*\S) (\S+) (\S+)")
+
+
+def _prefix_runs_this_script(prefix):
+    """True when `prefix` (`[&] <interpreter> <script>`, either shell's quoting) ends in unimatrix-control.py."""
+    try:
+        tokens = shlex.split(prefix, posix=False)
+    except ValueError:
+        return False
+    if tokens and tokens[0] == "&":
+        tokens = tokens[1:]
+    if len(tokens) < 2:
+        return False
+    script = tokens[-1]
+    if len(script) >= 2 and script[0] == script[-1] and script[0] in "\"'":
+        script = script[1:-1]
+    return ntpath.basename(script) == "unimatrix-control.py"
+
+
 def parse_mode(original_command):
-    """Map an SSH_ORIGINAL_COMMAND string to ("launch"|"wake", arg), or None when it is not allowed."""
-    cmd = (original_command or "").split()
+    """Map a command string to ("launch"|"wake", arg), or None when it is not allowed.
+
+    Accepts the bare `<verb> <arg>` (forced-command key) and the same two tokens behind an explicit
+    `[&] <interpreter> <script>` prefix whose script is unimatrix-control.py (a new client over an old forced key)."""
+    original_command = original_command or ""
+    cmd = original_command.split()
     if len(cmd) != 2 or original_command != f"{cmd[0]} {cmd[1]}":
-        return None
+        m = _EXPLICIT_RE.fullmatch(original_command)
+        if not m or not _prefix_runs_this_script(m.group(1)):
+            return None
+        cmd = [m.group(2), m.group(3)]
     if cmd[0] == "launch" and REPO_KEY_RE.fullmatch(cmd[1]):
         return "launch", cmd[1]
     if cmd[0] == "wake" and NAME_RE.fullmatch(cmd[1]):
@@ -164,7 +195,8 @@ def wake(name, *, sessions=None, spawner=None, platform=None, runner=None):
 
 
 def main():
-    parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
+    argv = sys.argv[1:]
+    parsed = parse_mode(" ".join(argv) if len(argv) == 2 else os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
         sys.exit("usage: launch <repo-key> | wake <session>")
     mode, arg = parsed
@@ -174,4 +206,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if any(_a in ("-h", "--help") for _a in __import__("sys").argv[1:]):
+        print("usage: unimatrix-control [-h]\nunimatrix control client; see the module docstring for subcommands")
+        raise SystemExit(0)
     main()

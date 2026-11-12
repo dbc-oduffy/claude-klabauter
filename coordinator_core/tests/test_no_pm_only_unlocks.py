@@ -33,6 +33,16 @@ _PM_SENTINEL_NAMES = (
     ".coordinator-bash-guards-disarmed",
 )
 
+
+def _exemption(rel: str) -> tuple[set[str], tuple[str, ...]]:
+    """(sentinel names, remedy phrases) a module may carry: the deny_registry PM-ruled rows naming it a reader."""
+    from coordinator_core import deny_registry
+
+    stem = Path(rel).stem
+    rows = [r for r in deny_registry.PM_RULED_EXCEPTIONS.values() if stem in r.readers]
+    return {r.sentinel for r in rows}, tuple(r.phrase for r in rows)
+
+
 _PRE_FILTER = re.compile(r"\bPM\b|sentinel|\.coordinator-", re.IGNORECASE)
 
 _SELF = Path(__file__).resolve()
@@ -65,8 +75,9 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
     return ids
 
 
-def _violations(text: str) -> list[tuple[int, str, str]]:
+def _violations(text: str, rel: str = "") -> list[tuple[int, str, str]]:
     """Return (lineno, kind, snippet) for each offending non-docstring literal."""
+    owned, phrases = _exemption(rel) if rel else (set(), ())
     if not _PRE_FILTER.search(text):
         return []
     try:
@@ -81,11 +92,14 @@ def _violations(text: str) -> list[tuple[int, str, str]]:
         if id(node) in skip:
             continue
         s = node.value
-        m = _PM_REMEDY.search(s)
+        scan = s
+        for phrase in phrases:
+            scan = scan.replace(phrase, "")
+        m = _PM_REMEDY.search(scan)
         if m:
             hits.append((node.lineno, "pm-remedy", m.group(0)))
         for name in _PM_SENTINEL_NAMES:
-            if name in s:
+            if name in s and name not in owned:
                 hits.append((node.lineno, "pm-sentinel-name", name))
     return hits
 
@@ -93,8 +107,9 @@ def _violations(text: str) -> list[tuple[int, str, str]]:
 def test_no_module_unlocks_or_advises_only_by_a_pm_act():
     offenders = []
     for path in _module_files():
-        for lineno, kind, snippet in _violations(path.read_text(encoding="utf-8", errors="replace")):
-            offenders.append(f"{path.relative_to(_ROOT).as_posix()}:{lineno} [{kind}] {snippet!r}")
+        rel = path.relative_to(_ROOT).as_posix()
+        for lineno, kind, snippet in _violations(path.read_text(encoding="utf-8", errors="replace"), rel):
+            offenders.append(f"{rel}:{lineno} [{kind}] {snippet!r}")
     assert not offenders, (
         "PM-only unlock or PM-approval remedy found; convert to an advisory, or route an "
         "irreversible class to the G-EM (docs/decisions/DR-NO-PM-UNLOCKS.md):\n  "
@@ -141,6 +156,45 @@ def test_matcher_flags_known_bad_phrasings(message):
 )
 def test_matcher_passes_gem_routed_and_advisory_text(message):
     assert not _violations(f"X = {message!r}\n")
+
+
+def test_exemption_is_keyed_to_a_registry_row_and_its_readers():
+    owner = "write_guards/_doctrine_edit_sentinel.py"
+    name = "X = '.coordinator-doctrine-edit-approved'\n"
+    assert not _violations(name, owner)
+    assert _violations(name, "write_guards/other.py")
+    assert _violations("X = '.coordinator-override-worktree-guard'\n", owner)
+
+
+def test_phrase_exemption_is_scoped_to_the_literal_in_readers():
+    reader = "bash_guards/block_approval_sentinel_creation.py"
+    ok = "X = 'creates the doctrine-edit approval sentinel'\n"
+    assert not _violations(ok, reader)
+    assert _violations(ok, "bash_guards/other.py")
+    assert _violations("X = 'Ask the PM'\n", reader)
+    assert _violations("X = 'get the PM sentinel'\n", reader)
+
+
+def test_every_pm_ruled_exception_row_resolves():
+    from coordinator_core import deny_registry
+
+    assert deny_registry.PM_RULED_EXCEPTIONS
+    stems = {p.stem for p in _module_files()}
+    for guard, row in deny_registry.PM_RULED_EXCEPTIONS.items():
+        assert guard in deny_registry.GUARD_DENY_CLASS, guard
+        assert list((_ROOT.parent / "docs" / "decisions").glob(f"{row.dr}-*.md")), row.dr
+        assert row.sentinel in _PM_SENTINEL_NAMES, row.sentinel
+        assert set(row.readers) <= stems, row.readers
+
+
+def test_dropping_the_registry_row_turns_the_ratchet_red(monkeypatch):
+    from coordinator_core import deny_registry
+
+    owner = "write_guards/_doctrine_edit_sentinel.py"
+    src = "X = '.coordinator-doctrine-edit-approved'\n"
+    assert not _violations(src, owner)
+    monkeypatch.setattr(deny_registry, "PM_RULED_EXCEPTIONS", {})
+    assert _violations(src, owner)
 
 
 def test_docstring_and_comment_mentions_are_not_deny_paths():

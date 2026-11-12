@@ -18,11 +18,12 @@ import signal
 import subprocess
 import sys
 import threading
+from pathlib import Path
 from typing import Any, Optional, Sequence
 
 import psutil
 
-from coordinator_core import temp_layout
+from coordinator_core import machine_resolver, temp_layout
 from coordinator_core.testing import nested_session_guard, spawn_depth, watch_parent
 
 ADMIT_KEY = "test-runner-pytest"
@@ -125,19 +126,61 @@ def _spawn(argv: list) -> tuple:
     return cr.spawn_in_capped_job(argv, popen_kwargs=kwargs)
 
 
+RUN_ROOT_KEY = "paths.pytest_run_root"
+
+
+def per_run_root(repo_root: Any) -> Path:
+    """Parent of every per-run pytest dir: the absolute machine-local registry value of
+    `paths.pytest_run_root`, else `temp_layout.pytest_basetemp_root(repo_root)`."""
+    try:
+        raw = machine_resolver.registry_get(RUN_ROOT_KEY)
+    except Exception:  # noqa: BLE001 -- an unreadable registry falls back to the Temp layout
+        raw = None
+    if raw:
+        configured = Path(os.path.expanduser(raw))
+        if configured.is_absolute():
+            return configured
+    try:
+        return temp_layout.pytest_basetemp_root(repo_root)
+    except ValueError:
+        return temp_layout.fleet_temp_root() / "pytest"
+
+
+def new_run_slug() -> str:
+    return "%d-%s" % (os.getpid(), os.urandom(3).hex())
+
+
+def has_basetemp(args: Sequence[str]) -> bool:
+    return any(a == "--basetemp" or a.startswith("--basetemp=") for a in args)
+
+
+def per_run_dirs(repo_root: Any, slug: str) -> tuple:
+    """(holder, basetemp, tmp), created: `<root>/<slug>` holds `bt` (pytest's basetemp) and `tmp`
+    (the child's TEMP/TMP), so no two slugs share a `pytest-current` link."""
+    holder = per_run_root(repo_root) / slug
+    bt, tmp = holder / "bt", holder / "tmp"
+    bt.mkdir(parents=True, exist_ok=True)
+    tmp.mkdir(parents=True, exist_ok=True)
+    return holder, bt, tmp
+
+
+def tmp_env(base_env: Any, tmp: Path) -> dict:
+    """Copy of `base_env` with TEMP, TMP and TMPDIR pointing at `tmp`."""
+    env = dict(base_env)
+    env.update(TEMP=str(tmp), TMP=str(tmp), TMPDIR=str(tmp))
+    return env
+
+
 def with_per_run_basetemp(pytest_args: Sequence[str]) -> list:
     """`pytest_args` unchanged when the caller passed `--basetemp`; else with a unique
-    `--basetemp <Temp>/coordinator/<repo>/pytest/<pid>-<hex>` appended, so concurrent runs never
+    `--basetemp <per_run_root>/<pid>-<hex>` appended, so concurrent runs never
     share pytest's `pytest-of-<user>` dir and its `pytest-current` symlink."""
     args = list(pytest_args)
-    if any(a == "--basetemp" or a.startswith("--basetemp=") for a in args):
+    if has_basetemp(args):
         return args
-    try:
-        root = temp_layout.pytest_basetemp_root(os.getcwd())
-    except ValueError:
-        root = temp_layout.fleet_temp_root() / "pytest"
+    root = per_run_root(os.getcwd())
     root.mkdir(parents=True, exist_ok=True)
-    return [*args, "--basetemp", str(root / ("%d-%s" % (os.getpid(), os.urandom(3).hex())))]
+    return [*args, "--basetemp", str(root / new_run_slug())]
 
 
 def main(argv: Optional[Sequence[str]] = None, host: Any = None) -> int:

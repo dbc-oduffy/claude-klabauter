@@ -410,6 +410,43 @@ class TestCrashWindowReconciliation:
         assert exit_code == grind_rows.EXIT_REFUSAL
         assert close_fixture["row_path"].is_file()
 
+    @staticmethod
+    def _close_with_surface(close_fixture, tmp_path, *, archived_surface: str) -> int:
+        row_text = close_fixture["row_text"].replace("title:", "surface: a/test_x.py\ntitle:", 1)
+        close_fixture["row_path"].write_text(row_text, encoding="utf-8", newline="\n")
+        archive_dir = tmp_path / "archive" / "bug-backlog" / "2026-09"
+        archive_dir.mkdir(parents=True)
+        (archive_dir / "bug-1.yaml").write_text(
+            f"---\nid: bug-1\nstatus: closed-fixed\nsurface: {archived_surface}\ncloser: earlier run\n---\nbody\n",
+            encoding="utf-8",
+        )
+        return grind_rows.main(
+            [
+                "close",
+                "--profile-dir", str(close_fixture["profile_dir"]),
+                "--profile", "bug",
+                "--row", close_fixture["row_rel"],
+                "--digest", _sha256(row_text),
+                "--verdict", "fix",
+                "--evidence-file", str(close_fixture["evidence_file"]),
+                "--closed-by", "test-session",
+                "--run-stamp", "2026-09-21T00:00:00Z",
+                "--repo-root", str(tmp_path),
+            ]
+        )
+
+    def test_archived_row_for_the_same_surface_closure_is_tolerated(self, close_fixture, tmp_path):
+        exit_code = self._close_with_surface(close_fixture, tmp_path, archived_surface="a/test_x.py")
+        assert exit_code == grind_rows.EXIT_OK
+        assert not close_fixture["row_path"].exists()
+        archived = tmp_path / "archive" / "bug-backlog" / "2026-09" / "bug-1.yaml"
+        assert "closer: earlier run" in archived.read_text(encoding="utf-8")
+
+    def test_archived_row_for_a_different_surface_still_refuses(self, close_fixture, tmp_path):
+        exit_code = self._close_with_surface(close_fixture, tmp_path, archived_surface="b/test_y.py")
+        assert exit_code == grind_rows.EXIT_REFUSAL
+        assert close_fixture["row_path"].is_file()
+
 
 class TestAppendIdempotence:
     def test_retried_append_does_not_duplicate_the_line(self, tmp_path, monkeypatch):

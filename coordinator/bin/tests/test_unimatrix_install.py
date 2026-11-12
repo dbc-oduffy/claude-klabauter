@@ -73,6 +73,8 @@ def _no_real_launchctl_ps_or_pin(monkeypatch):
     monkeypatch.setattr(ui, "run_launchctl", lambda *a: None)
     monkeypatch.setattr(ui._lib("unimatrix_relay_sessions"), "ps_snapshot", lambda *a, **k: "")
     monkeypatch.setattr(ui, "_pin_value", lambda: None)
+    monkeypatch.setattr(ui, "_pin_raw", lambda: "/stub/pin")  # abs-path-ok: set pin; record_python_pin writes nothing
+    monkeypatch.setattr(ui, "_write_pin", lambda interp: pytest.fail("machine-local write outside a pin test"))
 
 
 def _run(argv, text, dest=None, hooks=None):
@@ -1159,6 +1161,46 @@ def test_macos_login_agent_reruns_autolink_on_an_interval_without_keepalive(monk
     assert spec["ProgramArguments"][1].startswith(str(tmp_path))
 
 
+def test_login_agent_runs_the_unimatrix_python_pin_whichever_python_reinstalls(monkeypatch, tmp_path):
+    """A reinstall from a different interpreter leaves a pinned plist byte-identical: no reload, no grant loss."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(ui, "_pin_value", lambda: "/pinned/python3")  # abs-path-ok: synthetic pin, never opened
+    dest, agents = tmp_path / "unimatrix", tmp_path / "LaunchAgents"
+    assert ui.register_login_agent(dest, agents)[0] == "created"
+    import plistlib
+    [plist] = list(agents.iterdir())
+    assert plistlib.loads(plist.read_bytes())["ProgramArguments"][0] == "/pinned/python3"
+    monkeypatch.setattr(sys, "executable", "/other/python3.15")  # abs-path-ok: synthetic, never opened
+    assert ui.register_login_agent(dest, agents)[0] == "present"
+
+
+def test_first_install_pins_the_interpreter_the_login_agent_already_runs(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    granted = tmp_path / "granted-python3"
+    granted.write_text("")
+    agents = tmp_path / "LaunchAgents"
+    monkeypatch.setattr(ui, "_pin_value", lambda: str(granted))
+    ui.register_login_agent(tmp_path / "unimatrix", agents)
+    written = []
+    monkeypatch.setattr(ui, "_pin_raw", lambda: None)
+    monkeypatch.setattr(ui, "_write_pin", lambda interp: written.append(interp) or True)
+    monkeypatch.setattr(sys, "executable", "/other/python3.15")  # abs-path-ok: synthetic, never opened
+    assert ui.record_python_pin(agents) == str(granted) and written == [str(granted)]
+
+
+def test_first_install_without_a_login_agent_pins_the_installing_python(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    written = []
+    monkeypatch.setattr(ui, "_pin_raw", lambda: None)
+    monkeypatch.setattr(ui, "_write_pin", lambda interp: written.append(interp) or True)
+    assert ui.record_python_pin(tmp_path / "LaunchAgents") == sys.executable and written == [sys.executable]
+
+
+def test_an_existing_pin_is_never_overwritten_even_when_stale(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui, "_pin_raw", lambda: str(tmp_path / "gone-python3"))
+    assert ui.record_python_pin(tmp_path) is None  # autouse _write_pin fails the test on any write
+
+
 def test_linux_login_unit_carries_no_interval_or_restart(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "platform", "linux")
     text = ui._login_agent_text(tmp_path / "unimatrix").decode("utf-8")
@@ -1592,6 +1634,9 @@ class _PairBox:
             return done(0, self.vault) if self.vault else done(1)
         if argv[2] == "get":
             return done(0, self.store[argv[3]]) if argv[3] in self.store else done(1)
+        if argv[2] == "dump":
+            keep = {k: v for k, v in self.store.items() if k.startswith(argv[4] + ".")}
+            return done(0, json.dumps(keep))
         self.store[argv[3]] = argv[4]
         return done()
 
@@ -1822,6 +1867,69 @@ def test_pair_adopts_unrecorded_existing_key_without_overwriting(monkeypatch, tm
     priv, body = ui.pair_key("x", run=box)
     assert body == "EXISTINGBODY" and key.read_text(encoding="utf-8") == "MINE"
     assert not [c for c in box.calls if c[0] == "ssh-keygen"] and box.store["unimatrix.keys.x"] == str(key)
+
+
+def _recorded_key(home, box, alias, body="RECORDEDBODY"):
+    key = home / ".secrets" / "ssh" / f"unimatrix-{alias}"
+    key.parent.mkdir(parents=True, exist_ok=True)
+    key.write_text("PRIV", encoding="utf-8")
+    Path(str(key) + ".pub").write_text(f"ssh-ed25519 {body} c\n", encoding="utf-8")
+    box.store[f"unimatrix.keys.{alias}"] = str(key)
+    return key
+
+
+def test_pair_key_adopt_only_returns_the_recorded_key_and_never_mints_or_records(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    box = _PairBox()
+    key = _recorded_key(home, box, "far-1")
+    monkeypatch.setattr(ui, "_mint", lambda *a, **k: pytest.fail("adopt_only reached _mint"))
+    assert ui.pair_key("far-1", run=box, adopt_only=True) == (key, "RECORDEDBODY")
+    assert not [c for c in box.calls if c[0] in ("op", "ssh-keygen") or c[2:3] == ["set"]]
+
+
+def test_pair_key_adopt_only_without_a_record_raises_naming_the_alias_and_changes_nothing(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    box = _PairBox()
+    monkeypatch.setattr(ui, "_mint", lambda *a, **k: pytest.fail("adopt_only reached _mint"))
+    with pytest.raises(RuntimeError, match="no recorded pair key for far-1"):
+        ui.pair_key("far-1", run=box, adopt_only=True)
+    assert box.store == {} and not [c for c in box.calls if c[0] in ("op", "ssh-keygen") or c[2:3] == ["set"]]
+    assert not (home / ".secrets").exists()
+
+
+def test_pair_key_adopt_only_refuses_a_record_whose_file_is_missing(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    box = _PairBox(store={"unimatrix.keys.far-1": str(home / "gone")})
+    with pytest.raises(RuntimeError, match="far-1"):
+        ui.pair_key("far-1", run=box, adopt_only=True)
+    assert "unimatrix.keys.far-1" in box.store and not [c for c in box.calls if c[2:3] == ["set"]]
+
+
+def test_pair_key_adopt_only_with_remint_is_refused(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    with pytest.raises(ValueError):
+        ui.pair_key("far-1", run=_PairBox(), adopt_only=True, remint=True)
+
+
+def test_recorded_pair_keys_lists_every_record_with_existing_files(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    box = _PairBox()
+    a = _recorded_key(home, box, "far-1", "BODYONE")
+    b = _recorded_key(home, box, "far-2", "BODYTWO")
+    box.store["unimatrix.keys.dangling"] = str(home / "nope")
+    box.store["unrelated.key"] = str(a)
+    monkeypatch.setattr(ui, "_mint", lambda *a, **k: pytest.fail("recorded_pair_keys reached _mint"))
+    assert ui.recorded_pair_keys(run=box) == {"far-1": (a, "BODYONE"), "far-2": (b, "BODYTWO")}
+    assert len([c for c in box.calls if c[2:3] == ["dump"]]) == 1
+    assert not [c for c in box.calls if c[0] in ("op", "ssh-keygen") or c[2:3] == ["set"]]
+
+
+def test_recorded_pair_keys_empty_when_none_recorded_and_refuses_without_reader(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    assert ui.recorded_pair_keys(run=_PairBox()) == {}
+    _pair_home(monkeypatch, tmp_path / "other", reader=False)
+    with pytest.raises(RuntimeError, match="_machine_local.py"):
+        ui.recorded_pair_keys(run=_PairBox())
 
 
 def test_pair_sanitizes_alias_and_refuses_empty(monkeypatch, tmp_path):
@@ -2613,11 +2721,11 @@ def test_ssh_config_block_names_the_peer_by_hostname_never_an_ip(alias, host):
 
 
 def test_control_line_names_the_control_script_and_comment():
-    line = ui.authorized_keys_line("/home/me/unimatrix", "/usr/bin/python3", "KB", control=True)
-    assert line == 'restrict,command="/usr/bin/python3 /home/me/unimatrix/unimatrix-control.py" ssh-ed25519 KB unimatrix-control'  # abs-path-ok: synthetic line, never opened
-    assert "unimatrix-relay.py" not in line and "--peer" not in line
-    with pytest.raises(ValueError):
-        ui.authorized_keys_line("/d", "/p", control=True, file_peer="b")
+    line = ui.control_authorized_keys_line("KB", ["10.0.0.0/8", "fd00::/8"])
+    assert line == 'from="10.0.0.0/8,fd00::/8" ssh-ed25519 KB unimatrix-control'
+    assert "command=" not in line and "restrict" not in line
+    with pytest.raises(TypeError):
+        ui.authorized_keys_line("/d", "/p", control=True)
 
 
 def test_default_install_prints_a_control_key_line_after_the_relay_and_file_lines(monkeypatch, tmp_path):
@@ -2626,8 +2734,10 @@ def test_default_install_prints_a_control_key_line_after_the_relay_and_file_line
     rc, out = _run(["--install"], "2.1.316", dest, tmp_path / "gemini" / "hooks.json")
     assert rc == 0
     lines = [l for l in out.splitlines() if "restrict,command=" in l]
-    assert len(lines) == 3 and "unimatrix-relay.py" in lines[0] and "unimatrix-file-relay.py" in lines[1]
-    assert f"{dest / 'unimatrix-control.py'}\" ssh-ed25519" in lines[2] and lines[2].endswith(" unimatrix-control")
+    assert len(lines) == 2 and "unimatrix-relay.py" in lines[0] and "unimatrix-file-relay.py" in lines[1]
+    control = next(l for l in out.splitlines() if l.endswith(" unimatrix-control"))
+    assert 'from="<from-cidrs>" ssh-ed25519 <key-body> unimatrix-control' in control
+    assert "command=" not in control and "restrict" not in control
     assert {"unimatrix-control.py", "headless-em-launch.py"} <= {p.name for p in dest.iterdir()}
 
 
@@ -2646,22 +2756,202 @@ def test_control_key_mints_beside_ssh_and_prints_alias_block_and_control_line(mo
     monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
     buf = io.StringIO()
     box = _PairBox()
-    assert ui.main(["--control-key", "machine-a", "--unencrypted-key"], out=buf, pair_run=box) == 0
+    assert ui.main(["--control-key", "machine-a", "--from-cidr", "10.0.0.0/8"], out=buf, pair_run=box) == 0
     text = buf.getvalue()
     key = fake_home / ".ssh" / "unimatrix_control_machine_a"
     assert key.is_file() and f"control key for machine-a: {key}" in text
     assert "Host unimatrix-control-machine-a\n" in text and "    HostName machine-a.local\n" in text
-    assert any(l.startswith('restrict,command="') and "unimatrix-control.py" in l
-               and l.endswith("ssh-ed25519 AAAAPAIRBODY unimatrix-control") for l in text.splitlines())
+    assert 'from="10.0.0.0/8" ssh-ed25519 AAAAPAIRBODY unimatrix-control' in text.splitlines()
+    assert "restrict" not in text and "command=" not in text
     assert not [c for c in box.calls if c[0] != "ssh" and "unimatrix.keys" in " ".join(c)]
+
+
+class _AliasBox(_PairBox):
+    def __call__(self, argv, **kw):
+        if argv[:2] == ["ssh", "-G"]:
+            self.calls.append(list(argv))
+            return type("R", (), {"returncode": 0, "stderr": "", "stdout": self.ssh_g})()
+        return super().__call__(argv, **kw)
+
+
+def test_control_key_default_mints_unencrypted_and_never_touches_the_passphrase_vault(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    fake_home = tmp_path / "userhome"
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+    buf = io.StringIO()
+    box = _PairBox(op_missing=True)
+    assert ui.main(["--control-key", "machine-a", "--from-cidr", "10.0.0.0/8"], out=buf, pair_run=box) == 0
+    kg = [c for c in box.calls if c[0] == "ssh-keygen" and "-f" in c]
+    assert kg and kg[0][kg[0].index("-N") + 1] == ""
+    assert not [c for c in box.calls if c[0] == "op"]
+    assert "passphrase" not in buf.getvalue() and "REFUSE" not in buf.getvalue()
+
+
+def test_control_key_no_link_prints_the_pinned_line_and_writes_no_record(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "userhome"))
+    buf = io.StringIO()
+    assert ui.main(["--control-key", "machine-a", "--from-cidr", "10.0.0.0/8"], out=buf, pair_run=_PairBox()) == 0
+    text = buf.getvalue()
+    line = next(l for l in text.splitlines() if l.startswith('from="'))
+    assert line == 'from="10.0.0.0/8" ssh-ed25519 AAAAPAIRBODY unimatrix-control'
+    assert "record is absent" in text and "<far-" not in text and "python3" not in text
+    assert not (tmp_path / "sh" / "unimatrix" / "control-far").exists()
+
+
+def test_control_key_block_carries_the_peer_hostkeyalias_and_user(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "userhome"))
+    monkeypatch.setattr(ui.getpass, "getuser", lambda: "localuser")
+    buf = io.StringIO()
+    box = _AliasBox()
+    box.ssh_g = "host machine-a\nuser machine_auser\nhostkeyalias machine-a.local\nport 22\n"
+    assert ui.main(["--control-key", "machine-a", "--from-cidr", "10.0.0.0/8"], out=buf, pair_run=box) == 0
+    text = buf.getvalue()
+    assert "    HostKeyAlias machine-a.local\n" in text and "    User machine_auser\n" in text
+    assert ["ssh", "-G", "--", "machine-a"] in box.calls
+
+
+def test_control_key_block_omits_absent_peer_options_never_inventing_them(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "userhome"))
+    monkeypatch.setattr(ui.getpass, "getuser", lambda: "localuser")
+    buf = io.StringIO()
+    box = _AliasBox()
+    box.ssh_g = "host machine-a\nuser localuser\nport 22\n"
+    assert ui.main(["--control-key", "machine-a", "--from-cidr", "10.0.0.0/8"], out=buf, pair_run=box) == 0
+    assert "HostKeyAlias" not in buf.getvalue() and "    User " not in buf.getvalue()
 
 
 def test_control_install_over_link_writes_the_control_line(monkeypatch, tmp_path):
     far = tmp_path / "far"
     far.mkdir()
-    status, line = ui.install_over_link("x", "AAAAPAIRBODY", run=_FarBox(far), control=True)
-    assert status == "added" and line.endswith(" unimatrix-control") and "unimatrix-control.py" in line
+    status, line = ui.install_over_link("x", "AAAAPAIRBODY", run=_FarBox(far), control=True, from_cidrs=["10.0.0.0/8"])
+    assert status == "added" and line == 'from="10.0.0.0/8" ssh-ed25519 AAAAPAIRBODY unimatrix-control'
     assert (far / ".ssh" / "authorized_keys").read_text(encoding="utf-8") == line + "\n"
+
+
+def _record(home, box):
+    return json.loads((home / "unimatrix" / "control-far" / f"{box}.json").read_text(encoding="utf-8"))
+
+
+def test_control_install_over_link_records_the_probed_far_invocation(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    far = tmp_path / "far"
+    far.mkdir()
+    assert ui.install_over_link("machine-a", "B", run=_FarBox(far), control=True, from_cidrs=["10.0.0.0/8"])[0] == "added"
+    rec = _record(home, "machine-a")
+    assert rec == {"platform": sys.platform, "interpreter": sys.executable,
+                   "script": os.path.join(str(far / "fsh"), "unimatrix", "unimatrix-control.py"), "shell": "posix"}
+    assert not list((home / "unimatrix" / "control-far").glob("*.tmp"))
+
+
+@pytest.mark.parametrize("status_seen", ["present", "admin"])
+def test_control_record_is_written_on_present_and_admin_links_too(monkeypatch, tmp_path, status_seen):
+    home = _pair_home(monkeypatch, tmp_path)
+    far = tmp_path / "far"
+    far.mkdir()
+    box = _FarBox(far)
+    if status_seen == "present":
+        ui.install_over_link("machine-a", "B", run=box, control=True, from_cidrs=["10.0.0.0/8"])
+        (home / "unimatrix" / "control-far" / "machine-a.json").unlink()
+    else:
+        monkeypatch.setattr(ui, "_APPEND_PROGRAM", "print('admin')\n")
+    status, _ = ui.install_over_link("machine-a", "B", run=box, control=True, from_cidrs=["10.0.0.0/8"])
+    assert status == status_seen and _record(home, "machine-a")["shell"] == "posix"
+
+
+class _WinFar:
+    """A far Windows box: answers the probe triple, then the DefaultShell registry read."""
+
+    def __init__(self, default_shell):
+        self.default_shell, self.calls = default_shell, []
+
+    def __call__(self, argv, **kw):
+        self.calls.append((list(argv), kw.get("input")))
+        out = ("win32\tC:\\Py\\python.exe\tC:\\Users\\me\\.coordinator-claude-settings\n"
+               if "import os, sys" in kw["input"] else self.default_shell + "\n" if "winreg" in kw["input"] else "added\n")
+        return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+
+
+@pytest.mark.parametrize("default_shell,shell", [
+    ("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "powershell"),
+    ("C:\\Program Files\\PowerShell\\7\\pwsh.exe", "powershell"),
+    ("C:\\Windows\\System32\\cmd.exe", "cmd"), ("", "cmd")])
+def test_control_record_for_a_windows_far_box_reads_the_openssh_default_shell(monkeypatch, tmp_path, default_shell, shell):
+    home = _pair_home(monkeypatch, tmp_path)
+    box = _WinFar(default_shell)
+    ui.install_over_link("machine-a", "B", run=box, control=True, from_cidrs=["10.0.0.0/8"])
+    assert _record(home, "machine-a") == {
+        "platform": "win32", "interpreter": "C:\\Py\\python.exe",
+        "script": "C:\\Users\\me\\.coordinator-claude-settings\\unimatrix\\unimatrix-control.py", "shell": shell}
+    assert sum(1 for _, i in box.calls if "winreg" in i) == 1
+
+
+def test_control_record_reads_no_registry_on_a_posix_far_box(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    far = tmp_path / "far"
+    far.mkdir()
+    box = _FarBox(far)
+    ui.install_over_link("machine-a", "B", run=box, control=True, from_cidrs=["10.0.0.0/8"])
+    assert not [i for i in box.sent if "winreg" in i]
+
+
+def test_control_key_writes_the_record_over_a_link_and_prints_the_line(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "userhome"))
+    far = tmp_path / "far"
+    far.mkdir()
+    buf = io.StringIO()
+    assert ui.main(["--control-key", "machine-a", "--from-cidr", "10.0.0.0/8", "--from-cidr", "192.168.1.0/24"],
+                   out=buf, pair_run=_FarBox(far)) == 0
+    line = 'from="10.0.0.0/8,192.168.1.0/24" ssh-ed25519 AAAAPAIRBODY unimatrix-control'
+    assert line in buf.getvalue().splitlines()
+    assert (far / ".ssh" / "authorized_keys").read_text(encoding="utf-8") == line + "\n"
+    assert _record(home, "machine-a")["interpreter"] == sys.executable
+
+
+def test_control_key_without_a_cidr_source_refuses_naming_the_flag(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "userhome"))
+    buf = io.StringIO()
+    box = _PairBox()
+    assert ui.main(["--control-key", "machine-a"], out=buf, pair_run=box) == 6
+    assert "REFUSE" in buf.getvalue() and "--from-cidr" in buf.getvalue()
+    assert not (tmp_path / "userhome" / ".ssh").exists() and not (home / "unimatrix").exists()
+
+
+def test_control_key_refuses_a_value_that_is_not_a_cidr(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "userhome"))
+    buf = io.StringIO()
+    assert ui.main(["--control-key", "machine-a", "--from-cidr", "lan"], out=buf, pair_run=_PairBox()) == 6
+    assert "REFUSE" in buf.getvalue() and "not a CIDR" in buf.getvalue()
+
+
+def test_control_key_takes_the_pin_from_this_boxs_verified_membership(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "userhome"))
+    members = [{"box": "other", "from_cidrs": ["1.1.1.0/24"]}, {"box": "me", "from_cidrs": ["10.0.0.0/8", "fd00::/8"]}]
+    membership = ui._sibling("unimatrix-membership.py")
+    monkeypatch.setattr(membership, "verified_members", lambda home, run=None: members)
+    monkeypatch.setattr(ui._sibling("unimatrix-peer-contract.py"), "local_box", lambda: "me")
+    buf = io.StringIO()
+    assert ui.main(["--control-key", "machine-a"], out=buf, pair_run=_PairBox()) == 0
+    assert 'from="10.0.0.0/8,fd00::/8" ssh-ed25519 AAAAPAIRBODY unimatrix-control' in buf.getvalue().splitlines()
+    buf = io.StringIO()
+    assert ui.main(["--control-key", "machine-a", "--from-cidr", "172.16.0.0/12"], out=buf, pair_run=_PairBox()) == 0
+    assert 'from="172.16.0.0/12" ssh-ed25519' in buf.getvalue()
+
+
+def test_membership_without_this_box_or_with_empty_cidrs_is_no_pin(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    membership = ui._sibling("unimatrix-membership.py")
+    monkeypatch.setattr(ui._sibling("unimatrix-peer-contract.py"), "local_box", lambda: "me")
+    for members in ([{"box": "other", "from_cidrs": ["1.1.1.0/24"]}], [{"box": "me", "from_cidrs": []}]):
+        monkeypatch.setattr(membership, "verified_members", lambda home, run=None, m=members: m)
+        with pytest.raises(ValueError, match="--from-cidr"):
+            ui.control_from_cidrs(None)
 
 
 def test_control_key_never_overwrites_and_refuses_an_empty_box(monkeypatch, tmp_path):

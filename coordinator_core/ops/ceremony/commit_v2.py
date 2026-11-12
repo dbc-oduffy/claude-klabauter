@@ -1689,13 +1689,17 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                     _record_ledger(worktree_root, done_paths, done_sha, done_message)
                 with ledger.phase("release_committed_claims"):
                     _release_committed_claims_step(worktree_root, done_paths, done_sha)
-            return _error(
-                f"{landing.error['error']} The product commit {landed_halves[0][3]} landed; "
+            half_error = str(landing.error["error"]).replace(" Nothing was written.", "").rstrip()
+            result = _error(
+                f"Partial landing: {half_error} The product commit {landed_halves[0][3]} landed; "
                 f"{len(unlanded_all)} process path(s) did not land (first: {unlanded}). {follow_up}",
                 landed_sha=landed_halves[0][3],
+                landed_paths=[p for h in landed_halves for p in h[0]],
                 unlanded_paths=unlanded_all,
                 **{k: landing.error[k] for k in ("refused", "blob_drift") if k in landing.error},
             )
+            result.update(partial=True, sha=landed_halves[0][3])
+            return result
         else:
             return landing.error
     if not landed_halves:

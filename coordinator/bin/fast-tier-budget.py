@@ -37,6 +37,11 @@ NEW_MARKER = "complete"
 LEDGER_REL = "state/test-tiers/fast-tier-ledger.json"
 _REPO = Path(__file__).resolve().parents[2]
 
+import lib  # noqa: E402,F401 -- bootstraps coordinator/bin/lib onto sys.path
+from cc_invoke import ensure_engine_on_path  # noqa: E402
+
+ensure_engine_on_path(__file__)
+
 
 def _is_complete_mark(node: ast.AST) -> bool:
     return (

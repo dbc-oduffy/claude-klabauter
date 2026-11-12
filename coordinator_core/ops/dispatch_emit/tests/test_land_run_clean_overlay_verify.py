@@ -9,6 +9,7 @@ import json
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -110,9 +111,9 @@ def _pytest_argv_head(monkeypatch, root, head, pin):
     seen = []
     real = cov._run
 
-    def spy(argv, cwd, timeout):
+    def spy(argv, cwd, timeout, **kw):
         seen.append(argv[0])
-        return real([sys.executable, *argv[1:]] if "pytest" in argv else argv, cwd, timeout)
+        return real([sys.executable, *argv[1:]] if "pytest" in argv else argv, cwd, timeout, **kw)
 
     monkeypatch.setattr(cov, "_run", spy)
     cov.verify(root, "run1", head, [READER])
@@ -141,13 +142,109 @@ def test_the_overlay_checkout_runs_under_the_overlay_bound_not_the_2s_plumbing_b
     seen = []
     real = cov._run
 
-    def spy(argv, cwd, timeout):
+    def spy(argv, cwd, timeout, **kw):
         seen.append((argv[1:2], timeout))
-        return real(argv, cwd, timeout)
+        return real(argv, cwd, timeout, **kw)
 
     monkeypatch.setattr(cov, "_run", spy)
     assert cov.verify(root, "run1", head, [READER]).verdict == "green"
     assert (["checkout"], cov.TEST_TIMEOUT_S) in seen
+
+
+def _pytest_calls(monkeypatch, tmp_path, run_ids):
+    from coordinator_core.testing import scoped_pytest
+
+    monkeypatch.setattr(
+        scoped_pytest.machine_resolver, "registry_get",
+        lambda key: str(tmp_path / "ptbase") if key == scoped_pytest.RUN_ROOT_KEY else None,
+    )
+    root, head = _repo(tmp_path)
+    calls = []
+    real = cov._run
+
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" in argv:
+            calls.append((argv, kw.get("env")))
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    for run_id in run_ids:
+        assert cov.verify(root, run_id, head, [READER]).verdict == "green"
+    return calls
+
+
+def test_each_overlay_run_gets_its_own_basetemp_with_matching_tmp_under_the_registry_root(tmp_path, monkeypatch):
+    (argv_a, env_a), (argv_b, env_b) = _pytest_calls(monkeypatch, tmp_path, ["run-a", "run-b"])
+    base_a, base_b = (Path(a[a.index("--basetemp") + 1]) for a in (argv_a, argv_b))
+    assert base_a == tmp_path / "ptbase" / "run-a" / "bt" and base_b == tmp_path / "ptbase" / "run-b" / "bt"
+    assert Path(env_a["TEMP"]) == base_a.parent / "tmp" and env_a["TMP"] == env_a["TEMP"]
+    assert Path(env_b["TEMP"]) == base_b.parent / "tmp"
+    assert not base_a.parent.exists() and not base_b.parent.exists()
+
+
+def test_overlay_without_a_registry_root_falls_back_to_the_temp_layout_never_pytest_of_user(tmp_path, monkeypatch):
+    from coordinator_core import temp_layout
+    from coordinator_core.testing import scoped_pytest
+
+    monkeypatch.setattr(scoped_pytest.machine_resolver, "registry_get", lambda key: None)
+    root, head = _repo(tmp_path)
+    seen = []
+    real = cov._run
+
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" in argv:
+            seen.append(Path(argv[argv.index("--basetemp") + 1]))
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    assert cov.verify(root, "run-a", head, [READER]).verdict == "green"
+    assert seen[0].parent.parent == temp_layout.pytest_basetemp_root(root)
+    assert "pytest-of-" not in str(seen[0])
+
+
+_PASSED_THEN_SESSIONFINISH_ERROR = (
+    "..                                [100%]\n"
+    "INTERNALERROR> Traceback (most recent call last):\n"
+    "INTERNALERROR>   File \"_pytest/tmpdir.py\", line 1, in pytest_sessionfinish\n"
+    "INTERNALERROR>     cleanup_dead_symlinks(root)\n"
+    "INTERNALERROR> PermissionError: [WinError 5] Access is denied: 'pytest-current'\n"
+    "2 passed in 0.10s\n"
+)
+
+
+@pytest.mark.parametrize("rc", [1, 3])
+def test_a_sessionfinish_error_after_every_test_passed_is_green_and_keeps_the_error(tmp_path, monkeypatch, rc):
+    root, head = _repo(tmp_path)
+    real = cov._run
+
+    def fake(argv, cwd, timeout, **kw):
+        if "pytest" in argv:
+            return subprocess.CompletedProcess(argv, rc, _PASSED_THEN_SESSIONFINISH_ERROR, "")
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", fake)
+    out = cov.verify(root, "run1", head, [READER])
+    assert out.verdict == "green" and "PermissionError" in out.detail
+
+
+@pytest.mark.parametrize(
+    "rc,text",
+    [
+        (1, "F.   [100%]\\nFAILED t/test_x.py::test_a\\n1 failed, 1 passed in 0.1s\\n"),
+        (1, _PASSED_THEN_SESSIONFINISH_ERROR + "FAILED t/test_x.py::test_a\\n1 failed, 2 passed in 0.1s\\n"),
+        (1, "ERROR t/test_x.py::test_a\\n1 passed, 1 error in 0.1s\\n"),
+        (3, "INTERNALERROR> Traceback\\nINTERNALERROR> KeyError: x\\n2 passed in 0.1s\\n"),
+        (2, _PASSED_THEN_SESSIONFINISH_ERROR),
+        (1, "PermissionError in pytest_sessionfinish\\n"),
+    ],
+)
+def test_a_failed_test_or_a_non_teardown_internal_error_stays_red_or_inconclusive(rc, text):
+    assert not cov.teardown_only_error(rc, text.replace("\\n", "\n"))
+
+
+def test_a_real_failed_test_is_still_red(tmp_path):
+    root, head = _repo(tmp_path, data="bad\n")
+    assert cov.verify(root, "run1", head, [READER]).verdict == "red"
 
 
 def test_a_timed_out_overlay_checkout_is_named_with_its_budget_never_silent(tmp_path, monkeypatch):

@@ -277,16 +277,39 @@ def test_repeat_call_returns_the_landed_result_without_a_second_commit(repo):
     ledger_dir = repo / "state" / "queue-grind" / PROFILE
     ledger_dir.mkdir(parents=True)
     (ledger_dir / "r1.jsonl").write_text("{}\n", encoding="utf-8")
-    second = _call(repo, [_row("r1", ["a.py"]), _row("r2", ["b.py"])], run_token=token)
+    second = _call(repo, [_row("r1", ["a.py"])], run_token=token)
     assert second["committed"] is True and second["already_landed"] is True
     assert second["sha"] == first["sha"]
     assert [r["row_id"] for r in second["rows"]] == ["r1"]
-    assert second["dropped"] == []
-    assert [u["row_id"] for u in second["unlanded"]] == ["r2"]
-    assert first["sha"] in second["unlanded"][0]["reason"]
+    assert second["dropped"] == [] and second["unlanded"] == []
     assert _git(["rev-parse", "HEAD"], repo) == head
     assert _status(repo)["b.py"] == " M"
     assert (ledger_dir / "r1.jsonl").exists()
+
+
+def test_repeat_call_lands_rows_the_first_landing_missed_in_one_follow_up_commit(repo):
+    token = run_token.mint(repo, RUN, "run.mjs")
+    first = _call(repo, [_row("r1", ["a.py"])], run_token=token)
+    second = _call(repo, [_row("r1", ["a.py"]), _row("r2", ["b.py"])], run_token=token)
+    assert second["committed"] is True
+    assert second["sha"] != first["sha"] and second["sha"] == _git(["rev-parse", "HEAD"], repo).strip()
+    assert [(r["row_id"], r["sha"]) for r in second["rows"]] == [("r1", first["sha"]), ("r2", second["sha"])]
+    assert second["unlanded"] == []
+    assert _head_files(repo) == {"b.py"}
+    assert "Grind-Row: r2 fixed" in _message(repo) and "Grind-Row: r1" not in _message(repo)
+    assert "b.py" not in _status(repo)
+    third = _call(repo, [_row("r1", ["a.py"]), _row("r2", ["b.py"])], run_token=token)
+    assert third["committed"] is False or third.get("already_landed") is True
+    assert not run_token.admits(repo, RUN, token, "run.mjs")
+
+
+def test_repeat_call_keeps_an_unfinished_late_row_open(repo):
+    token = run_token.mint(repo, RUN, "run.mjs")
+    _call(repo, [_row("r1", ["a.py"])], run_token=token)
+    (repo / "b.py").unlink()
+    second = _call(repo, [_row("r1", ["a.py"]), _row("r2", ["b.py"])], run_token=token)
+    assert [u["row_id"] for u in second["unlanded"]] == ["r2"]
+    assert [r["row_id"] for r in second["rows"]] == ["r1"]
 
 
 def test_repeat_call_with_a_wrong_token_is_still_refused(repo):

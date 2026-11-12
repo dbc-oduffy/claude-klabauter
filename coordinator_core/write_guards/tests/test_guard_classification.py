@@ -184,6 +184,7 @@ HARD_DENY_NAMES = [
     "block_worktree_sentinel_write",
     "bump_out_of_repo_tool_write",
     "check_claude_md_size",
+    "guard_doctrine_surface_edits",
     "guard_memory_store_cap",
     "guard_settings_json_write",
     "nudge_improvement_queue_write",
@@ -196,7 +197,6 @@ HARD_DENY_NAMES = [
 ADVISORY_NAMES = [
     "block_published_engine_mirror_write",
     "guard_concrete_path_citations",
-    "guard_doctrine_surface_edits",
     "nudge_authoring_leak",
     "nudge_baton_body_bar",
     "nudge_dangling_sizing_citation",

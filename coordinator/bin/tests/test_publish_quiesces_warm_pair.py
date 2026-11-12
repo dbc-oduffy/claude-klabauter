@@ -17,6 +17,7 @@ import io
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 import pytest
@@ -165,6 +166,8 @@ def _setup(tmp_path, monkeypatch, engine_root: bool, rows: tuple = ("row-a",)) -
 
     monkeypatch.setattr(dr, "fetch_dest_upstream", fetch)
     monkeypatch.setattr(dr, "fast_forward_dest", fast_forward)
+    # The fetch stub returns a synthetic result for a non-repo; the real preflight would refuse it.
+    monkeypatch.setattr(dr, "preflight_dest_refresh", lambda result: result)
 
     for gate in GATES:
         monkeypatch.setattr(
@@ -565,6 +568,11 @@ def test_successor_timeout_leaves_the_old_pair_running_and_publish_lands(tmp_pat
     entry = env.repo / client.SERVER_ENTRY_SCRIPT
     entry.parent.mkdir(parents=True, exist_ok=True)
     entry.write_text("", encoding="utf-8")
+    # The entry script makes the dest an engine root, which arms the post-commit dry-refire gate;
+    # it is outside what this test asserts and needs a real engine tree.
+    from coordinator_core.publish import dry_refire_gate
+
+    monkeypatch.setattr(dry_refire_gate, "run", lambda *a, **k: types.SimpleNamespace(ok=True, error=None))
     monkeypatch.setattr(round_mod, "start_successor_pair_in_hold", env.real_start)
     rc, err = _run(env)
     assert rc == 0, err

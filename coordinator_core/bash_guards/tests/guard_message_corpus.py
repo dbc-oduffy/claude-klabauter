@@ -697,7 +697,7 @@ def _rehomed_doctrine_surface_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
     # The gate (`coordinator.feature.doctrine_edit_gate`) is on by default;
-    # pin it so an ambient `off` cannot silence the row.
+    # pin it so an ambient `off` cannot silence the sentinel-gated deny row.
     from coordinator_core import machine_profile as _machine_profile
 
     mp.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE", "on")
@@ -715,6 +715,8 @@ def _rehomed_doctrine_surface_setup(
     (plugin_root / "governed-authoring-surfaces.json").write_text(
         '["docs/wiki/governed-thing.md"]', encoding="utf-8"
     )
+    # A missing CLAUDE.md is an admitted first-time create; an existing one is denied.
+    (scratch_dir / "CLAUDE.md").write_text("# existing\n", encoding="utf-8")
     return {"plugin_root": str(plugin_root)}
 
 
@@ -1415,7 +1417,7 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
     CorpusRow(
         "guard-doctrine-surface-bash-write",
         "guard-doctrine-surface-bash-write-fire",
-        "echo corrupted > docs/wiki/governed-thing.md",
+        "echo corrupted > CLAUDE.md",
         True,
         _DENY,
         False,

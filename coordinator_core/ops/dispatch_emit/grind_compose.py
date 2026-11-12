@@ -880,7 +880,9 @@ def run_admission(
             _handback(row, "baton", "size scout returned no size" + (f": {reason}" if reason else ""))
             return
         below_floor = _tshirt_rank(tshirt) < _PLAN_WEIGHT_FLOOR_RANK
-        own_target = fix_entries.get(row.origin.removeprefix("triage:"))
+        own_target = fix_entries.get(row.origin.removeprefix("triage:")) or (
+            fix_entries[min(fix_entries)] if fix_entries else None
+        )
         if below_floor and own_target in routing:
             by_triage_check["size_collapsed"] += 1
             row.origin = "size:below-plan-weight"
@@ -1256,13 +1258,39 @@ def run_admission(
     }
 
 
-def _group_into_batches(manifest: Manifest, knobs: Mapping[str, Any]) -> list[tuple[str, list[ManifestEntry]]]:
+PACKED_BATCH_PREFIX = "@packed-b"
+
+
+def _packing_signature(profile: Profile, knobs: Mapping[str, Any], key: str) -> tuple[Any, ...]:
+    """Keys sharing a signature may share a triage batch: same triage depth and same verify spec on every verify node."""
+    depth_knob = knobs.get("triage_depth", "standard")
+    depth = depth_knob.get(key, depth_knob.get("default", "standard")) if isinstance(depth_knob, Mapping) else str(depth_knob)
+    verify = tuple(
+        (node_id, *_verify_mode_for_key(profile, node_id, key))
+        for node_id, node in sorted(profile.graph.items())
+        if node.kind == "verify"
+    )
+    return (depth, verify)
+
+
+def _group_into_batches(
+    manifest: Manifest, knobs: Mapping[str, Any], profile: Optional[Profile] = None
+) -> list[tuple[str, list[ManifestEntry]]]:
+    """Chunk rows per batch_key; with a `profile`, pack under-filled remainder chunks of compatible keys into `@packed-b<n>` batches
+    (compatible: equal triage depth and equal verify spec on every verify node).
+
+    A packed batch mixes batch_keys, so consumers must read a row's own key from its manifest entry.
+    """
     batch_size_knob = knobs.get("batch_size", 4)
+    default_size = max(
+        1, int(batch_size_knob.get("default", 4) if isinstance(batch_size_knob, Mapping) else batch_size_knob)
+    )
     groups: dict[str, list[ManifestEntry]] = {}
     for entry in manifest.entries:
         groups.setdefault(entry.batch_key, []).append(entry)
 
     batches: list[tuple[str, list[ManifestEntry]]] = []
+    remainders: list[tuple[str, str, list[ManifestEntry]]] = []
     for key in sorted(groups):
         entries = groups[key]
         size = (
@@ -1282,7 +1310,31 @@ def _group_into_batches(manifest: Manifest, knobs: Mapping[str, Any]) -> list[tu
             # and is never parsed back out (grind_rows.py::_extract_batch_rows
             # matches the id by exact string equality), so the separator
             # carries no meaning worth an NTFS-illegal char.
-            batches.append((f"{key}-b{i // size}", chunk))
+            own_id = f"{key}-b{i // size}"
+            if profile is not None and len(chunk) < min(size, default_size):
+                remainders.append((own_id, key, chunk))
+            else:
+                batches.append((own_id, chunk))
+
+    by_signature: dict[tuple[Any, ...], list[tuple[str, str, list[ManifestEntry]]]] = {}
+    for own_id, key, chunk in remainders:
+        by_signature.setdefault(_packing_signature(profile, knobs, key), []).append((own_id, key, chunk))
+    packs: list[list[tuple[str, str, list[ManifestEntry]]]] = []
+    for signature in sorted(by_signature, key=lambda sig: by_signature[sig][0][1]):
+        current: list[tuple[str, str, list[ManifestEntry]]] = []
+        for part in by_signature[signature]:
+            if current and sum(len(c) for _, _, c in current) + len(part[2]) > default_size:
+                packs.append(current)
+                current = []
+            current.append(part)
+        packs.append(current)
+    next_packed = 0
+    for pack in sorted(packs, key=lambda parts: parts[0][1]):
+        if len(pack) == 1:
+            batches.append((pack[0][0], pack[0][2]))
+        else:
+            batches.append((f"{PACKED_BATCH_PREFIX}{next_packed}", [e for _, _, c in pack for e in c]))
+            next_packed += 1
     return batches
 
 
@@ -1874,7 +1926,7 @@ def compose_grind_script(
     review_phase_titles = [title for title, _ in review_blocks]
     run_dir_s = Path(run_dir).as_posix()
     run_key = Path(run_dir).name
-    grouped = _group_into_batches(manifest, knobs)
+    grouped = _group_into_batches(manifest, knobs, profile)
     window = int(knobs.get("window", 6))
     batch_size_knob = knobs.get("batch_size", 4)
     reserve_batch_size = max(batch_size_knob.values()) if isinstance(batch_size_knob, Mapping) else batch_size_knob
@@ -2285,7 +2337,7 @@ def compose_grind_script(
         "  for (const r of b.rows) {\n"
         "    const _entry = QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r);\n"
         "    const _path = _entry.path;\n"
-        "    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, pmRuling: _entry.pm_ruling || '', node: null, "
+        "    _rows[r] = { rowId: r, batchId: b.id, batchKey: _entry.batch_key, path: _path, digest: _entry.digest, pmRuling: _entry.pm_ruling || '', node: null, "
         "declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], "
         "evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', "
         "origin: '', refuteNote: '', rulingNote: '', fixReported: false, sizingPath: '', undoReason: '', "
@@ -2367,7 +2419,7 @@ def compose_grind_script(
         "      continue;\n"
         "    }\n"
         "    const _belowFloor = _tshirtRank(scouted.tshirt) < PLAN_WEIGHT_FLOOR_RANK;\n"
-        "    const _ownTarget = SIZE_FIX_ENTRIES[String(row.origin).replace(/^triage:/, '')];\n"
+        "    const _ownTarget = SIZE_FIX_ENTRIES[String(row.origin).replace(/^triage:/, '')] || SIZE_FIX_ENTRIES[Object.keys(SIZE_FIX_ENTRIES).sort()[0]];\n"
         "    if (_belowFloor && _ownTarget && ROUTING[_ownTarget]) {\n"
         "      _byTriageCheck.size_collapsed += 1;\n"
         "      row.origin = 'size:below-plan-weight';\n"

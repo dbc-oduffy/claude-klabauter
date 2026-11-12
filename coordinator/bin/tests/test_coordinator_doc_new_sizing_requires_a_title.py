@@ -60,7 +60,7 @@ def test_a_titled_sizing_object_still_scaffolds(repo: Path):
     result = _run(repo, "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read", "--title", "A real PM ask")
 
     assert result.returncode == 0, result.stderr
-    minted = list((repo / "state" / "sizings").glob("*.yaml"))
+    minted = list((repo / "state" / "sizings").rglob("*.yaml"))
     assert len(minted) == 1
     # Other template fields legitimately carry their own PLACEHOLDER prompts; what
     # must not survive is the ASK itself being one.
@@ -79,7 +79,7 @@ def test_the_scaffolded_id_comment_names_the_join_route(repo: Path):
     result = _run(repo, "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read", "--title", "A real PM ask")
 
     assert result.returncode == 0, result.stderr
-    stamped = (repo / "state" / "sizings").glob("*.yaml")
+    stamped = (repo / "state" / "sizings").rglob("*.yaml")
     text = next(stamped).read_text(encoding="utf-8")
     assert "--deliverable-id" in text
     assert "do not hand-edit" not in text
@@ -97,5 +97,5 @@ def test_an_explicit_id_is_joined_not_re_minted(repo: Path):
     )
 
     assert result.returncode == 0, result.stderr
-    text = next((repo / "state" / "sizings").glob("*.yaml")).read_text(encoding="utf-8")
+    text = next((repo / "state" / "sizings").rglob("*.yaml")).read_text(encoding="utf-8")
     assert carried in text

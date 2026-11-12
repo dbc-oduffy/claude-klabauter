@@ -1453,8 +1453,9 @@ def test_a_busy_prep_in_the_wave_halts_rather_than_merging_a_prep_without_its_sl
     pytest.param("s0+nope", marks=pytest.mark.cadence),
 ])
 def test_a_wave_review_with_a_slice_id_naming_no_real_slice_halts(bad_id):
+    spawned = len(_run_in_wave(_FULL, 9)["spawned"])
     patch = (
-        f"(r, n) => n === 0 ? {{ prep: {{ ...r.prep, slices: [] }}, "
+        f"(r, n) => (n === 0 || n === {spawned}) ? {{ prep: {{ ...r.prep, slices: [] }}, "
         f"review: {{ ...r.review, slice_id: {json.dumps(bad_id)} }} }} : r"
     )
     result = _run_in_wave(_FULL, 9, patch=patch)
@@ -1520,11 +1521,13 @@ _LONG_SLICES = [_slice_row(f"{_RUN_PREP_ID}-{i + 1}", i) for i in range(3)]
 _LONG_PREP = {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 9, "slices": _LONG_SLICES, "error": None}
 
 
-def _with_slice_id(returned):
+def _with_slice_id(returned, redo_at=None):
     """Reply 0 returns an unbound slice_id (its own prep names no slices); the other replies keep
-    the group slices their prep honestly named, and the whole-diff replies carry every slice."""
+    the group slices their prep honestly named, and the whole-diff replies carry every slice.
+    ``redo_at`` is the spawn index of reply 0's one re-dispatch, which repeats the same reply."""
+    at = "n === 0" if redo_at is None else f"(n === 0 || n === {redo_at})"
     return (
-        f"(r, n) => n === 0 ? {{ prep: {{ ...r.prep, slices: [] }}, review: {{ ...r.review, slice_id: {json.dumps(returned)} }} }}"
+        f"(r, n) => {at} ? {{ prep: {{ ...r.prep, slices: [] }}, review: {{ ...r.review, slice_id: {json.dumps(returned)} }} }}"
         " : r"
     )
 
@@ -1550,7 +1553,8 @@ def test_a_grouped_wave_review_naming_every_prepped_slice_id_reaches_a_valid_wav
     ],
 )
 def test_a_wave_review_slice_id_that_is_not_an_exact_prepped_id_halts(returned):
-    result = _run_in_wave(_LONG_PREP, 9, patch=_with_slice_id(returned))
+    spawned = len(_run_in_wave(_LONG_PREP, 9)["spawned"])
+    result = _run_in_wave(_LONG_PREP, 9, patch=_with_slice_id(returned, redo_at=spawned))
     assert result["halted"].startswith(SLICE_ID_UNKNOWN_HALT)
     assert result["wave"] is None
 
@@ -1820,9 +1824,10 @@ def _reverify_phase_block(base_ref, group_prefixes=()):
 @pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
 def test_reverify_prompt_measures_failing_at_base_once_and_passes_it(prefixes):
     block = _reverify_phase_block("b" * 40, prefixes)
-    assert block.count("baseline_export") == 1
-    assert "--sha " + "b" * 40 in block
-    assert "pytest -rfE" in block
+    assert block.count("coordinator_core.ops.reverify_base_measure --sha") == 1
+    assert "coordinator_core.testing.baseline_export --sha" not in block
+    assert "--sha " + "b" * 40 + " --head-sha HEAD --out " in block
+    assert "pytest -rfE" not in block
     assert block.count("failing_at_base") >= 3
     assert block.count('failing_at_base\\":[<failing_at_base ids>]') + block.count(
         'failing_at_base":[<failing_at_base ids>]'
@@ -1833,7 +1838,7 @@ def test_reverify_prompt_measures_failing_at_base_once_and_passes_it(prefixes):
 def test_reverify_saves_the_base_export_and_every_revert_call_passes_its_path(prefixes):
     block = _reverify_phase_block("b" * 40, prefixes).replace('\\"', '"')
     path = "scratch/reverify-base-export-prep1.txt"
-    assert f"<the failing ids above> > {path}`" in block
+    assert f"--out {path} -- <the failing ids above>`" in block
     assert block.count(f'"base_export_path":"{path}"') == 1
     assert block.count('"failing_at_base":[<failing_at_base ids>]') == 1
 
@@ -1842,6 +1847,7 @@ def test_reverify_saves_the_base_export_and_every_revert_call_passes_its_path(pr
 def test_reverify_prompt_omits_the_base_run_when_the_base_is_unset(prefixes):
     block = _reverify_phase_block("run_base_sha", prefixes)
     assert "base_export_path" not in block
+    assert "reverify_base_measure" not in block
     assert "baseline_export" not in block
     assert "failing_at_base" in block
 
@@ -1856,7 +1862,8 @@ def test_reverify_reports_passed_alone_and_passed_at_base(prefixes):
     measured = _reverify_phase_block("b" * 40, prefixes)
     assert "ALONE (one pytest per id)" in measured and "`passed_alone`" in measured
     assert "absence at base is not a pass" in measured
-    assert '"ok"' in measured and "`runner_exit` 0 or 1" in measured
+    assert '"ok"' in measured and "`runner_exit` 0, 1 or 4" in measured
+    assert "`passed_at_base` key, under the same validity" in measured
     unset = _reverify_phase_block("run_base_sha", prefixes)
     assert "ALONE (one pytest per id)" in unset
     assert "Return `passed_at_base` []" in unset

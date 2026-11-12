@@ -1810,6 +1810,61 @@ def _git_output_lines(git_args: Sequence[str]) -> List[str]:
     return result.stdout.splitlines()
 
 
+def _refuse_dry_run_rollback(
+    worktree_root: str,
+    present: Sequence[str],
+    deleted: Sequence[str],
+    declared_reverts: Sequence[str],
+) -> None:
+    """Exit 1 with the real run's staged-rollback refusal text when the
+    pathspec's worktree blobs restore an earlier version. Writes blobs only,
+    never the index or a ref; a probe that cannot hash answers "no refusal".
+    """
+    from coordinator_core.git import rollback_check  # noqa: PLC0415
+    from coordinator_core.git.git_dir import resolve_git_common_dir  # noqa: PLC0415
+    from coordinator_core.ops.ceremony import git_native  # noqa: PLC0415
+
+    head = _git_rev_parse_head()
+    if head == "INITIAL":
+        return
+    from coordinator_core.git.git_state import read_tree_spine  # noqa: PLC0415
+
+    declared = {d.replace("\\", "/") for d in declared_reverts}
+    hashable = list(present)
+    assembled: Dict[str, object] = {}
+    if hashable:
+        hashed = git_native._hash_worktree_blobs(hashable, cwd=worktree_root)
+        shas = hashed.stdout.split() if hashed.returncode == 0 else []
+        if len(shas) == len(hashable):
+            assembled.update({p: (0, s) for p, s in zip(hashable, shas)})
+    for p in deleted:
+        assembled[p] = rollback_check.ABSENT
+    spine = read_tree_spine(worktree_root, list(assembled))
+    if spine is None:
+        return
+    moved = rollback_check.moved_deletions(assembled, spine, rollback_check.ABSENT)
+    candidates: Dict[str, object] = {}
+    for p, val in assembled.items():
+        if p in declared or p in moved:
+            continue
+        if val is not rollback_check.ABSENT:
+            d, _, name = p.rpartition("/")
+            head_entry = spine.get(d, {}).get(name)
+            if head_entry is not None and head_entry[1] == val[1]:
+                continue
+            candidates[p] = val[1]
+        else:
+            candidates[p] = rollback_check.ABSENT
+    if not candidates:
+        return
+    findings = rollback_check.find_exact_blob_rollbacks(
+        resolve_git_common_dir(worktree_root), head, candidates
+    )
+    if rollback_check.refusal(findings):
+        print(f"ERROR: {rollback_check.refusal_detail(findings, candidates)}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _git_rev_parse_head() -> str:
     try:
         result = subprocess.run(
@@ -3882,6 +3937,9 @@ def main(argv: Sequence[str]) -> None:
         if args.dry_run:
             present, deleted, untracked = _classify_paths_for_commit_v2(
                 _worktree_root_from_cwd(), args.paths
+            )
+            _refuse_dry_run_rollback(
+                _worktree_root_from_cwd(), present, deleted, args.declared_reverts
             )
             print(
                 f"DRY RUN — pathspec: would commit {len(present)} path(s) "

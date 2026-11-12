@@ -10,12 +10,19 @@ the same `additionalContext` also carries the rot-token advisory. Never a deny.
 
 from __future__ import annotations
 
+import pytest
+
 from coordinator_core.write_guards import guard_doctrine_surface_edits as guard
 
 
 def _make_repo(root) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / ".git").mkdir(parents=True, exist_ok=True)
+
+
+@pytest.fixture(autouse=True)
+def _sentinel_open(monkeypatch):
+    monkeypatch.setattr(guard, "sentinel_present", lambda cwd: True)
 
 
 def _no_gate(monkeypatch) -> None:
@@ -156,12 +163,12 @@ def test_subagent_deny_is_registered_and_survives_every_level(monkeypatch):
     from coordinator_core import machine_profile as mp
 
     assert dr.guard_deny_class("guard-doctrine-surface-edits", subagent=True) in dr.GUARD_CLASSES
-    assert dr.guard_deny_class("guard-doctrine-surface-edits") is None
+    assert dr.guard_deny_class("guard-doctrine-surface-edits") in dr.GUARD_CLASSES
     for level in ("strict", "warn", "off"):
         monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
         mp.reset_cache()
         assert mp.resolved_level("guard-doctrine-surface-edits", subagent=True) == "floor"
-        assert mp.resolved_level("guard-doctrine-surface-edits") == "log"
+        assert mp.resolved_level("guard-doctrine-surface-edits") == "floor"
 
 
 def test_guard_exposes_no_sentinel_reader():

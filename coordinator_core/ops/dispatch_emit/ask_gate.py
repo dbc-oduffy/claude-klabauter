@@ -1793,6 +1793,21 @@ def token_retired(root: Path, run_id: str) -> bool:
     return run_token._present(root, run_id, spent=True)
 
 
+def reservation_spent(root: Path, run_id: str) -> bool:
+    """True when a reserved run id (a fan-out slice's `ask_parent` pin) can no longer be emitted under:
+    `token_retired`, or its token was consumed without landing (a retired receipt, no live record).
+    A reservation never fired has none of these and is kept."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    if token_retired(root, run_id):
+        return True
+    return (
+        bool(run_token._RUN_ID_RE.match(run_id or ""))
+        and not run_token.is_live(root, run_id)
+        and run_token._present(root, run_id, retired=True)
+    )
+
+
 def retire_token_spent_halt(root: Path, sizing_rel: str) -> Optional[str]:
     """Mark `resumed` the halted run of `sizing_rel` whose run token is spent (`token_retired`), so
     the next emit takes a fresh run id and script. Returns the retired run id, else None.

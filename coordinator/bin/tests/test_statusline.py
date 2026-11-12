@@ -21,8 +21,22 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 _SCRIPT = Path(__file__).resolve().parents[1] / "statusline.py"
 
 
-def _run(stdin: bytes, settings_home: Path, *args: str) -> subprocess.CompletedProcess:
+def _real_engine_root() -> str | None:
+    """The dispatch engine as this box really resolves it. A test's throwaway settings home holds
+    no engine pointer, so the cost segment's engine import needs the root handed in explicitly."""
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); "
+            "from cc_invoke import require_dispatch_engine_on_path as r; print(r())")
+    done = subprocess.run([sys.executable, "-c", code, str(_SCRIPT.parent / "lib")],
+                          capture_output=True, timeout=30)
+    lines = done.stdout.decode("utf-8").strip().splitlines()
+    return lines[-1] if done.returncode == 0 and lines else None
+
+
+def _run(stdin: bytes, settings_home: Path, *args: str, engine_root: str | None = None
+         ) -> subprocess.CompletedProcess:
     env = dict(os.environ)
+    if engine_root:
+        env["COORDINATOR_ENGINE_ROOT"] = engine_root
     env["COORDINATOR_SETTINGS_HOME"] = str(settings_home)
     env["NO_COLOR"] = "1"
     env["CLAUDE_CONFIG_DIR"] = str(settings_home / "no-claude-config")
@@ -96,7 +110,8 @@ def _cost_payload(transcript: Path, session_id: str = "sess1") -> bytes:
 
 def test_cost_segment_is_last_and_equals_the_fixture_total(tmp_path):
     main, total = _fixture_session(tmp_path / "proj")
-    line = _run(_cost_payload(main), tmp_path / "home").stdout.decode("utf-8").strip()
+    line = _run(_cost_payload(main), tmp_path / "home",
+                engine_root=_real_engine_root()).stdout.decode("utf-8").strip()
     assert line.split(" · ")[-1] == f"~${total:.2f}"
 
 
@@ -160,7 +175,7 @@ def test_a_grown_transcript_falls_through_to_the_engine(tmp_path, monkeypatch):
 
 def test_the_cost_cache_lands_under_the_settings_home(tmp_path):
     main, _ = _fixture_session(tmp_path / "proj")
-    _run(_cost_payload(main), tmp_path / "home")
+    _run(_cost_payload(main), tmp_path / "home", engine_root=_real_engine_root())
     assert (tmp_path / "home" / "state" / "session-cost" / "sess1.json").is_file()
 
 

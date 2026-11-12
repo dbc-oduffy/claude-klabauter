@@ -325,9 +325,9 @@ def check_cross_repo_writes(
     if sibling_rows and not approved and not is_remote_venue(env):
         raise CrossRepoApprovalNeeded(
             f"{APPROVE_TOUCHPOINT}: this run writes into {', '.join(repos)} beside "
-            f"{repo_root.name} -- {'; '.join(sibling_rows)}. Ask the PM whether this "
-            "cross-repo write is okay; on approval re-emit with --cross-repo-approved "
-            "(the approval is this session's cross-repo commit assent)."
+            f"{repo_root.name} -- {'; '.join(sibling_rows)}. Send a cross-repo-memo to the "
+            "owning repo, or take the commit assent from the G-EM (else the APM), then "
+            "re-emit with --cross-repo-approved."
         )
     if session_id and granted:
         record_grants(repo_root, session_id, granted)

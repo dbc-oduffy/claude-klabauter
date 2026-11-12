@@ -18,9 +18,10 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.session import record_homes
+
 DEFAULT_PROFILE = "lessons"
 DEFAULT_APPETITE = "standard"
-DEFAULT_QUEUE = "state/lessons"
 
 
 def _default_profile_dir(profile: str) -> Path:
@@ -50,7 +51,7 @@ def measure(
     from coordinator_core.ops.dispatch_emit.queue_select import load_row_schema_gate, select_rows
 
     repo_root = Path(repo_root).resolve()
-    queue_dir = Path(queue) if queue is not None else repo_root / DEFAULT_QUEUE
+    queue_dir = Path(queue) if queue is not None else Path(record_homes.home_dir(str(repo_root), "lessons"))
     pdir = Path(profile_dir) if profile_dir is not None else _default_profile_dir(profile)
 
     loaded = load_profile(profile, pdir)
@@ -74,7 +75,7 @@ def measure(
             claimant_sid=None,
             row_schema_gate=load_row_schema_gate(loaded, repo_root),
         )
-        batches = _group_into_batches(manifest, knobs)
+        batches = _group_into_batches(manifest, knobs, loaded)
 
     admitted = len(manifest.entries)
     triage_batches = len(batches)

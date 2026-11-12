@@ -12,8 +12,8 @@ Coverage:
   compute_scope, fixture-repo golden:
     (e) harvest cohort = ripe_filter.harvest ∩ harvest_debt.harvest_debt (a ripe spec
         already logged harvested is excluded; an un-ripe undebted spec is excluded)
-    (f) sidecar cohort routed via sweep_sidecars (active-reference-guard-cleared),
-        never via ripe_filter's own raw sidecars field
+    (f) sidecar cohort routed via sidecar_candidate_ids (no rg spawn; the guard is
+        delete-time), never via ripe_filter's own raw sidecars field
     (g) handoff resolution gate: consumed/claimed + shipped_in + not-abandoned passes;
         missing shipped_in, wrong status, or deployment_state: abandoned all SKIP
     (h) memos cohort enumerates cross-repo/archive/*.md verbatim
@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -196,6 +197,27 @@ def test_compute_scope_sidecar_cohort_via_sweep_not_ripe_filter(fixture_repo):
         "archive/specs/2026-07-04-delta.review.md"
     ]
     assert "archive/specs/2026-07-04-delta.review.md" not in result.manifest["cohorts"]["harvest"]
+
+
+def test_compute_scope_reports_referenced_sidecar_without_spawning_rg(fixture_repo, monkeypatch):
+    """The op reports candidates and spawns nothing; the reference decision is the
+    delete-time guard's, which still blocks a referenced sidecar."""
+    from coordinator_core.distill.delete_guard import check_active_reference
+
+    rel = "archive/specs/2026-07-04-delta.review.md"
+    _write(fixture_repo / "docs" / "cites.md", f"see {rel}\n")
+
+    def _no_spawn(*args, **kwargs):
+        raise AssertionError(f"distill.scope spawned: {args[:1]}")
+
+    with monkeypatch.context() as m:
+        m.setattr(subprocess, "run", _no_spawn)
+        m.setattr(subprocess, "Popen", _no_spawn)
+        result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
+
+    assert result.manifest["cohorts"]["sidecars"] == [rel]
+    if shutil.which("rg"):
+        assert check_active_reference(rel, fixture_repo).passed is False
 
 
 def test_compute_scope_handoff_resolution_gate(fixture_repo):

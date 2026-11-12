@@ -708,3 +708,56 @@ def test_confirm_at_default_arguments_on_an_empty_box_exits_nonzero(box, tmp_pat
                                        "HOME": str(tmp_path / "h"), "USERPROFILE": str(tmp_path / "h")},
                        cwd=str(tmp_path))
     assert r.returncode == 1 and r.stdout.startswith("UNCONFIRMED: no mirror")
+
+
+def _pair_snapshot(box):
+    """Epoch 2 with `machine-a` carrying relay_pub=other and relay_pubs={me: relay}; returns the snapshot."""
+    m = box.al._membership()
+    box.mem = m
+    m.write_pin(box.home, box.signer[1])
+    me = {"box": "me", "host": "me.local", "user": "kim", "relay_pub": box.other[1], "from_cidrs": []}
+    peer = {"box": "machine-a", "host": "machine-a.local", "user": "kim", "relay_pub": box.relay[1],
+            "relay_pubs": {"me": box.pair[1]}, "from_cidrs": []}
+    snap = None
+    for member in (me, peer):
+        snap = m.next_snapshot(snap, {"op": "join", "member": member})
+        m.adopt(box.home, snap, m.FakeSigner(box.signer[0], environ={}).sign(m.canonical_bytes(snap)),
+                notifier=lambda *a, **k: None)
+    return snap
+
+
+def _problems(out):
+    return [ln for ln in out.splitlines() if ln.startswith("problem:")]
+
+
+def test_the_per_pair_key_addressed_to_this_box_signs_its_line_and_satisfies_the_inbound_check(box):
+    box.pair = keygen(box.tmp / "pair")
+    snap = _pair_snapshot(box)
+    box.ak.write_text(box.relay_line(box.pair[1], "machine-a") + "\n")
+    box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
+    box.seed_live("kim@machine-a.local")
+    rc, out = box.main()
+    assert (rc, _problems(out)) == (0, [])
+
+
+def test_a_missing_per_pair_key_is_one_inbound_problem_even_when_the_members_other_key_is_held(box):
+    box.pair = keygen(box.tmp / "pair")
+    snap = _pair_snapshot(box)
+    box.ak.write_text(box.relay_line(box.relay[1], "machine-a") + "\n")
+    box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
+    box.seed_live("kim@machine-a.local")
+    rc, out = box.main()
+    assert rc == 1
+    assert [p for p in _problems(out) if "asymmetric: machine-a -> me missing" in p] != []
+    assert not [p for p in _problems(out) if "no signed membership record" in p]
+
+
+def test_no_pin_is_a_problem_naming_the_pin_command_and_a_held_pin_still_prints_its_fingerprint(box):
+    rc, out = box.main()
+    assert rc == 1 and any("no signer pin" in p and "unimatrix-pair.py pin" in p for p in _problems(out))
+    snap = box.adopt("me", "machine-a")
+    box.ak.write_text(box.relay_line(box.relay[1]) + "\n")
+    box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
+    box.seed_live("kim@machine-a.local")
+    rc, out = box.main()
+    assert "info: pin SHA256:" in out and not any("no signer pin" in p for p in _problems(out))

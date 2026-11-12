@@ -446,6 +446,10 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
         # REACHABLE_CWD_FALLBACK / B_SAFE_CWD_FALLBACK below.
         "wsc-session-disposition.py",
         "queue-triage.py",
+        # B-safe per state/audits/class-b-repo-root-reverification.md
+        # (section "Post-baseline detector finds"): `--install-hook` is an
+        # explicit operator action whose target IS the invoking repo.
+        "pre_commit_corpus_artifact_guard.py",
     }
 
     #: Every `coordinator/bin/*.py` file legitimately still allowed to
@@ -482,6 +486,11 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
         # `_has_real_rev_parse_toplevel_call`) so neither was ever checked.
         "klabauter-reconcile.py",
         "percolate-gate.py",
+        # Class-C per state/audits/class-b-repo-root-reverification.md
+        # (section "Post-baseline detector finds"): every `--show-toplevel`
+        # site takes an explicit root or anchor (`_REPO_ROOT`, `repo_root`,
+        # a source path); none reads the bare process cwd.
+        "publish.py",
         # Class-C, new since the 2026-08-11 KNOWN_REMAINDER baseline was
         # frozen: `git -C dirname(handoff_path) rev-parse --show-toplevel`,
         # own docstring carries the literal phrase "not the process cwd";

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple, Union
+from typing import Dict, Iterable, List, NamedTuple, Tuple, Union
 
 #: What may deny. ``box-degrading``: disk fill, runaway processes, whole-filesystem
 #: scans, destroying data or history. ``irreversible-external``: push/PR to a non-owned
@@ -58,16 +58,47 @@ GUARD_DENY_CLASS: Dict[str, str] = {
     "block-worktree-tool": BOX_DEGRADING,
     "block-workflow-foreign-emission": DISRUPTIVE,
     "runaway-find": BOX_DEGRADING,
+    #: PM-ruled exception (DR-502), R1: "ignoring the guard's warning is a sign that the guard
+    #: needs to be reinstated for CLAUDE.md and for rules." An EM write to CLAUDE.md-class and
+    #: rules files is denied unless a fresh doctrine-edit sentinel is in the git dir.
+    "guard-doctrine-surface-edits": DISRUPTIVE,
+    "guard-doctrine-surface-bash-write": DISRUPTIVE,
+}
+
+
+class PmRuledException(NamedTuple):
+    """A PM-ruled exception to the no-PM-unlock ratchet, recorded against a guard.
+
+    ``dr`` is the decision record (``docs/decisions/<dr>-*.md``); ``sentinel`` is the
+    unlock file name the route reads; ``readers`` are the module stems that implement or
+    guard the route and may name it; ``phrase`` is the one remedy literal those modules may
+    carry (matched as a substring of a string literal).
+    """
+
+    dr: str
+    sentinel: str
+    readers: Tuple[str, ...]
+    phrase: str
+
+
+#: Keyed by a GUARD_DENY_CLASS guard name. The no-PM-unlocks ratchet
+#: (``tests/test_no_pm_only_unlocks.py``) exempts the row's sentinel name and phrase in its
+#: ``readers`` only, so the exemption lives in this registry row and nowhere else.
+_DOCTRINE_EDIT_EXCEPTION = PmRuledException(
+    dr="DR-502",
+    sentinel=".coordinator-doctrine-edit-approved",
+    readers=("deny_registry", "_doctrine_edit_sentinel", "block_approval_sentinel_creation"),
+    phrase="doctrine-edit approval sentinel",
+)
+PM_RULED_EXCEPTIONS: Dict[str, PmRuledException] = {
+    "guard-doctrine-surface-edits": _DOCTRINE_EDIT_EXCEPTION,
+    "guard-doctrine-surface-bash-write": _DOCTRINE_EDIT_EXCEPTION,
 }
 
 #: Guards whose deny is registered for a dispatched caller only; the EM's call is a log.
 SUBAGENT_DENY_CLASS: Dict[str, str] = {
     "guard-subagent-heavy-ue-launch": BOX_DEGRADING,
     "block-subagent-destructive-action": BOX_DEGRADING,
-    #: PM ruling: "subagents should be hard-blocked from changes to CLAUDE.md too".
-    #: Always-loaded doctrine is fleet-wide; DISRUPTIVE is the admitted class (a write that
-    #: damages shared state peers load).
-    "guard-doctrine-surface-edits": DISRUPTIVE,
 }
 
 #: Guards ruled advisory after a predicate read against the five deny classes (disk fill,
@@ -90,7 +121,6 @@ ADVISORY_BY_RULING: Dict[str, str] = {
     "guard-agent-route-admission": "routing mismatch; the dispatch can be redone",
     "guard-brief-prescribed-method": "brief lint; prose only",
     "guard-doctrine-changelog-prose": "doctrine prose style; recoverable",
-    "guard-doctrine-surface-bash-write": "doctrine-surface edit through Bash; recoverable by revert",
     "guard-doctrine-surface-ratio": "doctrine weight ratio; recoverable",
     "guard-editor-python-direct": "routing nudge; editor Python is not destructive here",
     "guard-em-prefire-survey": "an EM's read sprawl; no side effect",

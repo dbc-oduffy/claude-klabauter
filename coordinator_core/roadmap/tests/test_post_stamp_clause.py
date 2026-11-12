@@ -218,6 +218,8 @@ def test_doc_approval_refused(text):
     msg = psc.doc_approval_refusal(text)
     assert msg and msg.startswith(psc.EXIT_CRITERION_REFUSAL_HEAD)
     assert msg.endswith(f"{psc.REMEDIATION_MARKER}{psc.DOC_APPROVAL_REMEDIATION}.")
+    assert "a sign-off clause on a non-direction artifact" in msg
+    assert "PM approval" not in msg
 
 
 @pytest.mark.parametrize(

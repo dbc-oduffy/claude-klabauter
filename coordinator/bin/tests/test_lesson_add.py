@@ -613,8 +613,12 @@ def test_delegation_carries_the_served_session_not_the_servers_spawner(monkeypat
             _invoke()
 
     child_env = mock_run.call_args.kwargs["env"]
-    for var in _session_core.SESSION_ENV_PRECEDENCE:
+    # Legacy Claude slots carry the caller; native vendor slots (CODEX_THREAD_ID
+    # etc.) are never manufactured, only dropped, so none may name the spawner.
+    for var in _session_core.CLAUDE_SESSION_ENV_PRECEDENCE:
         assert child_env.get(var) == caller, f"{var} must name the served session"
+    for var in _session_core.NATIVE_SESSION_ENV_PRECEDENCE:
+        assert child_env.get(var) in (None, caller), f"{var} must not name a stranger"
 
 
 # ---------------------------------------------------------------------------

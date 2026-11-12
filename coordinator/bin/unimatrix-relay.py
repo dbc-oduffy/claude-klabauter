@@ -49,7 +49,9 @@ Modes, read from SSH_ORIGINAL_COMMAND:
                     when accepted. Argv must restate the envelope or the grant is refused.
   membership get    print the held signed membership snapshot (canonical JSON line, then its
                     base64 signature line); exit 1 when none is held.
-  membership put    read the snapshot line and base64 signature line on stdin, verify against
+  membership put    read the snapshot line and base64 signature line (and an optional signer
+                    pin line, honoured only by a receiver holding no pin, and only when the
+                    snapshot verifies against it) on stdin, verify against
                     the pinned signer key and the held epoch, adopt, and reconcile the
                     relay-managed authorized_keys lines (from= and --peer pins generated);
                     prints a JSON reply, exit 0 only when adopted. The relay never signs.
@@ -72,6 +74,14 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+
+try:
+    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import ensure_engine_on_path
+
+    ensure_engine_on_path(__file__)
+except ImportError:  # a receiving-box copy carries no lib/; the engine resolves lazily
+    pass
 
 SESS = "~/.claude/sessions"
 SOCKS = "/tmp/cc-socks"
@@ -1301,13 +1311,32 @@ def membership_get(home, membership):
     return membership.canonical_bytes(snap).decode("ascii"), base64.b64encode(sig).decode("ascii")
 
 
+def _pin_pinless_receiver(home, snap, sig, pin_line, membership, notifier, run):
+    """Write the pushed pin only when this box holds none and `snap` verifies against it; else do nothing.
+
+    Verification precedes the write, so a snapshot the pushed pin does not vouch for leaves no pin file.
+    Raises MembershipError (after a `refused` event) when the pushed pin cannot vouch for `snap`."""
+    if not pin_line.strip() or membership.load_pin(home) is not None:
+        return
+    try:
+        held, _ = membership.load_snapshot(home)
+        membership.verify_snapshot(snap, sig, pin_line.strip(), held=held, run=run)
+        fp = membership.fingerprint(pin_line)
+    except membership.MembershipError as ex:
+        notifier(home, {"kind": "refused", "epoch": snap.get("epoch"), "detail": f"pushed pin: {ex}"[:160]})
+        raise
+    membership.write_pin(home, pin_line)
+    notifier(home, {"kind": "pinned", "epoch": snap.get("epoch"), "detail": f"signer pin {fp} adopted from a verified push"})
+
+
 def membership_put(home, snapshot_line, sig_line, membership, authorized_keys, notifier=None,
-                   is_admin=windows_admin, run=subprocess.run):
+                   is_admin=windows_admin, run=subprocess.run, pin_line=""):
     """Verify and adopt a pushed snapshot, then reconcile authorized_keys; return the reply dict.
 
     The pin and the epoch gate inside `membership.adopt` are the only defence: a refusal (bad
     signature, replayed epoch, fork, no pin, malformed input) appends one `refused` event and changes
-    nothing. The relay never signs."""
+    nothing. A non-empty `pin_line` pins a pinless receiver, and only when the snapshot verifies
+    against it; a receiver already holding a pin ignores it. The relay never signs."""
     notifier = notifier or membership.notify
     try:
         snap = json.loads(snapshot_line)
@@ -1320,10 +1349,12 @@ def membership_put(home, snapshot_line, sig_line, membership, authorized_keys, n
     try:
         prior, _ = membership.load_snapshot(home)
         try:
-            listed = ({m[k].split()[1] for m in prior["members"] for k in ("relay_pub", "file_pub") if k in m}
+            listed = ({b for m in prior["members"]
+                       for b in (*membership.member_key_bodies(m), *([m["file_pub"].split()[1]] if "file_pub" in m else []))}
                       if prior else set())
         except (KeyError, IndexError, TypeError, AttributeError):
             listed = set()
+        _pin_pinless_receiver(home, snap, sig, pin_line, membership, notifier, run)
         members = membership.adopt(home, snap, sig, notifier=notifier, run=run)
     except membership.MembershipError as ex:
         return {"ok": False, "reason": f"refused: {ex}"[:200]}
@@ -1448,7 +1479,7 @@ def main():
             print(held[1])
             return
         reply = membership_put(home, sys.stdin.readline(), sys.stdin.readline(), membership,
-                               Path.home() / ".ssh" / "authorized_keys")
+                               Path.home() / ".ssh" / "authorized_keys", pin_line=sys.stdin.readline())
         print(json.dumps(reply))
         sys.exit(0 if reply.get("ok") is True else 1)
     if mode == "grant":
@@ -1479,4 +1510,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if any(_a in ("-h", "--help") for _a in sys.argv[1:]):
+        print("usage: unimatrix-relay [-h]\nunimatrix relay daemon")
+        raise SystemExit(0)
     main()

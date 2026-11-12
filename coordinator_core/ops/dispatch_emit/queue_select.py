@@ -155,6 +155,8 @@ class RowSchemaGate:
 
     schema: Mapping[str, Any]
     closure_fields: frozenset
+    status_field: str = ""
+    closed_values: frozenset = frozenset()
 
 
 def load_row_schema_gate(profile_obj: Any, repo_root: Path) -> Optional[RowSchemaGate]:
@@ -169,7 +171,23 @@ def load_row_schema_gate(profile_obj: Any, repo_root: Path) -> Optional[RowSchem
     return RowSchemaGate(
         schema=json.loads(schema_path.read_text(encoding="utf-8")),
         closure_fields=frozenset({closure.status_field, *closure.stamp_fields}),
+        status_field=closure.status_field,
+        closed_values=frozenset(str(v) for v in closure.closed_values.values()),
     )
+
+
+def _closed_status_decline_reason(parsed: Mapping[str, Any], gate: RowSchemaGate) -> Optional[str]:
+    """Decline reason when the row's status is one of the profile's closed values; an absent
+    or unrecognised status is admitted."""
+    if not gate.status_field or not gate.closed_values:
+        return None
+    value = parsed.get(gate.status_field)
+    if not isinstance(value, str):
+        return None
+    status = value.strip().strip("\"'").strip()
+    if status in gate.closed_values:
+        return f"admission: row status {status} is closed"
+    return None
 
 
 def _row_schema_decline_reason(parsed: Mapping[str, Any], gate: RowSchemaGate) -> Optional[str]:
@@ -857,7 +875,9 @@ def select_rows(
                 continue
         if row_schema_gate is not None:
             # The raw row: sentinel normalisation must not make a present field look missing.
-            malformed = _row_schema_decline_reason(raw_row, row_schema_gate)
+            malformed = _closed_status_decline_reason(raw_row, row_schema_gate) or _row_schema_decline_reason(
+                raw_row, row_schema_gate
+            )
             if malformed is not None:
                 declined.append(DeclinedEntry(row_id=row_id, path=rel_path, reason=malformed))
                 continue

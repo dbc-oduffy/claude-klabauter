@@ -54,7 +54,9 @@ def test_sibling_write_on_local_asks_pm(tmp_path: Path) -> None:
     with pytest.raises(CrossRepoApprovalNeeded) as excinfo:
         check_cross_repo_writes(rows, repo_root, env=LOCAL)
     message = str(excinfo.value)
-    assert "approve_cross_repo_write" in message and "Ask the PM" in message
+    assert "approve_cross_repo_write" in message
+    assert "cross-repo-memo" in message and "G-EM" in message
+    assert "--cross-repo-approved" in message and "Ask the PM" not in message
     assert "claude-klabauter" in message
     assert "M5a" in message
     assert "M5b" in message

@@ -716,6 +716,34 @@ def test_a_scout_reply_without_exit_code_is_redispatched_once_then_halts_distinc
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
 
 
+@pytest.mark.spawns_process
+def test_a_null_scout_result_is_unproven_not_a_throw():
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    script = _compose()
+    decls = [
+        line.strip()
+        for line in script.splitlines()
+        if line.strip().startswith(("const _assembleProven = ", "const _scoutHasValues = ", "const _slugOf = "))
+    ]
+    assert len(decls) == 3
+    prog = (
+        "const _parseDecision = () => null; " + " ".join(decls)
+        + " console.log(JSON.stringify([_assembleProven(null), _scoutHasValues(null), _assembleProven({exit_code: 1}),"
+        " _slugOf(null), _slugOf(undefined)]));"
+    )
+    out = subprocess.run(
+        [node, "-e", prog], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert json.loads(out.stdout) == [False, False, True, "ask", "ask"]
+
+
 def test_a_paraphrased_scout_stdout_with_the_sizing_file_on_disk_does_not_halt():
     script = _compose()
     assert "label: 'sizing-probe'" not in script

@@ -47,7 +47,7 @@ def test_second_scaffold_at_same_path_is_refused_and_first_is_unchanged(repo: Pa
     first = _run(repo, "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read", "--title", "A real PM ask")
     assert first.returncode == 0, first.stderr
 
-    minted = list((repo / "state" / "sizings").glob("*.yaml"))
+    minted = list((repo / "state" / "sizings").rglob("*.yaml"))
     assert len(minted) == 1
     out_path = minted[0]
     original_bytes = out_path.read_bytes()
@@ -59,7 +59,7 @@ def test_second_scaffold_at_same_path_is_refused_and_first_is_unchanged(repo: Pa
     assert str(out_path) in second.stderr or out_path.name in second.stderr
     assert "--out" in second.stderr
     assert out_path.read_bytes() == original_bytes
-    assert len(list((repo / "state" / "sizings").glob("*.yaml"))) == 1
+    assert len(list((repo / "state" / "sizings").rglob("*.yaml"))) == 1
 
 
 def test_an_explicit_out_still_scaffolds_alongside_the_existing_one(repo: Path):

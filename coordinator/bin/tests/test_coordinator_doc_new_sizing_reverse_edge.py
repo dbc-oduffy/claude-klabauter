@@ -131,7 +131,7 @@ def _tmp_git_repo():
         # the reverse edge writes this path INTO the sizing object and then validates
         # it, so a path outside docs/plans/ fails the post-mutation schema check
         # rather than exercising the branch under test.
-        out_path = repo / "docs" / "plans" / "2026-08-10-reverse-edge-fixture.md"
+        out_path = repo / "docs" / "plans" / "2026-08" / "2026-08-10-reverse-edge-fixture.md"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         yield repo, out_path
 
@@ -315,6 +315,9 @@ class FullCliReverseEdgeClobberGuardTest(unittest.TestCase):
             sizing_file = sizing_dir / "2026-08-10-example.yaml"
             original_text = _sizing_yaml("routed", '"docs/plans/2026-08-01-existing-owner.md"')
             sizing_file.write_text(original_text)
+            # A cited plan absent on disk is a first routing, not a re-route.
+            owner = repo / "docs" / "plans" / "2026-08-01-existing-owner.md"
+            owner.write_text("---\ntitle: existing owner\n---\n# owner\n")
 
             result = _run_cli(
                 repo, out_path, "Reverse edge clobber guard plan",
@@ -343,8 +346,8 @@ class FullCliReverseEdgeFanOutTest(unittest.TestCase):
             sizing_rel = "state/sizings/2026-08-10-example.yaml"
 
             (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
-            first_out = repo / "docs" / "plans" / "2026-08-10-first-baton.md"
-            second_out = repo / "docs" / "plans" / "2026-08-10-second-baton.md"
+            first_out = repo / "docs" / "plans" / "2026-08" / "2026-08-10-first-baton.md"
+            second_out = repo / "docs" / "plans" / "2026-08" / "2026-08-10-second-baton.md"
 
             first_result = _run_cli(repo, first_out, "First baton plan", sizing_rel)
             self.assertEqual(first_result.returncode, 0, first_result.stderr)
@@ -378,8 +381,8 @@ class FullCliReverseEdgeFanOutTest(unittest.TestCase):
             sizing_rel = "state/sizings/2026-08-10-example.yaml"
 
             (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
-            first_out = repo / "docs" / "plans" / "2026-08-10-first-baton.md"
-            second_out = repo / "docs" / "plans" / "2026-08-10-second-baton.md"
+            first_out = repo / "docs" / "plans" / "2026-08" / "2026-08-10-first-baton.md"
+            second_out = repo / "docs" / "plans" / "2026-08" / "2026-08-10-second-baton.md"
 
             first_result = _run_cli(repo, first_out, "First baton plan", sizing_rel)
             self.assertEqual(first_result.returncode, 0, first_result.stderr)
@@ -433,8 +436,8 @@ class FullCliReverseEdgeFanOutWithSizingCarriedDeliverableIdTest(unittest.TestCa
             sizing_rel = "state/sizings/2026-08-10-example.yaml"
 
             (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
-            first_out = repo / "docs" / "plans" / "2026-08-10-first-baton.md"
-            second_out = repo / "docs" / "plans" / "2026-08-10-second-baton.md"
+            first_out = repo / "docs" / "plans" / "2026-08" / "2026-08-10-first-baton.md"
+            second_out = repo / "docs" / "plans" / "2026-08" / "2026-08-10-second-baton.md"
 
             first_result = _run_cli(repo, first_out, "First baton plan", sizing_rel)
             self.assertEqual(first_result.returncode, 0, first_result.stderr)
@@ -497,8 +500,8 @@ class FullCliReverseEdgeFanOutExplicitDeliverableIdWinsTest(unittest.TestCase):
             sizing_rel = "state/sizings/2026-08-10-example.yaml"
 
             (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
-            first_out = repo / "docs" / "plans" / "2026-08-10-first-baton.md"
-            second_out = repo / "docs" / "plans" / "2026-08-10-second-baton.md"
+            first_out = repo / "docs" / "plans" / "2026-08" / "2026-08-10-first-baton.md"
+            second_out = repo / "docs" / "plans" / "2026-08" / "2026-08-10-second-baton.md"
 
             first_result = _run_cli(repo, first_out, "First baton plan", sizing_rel)
             self.assertEqual(first_result.returncode, 0, first_result.stderr)
@@ -544,7 +547,7 @@ class PlanCarryPrefersCitedSizingOverHeldBatonTest(unittest.TestCase):
         (claim / "claimed_at").write_text("2026-09-06T00:00:00Z\n", encoding="utf-8")
 
     def _plan(self, repo: Path, sizing_rel: str, *extra: str) -> tuple[subprocess.CompletedProcess, Path]:
-        out = repo / "docs" / "plans" / "2026-09-06-novel-work.md"
+        out = repo / "docs" / "plans" / "2026-09" / "2026-09-06-novel-work.md"
         out.parent.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ)
         for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "DELIVERABLE_ID"):
@@ -586,8 +589,8 @@ class PlanCarryPrefersCitedSizingOverHeldBatonTest(unittest.TestCase):
     def test_scaffolded_sizing_id_outranks_the_held_baton(self):
         with _tmp_git_repo() as (repo, _unused_out):
             self._hold_roadmap_baton(repo)
-            sizing_rel = "state/sizings/2026-09-06-novel-work.yaml"
-            (repo / "state" / "sizings").mkdir(parents=True)
+            sizing_rel = "state/sizings/2026-09/2026-09-06-novel-work.yaml"
+            (repo / "state" / "sizings" / "2026-09").mkdir(parents=True)
             env = dict(os.environ)
             for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "DELIVERABLE_ID"):
                 env.pop(var, None)
@@ -705,15 +708,15 @@ class SizingReverseEdgeIsClaimedByTheInvokingSessionTest(unittest.TestCase):
     def test_both_the_plan_and_the_cited_sizing_are_claimed(self):
         sid = "reverse-edge-claim-test"
         with _tmp_git_repo() as (repo, _unused_out):
-            sizing_rel = "state/sizings/2026-08-10-example.yaml"
-            (repo / "state" / "sizings").mkdir(parents=True)
+            sizing_rel = "state/sizings/2026-08/2026-08-10-example.yaml"
+            (repo / "state" / "sizings" / "2026-08").mkdir(parents=True)
             self._scaffold_sizing(repo, sizing_rel)
 
             # The schema pins `plan:` to `^docs/plans/.+\.md$`, so the plan
             # this routes to must live there — `_tmp_git_repo`'s bare
             # `custom-out.md` fails validation before the declaration under
             # test is ever reached.
-            out_path = repo / "docs" / "plans" / "2026-08-10-reverse-edge-claim.md"
+            out_path = repo / "docs" / "plans" / "2026-08" / "2026-08-10-reverse-edge-claim.md"
             out_path.parent.mkdir(parents=True, exist_ok=True)
 
             env = dict(os.environ)

@@ -175,7 +175,7 @@ def test_missing_socket_queues_and_reads_reply_from_rollout(tmp_path, monkeypatc
     log = fake_codex(tmp_path, monkeypatch)
     out = asyncio.run(pcx.codex_turn(str(tmp_path / "nope.sock"), "thr-1", "hello"))
     assert out == "queued-reply"
-    assert log.read_text() == "queue --thread thr-1 --message hello"
+    assert log.read_text() == "--remote unix:// queue --thread thr-1 --message hello"
 
 
 def test_queue_ignores_rows_before_baseline_and_non_final_phases(tmp_path, monkeypatch):
@@ -213,7 +213,7 @@ def test_tui_held_thread_queues_even_when_the_socket_connects(tmp_path, monkeypa
     log = fake_codex(tmp_path, monkeypatch)
     out, calls = run_against(tmp_path, lambda s: pcx.codex_turn(s, "thr-1", "hello", tui_held=True))
     assert out == "queued-reply" and calls == []
-    assert log.read_text() == "queue --thread thr-1 --message hello"
+    assert log.read_text() == "--remote unix:// queue --thread thr-1 --message hello"
 
 
 def test_codex_home_defaults_to_home_dot_codex(monkeypatch):

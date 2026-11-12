@@ -33,6 +33,11 @@ def test_list_names_a_far_box_by_member_host_never_an_ip_octet(monkeypatch, caps
 
 def test_list_without_router_lists_sessions_dir_and_succeeds(monkeypatch, capsys):
     monkeypatch.setattr(us, "_session_entries", lambda: _ENTRIES)
+    # An entry with no unimatrixBox takes the local box; pin it so a host named
+    # "machine-b" cannot collide with the dp-claude fixture's explicit box.
+    contract = us._sibling("unimatrix-peer-contract.py", "unimatrix_peer_contract_send")
+    monkeypatch.setattr(contract, "local_box", lambda: "mac")
+    monkeypatch.setattr(us, "_sibling", lambda f, m: contract)
     with tempfile.TemporaryDirectory() as d:
         rc = us.main(["--list", "--endpoint-dir", d])
     cap = capsys.readouterr()

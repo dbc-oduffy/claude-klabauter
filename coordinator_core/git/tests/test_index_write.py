@@ -81,7 +81,7 @@ def test_absent_sentinel_stages_a_deletion(tmp_path):
 
 def test_lock_is_refused_never_stolen(tmp_path):
     repo = _repo(tmp_path)
-    (repo / ".git" / "index.lock").write_bytes(b"")
+    (repo / ".git" / "index.lock").write_bytes(b"partial index bytes")
     with pytest.raises(index_write.IndexWriteLockBusy):
         index_write.splice_index(repo, {"seed.txt": index_write.ABSENT})
 

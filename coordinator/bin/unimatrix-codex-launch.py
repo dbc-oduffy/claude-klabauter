@@ -23,6 +23,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 READY_SECONDS = 20
 
+import lib  # noqa: E402,F401 -- bootstraps coordinator/bin/lib onto sys.path
+from cc_invoke import ensure_engine_on_path  # noqa: E402
+
+ensure_engine_on_path(__file__)
+
 
 def load_sibling(name):
     spec = importlib.util.spec_from_file_location(name.replace("-", "_"), HERE / f"{name}.py")

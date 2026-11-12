@@ -4,7 +4,7 @@
 For Codex and agy peers: an agent's message in is answered with this command out, addressed to
 the sender, never with plain text to the human at the keyboard.
 
-    unimatrix-send.py --to coordinator-content-repo-ea 'Reviewed the plan: two issues, ...'
+    unimatrix-send.py --to <peer-name> 'Reviewed the plan: two issues, ...'
     unimatrix-send.py --list
 
 The sender is identified from the shell this runs in: CODEX_THREAD_ID (Codex) or

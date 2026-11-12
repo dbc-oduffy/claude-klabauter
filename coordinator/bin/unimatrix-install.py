@@ -7,8 +7,10 @@ VENDORED_SCRIPTS into <settings home>/unimatrix. Outside the range the gate refu
 macOS, Windows and Linux.
 """
 import argparse
+import getpass
 import hashlib
 import importlib.util
+import ipaddress
 import json
 import ntpath
 import os
@@ -320,6 +322,7 @@ def _lib(name):
 _LIBS = {}
 HOMEBREW_PYTHONS = ("/opt/homebrew/bin/python3", "/usr/local/bin/python3")  # literal: the installer must import without lib/ beside it
 _PIN_UNREAD = object()
+PYTHON_PIN_KEY = "unimatrix.python"
 _PIN_CACHE = {}
 
 
@@ -344,25 +347,27 @@ def forced_command_interpreter(pin_value=_PIN_UNREAD):
     return _lib("python_interp").unimatrix_python(pin_value, homebrew=HOMEBREW_PYTHONS) or sys.executable
 
 
-def authorized_keys_line(dest_dir, interpreter=None, key_body="<key-body>", file_peer=None, control=False):
+def authorized_keys_line(dest_dir, interpreter=None, key_body="<key-body>", file_peer=None):
     """Paste-ready `restrict,command=...` authorized_keys line; `key_body` defaults to the <key-body> placeholder.
     A path with a space is quoted inside the command and each inner quote escaped for sshd.
     `file_peer` (the calling box) makes it the file key's line: the separate unimatrix-file-relay.py
-    forced command with a fixed `--peer <box>`. `control` makes it the control key's line: the separate
-    unimatrix-control.py forced command (launch/wake only), comment `unimatrix-control`."""
-    if control and file_peer is not None:
-        raise ValueError("a key is the control key or the file key, not both")
+    forced command with a fixed `--peer <box>`."""
     interp = interpreter or forced_command_interpreter()
-    script = "unimatrix-control.py" if control else (
-        "unimatrix-file-relay.py" if file_peer is not None else "unimatrix-relay.py")
+    script = "unimatrix-file-relay.py" if file_peer is not None else "unimatrix-relay.py"
     parts = [f'\\"{p}\\"' if " " in p else p for p in (interp, str(Path(dest_dir) / script))]
     if file_peer is not None:
         parts += ["--peer", file_peer]
-    return f'restrict,command="{" ".join(parts)}" ssh-ed25519 {key_body} {"unimatrix-control" if control else "unimatrix"}'
+    return f'restrict,command="{" ".join(parts)}" ssh-ed25519 {key_body} unimatrix'
+
+
+def control_authorized_keys_line(key_body, from_cidrs):
+    """The control key's full-admin line: pinned only by `from=`, no `command=`, no `restrict`."""
+    return f'from="{",".join(from_cidrs)}" ssh-ed25519 {key_body} unimatrix-control'
 
 
 FAR_DEST_DIR = "~/.coordinator-claude-settings/unimatrix"
 FAR_INTERPRETER = "python3"
+FROM_CIDRS_PLACEHOLDER = "<from-cidrs>"
 _ALIAS_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 _SIBLINGS = {}
 
@@ -460,20 +465,26 @@ def _retitle_item(mod, stage, alias, run):
                            f"renamed to {mod.item_name(alias)}: {mod._tail(r)}")
 
 
-def pair_key(alias, run=subprocess.run, unencrypted=False, remint=False, on_mint=None):
+def pair_key(alias, run=subprocess.run, unencrypted=False, remint=False, on_mint=None, adopt_only=False):
     """Return (private key path, public key body) for this box's pair with `alias`. Reads the key autolink's
     resolve_key finds when it is alias-specific and present; otherwise mints (or adopts an unrecorded file at)
     <settings home>/.secrets/ssh/unimatrix-<alias> and records unimatrix.keys.<alias>. Never overwrites a key
     except under `remint`, which deletes the old pair and its 1Password item first. The mint is passphrase-encrypted
     with the item's passphrase (`on_mint(ref)` receives the op reference) unless `unencrypted`.
+    `adopt_only` returns the found key and otherwise raises RuntimeError naming the alias: it never mints, never
+    writes the machine-local record, and refuses `remint` (ValueError).
     RuntimeError when the alias reduces to nothing, the mint fails, or the machine-local record cannot be made;
     PassphraseSourceMissing / OnePasswordLocked (RuntimeError) when the passphrase source cannot be reached."""
+    if adopt_only and remint:
+        raise ValueError("adopt_only and remint are mutually exclusive")
     autolink, roster = _sibling(AUTOLINK_SCRIPT), _sibling("unimatrix-roster.py")
     found = autolink.resolve_key(
         roster, alias,
         local_fn=lambda r, a: autolink.machine_local_key(r, a, run=run),
         ssh_fn=lambda r, a: autolink.ssh_identity_file(r, a, run=run))
     alias_key = found != roster.default_key() and Path(found).is_file()
+    if adopt_only and not alias_key:
+        raise RuntimeError(f"no recorded pair key for {alias}: {autolink.KEYS_PREFIX}{alias} is unset or its file is missing")
     if alias_key and not remint:
         priv = Path(found)
     else:
@@ -495,6 +506,35 @@ def pair_key(alias, run=subprocess.run, unencrypted=False, remint=False, on_mint
     if not pub.is_file():
         raise RuntimeError(f"{pub} is missing; cannot read the public key of {priv}")
     return priv, _pub_body(pub)
+
+
+def recorded_pair_keys(run=subprocess.run):
+    """{alias: (private key path, public key body)} for every machine-local `unimatrix.keys.<alias>` record whose
+    private and public key files exist. One reader process; never mints or writes a record. RuntimeError when the
+    reader is missing or its output is not a JSON object."""
+    autolink, roster = _sibling(AUTOLINK_SCRIPT), _sibling("unimatrix-roster.py")
+    reader = roster.settings_home() / "bin" / "_machine_local.py"
+    if not reader.is_file():
+        raise RuntimeError(f"{reader} is missing; recorded pair keys cannot be listed")
+    r = run([sys.executable, str(reader), "dump", "--prefix", autolink.KEYS_PREFIX.rstrip(".")],
+            capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
+    try:
+        records = json.loads(r.stdout or "")
+    except ValueError:
+        records = None
+    if not isinstance(records, dict):
+        raise RuntimeError(f"listing {autolink.KEYS_PREFIX}* failed: {(r.stderr or r.stdout or '').strip()[:200]}")
+    out = {}
+    for key, value in sorted(records.items()):
+        alias = key[len(autolink.KEYS_PREFIX):] if key.startswith(autolink.KEYS_PREFIX) else ""
+        if not alias or not isinstance(value, str) or not value:
+            continue
+        priv = Path(os.path.expanduser(value))
+        roster.refuse_real("key_path", str(priv))
+        pub = Path(str(priv) + ".pub")
+        if priv.is_file() and pub.is_file():
+            out[alias] = (priv, _pub_body(pub))
+    return out
 
 
 FILE_KEY_NAME = "unimatrix-file"
@@ -525,33 +565,59 @@ def file_key(run=subprocess.run, unencrypted=False, remint=False, on_mint=None):
 CONTROL_ALIAS_PREFIX = "unimatrix-control-"
 
 
-def control_key(box, run=subprocess.run, unencrypted=False, remint=False, on_mint=None):
+def control_key(box, run=subprocess.run, remint=False):
     """(private key path, public key body) of this box's control key for far box `box`, minted at
     ~/.ssh/unimatrix_control_<box> when absent; never overwrites (bar `remint`) and never touches the relay or file key.
-    RuntimeError when `box` has no usable characters, the mint fails, or the public key is unreadable;
-    PassphraseSourceMissing / OnePasswordLocked (RuntimeError) when the passphrase source cannot be reached."""
+    The mint is always unencrypted: the launch path is `ssh -i` under BatchMode with no agent, so it cannot answer a
+    passphrase. RuntimeError when `box` has no usable characters, the mint fails, or the public key is unreadable."""
     safe = _ALIAS_UNSAFE.sub("-", box)
     if not safe.strip("-"):
         raise RuntimeError(f"box {box!r} has no usable characters for a key file name")
     priv = Path.home() / ".ssh" / f"unimatrix_control_{safe}"
     if remint or not priv.is_file():
-        _mint(priv, "unimatrix-control", run, unencrypted, remint, on_mint)
+        _mint(priv, "unimatrix-control", run, True, remint)
     pub = Path(str(priv) + ".pub")
     if not pub.is_file():
         raise RuntimeError(f"{pub} is missing; cannot read the public key of {priv}")
     return priv, _pub_body(pub)
 
 
-def render_ssh_config_block(alias, key_path, host_alias=None):
+def peer_ssh_options(box, run=subprocess.run):
+    """{"hostkeyalias": ..., "user": ...} that `ssh -G` resolves for the existing `Host` entry of `box`; a value
+    ssh did not take from config (no hostkeyalias line, or the default local user) is omitted, never invented."""
+    try:
+        r = run(["ssh", "-G", "--", box], capture_output=True, text=True, timeout=10,
+                creationflags=_sibling("unimatrix-roster.py").no_window())
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if r.returncode or not isinstance(r.stdout, str):
+        return {}
+    fields = {}
+    for line in r.stdout.splitlines():
+        k, _, v = line.partition(" ")
+        fields.setdefault(k.lower(), v.strip())
+    out = {k: fields[k] for k in ("hostkeyalias", "user") if fields.get(k)}
+    try:
+        if out.get("user") == getpass.getuser():
+            del out["user"]
+    except (OSError, KeyError, ImportError):
+        pass
+    return out
+
+
+def render_ssh_config_block(alias, key_path, host_alias=None, peer_options=None):
     """The near-side `~/.ssh/config` block for the pair; printed, never written. The peer is named by
     hostname (`<name>.local` unless the name is already dotted), never an IP literal. `host_alias` names the
-    `Host` entry when it differs from the peer (the control key's `unimatrix-control-<box>`)."""
+    `Host` entry when it differs from the peer (the control key's `unimatrix-control-<box>`). `peer_options`
+    (`peer_ssh_options`) adds the peer's HostKeyAlias and User lines when present."""
     name = alias.rsplit("@", 1)[-1]
     host = name if "." in name else f"{name}.local"
     return (f"Host {host_alias or alias}\n"
             f"    HostName {host}\n"
             f"    AddressFamily inet\n"
-            f"    IdentityFile {Path(key_path).as_posix()}\n"
+            + "".join(f"    {n} {peer_options[k]}\n" for k, n in (("hostkeyalias", "HostKeyAlias"), ("user", "User"))
+                      if peer_options and peer_options.get(k))
+            + f"    IdentityFile {Path(key_path).as_posix()}\n"
             f"    IdentitiesOnly yes\n")
 
 
@@ -608,17 +674,88 @@ def probe_far(alias, run=subprocess.run):
     return None
 
 
-def install_over_link(alias, body, run=subprocess.run, control=False):
+_SHELL_PROGRAM = (
+    "import winreg\n"
+    "try:\n"
+    "    print(winreg.QueryValueEx(winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\\OpenSSH'), 'DefaultShell')[0])\n"
+    "except OSError:\n"
+    "    print('')\n")
+
+
+def far_shell(py, plat, alias, run):
+    """The far sshd's command shell: `posix` off win32; on win32 `powershell` when the OpenSSH DefaultShell
+    names powershell or pwsh, else `cmd` (also when the registry read fails)."""
+    if plat != "win32":
+        return "posix"
+    try:
+        r = _ssh_batch(alias, py, _SHELL_PROGRAM, run)
+    except (OSError, subprocess.SubprocessError):
+        return "cmd"
+    lines = (r.stdout or "").strip().splitlines() if r.returncode == 0 else []
+    base = ntpath.basename(lines[-1].strip()).lower() if lines else ""
+    return "powershell" if "powershell" in base or "pwsh" in base else "cmd"
+
+
+def control_far_record_path(box):
+    """Where the far invocation record for `box` lives: <settings home>/unimatrix/control-far/<box>.json."""
+    return settings_home() / "unimatrix" / "control-far" / f"{_ALIAS_UNSAFE.sub('-', box)}.json"
+
+
+def write_control_far_record(box, py, plat, interp, home, run=subprocess.run):
+    """Atomically write the far invocation record the control client reads: the far platform, absolute interpreter,
+    absolute unimatrix-control.py and command shell, all from a successful probe. Returns the record's path."""
+    join = ntpath.join if plat == "win32" else posixpath.join
+    record = {"platform": plat, "interpreter": interp, "script": join(home, "unimatrix", "unimatrix-control.py"),
+              "shell": far_shell(py, plat, box, run)}
+    path = control_far_record_path(box)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(record), encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return path
+
+
+def control_from_cidrs(explicit):
+    """The `from=` pin for a control key: the `--from-cidr` values, else this box's verified membership
+    `from_cidrs`. ValueError naming `--from-cidr` when neither yields a non-empty list or a value is not a CIDR."""
+    cidrs = list(explicit or [])
+    if not cidrs:
+        membership = _sibling("unimatrix-membership.py")
+        try:
+            members = membership.verified_members(_sibling("unimatrix-roster.py").settings_home())
+        except (membership.MembershipError, OSError, ValueError, subprocess.SubprocessError):
+            members = []
+        me = _sibling("unimatrix-peer-contract.py").local_box()
+        cidrs = next((list(m["from_cidrs"]) for m in members if m.get("box") == me and m.get("from_cidrs")), [])
+    if not cidrs:
+        raise ValueError("no from= pin: pass --from-cidr CIDR (this box's verified membership has no from_cidrs)")
+    for c in cidrs:
+        try:
+            ipaddress.ip_network(c, strict=False)
+        except (ValueError, TypeError):
+            raise ValueError(f"--from-cidr {c!r} is not a CIDR") from None
+    return cidrs
+
+
+def install_over_link(alias, body, run=subprocess.run, control=False, from_cidrs=None):
     """Append the pair's authorized_keys line on the far box over an already-authorized BatchMode link.
     Returns (status, line): status is added | present | admin | no-link | failed; `line` is the line with the far
-    box's own interpreter and relay directory (None for no-link); `control` makes it the control key's line.
+    box's own interpreter and relay directory (None for no-link); `control` makes it the control key's full-admin
+    `from_cidrs`-pinned line and records the probed far invocation for the control client.
     Never prompts, never sudo, never the relay key."""
     far = probe_far(alias, run)
     if far is None:
         return "no-link", None
     py, plat, interp, home = far
-    join = ntpath.join if plat == "win32" else posixpath.join
-    line = authorized_keys_line(join(home, "unimatrix"), interp, body, control=control)
+    if control:
+        write_control_far_record(alias, py, plat, interp, home, run)
+        line = control_authorized_keys_line(body, from_cidrs)
+    else:
+        join = ntpath.join if plat == "win32" else posixpath.join
+        line = authorized_keys_line(join(home, "unimatrix"), interp, body)
     try:
         r = _ssh_batch(alias, py, _APPEND_PROGRAM.format(body=body, line=line), run)
     except (OSError, subprocess.SubprocessError):
@@ -1372,6 +1509,54 @@ def run_schtasks(*args):
         return None
 
 
+def _agent_python(agent_dir=None):
+    """The interpreter the installed macOS login agent runs, when that file exists; else None."""
+    if sys.platform != "darwin":
+        return None
+    root = Path(agent_dir) if agent_dir else login_agent_dir()
+    try:
+        import plistlib
+        exe = plistlib.loads(_login_agent_paths(root)[0].read_bytes())["ProgramArguments"][0]
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        return None
+    return exe if isinstance(exe, str) and os.path.isfile(exe) else None
+
+
+def _pin_raw():
+    """The `unimatrix.python` value as stored, existing file or not; None when unset."""
+    return _sibling(AUTOLINK_SCRIPT).pin_key_value(_sibling("unimatrix-roster.py"))
+
+
+def _write_pin(interp):
+    """Record `unimatrix.python` = *interp* in machine-local; True when recorded."""
+    roster = _sibling("unimatrix-roster.py")
+    reader = roster.settings_home() / "bin" / "_machine_local.py"
+    if not reader.is_file():
+        return False
+    try:
+        rec = subprocess.run([sys.executable, str(reader), "set", PYTHON_PIN_KEY, interp], capture_output=True,
+                             text=True, timeout=30, creationflags=roster.no_window())
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return rec.returncode == 0
+
+
+def record_python_pin(agent_dir=None):
+    """Pin `unimatrix.python` when unset; return the recorded interpreter, else None (a pin, even a stale
+    one, is never overwritten). The pin is the interpreter the login agent already runs (it holds the macOS
+    Local Network grant), else this installer's: later reinstalls from another python keep that binary."""
+    try:
+        if _pin_raw():
+            return None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    interp = _agent_python(agent_dir) or sys.executable
+    if not _write_pin(interp):
+        return None
+    _PIN_CACHE.clear()
+    return interp
+
+
 def login_agent_dir():
     """Where this OS reads user login agents; None on a platform with none."""
     if sys.platform == "darwin":
@@ -1382,7 +1567,9 @@ def login_agent_dir():
 
 
 def _autolink_argv(dest_dir):
-    return [sys.executable, str(Path(dest_dir) / AUTOLINK_SCRIPT)]
+    # The `unimatrix.python` pin before the installing interpreter: a reinstall from another python must not
+    # repoint the login agent at a binary without the Local Network grant (a silent link loss on macOS).
+    return [_pin_value() or sys.executable, str(Path(dest_dir) / AUTOLINK_SCRIPT)]
 
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -1934,9 +2121,12 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
                     "separate from the relay key, and print its public line and fingerprint for the membership signer")
     ap.add_argument("--control-key", metavar="BOX", help="mint or read the control key for a far box "
                     "(~/.ssh/unimatrix_control_<BOX>) and print its authorized_keys line and the "
-                    f"{CONTROL_ALIAS_PREFIX}<BOX> ssh config block; the control key can only launch or wake a session")
+                    f"{CONTROL_ALIAS_PREFIX}<BOX> ssh config block; the line is a full-admin key pinned by from=")
+    ap.add_argument("--from-cidr", metavar="CIDR", action="append", help="with --control-key: a from= address range "
+                    "for the far box to admit (repeatable); default this box's verified membership from_cidrs")
     ap.add_argument("--unencrypted-key", action="store_true", help="with --pair, --file-key or --control-key: mint the private key "
-                    "without a passphrase (for boxes with no 1Password); the default mint is passphrase-encrypted")
+                    "without a passphrase (for boxes with no 1Password); the default mint is passphrase-encrypted, except "
+                    "--control-key, which is always unencrypted (the launch path has no agent)")
     ap.add_argument("--remint", action="store_true", help="with --pair, --file-key or --control-key: delete the existing private "
                     "key, its .pub and its 1Password passphrase item, then mint anew")
     ap.add_argument("--plugin-root", metavar="DIR", help="seed Codex and agy doctrine and skills from this plugin "
@@ -1958,21 +2148,22 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         return 0
     if args.control_key is not None:
         try:
-            priv, body = control_key(args.control_key, run=pair_run or subprocess.run, unencrypted=args.unencrypted_key,
-                                     remint=args.remint, on_mint=lambda ref: print(
-                                         f"minted a passphrase-encrypted private key\npassphrase: {ref}", file=out))
+            cidrs = control_from_cidrs(args.from_cidr)
+            priv, body = control_key(args.control_key, run=pair_run or subprocess.run, remint=args.remint)
         except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
             print(f"REFUSE: {exc}", file=out)
             return 6
         print(f"control key for {args.control_key}: {priv}", file=out)
         print("ssh config block for this box (add to ~/.ssh/config):", file=out)
-        print(render_ssh_config_block(args.control_key, priv, host_alias=f"{CONTROL_ALIAS_PREFIX}{args.control_key}"),
+        print(render_ssh_config_block(args.control_key, priv, host_alias=f"{CONTROL_ALIAS_PREFIX}{args.control_key}",
+                                      peer_options=peer_ssh_options(args.control_key, run=pair_run or subprocess.run)),
               file=out)
-        status, line = install_over_link(args.control_key, body, run=pair_run or subprocess.run, control=True)
+        status, line = install_over_link(args.control_key, body, run=pair_run or subprocess.run, control=True,
+                                         from_cidrs=cidrs)
         if status == "no-link":
-            print(f"no authorized link to {args.control_key}: paste on the far box (interpreter and path are "
-                  f"placeholders: {FAR_INTERPRETER} and {FAR_DEST_DIR}; use the far box's absolute ones):\n"
-                  f"{authorized_keys_line(FAR_DEST_DIR, FAR_INTERPRETER, body, control=True)}", file=out)
+            print(f"no authorized link to {args.control_key}: paste this line on the far box. The far invocation "
+                  f"record is absent, so launch sends the bare form until `unimatrix-install.py --control-key "
+                  f"{args.control_key}` is re-run over a link:\n{control_authorized_keys_line(body, cidrs)}", file=out)
         elif status == "failed":
             print(f"install over the link to {args.control_key} failed: paste this line on the far box:\n{line}", file=out)
         elif status == "admin":
@@ -2127,8 +2318,8 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
           f"{authorized_keys_line(dest)}", file=out)
     print(f"authorized_keys line for the far side's file key (fill <key-body> and <box>, this box's name): "
           f"{authorized_keys_line(dest, file_peer='<box>')}", file=out)
-    print(f"authorized_keys line for the far side's control key (launch/wake only; fill <key-body>): "
-          f"{authorized_keys_line(dest, control=True)}", file=out)
+    print(f"authorized_keys line for the far side's control key (full admin; fill <key-body> and {FROM_CIDRS_PLACEHOLDER}): "
+          f"{control_authorized_keys_line('<key-body>', [FROM_CIDRS_PLACEHOLDER])}", file=out)
     engine_root, provenance = resolve_engine_root()
     hp = Path(hooks_path) if hooks_path else agy_hooks_path()
     if want_agy:
@@ -2220,6 +2411,9 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     if missing:
         print(f"PARTIAL INSTALL: not installed: {', '.join(missing)}", file=out)
         rc = rc or 7
+    pinned = record_python_pin(agent_dir)
+    if pinned:
+        print(f"unimatrix.python pinned: {pinned}", file=out)
     try:
         state, where = register_login_agent(dest, agent_dir, schtasks, launchctl)
         print(f"login agent {state}: {where}" if state != "skipped" else f"WARN: login agent not registered: {where}", file=out)

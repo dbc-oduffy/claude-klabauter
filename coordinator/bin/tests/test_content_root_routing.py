@@ -73,6 +73,38 @@ def _load_cli(path: Path, module_name: str):
 _lesson_cli = _load_cli(_LESSON_PROMOTE_PATH, "coordinator_lesson_promote")
 _queue_cli = _load_cli(_QUEUE_APPEND_PATH, "coordinator_queue_append")
 
+# The CLIs bind the engine lazily, on first attribute use. Tests below run under
+# `patch.dict(os.environ, ..., clear=True)`, which drops the engine-root seam, so a
+# first bind inside one fails. `_engine_bound` binds once, before any test clears it,
+# against a stub stamped engine under tmp_path: the host's registered published
+# engine is never consulted.
+
+
+def _stub_stamped_engine(root: Path) -> Path:
+    """A minimal stamped engine tree: the non-empty `coordinator_core/_engine_stamp`
+    is what COORDINATOR_ENGINE_ROOT needs to be answered rather than refused."""
+    core = root / "coordinator_core"
+    core.mkdir(parents=True)
+    (core / "_engine_stamp").write_text("stub-engine\n", encoding="utf-8")
+    (root / "pyproject.toml").write_text('[project]\nname = "stub-engine"\n', encoding="utf-8")
+    return root
+
+
+@pytest.fixture(autouse=True)
+def _engine_bound(tmp_path_factory, monkeypatch):
+    """Bind the lesson CLI's engine against the stub, not the host's published one.
+
+    This module already bound `coordinator_core` off the checkout at import, so the
+    CLI's real `require_dispatch_engine_on_path` would see the stub root as divergent
+    from it; the stub stands in for that one call and returns the stub root.
+    """
+    engine = _stub_stamped_engine(tmp_path_factory.mktemp("stub-engine"))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(engine))
+    import cc_invoke
+
+    monkeypatch.setattr(cc_invoke, "require_dispatch_engine_on_path", lambda: str(engine))
+    _lesson_cli._bootstrap_engine()
+
 
 def _isolated_env(home: Path | str, **extra: str) -> dict[str, str]:
     """A replacement os.environ with only the process basics, every home and
@@ -384,6 +416,9 @@ def _run_cold_lesson(tmpdir: str) -> tuple[int, str]:
 
     with (
         unittest.mock.patch.dict(os.environ, cold_env, clear=True),
+        # The engine is bound at import above; these tests exercise the content
+        # root, and the cleared env cannot re-resolve a published engine.
+        unittest.mock.patch.object(_lesson_cli, "require_dispatch_engine_on_path"),
         unittest.mock.patch.object(
             _lesson_cli, "_cc_route", side_effect=fake_route
         ),
@@ -579,6 +614,7 @@ def _run_native_skip_lesson() -> tuple[int, str]:
 
     with (
         _cold_env_patch(),
+        unittest.mock.patch.object(_lesson_cli, "require_dispatch_engine_on_path"),
         unittest.mock.patch.object(
             _lesson_cli, "_cc_route", side_effect=fake_route_skip
         ),

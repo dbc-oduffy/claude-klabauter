@@ -260,6 +260,7 @@ def test_week_only_commits_only_touched_paths(fixture):
         "A archive/week-changelogs/2026-08-17/2026-08-17.md",
         "A archive/week-changelogs/2026-08-17/2026-08-18.md",
         "A archive/week-changelogs/2026-08-17/HEADER.priorities.abc123.md",
+        "A archive/week-changelogs/2026-08-17/WEEK-SUMMARY.md",
         "D state/review-trail/2026-08-18-review.json",
         "D state/week-changelog/2026-08-17.md",
         "D state/week-changelog/2026-08-18.md",

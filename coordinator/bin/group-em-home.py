@@ -60,6 +60,14 @@ def _place_engine_on_path() -> str:
     return place_engine_root_on_path(root)
 
 
+try:
+    _engine_root = _place_engine_on_path()
+except Exception:  # main() reports an unresolvable engine with its own exit code
+    _engine_root = None
+if _engine_root and _engine_root not in sys.path:
+    sys.path.insert(0, _engine_root)
+
+
 def _create_remote(gem_home, home, report: dict) -> None:
     """`gh repo create --private` from the home and record the URL and branch machine-locally.
     A failure leaves the report's opt-out untouched."""

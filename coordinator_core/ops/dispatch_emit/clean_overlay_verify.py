@@ -12,6 +12,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -22,8 +24,9 @@ from typing import Optional, Sequence
 from coordinator_core.git.run import _git_exe, run_git
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
-from coordinator_core.ops.dispatch_emit.test_interpreter import resolve_targeted_test_python
+from coordinator_core.ops.dispatch_emit.interpreter_pin import resolve_targeted_test_python
 from coordinator_core.resolve_validation_cmd import read_local_md_key
+from coordinator_core.testing import scoped_pytest
 from coordinator_core.win_portability import no_console_creationflags
 
 VERDICT_FILE = "overlay-verdict.json"
@@ -73,7 +76,7 @@ def _ledger_holder(root: Path, run_id: str, holder: Path) -> None:
         pass
 
 
-def _run(argv: list, cwd: Path, timeout: int) -> subprocess.CompletedProcess:
+def _run(argv: list, cwd: Path, timeout: int, env: Optional[dict] = None) -> subprocess.CompletedProcess:
     """Run `argv` in a capped job (a killpg session off Windows); the tree is closed on every exit, so a
     timed-out pytest leaves no grandchild. Raises `subprocess.TimeoutExpired` at the timeout."""
     from coordinator_core.diagnostics.contained_run import spawn_in_capped_job
@@ -81,7 +84,7 @@ def _run(argv: list, cwd: Path, timeout: int) -> subprocess.CompletedProcess:
     proc, close = spawn_in_capped_job(
         argv,
         popen_kwargs=dict(
-            cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=str(cwd), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, errors="replace", **no_console_creationflags(),
         ),
     )
@@ -114,6 +117,23 @@ def engine_python_command(root: Path) -> str:
     return py
 
 
+_PASSED_RE = re.compile(r"\b\d+ passed\b")
+_NOT_PASSED_RE = re.compile(r"\b\d+ (?:failed|errors?)\b|^(?:FAILED|ERROR) ", re.MULTILINE)
+_TEARDOWN_MARKERS = ("pytest_sessionfinish", "pytest_unconfigure", "cleanup_dead_symlinks", "pytest_terminal_summary")
+_PYTEST_INTERNAL_ERROR = 3
+
+
+def teardown_only_error(returncode: int, output: str) -> bool:
+    """True when a non-zero pytest exit is only a session-teardown error: the run reports passed tests, no
+    failed or errored test, and an INTERNALERROR (or a failure exit) whose trace sits in a sessionfinish-time
+    hook. A failed test, a collection error or an INTERNALERROR with no teardown frame is not."""
+    if returncode not in (_PYTEST_FAILED, _PYTEST_INTERNAL_ERROR) or not _PASSED_RE.search(output):
+        return False
+    if _NOT_PASSED_RE.search(output) or "INTERNALERROR" not in output:
+        return False
+    return any(marker in output for marker in _TEARDOWN_MARKERS)
+
+
 def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) -> OverlayVerdict:
     """Clone `root` shared into the run's overlay dir, check out `candidate_sha` detached, run pytest over
     `seeds` there, and reap the overlay on every exit path. Never raises: a setup failure, a timeout or a
@@ -123,6 +143,7 @@ def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) ->
         return OverlayVerdict("inconclusive", "the landing set has no test seeds", seeds)
     holder = overlay_root(root, run_id)
     dest = holder / root.resolve().name
+    run_dirs: list = []
     _ledger_holder(root, run_id, holder)
     try:
         shutil.rmtree(holder, ignore_errors=True)
@@ -136,14 +157,24 @@ def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) ->
         out = _run([_git_exe(), "checkout", "--detach", "-q", candidate_sha], dest, TEST_TIMEOUT_S)
         if out.returncode:
             return OverlayVerdict("inconclusive", f"overlay checkout failed: {out.stderr.strip()[-_OUTPUT_TAIL:]}", seeds)
-        ran = _run([_gate_python(root), "-m", "pytest", "-q", "-p", "no:cacheprovider", *seeds], dest, TEST_TIMEOUT_S)
+        run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, run_id)
+        run_dirs.append(run_holder)
+        ran = _run(
+            [_gate_python(root), "-m", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", str(basetemp), *seeds],
+            dest, TEST_TIMEOUT_S, env=scoped_pytest.tmp_env(os.environ, tmp),
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         return OverlayVerdict("inconclusive", f"overlay verify did not complete: {type(exc).__name__}: {exc}", seeds)
     finally:
         shutil.rmtree(holder, ignore_errors=True)
-    tail = (ran.stdout + ran.stderr).strip()[-_OUTPUT_TAIL:]
+        for run_dir in run_dirs:
+            shutil.rmtree(run_dir, ignore_errors=True)
+    full = ran.stdout + ran.stderr
+    tail = full.strip()[-_OUTPUT_TAIL:]
     if ran.returncode == 0:
         return OverlayVerdict("green", tail, seeds)
+    if teardown_only_error(ran.returncode, full):
+        return OverlayVerdict("green", f"pytest teardown error after every test passed (exit {ran.returncode}): {tail}", seeds)
     if ran.returncode == _PYTEST_FAILED:
         return OverlayVerdict("red", tail, seeds)
     return OverlayVerdict("inconclusive", f"pytest exit {ran.returncode}: {tail}", seeds)
@@ -213,7 +244,7 @@ def remedy_call(run_id: Optional[str], root: Optional[Path] = None) -> str:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Verify-stage entry: read the run's `measured-rev.json`, run the overlay over the landing set's test
     seeds and write the verdict. Exit 0 on green, 1 on red, 2 when inconclusive or unmeasured."""
-    from coordinator_core.ops.dispatch_emit.test_reach import seeds_for_landing
+    from coordinator_core.ops.dispatch_emit.landing_reach import seeds_for_landing
 
     parser = argparse.ArgumentParser(prog="clean_overlay_verify")
     parser.add_argument("--run-id", required=True)

@@ -2955,7 +2955,7 @@ def test_plan_weight_size_fail_reply_still_hands_back_when_several_verdicts_reac
     assert any("size step failed" in str(h["reason"]) for h in result["handed_back"])
 
 
-def test_below_floor_size_reply_for_a_row_whose_edge_reaches_no_fix_still_hands_back():
+def test_below_floor_size_reply_for_a_row_whose_edge_reaches_no_fix_proceeds_to_a_fix_entry():
     routing, triage_node = _multi_fix_routing()
     routing[triage_node]["edges"]["not-reproduced"] = "close"
     budget = _StubBudgetSpender()
@@ -2963,6 +2963,27 @@ def test_below_floor_size_reply_for_a_row_whose_edge_reaches_no_fix_still_hands_
         {
             "triage": lambda bid: [{"row": "r0", "verdict": "not-reproduced", "tshirt_size": "M", "tradeoff": ""}],
             "size": lambda rid: _scout("XS", reason="below"),
+            "verify": lambda rid: {"outcome": "pass"},
+            "fix": lambda rid: {"outcome": "NEEDS_PLAN", "has_tradeoff": False},
+            "refute-close": lambda bid: {"confirmed": [], "refuted": []},
+        },
+        budget,
+    )
+    result = gc.run_admission(
+        [("b0", ["r0"])], routing, triage_node, reserve=gc.batch_reserve(4), budget=budget, agent=agent_fn
+    )
+    assert result["by_triage_check"]["size_collapsed"] == 1
+    assert not any("size step failed" in str(h["reason"]) for h in result["handed_back"])
+
+
+def test_plan_weight_size_reply_for_a_row_whose_edge_reaches_no_fix_still_hands_back():
+    routing, triage_node = _multi_fix_routing()
+    routing[triage_node]["edges"]["not-reproduced"] = "close"
+    budget = _StubBudgetSpender()
+    agent_fn = _agent_stub(
+        {
+            "triage": lambda bid: [{"row": "r0", "verdict": "not-reproduced", "tshirt_size": "M", "tradeoff": ""}],
+            "size": lambda rid: _scout("M", reason="boom"),
             "refute-close": lambda bid: {"confirmed": [], "refuted": []},
         },
         budget,
@@ -2971,6 +2992,12 @@ def test_below_floor_size_reply_for_a_row_whose_edge_reaches_no_fix_still_hands_
         [("b0", ["r0"])], routing, triage_node, reserve=gc.batch_reserve(4), budget=budget, agent=agent_fn
     )
     assert result["by_triage_check"]["size_collapsed"] == 0
+    assert any("size step failed" in str(h["reason"]) for h in result["handed_back"])
+
+
+def test_emitted_size_loop_falls_back_to_a_fix_entry_for_a_below_floor_row():
+    script = _compose()
+    assert "|| SIZE_FIX_ENTRIES[Object.keys(SIZE_FIX_ENTRIES).sort()[0]]" in script
 
 
 def test_emitted_size_call_makes_the_scout_check_the_sizing_file_exists():

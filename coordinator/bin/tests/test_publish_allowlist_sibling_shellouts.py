@@ -47,6 +47,10 @@ _SIBLING_CALL_RE = re.compile(r'(?<![A-Za-z0-9])_sibling\(\s*["\']([^"\']+)["\']
 # sites or the row surfaces as a specific, legible failure rather than only
 # a generic "something in the sweep failed".
 _EXPECTED_CALL_SITES = {
+    "unimatrix-install.py": {
+        "unimatrix-membership.py",
+        "unimatrix-roster.py",
+    },
     "workday-start-health-probes.py": {
         "coordinator-ceremony-hook.py",
         "klabauter-channel.py",

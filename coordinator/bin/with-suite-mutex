@@ -60,8 +60,12 @@ handle after spawn.
 
 EXIT CODE is the child's, verbatim — this wrapper never coerces a suite
 failure into a wrapper success or vice versa. The ONE exception is the
---max-runtime ceiling, which kills the child and returns 124: there is no
-child exit code to report in that case, because the child never produced one.
+--max-runtime ceiling, which interrupts the child tree (SIGINT; CTRL_BREAK on
+Windows), grants it a grace period to flush output such as pytest's junit file,
+then kills what remains and returns 124: there is no child exit code to
+report in that case, because the child never produced one. With no
+--max-runtime, a pytest run's ceiling is derived from the test count pytest
+prints; the ceiling hit is reported on stderr as a defect naming the junit path.
 
 RELEASE ON EVERY EXIT PATH: normal completion, non-zero child exit, an
 exception before/after spawn, and Ctrl-C/SIGINT. Achieved by running the
@@ -107,7 +111,9 @@ no bypass flag.
 Negative-spec — what this wrapper is NOT:
     - NOT runner-aware. It knows nothing about pytest, pnpm, node, or any
       other test tool — it execs whatever argv follows -- unmodified.
-      Do not add runner-specific flag parsing here.
+      Do not add runner-specific flag parsing here. The one reading it does
+      of the child's own output is the ceiling's: a "collected N items" line
+      and a --junitxml path, both only to report and size a ceiling hit.
     - NOT a retry loop or an output filter. It DOES capture: the child's
       stdout/stderr are pipes that two threads forward, byte for byte and
       unmodified, to this process's matching streams while appending them to
@@ -200,6 +206,8 @@ _MUTEX_HELD_EXIT_CODE = 75
 #: holder is not live", so a child outliving it is, by the mutex's own
 #: definition, no longer a holder worth waiting for. Raising one without the
 #: other would let this wrapper defend a lock the lock itself has given up on.
+#: The count-derived ceiling (``_count_ceiling_secs``) may exceed this only
+#: because ``suite_mutex.held()`` heartbeats the lock while the child runs.
 #:
 #: WHY THIS EXISTS AT ALL, and why no pytest flag replaces it (measured
 #: 2026-08-25 on the fast tier): `--timeout` and `--session-timeout` are both
@@ -253,6 +261,77 @@ _WAIT_POLL_SECS = 1.0
 #: Exit code for a run killed by the ceiling. 124 is GNU ``timeout``'s, chosen
 #: so an existing caller that already special-cases a timeout keeps working.
 _MAX_RUNTIME_EXIT_CODE = 124
+
+#: With no ``--max-runtime`` (and no repo declaration), a pytest run's ceiling
+#: is ``_CEILING_BASE_SECS + count * _CEILING_SECS_PER_TEST`` floored at
+#: ``_CEILING_MIN_SECS``, where ``count`` is the "collected N items" /
+#: "[N items]" figure pytest itself prints into the live log. Until that line
+#: appears (or for a non-pytest child) the fixed default above stays in force.
+#: A ``-q`` run omits that header, so it keeps the fixed default.
+_CEILING_BASE_SECS = 300.0
+_CEILING_SECS_PER_TEST = 2.0
+_CEILING_MIN_SECS = 900.0
+_COUNT_SCAN_BYTES = 256 * 1024
+_COLLECTED_RE = re.compile(rb"collected (\d+) items?|\[(\d+) items?\]")
+
+#: Seconds the tree gets after the interrupt to exit on its own; pytest writes
+#: its junit file during that exit and only then. The hard kill follows after.
+#: Every tree kill, an operator interrupt included, can wait this long on a
+#: child that ignores SIGINT.
+_INTERRUPT_GRACE_SECS = 30.0
+
+_JUNIT_FLAGS = ("--junitxml", "--junit-xml")
+
+
+def _junit_path_from(command: List[str]) -> Optional[str]:
+    """The path the wrapped command was told to write junit to, from its own
+    ``--junitxml[=| ]PATH`` argument; None when it carries none."""
+    for index, token in enumerate(command):
+        for flag in _JUNIT_FLAGS:
+            if token == flag and index + 1 < len(command):
+                return command[index + 1]
+            if token.startswith(flag + "="):
+                return token.split("=", 1)[1]
+    return None
+
+
+def _collected_count(log_path: Optional[str]) -> Optional[int]:
+    """The test count pytest announced at the head of the live log, else None."""
+    if not log_path:
+        return None
+    try:
+        with open(log_path, "rb") as handle:
+            head = handle.read(_COUNT_SCAN_BYTES)
+    except OSError:
+        return None
+    match = _COLLECTED_RE.search(head)
+    if match is None:
+        return None
+    return int(match.group(1) or match.group(2))
+
+
+def _count_ceiling_secs(count: int) -> float:
+    """How long a run of ``count`` tests may take before it counts as wedged."""
+    return max(_CEILING_MIN_SECS, _CEILING_BASE_SECS + count * _CEILING_SECS_PER_TEST)
+
+
+def _junit_report(junit_path: Optional[str], started_wall: float) -> str:
+    """One sentence naming the junit output of the run, or saying none was written.
+
+    A file older than the run is a previous run's leftover, never this run's flush.
+    """
+    if junit_path is None:
+        return "The command names no --junitxml, so no junit output was requested."
+    absolute = os.path.abspath(junit_path)
+    try:
+        if os.path.getmtime(absolute) >= started_wall - 1.0:
+            return f"Flushed junit output: {absolute}."
+    except OSError:
+        pass
+    return (
+        f"No junit was written: {absolute} is absent or predates this run, "
+        "so the run's results are lost."
+    )
 
 
 def _install_signal_handlers() -> None:
@@ -511,6 +590,13 @@ def _kill_process_tree(process: "subprocess.Popen[bytes]") -> int:
         victims = parent.children(recursive=True) + [parent]
     except psutil.Error:
         victims = []
+    total = len(victims)
+
+    # Interrupt first: pytest writes junit only while finishing its session, which
+    # SIGINT triggers and SIGTERM/SIGKILL do not. Terminate/kill follow only for
+    # whatever is still alive after the grace period (a child that ignores SIGINT).
+    _interrupt_tree(process)
+    _gone, victims = psutil.wait_procs(victims, timeout=_INTERRUPT_GRACE_SECS)
 
     for victim in victims:
         try:
@@ -530,7 +616,23 @@ def _kill_process_tree(process: "subprocess.Popen[bytes]") -> int:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             pass
-    return len(victims)
+    return total
+
+
+def _interrupt_tree(process: "subprocess.Popen[bytes]") -> None:
+    """Deliver the console-interrupt equivalent to the child's whole group.
+
+    POSIX: SIGINT to the child's own process group (see ``_own_tree_popen_kwargs``).
+    Windows: CTRL_BREAK_EVENT to the child's own console process group. Best-effort:
+    a group already gone or unsignalable is the outcome the kill path wants anyway.
+    """
+    try:
+        if sys.platform == "win32":
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            os.killpg(process.pid, signal.SIGINT)
+    except (OSError, ValueError, AttributeError):
+        pass
 
 
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
@@ -545,9 +647,14 @@ _JOB_HANDLES: list = []
 def _own_tree_popen_kwargs() -> dict:
     """POSIX: put the child in its own process group so one signal reaches its
     whole tree; on Linux also have the kernel SIGKILL it when this wrapper dies.
-    Windows binds the tree through a Job Object instead (see below)."""
+    Windows binds the tree through a Job Object instead (see below), and gives
+    the child its own console process group so CTRL_BREAK_EVENT reaches it
+    alone; its flags carry CREATE_NO_WINDOW too, as main() merges, not splats."""
     if sys.platform == "win32":
-        return {}
+        return {
+            "creationflags": no_console_creationflags().get("creationflags", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        }
     kwargs: dict = {"process_group": 0}
     if sys.platform.startswith("linux"):
 
@@ -713,7 +820,12 @@ def _progress_verdict(
 
 
 def _wait_interruptible(
-    process: "subprocess.Popen[bytes]", max_runtime: float = 0.0
+    process: "subprocess.Popen[bytes]",
+    max_runtime: float = 0.0,
+    *,
+    junit_path: Optional[str] = None,
+    log_path: Optional[str] = None,
+    derive_ceiling: bool = False,
 ) -> int:
     """Wait for ``process`` to exit while staying responsive to signals.
 
@@ -732,8 +844,17 @@ def _wait_interruptible(
     release is the point: the failure this bounds is a child that stops
     making progress while still holding a machine-wide mutex, which converts
     one session's wedge into every peer's.
+
+    With ``derive_ceiling`` the ceiling becomes ``_count_ceiling_secs`` of the
+    test count found in ``log_path`` as soon as pytest prints it; ``max_runtime``
+    stays the ceiling until then and for a child that never prints a count.
+    The kill interrupts the tree first (see ``_kill_process_tree``), and the
+    message that follows is a defect report naming ``junit_path``'s fate.
     """
     now = time.monotonic()
+    started_wall = time.time()
+    start = now
+    count: Optional[int] = None
     deadline = (now + max_runtime) if max_runtime > 0 else None
     samples: "collections.deque[Tuple[float, float]]" = collections.deque()
     next_sample = now
@@ -749,14 +870,24 @@ def _wait_interruptible(
                     while samples and now - samples[0][0] > _PROGRESS_WINDOW_SECS:
                         samples.popleft()
                 next_sample = now + _PROGRESS_SAMPLE_SECS
+                if derive_ceiling and count is None:
+                    count = _collected_count(log_path)
+                    if count is not None:
+                        max_runtime = _count_ceiling_secs(count)
+                        deadline = start + max_runtime
             if deadline is not None and now >= deadline:
                 progress = _progress_verdict(samples, _tree_cpu_secs(process))
                 _dump_process_tree(process)
                 killed = _kill_process_tree(process)
+                source = (
+                    f" (derived from {count} collected tests)" if count is not None else ""
+                )
                 print(
-                    "with-suite-mutex: killed the command after "
-                    f"{int(max_runtime)}s ({killed} process(es)) and released the "
-                    f"suite mutex. {progress} "
+                    "with-suite-mutex: this is a defect, not a clean finish: the run hit its "
+                    f"ceiling{source}. The tree was interrupted first, then "
+                    f"killed the command after {int(max_runtime)}s ({killed} process(es)) "
+                    "and released the suite mutex. "
+                    f"{_junit_report(junit_path, started_wall)} {progress} "
                     "Output above is unbuffered. Bound workers via "
                     "coordinator-resolve-validation-cmd --full, or if wedged: "
                     "py-spy dump --pid <controller-pid>. "
@@ -783,6 +914,10 @@ def main(argv: List[str]) -> int:
     if not command:
         return 2
     argv_as_given = list(command)
+    wrapper_flags = argv[: argv.index("--")]
+    derive_ceiling = max_runtime == float(_DEFAULT_MAX_RUNTIME_SECS) and not any(
+        flag == "--max-runtime" or flag.startswith("--max-runtime=") for flag in wrapper_flags
+    )
     if collection is None:
         collection = _default_collection(owner_label, argv_as_given)
 
@@ -836,8 +971,7 @@ def main(argv: List[str]) -> int:
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        **no_console_creationflags(),
-        **_own_tree_popen_kwargs(),
+        **{**no_console_creationflags(), **_own_tree_popen_kwargs()},
     )
     _bind_child_to_wrapper_lifetime(process)
     try:
@@ -934,7 +1068,13 @@ def main(argv: List[str]) -> int:
             tee = suite_run_reuse.Tee(process, log_path)
             exit_code, outcome = 130, "interrupted"
             try:
-                exit_code = _wait_interruptible(process, max_runtime)
+                exit_code = _wait_interruptible(
+                    process,
+                    max_runtime,
+                    junit_path=_junit_path_from(command),
+                    log_path=log_path,
+                    derive_ceiling=derive_ceiling,
+                )
                 outcome = (
                     "pass" if exit_code == 0
                     else "timeout" if exit_code == _MAX_RUNTIME_EXIT_CODE

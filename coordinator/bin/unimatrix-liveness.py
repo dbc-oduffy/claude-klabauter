@@ -344,4 +344,7 @@ def note_probe(state_dir, alias, ok, now=None):
 
 
 if __name__ == "__main__":
+    if any(_a in ("-h", "--help") for _a in sys.argv[1:]):
+        print("usage: unimatrix-liveness [-h]\nunimatrix peer liveness probe")
+        raise SystemExit(0)
     sys.exit(main())

@@ -1,5 +1,6 @@
 """Behavior pins for the agy leg on Windows: named-pipe listener, msvcrt spool lock, non-lsof LS discovery,
 and the SessionStart peer binding."""
+import types
 import importlib.util
 import json
 import os
@@ -209,6 +210,8 @@ def test_sessionstart_register_upserts_an_agy_peer_row(tmp_path, monkeypatch):
         pid = 31337
 
     monkeypatch.setattr(launch.subprocess, "Popen", lambda cmd, **kw: FakeProc())
+    # Non-nt start() runs lsof via subprocess.run, which needs a context-manager Popen; sessionstart loads its own launch copy, so patch run on the shared subprocess module.
+    monkeypatch.setattr(launch.subprocess, "run", lambda *a, **kw: types.SimpleNamespace(stdout=""))
     assert sess.register({"conversationId": CONV, "cwd": str(tmp_path)}, 5) is True
     peers = json.loads((tmp_path / "unimatrix" / "peers.json").read_text())
     peers = peers["peers"] if isinstance(peers, dict) else peers
@@ -230,6 +233,8 @@ def test_sessionstart_peer_binding_failure_never_unregisters(tmp_path, monkeypat
         pid = 31337
 
     monkeypatch.setattr(launch.subprocess, "Popen", lambda cmd, **kw: FakeProc())
+    # Non-nt start() runs lsof via subprocess.run, which needs a context-manager Popen; sessionstart loads its own launch copy, so patch run on the shared subprocess module.
+    monkeypatch.setattr(launch.subprocess, "run", lambda *a, **kw: types.SimpleNamespace(stdout=""))
     peers = tmp_path / "unimatrix" / "peers.json"
     peers.parent.mkdir(parents=True)
     peers.write_text("{not json")

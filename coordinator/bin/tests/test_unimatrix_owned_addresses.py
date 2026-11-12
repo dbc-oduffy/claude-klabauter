@@ -24,6 +24,8 @@ SID = '01a1b63b-acfb-78d1-86f2-a74ad6ca4572'
 OTHER = '01a1b63c-040a-76f2-a9b9-929d9a0d0098'
 CLI_ROOT = {SID: {'id': SID, 'cwd': '/work/claude-klabauter', 'source': 'cli',
                   'thread_source': 'user', 'agent_path': None}}
+# Router construction reads the live Codex DB; routing tests pin roots so the host's DB never decides.
+CLI_ROOTS = {**CLI_ROOT, **{OTHER: {**CLI_ROOT[SID], 'id': OTHER}}}
 
 
 def address(**updates):
@@ -116,7 +118,8 @@ def test_malformed_owned_binding_does_not_fall_back_to_legacy_allocator(tmp_path
     assert not peers.exists()
 
 
-def test_picker_accepts_owned_name_legacy_alias_and_native_uuid(tmp_path):
+def test_picker_accepts_owned_name_legacy_alias_and_native_uuid(tmp_path, monkeypatch):
+    monkeypatch.setattr(router, 'codex_thread_metadata', lambda home: CLI_ROOTS)
     peer = {**address(), 'vendor': 'codex', 'target': SID, 'aliases': ['legacy-safe'], 'codexPid': os.getpid()}
     r = router.Router([peer], sessions_dir=tmp_path, state_dir=tmp_path, endpoint_dir=tmp_path)
     for name in (peer['name'], 'legacy-safe', SID, f'codex-{SID}'):
@@ -129,7 +132,8 @@ def test_picker_accepts_owned_name_legacy_alias_and_native_uuid(tmp_path):
     assert asyncio.run(r._dispatch({'op': 'send', 'to': SID, 'text': 'work'}))['ok']
 
 
-def test_picker_and_config_both_refuse_alias_conflicts(tmp_path):
+def test_picker_and_config_both_refuse_alias_conflicts(tmp_path, monkeypatch):
+    monkeypatch.setattr(router, 'codex_thread_metadata', lambda home: CLI_ROOTS)
     rows = [{'name': 'one', 'vendor': 'codex', 'target': SID, 'aliases': ['shared']},
             {'name': 'shared', 'vendor': 'codex', 'target': OTHER}]
     path = tmp_path / 'peers.json'
@@ -210,6 +214,7 @@ def test_remote_picker_accepts_projected_legacy_alias_and_native_target(tmp_path
              'aliases': ['legacy-safe'], 'pid': 999, 'messagingSocketPath': 'remote-endpoint'}
     (tmp_path / '999.json').write_text(json.dumps(entry))
     monkeypatch.setattr(router._roster(), 'pid_alive', lambda pid: True)
+    monkeypatch.setattr(router, 'codex_thread_metadata', lambda home: CLI_ROOTS)
     r = router.Router([], sessions_dir=tmp_path, state_dir=tmp_path, endpoint_dir=tmp_path)
     assert r.resolve_sender('legacy-safe') == 'remote-endpoint'
     assert r.resolve_sender(SID) == 'remote-endpoint'

@@ -106,6 +106,7 @@ _PARAMS = (
     Field("widened", "list"),
     Field("credit_chunks", "list"),
     Field("owned_red", "list"),
+    Field("pre_existing", "list"),
     Field("retract_note", "dict"),
     Field("retract_row", "dict"),
     Field("build_only", "bool"),
@@ -1249,6 +1250,23 @@ def validate_owned_red(raw: object) -> list[dict]:
     return out
 
 
+def validate_pre_existing(raw: object) -> list[dict]:
+    """`[{nodeid, reason}]` as clean entries; a malformed entry raises ValueError naming its index."""
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError("pre_existing must be a list of {nodeid, reason}")
+    out: list[dict] = []
+    for i, entry in enumerate(raw):
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"pre_existing[{i}] is not an object with nodeid and reason")
+        nodeid, reason = entry.get("nodeid"), entry.get("reason")
+        if not isinstance(nodeid, str) or "::" not in nodeid.strip():
+            raise ValueError(f"pre_existing[{i}].nodeid {nodeid!r} is not a pytest node id (path::test)")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(f"pre_existing[{i}].reason is empty")
+        out.append({"nodeid": nodeid.strip(), "reason": reason.strip()})
+    return out
+
+
 def _lettered_entries(text: object) -> list[tuple[str, str]]:
     """One `relayed` entry `(label) part` per lettered part of `text`; `_append_rows` skips one the
     register already holds."""
@@ -1423,7 +1441,7 @@ def revise(
     out_of_scope: Sequence[str] = (), note: Optional[str] = None, sender: Optional[str] = None,
     withhold_paths: Sequence = (), credit_chunks: Sequence = (), build_only: bool = False,
     outcome: Optional[dict] = None, stop_after: Optional[str] = None, retract_note: Optional[dict] = None,
-    claim: bool = False, owned_red: Sequence = (), add_paths: Sequence = (), retract_row: Optional[dict] = None,
+    claim: bool = False, owned_red: Sequence = (), pre_existing: Sequence = (), add_paths: Sequence = (), retract_row: Optional[dict] = None,
     widened: Sequence = (), accept_partial: Sequence = (), ledger_verdict: Optional[dict] = None,
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
@@ -1513,6 +1531,12 @@ def revise(
             red_entries = validate_owned_red(owned_red)
         except ValueError as exc:
             raise LedgerRefused(str(exc)) from exc
+    pre_entries: list[dict] = []
+    if pre_existing:
+        try:
+            pre_entries = validate_pre_existing(pre_existing)
+        except ValueError as exc:
+            raise LedgerRefused(str(exc)) from exc
     retraction: Optional[dict] = None
     if retract_note is not None:
         from coordinator_core.ops.dispatch_emit import run_notes
@@ -1536,7 +1560,7 @@ def revise(
         raise LedgerRefused(f"stop_after takes only {STOP_AFTER_PLAN!r}, got {stop_after!r}")
     if (
         not text and all_of_pm_ask is None and not has_note and not withheld_entries and not credit_entries
-        and not accept_entries and not red_entries and not build_only and stop_after is None and retraction is None and not add_paths
+        and not accept_entries and not red_entries and not pre_entries and not build_only and stop_after is None and retraction is None and not add_paths
         and not widened and row_retraction is None and not ledger_verdict
     ):
         raise LedgerRefused(
@@ -1551,7 +1575,7 @@ def revise(
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
     verbatim_only = not (
-        named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or build_only
+        named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or pre_entries or build_only
         or stop_after or retraction is not None or row_retraction is not None or claim or accept_entries
         or add_paths or widened or ledger_verdict
     )
@@ -1594,7 +1618,7 @@ def revise(
             if pipeline_run.pipeline_run_state(root, run_id) == "finished":
                 raise LedgerRefused(f"research pipeline run {run_id!r} is finished: revision not delivered")
             if (
-                named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or build_only
+                named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or pre_entries or build_only
                 or stop_after or retraction is not None or claim or accept_entries
             ):
                 raise LedgerRefused(
@@ -1628,7 +1652,7 @@ def revise(
                 outcome["pipeline_revisions"] = pipeline_run.revisions_rel(run_id)
             return Ledger((), False), dir_, None
         if (
-            named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or build_only
+            named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or pre_entries or build_only
             or stop_after or retraction is not None or row_retraction is not None or accept_entries
         ):
             raise LedgerRefused(
@@ -1767,6 +1791,13 @@ def revise(
         for e in red_entries:
             append_line(dir_ / OWNED_RED_FILE, (json.dumps({**e, "at": _now()}, ensure_ascii=False) + "\n").encode("utf-8"))
         declare_write(dir_ / OWNED_RED_FILE)
+    if pre_entries:
+        from coordinator_core.atomic_append import append_line
+        from coordinator_core.ops.pre_existing_ruling import PRE_EXISTING_FILE
+
+        for e in pre_entries:
+            append_line(dir_ / PRE_EXISTING_FILE, (json.dumps({**e, "at": _now()}, ensure_ascii=False) + "\n").encode("utf-8"))
+        declare_write(dir_ / PRE_EXISTING_FILE)
     if row_retraction is not None:
         _append_rows(root, run["sizing_rel"], [], retract_row=row_retraction)
     if named:
@@ -2240,6 +2271,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     planning; needs an emitted run that has not staged; adds no row; replied as `stop_after`),
     `owned_red` (list of `{nodeid, owner_run_id, reason?}`: failing tests another run owns, recorded to
     the run's `owned_red.jsonl`; needs an emitted run, adds no row; replied as `owned_red`),
+    `pre_existing` (list of `{nodeid, reason}`: failing tests the EM rules pre-existing at the run base,
+    recorded to the run's `pre_existing_ruled.jsonl` for `review.reverify`; needs an emitted run, adds no
+    row; replied as `pre_existing`),
     `claim` (bool, needs `verbatim` and a run bound to a sizing whose plan claims it: the minted row is
     claimed on the plan with its pin and added to `ruled` on the plan's ledger-halt pointer in the
     same call; replied as `claimed: [id]`).
@@ -2281,7 +2315,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             sender=params.get("from"), withhold_paths=params.get("withhold_paths") or (),
             credit_chunks=params.get("credit_chunks") or (), stop_after=params.get("stop_after"),
             retract_note=params.get("retract_note"), claim=bool(params.get(CLAIM_PARAM)),
-            owned_red=params.get("owned_red") or (), add_paths=params.get("add_paths") or (),
+            owned_red=params.get("owned_red") or (), pre_existing=params.get("pre_existing") or (), add_paths=params.get("add_paths") or (),
             retract_row=params.get("retract_row"), widened=params.get("widened") or (),
             accept_partial=params.get("accept_partial") or (), ledger_verdict=params.get("ledger_verdict"),
         )
@@ -2375,6 +2409,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["credit_chunks"] = run_credit.validate(params["credit_chunks"])
     if params.get("owned_red"):
         out["owned_red"] = validate_owned_red(params["owned_red"])
+    if params.get("pre_existing"):
+        out["pre_existing"] = validate_pre_existing(params["pre_existing"])
     if params.get("retract_note"):
         out["retracted_note"] = {"run_id": params["run_id"], "note_id": params["retract_note"]["note_id"].strip()}
     if params.get("retract_row"):
@@ -2494,7 +2530,7 @@ def _land_on_verdict(
     return full, None
 
 
-_APPLIED_KEYS = ("widened", "footprint_widened", "research_dropped", "claimed", "stop_after", "withhold_paths", "accept_partial", "credit_chunks", "owned_red", "retracted_note", "retracted_row", "withheld")
+_APPLIED_KEYS = ("widened", "footprint_widened", "research_dropped", "claimed", "stop_after", "withhold_paths", "accept_partial", "credit_chunks", "owned_red", "pre_existing", "retracted_note", "retracted_row", "withheld")
 
 
 def _mutation_reply(applied: tuple, refused: tuple, target: str, **fields) -> dict:

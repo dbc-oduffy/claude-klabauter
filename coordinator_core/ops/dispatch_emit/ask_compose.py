@@ -4461,7 +4461,7 @@ def compose_ask_script(
         b.append("  const _q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"'\\\\''\") + \"'\";")
         b.append("  const _reassembleCmdOf = (_asmFields, _path) => " + _assemble_cmd_js("_path") + ";")
         b.append(
-            "  const _slugOf = (r) => String(r.name || 'ask').toLowerCase().replace(/[^a-z0-9]+/g, '-')"
+            "  const _slugOf = (r) => String(r?.name || 'ask').toLowerCase().replace(/[^a-z0-9]+/g, '-')"
             ".replace(/^-+|-+$/g, '').replace(/^" + DATE_HEAD_PATTERN + "/, '') || 'ask';"
         )
         if intake is not None:
@@ -4494,12 +4494,12 @@ def compose_ask_script(
         # reply (an arm or a halt; ask_gate reads the sizing from disk, so it answers only once the file
         # exists). A non-zero exit is proof too: the reword and failed-exit paths own it.
         b.append(
-            "  const _assembleProven = (r) => Number.isInteger(r.exit_code) && (r.exit_code !== 0 "
+            "  const _assembleProven = (r) => !!r && Number.isInteger(r.exit_code) && (r.exit_code !== 0 "
             "|| !!_parseDecision(r.stdout) || typeof r.arm === 'string' "
             "|| !!(r.halt && typeof r.halt === 'object'));"
         )
         b.append(
-            "  const _scoutHasValues = (r) => "
+            "  const _scoutHasValues = (r) => !!r && "
             f"{json.dumps(_SCOUT_STRING_FIELDS)}.every((k) => typeof r[k] === 'string' && r[k].trim() !== '') "
             f"&& {json.dumps(_SCOUT_ARRAY_FIELDS)}.every((k) => Array.isArray(r[k]));"
         )

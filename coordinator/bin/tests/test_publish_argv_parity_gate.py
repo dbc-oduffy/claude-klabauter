@@ -68,6 +68,17 @@ def _init_committed_git_repo(root: Path) -> None:
     _git("config", "commit.gpgsign", "false")
     _git("add", "-A")
     _git("commit", "-q", "-m", "chore: init")
+    # The publish round-source preflight and slot probe need a reachable
+    # origin with a tip; use a sibling bare repo as that remote.
+    bare = root.parent / (root.name + "-origin.git")
+    subprocess.run(
+        ["git", "init", "-q", "--bare", "-b", "main", str(bare)],
+        check=True, capture_output=True, creationflags=_NO_WINDOW,
+    )
+    _git("remote", "add", "origin", str(bare))
+    _git("push", "-q", "origin", "main")
+    _git("remote", "set-head", "origin", "main")
+    _git("branch", "--set-upstream-to=origin/main", "main")
 
 
 def _load_publish_module():
@@ -434,6 +445,11 @@ def _stub_dest_refresh(monkeypatch) -> None:
 
 
 def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> None:
+    # The dry-refire leg runs the real engine against live repo state; this
+    # file pins only the argv-parity gate's wiring, so the leg is stubbed.
+    from coordinator_core.publish import dry_refire_gate
+
+    monkeypatch.setattr(dry_refire_gate, "run", lambda root, data_root=None: dry_refire_gate.DryRefireVerdict(ok=True))
     _stub_dest_refresh(monkeypatch)
     percolate_root = setup_dir.parent
     monkeypatch.setattr(

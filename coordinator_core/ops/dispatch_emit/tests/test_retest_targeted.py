@@ -1203,6 +1203,41 @@ def test_run_argv_stamps_child_depth_and_strips_current_test(tmp_path, monkeypat
     assert spawned.closes == [1]
 
 
+def _run_pytest_argv_twice(tmp_path, monkeypatch, argv):
+    from coordinator_core.testing import scoped_pytest, spawn_depth
+
+    spawned = _patched_popen(monkeypatch)
+    monkeypatch.delenv(spawn_depth.ENV_KEY, raising=False)
+    monkeypatch.setattr(
+        scoped_pytest.machine_resolver, "registry_get",
+        lambda key: str(tmp_path / "ptbase") if key == scoped_pytest.RUN_ROOT_KEY else None,
+    )
+    for _ in range(2):
+        assert retest_targeted._run_argv(list(argv), tmp_path) == 0
+    return spawned
+
+
+def test_run_argv_gives_each_pytest_session_its_own_basetemp_and_matching_tmp(tmp_path, monkeypatch):
+    spawned = _run_pytest_argv_twice(tmp_path, monkeypatch, ["python", "-m", "pytest", "test_a.py"])
+    seen = []
+    for argv, kw in spawned:
+        base = Path(argv[argv.index("--basetemp") + 1])
+        assert argv[argv.index("pytest") + 1] == "--basetemp" and argv[-1] == "test_a.py"
+        assert base.parent.parent == tmp_path / "ptbase" and base.name == "bt"
+        tmp = Path(kw["env"]["TEMP"])
+        assert kw["env"]["TMP"] == kw["env"]["TEMP"] and tmp.parent == base.parent
+        seen.append(base)
+    assert seen[0] != seen[1]
+    assert not any(b.parent.exists() for b in seen), "the per-run dir is reaped when the session ends"
+
+
+def test_run_argv_honours_a_caller_basetemp_and_leaves_non_pytest_argv_alone(tmp_path, monkeypatch):
+    spawned = _run_pytest_argv_twice(tmp_path, monkeypatch, ["python", "-m", "pytest", "--basetemp=X", "test_a.py"])
+    assert all(argv.count("--basetemp=X") == 1 and "--basetemp" not in argv for argv, _ in spawned)
+    spawned = _run_pytest_argv_twice(tmp_path, monkeypatch, ["git", "status"])
+    assert all("--basetemp" not in argv and kw["env"].get("TEMP") != str(tmp_path / "ptbase") for argv, kw in spawned)
+
+
 def test_run_argv_timeout_closes_the_whole_job(tmp_path, monkeypatch):
     import subprocess
 

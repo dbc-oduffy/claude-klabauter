@@ -247,6 +247,25 @@ def test_scan_secrets_high_hit_blocks(tmp_path):
     assert token not in out
 
 
+_ARMOR = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
+
+
+@pytest.mark.parametrize("line, blocks", [
+    (_ARMOR, True),
+    ("-----BEGIN " + "PRIVATE KEY-----", True),
+    ('"private_key": "' + _ARMOR + "\\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC", True),
+    ('m = re.search(r"' + _ARMOR + '(.*?)-----END", text)', False),
+])
+def test_scan_secrets_private_key_armor_needs_a_body_or_line_end(tmp_path, line, blocks):
+    target_file = tmp_path / "f.py"
+    target_file.write_text(line + "\n", encoding="utf-8")
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, _ = _run_cli(["scan-secrets", "--files", str(file_list)])
+    assert (rc == 2) is blocks
+
+
 def test_scan_secrets_medium_hit_does_not_block(tmp_path):
     target_file = tmp_path / "wiki.md"
     target_file.write_text(

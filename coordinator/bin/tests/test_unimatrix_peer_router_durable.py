@@ -22,6 +22,21 @@ FakeSender, frame_to, post_frame, until, run = base.FakeSender, base.frame_to, b
 pytestmark = [pytest.mark.complete, pytest.mark.skipif(os.name == "nt", reason="unix sockets")]
 
 
+@pytest.fixture(autouse=True)
+def _fixture_codex_threads_are_sendable_roots(monkeypatch):
+    """The fixture peers' Codex threads have no state DB; the router drops codex rows without root proof."""
+    monkeypatch.setattr(pr, "codex_is_sendable_root", lambda metadata: True)
+
+
+THR_A = "01a1b600-0000-7000-8000-0000000000d1"
+PEERS = [{"name": "codex-a", "vendor": "codex", "target": THR_A, "codexPid": os.getpid()},
+         {"name": "agy-a", "vendor": "agy", "target": "conv-1"}]
+
+
+def make_router(box, adapters):
+    return base.make_router(box, adapters, PEERS)
+
+
 def register_sender(box, name, endpoint, pid, started):
     """Write a roster entry for a fake Claude session called `name`."""
     (box / "sessions" / f"{pid}.json").write_text(json.dumps(
@@ -30,7 +45,7 @@ def register_sender(box, name, endpoint, pid, started):
 
 def test_peer_restart_keeps_the_same_address(box):
     async def go():
-        r = base.make_router(box, base.echo_adapters())
+        r = make_router(box, base.echo_adapters())
         s = FakeSender(str(box / "s.sock"))
         await r.start()
         try:
@@ -53,7 +68,7 @@ def test_peer_restart_keeps_the_same_address(box):
     run(go())
 
 
-def test_reply_follows_a_sender_that_restarted_under_the_same_name(box):
+def test_name_resolves_to_the_restarted_sender_but_a_local_reply_keeps_the_frame_endpoint(box):
     async def go():
         gate = asyncio.Event()
 
@@ -61,7 +76,7 @@ def test_reply_follows_a_sender_that_restarted_under_the_same_name(box):
             await gate.wait()
             return "answer"
 
-        r = base.make_router(box, {"codex": codex, "agy": codex})
+        r = make_router(box, {"codex": codex, "agy": codex})
         old_sock = FakeSender(str(box / "old.sock"))
         new_sock = FakeSender(str(box / "new.sock"))
         sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
@@ -71,10 +86,12 @@ def test_reply_follows_a_sender_that_restarted_under_the_same_name(box):
             post_frame(r.endpoint_of("codex-a"), frame_to(box, old_sock.path, "em-one", "q"))
             await asyncio.sleep(0.3)
             register_sender(box, "em-one", new_sock.path, sleeper.pid, 2)  # restarted: live pid
+            assert r.resolve_sender("em-one", old_sock.path) == new_sock.path  # the name still addresses the live session
             gate.set()
-            await until(lambda: len(new_sock.frames) == 1)
-            assert old_sock.frames == []
-            assert "[reply] codex-a: answer" in new_sock.contents()[0]
+            # A local roster row never retargets a frame's own endpoint (fde11ea28b: it may be a far sender's name).
+            await until(lambda: len(old_sock.frames) == 1)
+            assert new_sock.frames == []
+            assert "[reply] codex-a: answer" in old_sock.contents()[0]
         finally:
             sleeper.kill()
             sleeper.wait()
@@ -86,7 +103,7 @@ def test_reply_follows_a_sender_that_restarted_under_the_same_name(box):
 
 def test_unresolvable_sender_name_falls_back_to_frame_endpoint(box):
     async def go():
-        r = base.make_router(box, base.echo_adapters())
+        r = make_router(box, base.echo_adapters())
         s = FakeSender(str(box / "s.sock"))
         await r.start()
         try:
@@ -101,7 +118,7 @@ def test_unresolvable_sender_name_falls_back_to_frame_endpoint(box):
 
 def test_peer_names_never_resolve_to_a_claude_sender(box):
     async def go():
-        r = base.make_router(box, base.echo_adapters())
+        r = make_router(box, base.echo_adapters())
         await r.start()
         try:
             assert r.resolve_sender("codex-a", "") == ""  # a face entry is not a sender
@@ -118,7 +135,7 @@ def test_no_session_id_pid_or_key_reaches_a_peer(box):
             seen.append(text)
             return "ok"
 
-        r = base.make_router(box, {"codex": codex, "agy": codex})
+        r = make_router(box, {"codex": codex, "agy": codex})
         s = FakeSender(str(box / "s.sock"))
         await r.start()
         try:

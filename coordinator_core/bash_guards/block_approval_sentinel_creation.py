@@ -20,17 +20,16 @@ assembly, a glob near-miss, a runtime-computed basename -- see "KNOWN OPEN
 GAP" below for the specific shapes known to defeat it. The boundary's real
 strength does not live here alone: the Write/Edit tool-call surface is
 separately guarded by `_sentinel_write_guard` (a different code path, not a
-text classifier over Bash strings), and the doctrine-edit write guard no
-longer reads the sentinel, so a forged one unlocks nothing -- those hold
-regardless of whatever this classifier misses.
+text classifier over Bash strings) -- that holds regardless of whatever
+this classifier misses.
 
 DEFAULT-ON. The doctrine-edit gate is on every profile; this guard
 allows only after `machine-local set coordinator.feature.doctrine_edit_gate off`.
 
 WHY THIS EXISTS. The doctrine-edit sentinel file
-`.coordinator-doctrine-edit-approved` no longer gates any edit; this guard
-keeps the file un-creatable so a legacy reader or a stale forged copy never
-regains meaning. It closes every shape of creation it can see lexically --
+`.coordinator-doctrine-edit-approved` gates EM CLAUDE.md and rules writes
+(DR-502); this guard keeps agent creation denied so the sentinel stays a
+human-created route. It closes every shape of creation it can see lexically --
 not every conceivable shape, see "KNOWN OPEN GAP" -- and denies CREATION
 only; removing the sentinel is always safe and stays allowed.
 
@@ -1555,7 +1554,7 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
     )
     return (
         "BLOCKED: creates/modifies the doctrine-edit approval sentinel. "
-        "Doctrine edits need no sentinel.\n\n"
+        "The sentinel is created by a human, never by an agent.\n\n"
         "Use instead:\n"
         "  %s\n"
         "  %s\n"

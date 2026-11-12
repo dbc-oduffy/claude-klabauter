@@ -55,6 +55,7 @@ def box(tmp_path, monkeypatch):
     monkeypatch.setattr(co, "read_content_root", lambda: str(b.doe))
     monkeypatch.setattr(co, "claude_config_dir", lambda: b.cfg)
     monkeypatch.setattr(guard, "_git_root", lambda: str(b.repo))
+    monkeypatch.setattr(guard, "sentinel_present", lambda cwd: True)
     monkeypatch.setattr(
         guard, "compute_repo_identity_gate", lambda *a, **k: {"verdict": "MATCH", "message": ""}
     )

@@ -156,6 +156,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.liveness import resolve_live_session_ids
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.session.output_tree_layout import is_month_dir
 
 _LOG = logging.getLogger(__name__)
 
@@ -195,20 +196,26 @@ def _collect_handoff_paths(worktree_root: Path) -> "tuple[List[str], List[str]]"
     paths: List[str] = []
     scan_errors: List[str] = []
 
+    # state/handoffs is month-sharded: batons live at the root or under a YYYY-MM child dir.
     state_dir = worktree_root / "state" / "handoffs"
     if state_dir.is_dir():
-        try:
-            with os.scandir(state_dir) as it:
-                for entry in it:
-                    if entry.name.endswith(".md") and entry.is_file():
-                        paths.append(entry.path)
-        except OSError as exc:
-            _LOG.warning(
-                "handoff.has_live_children: cannot scan live handoff dir %s — %s; "
-                "cannot rule out a live child under it",
-                state_dir, exc,
-            )
-            scan_errors.append(f"{state_dir}: {exc}")
+        to_scan: List[str] = [str(state_dir)]
+        while to_scan:
+            current = to_scan.pop()
+            try:
+                with os.scandir(current) as it:
+                    for entry in it:
+                        if entry.name.endswith(".md") and entry.is_file():
+                            paths.append(entry.path)
+                        elif current == str(state_dir) and is_month_dir(entry.name) and entry.is_dir():
+                            to_scan.append(entry.path)
+            except OSError as exc:
+                _LOG.warning(
+                    "handoff.has_live_children: cannot scan live handoff dir %s — %s; "
+                    "cannot rule out a live child under it",
+                    current, exc,
+                )
+                scan_errors.append(f"{current}: {exc}")
 
     archive_dir = worktree_root / "archive" / "handoffs"
     if archive_dir.is_dir():

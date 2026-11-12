@@ -513,6 +513,30 @@ def _unruled_tradeoff_refusal(fm_text: str, evidence_file: str, repo_root: Path)
     )
 
 
+def _archived_row_is_same_closure(
+    archived: Path,
+    whole_document: bool,
+    fm_dict: Any,
+    status_field: str,
+    closed_values: dict[str, str],
+) -> bool:
+    """True when `archived` is already a closed row with the same surface as the row being closed."""
+    try:
+        text = archived.read_text(encoding="utf-8")
+        if whole_document:
+            other = schema_validate.parse_yaml(text)
+        else:
+            split = fm_primitives.split_frontmatter(text)
+            other = schema_validate.parse_yaml(split.fm_text) if split is not None else None
+    except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError):
+        return False
+    if not isinstance(other, dict) or not isinstance(fm_dict, dict):
+        return False
+    if other.get(status_field) not in closed_values.values():
+        return False
+    return other.get("surface") is not None and other.get("surface") == fm_dict.get("surface")
+
+
 def cmd_close(rest: list[str]) -> int:
     flags = _parse_flags(
         rest,
@@ -645,6 +669,13 @@ def cmd_close(rest: list[str]) -> int:
         # removal instead of refusing forever on a duplicate a human would
         # otherwise have to clean up by hand.
         if new_path.read_bytes() == new_text.encode("utf-8"):
+            _declare_before_unlink(row_path, repo_root)
+            row_path.unlink()
+            _declare_under_repo_root(new_path, repo_root)
+            _release_row_claim(row_path, repo_root)
+            print(json.dumps({"old": str(row_path), "new": str(new_path)}, sort_keys=True))
+            return EXIT_OK
+        if _archived_row_is_same_closure(new_path, whole_document, fm_dict, status_field, closed_values):
             _declare_before_unlink(row_path, repo_root)
             row_path.unlink()
             _declare_under_repo_root(new_path, repo_root)

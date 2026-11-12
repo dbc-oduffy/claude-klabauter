@@ -52,6 +52,8 @@ _BASH_CASES = {
     "blanket-git-add": ("git -C {repo} add -A", False),
     "check-test-suite-invocation": ("pytest", False),
     "runaway-find": ("find / -name x", False),
+    "guard-doctrine-surface-bash-write": ("echo x >> ~/.claude/rules/x.md", False),
+    "stale-temp-index-base": ("GIT_INDEX_FILE={index} git commit -m mine", False),
     "guard-subagent-heavy-ue-launch": ("UnrealEditor-Cmd.exe proj.uproject -run=Foo", True),
     "block-subagent-destructive-action": ("chmod -R 777 .", True),
 }
@@ -113,6 +115,33 @@ def world(tmp_path, monkeypatch):
     _git(other, "init", "-q")
     yield {"repo": repo, "other": other}
     machine_resolver._external_ws_cache.clear()
+
+
+def _stale_scratch_index(repo: Path, tmp_path: Path) -> Path:
+    """A scratch index built from HEAD, then a peer commit to a path it did not touch."""
+    import os
+
+    index = tmp_path / "scratch-index"
+    env = dict(os.environ, GIT_INDEX_FILE=str(index))
+    from coordinator_core.win_portability import no_console_creationflags
+
+    def run(*args: str, with_index: bool = False) -> None:
+        subprocess.run(
+            ["git", "-c", "commit.gpgsign=false", *args],
+            cwd=str(repo),
+            env=env if with_index else None,
+            check=True,
+            capture_output=True,
+            **no_console_creationflags(),
+        )
+
+    run("read-tree", "HEAD", with_index=True)
+    (repo / "docs" / "plans" / "kept.md").write_text("peer\n", encoding="utf-8")
+    run("add", "--", "docs/plans/kept.md")
+    run("commit", "-q", "-m", "peer lands kept")
+    (repo / "mine.txt").write_text("mine\n", encoding="utf-8")
+    run("add", "--", "mine.txt", with_index=True)
+    return index
 
 
 def _deny_reason(out) -> str:
@@ -183,7 +212,12 @@ def test_registered_guard_denies_a_live_harmful_input(guard, world, tmp_path, mo
             (world["repo"] / "coordinator.local.md").write_text(
                 "---\nvcs_mirror: p4\n---\n", encoding="utf-8"
             )
-        cmd = cmd.format(repo=Path(world["repo"]).as_posix(), other=Path(world["other"]).as_posix())
+        index = _stale_scratch_index(Path(world["repo"]), tmp_path) if "{index}" in cmd else None
+        cmd = cmd.format(
+            repo=Path(world["repo"]).as_posix(),
+            other=Path(world["other"]).as_posix(),
+            index=index.as_posix() if index else "",
+        )
         payload = {
             "tool_name": "Bash",
             "tool_input": {"command": cmd},

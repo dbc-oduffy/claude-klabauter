@@ -301,7 +301,12 @@ def _spawned_argv(monkeypatch, tmp_path, pytest_args):
     return seen["argv"]
 
 
-def test_default_run_gets_unique_per_run_basetemp_under_temp(monkeypatch, tmp_path):
+@pytest.fixture
+def _no_run_root(monkeypatch):
+    monkeypatch.setattr(sp.machine_resolver, "registry_get", lambda key: None)
+
+
+def test_default_run_gets_unique_per_run_basetemp_under_temp(monkeypatch, tmp_path, _no_run_root):
     from coordinator_core import temp_layout
 
     first = _spawned_argv(monkeypatch, tmp_path, ["test_a.py"])
@@ -353,3 +358,23 @@ def test_spawn_passes_child_env_to_popen(monkeypatch):
     assert "coordinator_core.testing.nested_session_guard" in seen["env"]["PYTEST_ADDOPTS"]
     if sp._IS_WINDOWS:
         assert seen["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP
+
+
+def test_registry_run_root_is_used_when_absolute_and_ignored_when_relative(monkeypatch, tmp_path):
+    from coordinator_core import temp_layout
+
+    monkeypatch.setattr(sp.machine_resolver, "registry_get", lambda key: str(tmp_path / "ptbase") if key == sp.RUN_ROOT_KEY else None)
+    assert sp.per_run_root(tmp_path) == tmp_path / "ptbase"
+    monkeypatch.setattr(sp.machine_resolver, "registry_get", lambda key: "rel/ptbase")
+    assert sp.per_run_root(tmp_path) == temp_layout.pytest_basetemp_root(tmp_path)
+
+
+def test_per_run_dirs_are_disjoint_per_slug_and_tmp_env_points_under_them(monkeypatch, tmp_path):
+    monkeypatch.setattr(sp.machine_resolver, "registry_get", lambda key: str(tmp_path / "ptbase"))
+    holder_a, bt_a, tmp_a = sp.per_run_dirs(tmp_path, "run-a")
+    holder_b, bt_b, tmp_b = sp.per_run_dirs(tmp_path, "run-b")
+    assert bt_a == tmp_path / "ptbase" / "run-a" / "bt" and bt_a.is_dir() and tmp_a.is_dir()
+    assert bt_a != bt_b and holder_a != holder_b and not bt_a.is_relative_to(holder_b)
+    env = sp.tmp_env({"PATH": "p"}, tmp_a)
+    assert env["TEMP"] == env["TMP"] == env["TMPDIR"] == str(tmp_a) and env["PATH"] == "p"
+    assert Path(env["TEMP"]).is_relative_to(holder_a)

@@ -11,12 +11,7 @@ LIB_DIR = REPO / "coordinator" / "lib"
 LIB_ROWS = ("claude-klabauter-lib", "claude-klabauter-coordinator-lib")
 
 sys.path.insert(0, str(LIB_DIR))
-from percolate.targets import load_targets  # noqa: E402
-
-
-def _allowlist(row: str) -> set[str]:
-    # load_targets resolves a row to 6 fields; the allowlist is the last (index 5).
-    return {e.strip() for e in row.split("|")[5].split(",") if e.strip()}
+from percolate.targets import parse_portable_rows  # noqa: E402
 
 
 def missing_twins(allowlist: set[str], lib_dir: Path) -> list[str]:
@@ -39,10 +34,13 @@ def test_guard_flags_omitted_twin_and_passes_admitted(tmp_path):
 
 @pytest.mark.parametrize("row_name", LIB_ROWS)
 def test_lib_row_admits_cmd_twin_of_every_admitted_py(row_name):
+    # Raw portable rows, not load_targets: resolving a row needs the machine-local
+    # publish.mirrors.* registry, which the allowlist check must not depend on.
     rows = [
-        r for r in load_targets(REPO / "setup", target_filter=row_name)
-        if r.split("|", 1)[0] == row_name
+        r for r in parse_portable_rows(REPO / "setup" / "publish-targets.portable")
+        if r["name"] == row_name
     ]
-    assert rows, f"row {row_name} not resolved"
-    missing = missing_twins(_allowlist(rows[0]), LIB_DIR)
+    assert rows, f"row {row_name} not found"
+    allowlist = {e.strip() for e in rows[0]["allowlist"].split(",") if e.strip()}
+    missing = missing_twins(allowlist, LIB_DIR)
     assert not missing, f"row {row_name} admits .py but omits .cmd twin(s): {missing}"

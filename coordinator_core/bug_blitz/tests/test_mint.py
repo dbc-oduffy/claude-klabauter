@@ -218,6 +218,33 @@ def test_closed_row_is_not_reused(tmp_path):
     assert len(_rows(tmp_path)) == 2
 
 
+def _archive_first_row(root: Path, row_id: str) -> Path:
+    src = root / "state" / "bug-backlog" / f"{row_id}.yaml"
+    dest = root / "archive" / "bug-backlog" / "2026-11" / src.name
+    dest.parent.mkdir(parents=True)
+    dest.write_text(src.read_text(encoding="utf-8").replace("status: open", "status: closed-fixed"), encoding="utf-8")
+    src.unlink()
+    return dest
+
+
+def test_archived_tf_row_for_the_surface_is_reused_not_reminted(tmp_path):
+    ids = mint_tf_rows(tmp_path, "r1", _tests()[:1], target_ref="t")
+    dest = _archive_first_row(tmp_path, ids[0])
+    before = dest.read_bytes()
+    again = mint_tf_rows(tmp_path, "r2", _tests()[:1], target_ref="t")
+    assert again == ids
+    assert _rows(tmp_path) == {}
+    assert dest.read_bytes() == before
+
+
+def test_archived_row_on_another_surface_does_not_suppress_a_new_row(tmp_path):
+    ids = mint_tf_rows(tmp_path, "r1", _tests()[:1], target_ref="t")
+    _archive_first_row(tmp_path, ids[0])
+    other = mint_tf_rows(tmp_path, "r2", _tests()[2:], target_ref="t")
+    assert other != ids
+    assert len(_rows(tmp_path)) == 1
+
+
 def test_empty_tests_mints_nothing(tmp_path):
     assert mint_tf_rows(tmp_path, "r1", (), target_ref="t") == []
 

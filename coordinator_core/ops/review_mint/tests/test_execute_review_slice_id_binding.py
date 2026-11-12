@@ -156,6 +156,30 @@ def _full_last_id():
     return _FULL["slices"][-1]["id"]
 
 
+_RANGE_IDS = "[{ id: 'manifest-x-prep-1..manifest-x-prep-6' }]"
+
+
+def test_a_range_token_in_a_prep_is_redispatched_once_and_rebound_to_its_group():
+    base = _run_in_wave(_FULL, 9)
+    result = _run_in_wave(_FULL, 9, patch=_prep_rewrite(_RANGE_IDS))
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][1]["slice_id"] == _bound_group_one("r.prep.slices")
+    assert len(result["spawned"]) == len(base["spawned"]) + 1
+
+
+def test_a_range_token_that_survives_its_one_redispatch_halts():
+    base = _run_in_wave(_FULL, 9)
+    patch = _prep_rewrite(_RANGE_IDS, retry_at=len(base["spawned"]))
+    result = _run_in_wave(_FULL, 9, patch=patch)
+    assert result["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
+
+
+def test_an_out_of_group_real_slice_id_is_not_redispatched():
+    base = _run_in_wave(_FULL, 9)
+    result = _run_in_wave(_FULL, 9, patch=_prep_rewrite("_full.slices"))
+    assert len(result["spawned"]) == len(base["spawned"])
+
+
 def test_unbound_reply_still_falls_back_to_resolution_and_halt():
     block = _wave_block(_ratio_review(), executor_rows=9, prep_in_wave=True)
     assert "const _resolveSliceId" in block

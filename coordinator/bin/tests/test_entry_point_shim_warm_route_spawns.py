@@ -194,21 +194,41 @@ def test_import_engine_module_honours_coordinator_engine_root(tmp_path):
     answer for the wrong reason -- the override must be doing the work.
     """
     import os
+    import shutil
 
     scratch_cwd = tmp_path / "outside_checkout"
     scratch_cwd.mkdir()
 
+    # PM ruling 2026-11-05: no rung returns a claude-klabauter tree -- the env
+    # override answers only for an engine root carrying a non-empty
+    # `coordinator_core/_engine_stamp`, and this checkout is unstamped. So the
+    # override target is a stamped COPY of the engine package, never _REPO_ROOT.
+    stamped_root = tmp_path / "stamped_engine"
+    stamped_core = stamped_root / "coordinator_core"
+    shutil.copytree(
+        _REPO_ROOT / "coordinator_core",
+        stamped_core,
+        ignore=shutil.ignore_patterns("__pycache__", "tests", "test_*.py"),
+    )
+    # The gate loads the resolver shim from the candidate's own tree.
+    shutil.copytree(
+        _REPO_ROOT / "coordinator" / "lib" / "resolve-claude-klabauter",
+        stamped_root / "coordinator" / "lib" / "resolve-claude-klabauter",
+        ignore=shutil.ignore_patterns("__pycache__", "tests", "test_*.py"),
+    )
+    (stamped_core / "_engine_stamp").write_bytes(b"test-stamp\n")
+
     env_with_override = dict(os.environ)
-    env_with_override["COORDINATOR_ENGINE_ROOT"] = str(_REPO_ROOT)
+    env_with_override["COORDINATOR_ENGINE_ROOT"] = str(stamped_root)
     with_override = _probe_engine_root_override(scratch_cwd, env_with_override)
 
-    assert with_override["resolved_root"] == str(_REPO_ROOT), (
-        f"COORDINATOR_ENGINE_ROOT={_REPO_ROOT!s} did not win the ladder -- "
+    assert with_override["resolved_root"] == str(stamped_root), (
+        f"COORDINATOR_ENGINE_ROOT={stamped_root!s} did not win the ladder -- "
         f"resolved {with_override['resolved_root']!r} instead"
     )
-    assert Path(with_override["module_file"]).resolve().is_relative_to(_REPO_ROOT.resolve()), (
+    assert Path(with_override["module_file"]).resolve().is_relative_to(stamped_root.resolve()), (
         f"coordinator_core.pickup_assemble imported from "
-        f"{with_override['module_file']!r}, not under {_REPO_ROOT!s} -- "
+        f"{with_override['module_file']!r}, not under {stamped_root!s} -- "
         "COORDINATOR_ENGINE_ROOT was set but not honoured"
     )
 
@@ -216,8 +236,8 @@ def test_import_engine_module_honours_coordinator_engine_root(tmp_path):
     env_without_override.pop("COORDINATOR_ENGINE_ROOT", None)
     without_override = _probe_engine_root_override(scratch_cwd, env_without_override)
 
-    assert without_override["resolved_root"] != str(_REPO_ROOT), (
-        "the no-override baseline also resolved to this checkout -- the test "
+    assert without_override["resolved_root"] != str(stamped_root), (
+        "the no-override baseline also resolved to the override target -- the test "
         "cannot tell an honoured override from a coincidence; rerun from a "
         "box where the pointer/registry ladder answers something else, or "
         "adjust the scratch cwd"

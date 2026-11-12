@@ -17,6 +17,7 @@ refusal BEFORE any landing keeps `committed: false` and "Nothing was written" (t
 
 from __future__ import annotations
 
+import os
 import pathlib
 import subprocess
 import sys
@@ -26,6 +27,7 @@ import pytest
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _WRAPPER = pathlib.Path(__file__).resolve().parent.parent / "coordinator-safe-commit.py"
+_CHECKOUT_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SUBJECT = "land the change now"
 _NOPE = "Nothing was written"
 _PEER = "a peer holds the index"
@@ -62,9 +64,11 @@ def _head(repo: pathlib.Path) -> str:
 
 
 def _wrapper(repo: pathlib.Path, *argv: str) -> subprocess.CompletedProcess:
+    # Pin the engine to this checkout: unpinned, the child loads the published copy.
+    env = {**os.environ, "COORDINATOR_ENGINE_ROOT": str(_CHECKOUT_ROOT)}
     return subprocess.run(
         [sys.executable, str(_WRAPPER), *argv], cwd=str(repo), capture_output=True,
-        text=True, timeout=120, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        text=True, timeout=120, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 
 

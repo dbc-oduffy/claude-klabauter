@@ -1,14 +1,17 @@
-"""coordinator_core.write_guards.guard_doctrine_surface_edits — advisory on edits
-to always-loaded doctrine surfaces and privileged configuration.
+"""coordinator_core.write_guards.guard_doctrine_surface_edits — sentinel-gated deny
+on CLAUDE.md and rules edits, advisory on other always-loaded doctrine surfaces and privileged configuration.
 
-An edit to a protected surface lands. The guard returns `additionalContext`
+An edit to any other protected surface lands. The guard returns `additionalContext`
 naming the review checks the run answers for itself (always-loaded byte
 budget; no unprompted rewrite). Any CLAUDE.md edit by the EM also carries the
 strongest-terms "enforce the rule in code or a tripwire, not doctrine prose"
 warning, louder for a changelog-shaped addition (dated heading, quoted block).
-The EM path never denies. The one deny is a dispatched agent's edit of an
-existing CLAUDE.md (PM ruling), registered in `deny_registry.SUBAGENT_DENY_CLASS`.
-No sentinel file, transcript turn or other human-created unlock is read.
+An EM edit of an existing protected CLAUDE.md, or any edit of a rules file
+(`_doctrine_edit_sentinel.is_rules_path`), is denied with `DENY_REASON` unless a fresh
+`.coordinator-doctrine-edit-approved` is in the git dir (`sentinel_present`); the
+admitted edit still carries the advisory. A dispatched agent's edit of an existing
+CLAUDE.md is denied regardless of the sentinel (PM ruling). Both denies are registered
+in `deny_registry`. Every other protected surface stays advisory.
 
 Two classes of file are protected, for two distinct reasons; the advisory
 text is per-class because a class-1 reason attached to coordinator.local.md
@@ -105,10 +108,15 @@ from coordinator_core.write_guards._gem_doctrine_carve_out import (
     doctrine_root_of,
     gem_admitted,
 )
+from coordinator_core.write_guards._doctrine_edit_sentinel import (
+    DENY_REASON,
+    is_rules_path,
+    sentinel_present,
+)
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._sentinel_write_guard import extract_target_path
 
-CLASS = "advisory"
+CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 127
 
@@ -702,6 +710,18 @@ def _match_protected(
     return False, None
 
 
+def _doctrine_deny(payload: Dict[str, Any]) -> "Optional[Dict[str, Any]]":
+    from coordinator_core._hook_envelope import deny
+    from coordinator_core.machine_profile import apply_guard_level
+
+    return apply_guard_level(
+        "guard-doctrine-surface-edits",
+        deny("PreToolUse", DENY_REASON),
+        session_id=payload.get("session_id") or "",
+        cwd=payload.get("cwd"),
+    )
+
+
 def edit_admitted(payload: Dict[str, Any], target: str) -> bool:
     """Whether an Edit on ``target`` is open to this caller: every path except the derived live copy.
 
@@ -752,12 +772,17 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return _rot_token_advisory(tool_name, tool_input, target)
 
     matched, _owning_root = _match_protected(target, repo_root, payload)
-    if not matched:
+    rules = is_rules_path(target)
+    if not matched and not rules:
         return None
 
     rot = _rot_token_advisory(tool_name, tool_input, target)
 
     basename = os.path.basename(target)
+    if rules:
+        if sentinel_present(payload.get("cwd") or ""):
+            return _advisory_envelope(_surface_advisory(target_raw, False), _rot_text(rot))
+        return _doctrine_deny(payload)
     is_local_config = basename == "coordinator.local.md"
     if _is_first_time_create(tool_name, tool_input, target):
         return None
@@ -766,6 +791,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     if basename == "CLAUDE.md" and _caller_is_subagent(payload):
         return _subagent_deny(payload)
+
+    if basename == "CLAUDE.md" and not sentinel_present(payload.get("cwd") or ""):
+        return _doctrine_deny(payload)
 
     strong = None
     if not is_local_config:

@@ -79,7 +79,10 @@ Optional ``base_export_path`` names a saved baseline_export output: its ``FAILED
 ``unattributed`` ids to ``unmeasured``: not pre_existing (they still block), not the run's own. File read only.
 Optional ``run_key`` names a run whose ``owned_red.jsonl`` ids join ``failing_at_base``: a failing id
 recorded there (and not in ``failing_at_base``) is reported in the ``owned_red`` bucket, never reverted or
-``unattributed``.
+``unattributed``. The same ``run_key`` also names the EM's pre-existing ruling (``ruled_pre_existing``:
+a ``pre_existing_ruled.jsonl`` row or a live revise note naming the id): a ruled failing id joins
+``failing_at_base`` and lands in ``pre_existing``, and the reply's ``ruled_pre_existing`` maps each such id
+to its reason. A ruling never classes an id outside ``failing``.
 
 Negative-spec: no test execution and no git verb of its own; the only spawn is the ``git cat-file``
 inside ``land_run.foreign_halted_withheld`` (up to one per still-held halted run), reached on a probe
@@ -114,6 +117,7 @@ from coordinator_core.ops import review_reverify_probe as probe_io
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused
 from coordinator_core.ops.owned_red import read_owned_red
+from coordinator_core.ops.pre_existing_ruling import ruled_pre_existing
 from coordinator_core.ops.review_reverify_findings import applied_rows, invert
 from coordinator_core.ops.review_tripwires import TripwireScanUnavailable, literal_namers, names_in, tree_scanners, walked_created
 from coordinator_core.ops.reverify_callers import callers_of, removed_symbols
@@ -871,11 +875,14 @@ def review_reverify(
             else:
                 explicit_base |= measured
         owned: Set[str] = set()
+        ruled: Dict[str, str] = {}
         if run_key:
             try:
                 owned = set(read_owned_red(repo_root, run_key))
+                ruled = ruled_pre_existing(repo_root, run_key, ids)
             except LedgerRefused as exc:
                 return _fail(f"run_key refused: {exc}", True)
+            explicit_base |= set(ruled)
         at_base = explicit_base | owned
         recorded_pre = {str(n) for n in prior["pre_existing"]}
         prior_red = already | recorded_pre
@@ -887,6 +894,7 @@ def review_reverify(
         base_green = {n for n in ids if base_measured and n not in skip}
     else:
         pre_existing, owned_red, not_base_red, skip, base_green = [], [], [], set(), set()
+        ruled = {}
     foreign_set, foreign_ids = set(foreign), []  # type: Set[str], List[str]
     foreign_node = {n for n in ids if n not in skip and n not in base_green and _node_file(n) in foreign_set}
     implication = _implication(repo_root, [n for n in ids if n not in skip and n not in foreign_node], edited, created)
@@ -1055,6 +1063,7 @@ def review_reverify(
         "unattributed": unattributed,
         "pre_existing": pre_existing,
         "owned_red": owned_red,
+        "ruled_pre_existing": {n: ruled[n] for n in pre_existing if n in ruled},
         "sibling_owned": sibling_owned,
         "foreign_red": foreign_red,
         "kept": kept,

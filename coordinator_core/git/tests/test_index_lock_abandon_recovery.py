@@ -142,7 +142,10 @@ def _reclaimed(repo) -> list:
     return sorted((repo / ".git").glob("index.lock.reclaimed-*"))
 
 
-@pytest.mark.skipif(os.name != "nt", reason="POSIX has no held-open probe; its lock reads as held")
+_HAS_PROBE = os.name == "nt" or sys.platform.startswith("linux") or sys.platform == "darwin"
+
+
+@pytest.mark.skipif(not _HAS_PROBE, reason="no held-open probe on this platform")
 def test_ownerless_unheld_lock_past_floor_is_moved_aside_and_logged(repo):
     _lock(repo).write_bytes(b"git.exe's stranded bytes")
     _backdate(_lock(repo))
@@ -173,8 +176,94 @@ def test_ownerless_lock_past_floor_is_left_alone_where_no_probe_exists(repo, mon
     assert not _reclaimed(repo)
 
 
-@pytest.mark.skipif(os.name != "nt", reason="no portable held-open probe off Windows")
+def test_fresh_zero_byte_unheld_ownerless_lock_is_moved_aside(repo):
+    if not _HAS_PROBE:
+        pytest.skip("no held-open probe on this platform")
+    _lock(repo).write_bytes(b"")
+    index_write.prepare_splice(repo, _updates(repo), stat_fallback=True).publish()
+    assert not _lock(repo).exists()
+    assert "new.txt" in _git(["ls-files"], repo)
+    moved = _reclaimed(repo)
+    assert len(moved) == 1 and moved[0].read_bytes() == b""
+    assert "reclaimed ownerless unheld" in (repo / ".git" / "lock-reap.log").read_text(encoding="utf-8")
+
+
+def test_fresh_nonempty_unheld_ownerless_lock_is_refused(repo):
+    _lock(repo).write_bytes(b"x")
+    with pytest.raises(index_write.IndexWriteLockBusy):
+        index_write.prepare_splice(repo, _updates(repo), stat_fallback=True)
+    assert _lock(repo).read_bytes() == b"x" and not _reclaimed(repo)
+
+
+def test_fresh_zero_byte_lock_with_an_owner_file_is_refused(repo):
+    _lock(repo).write_bytes(b"")
+    index_write._owner_path(_lock(repo)).write_text("{}", encoding="utf-8")
+    assert index_write._reclaim_ownerless_lock(_lock(repo)) is False
+    assert _lock(repo).exists() and not _reclaimed(repo)
+
+
+def test_fresh_zero_byte_lock_is_refused_where_the_probe_reads_held(repo, monkeypatch):
+    monkeypatch.setattr(index_write, "_lock_held_open", lambda p: True)
+    _lock(repo).write_bytes(b"")
+    with pytest.raises(index_write.IndexWriteLockBusy):
+        index_write.prepare_splice(repo, _updates(repo), stat_fallback=True)
+    assert _lock(repo).exists() and not _reclaimed(repo)
+
+
+def test_held_open_probe_answers_true_on_an_unknown_platform(repo, monkeypatch):
+    monkeypatch.setattr(index_write.os, "name", "posix")
+    monkeypatch.setattr(index_write.sys, "platform", "plan9")
+    _lock(repo).write_bytes(b"")
+    assert index_write._lock_held_open(_lock(repo)) is True
+
+
+def test_held_open_probe_answers_true_when_the_scan_raises(repo, monkeypatch):
+    def boom(path):
+        raise RuntimeError("scan failed")
+
+    monkeypatch.setattr(index_write, "_held_open_linux", boom)
+    monkeypatch.setattr(index_write, "_held_open_macos", boom)
+    monkeypatch.setattr(index_write.os, "name", "posix")
+    _lock(repo).write_bytes(b"")
+    assert index_write._lock_held_open(_lock(repo)) is True
+
+
+@pytest.mark.skipif(not _HAS_PROBE, reason="no held-open probe on this platform")
+def test_held_open_probe_is_cheap_and_unheld_reads_false(repo):
+    import time
+
+    _lock(repo).write_bytes(b"")
+    t0 = time.process_time()
+    held = index_write._lock_held_open(_lock(repo))
+    cost = time.process_time() - t0
+    assert held is False
+    assert cost < 0.2, cost
+
+
+@pytest.mark.skipif(not _HAS_PROBE, reason="no held-open probe on this platform")
 def test_ownerless_lock_held_open_by_child_is_left_alone(repo):
+    _lock(repo).write_bytes(b"")
+    code = (
+        "import sys,time\n"
+        "f=open(sys.argv[1],'rb'); print('ready',flush=True); time.sleep(60)\n"
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", code, str(_lock(repo))],
+        stdout=subprocess.PIPE, text=True, **no_console_creationflags(),
+    )
+    try:
+        assert child.stdout.readline().strip() == "ready"
+        assert index_write._lock_held_open(_lock(repo))
+        with pytest.raises(index_write.IndexWriteLockBusy):
+            index_write.prepare_splice(repo, _updates(repo), stat_fallback=True)
+        assert _lock(repo).read_bytes() == b"" and not _reclaimed(repo)
+    finally:
+        child.kill()
+        child.wait(timeout=10)
+
+
+@pytest.mark.skipif(not _HAS_PROBE, reason="no held-open probe on this platform")
+def test_nonempty_lock_past_floor_held_open_by_child_is_left_alone(repo):
     _lock(repo).write_bytes(b"held by child")
     _backdate(_lock(repo))
     code = (

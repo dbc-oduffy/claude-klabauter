@@ -89,7 +89,9 @@ _HIGH_RE = re.compile(
     r"|AKIA[A-Z0-9]{16}"
     r"|xox[bpars]-[A-Za-z0-9-]{10,}"
     r"|ya29\.[A-Za-z0-9_-]{20,}"
-    r"|-----BEGIN [A-Z ]+PRIVATE KEY-----"
+    # Armor counts only at line end or running into a base64 body: parity
+    # with percolate-gate.py's _TIER_HIGH, which documents why.
+    r"|-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----(?:\s*$|(?:\\n|\s)*[A-Za-z0-9+/]{16,})"
 )
 
 _MEDIUM_RE = re.compile(

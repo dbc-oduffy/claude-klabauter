@@ -12,13 +12,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import yaml
+
 from coordinator_core.bug_blitz.contract import FailingTest, run_tag
-from coordinator_core.ops.queue_append import append_queue_entry
+from coordinator_core.ops.queue_append import _slug_from_title, append_queue_entry
 from coordinator_core.ops.queue_family import load_family_records
 from coordinator_core.repo_relative_text import to_repo_relative
 from coordinator_core.session.declared_writes import declare_write
 
 SCHEMA = "bug-backlog"
+ARCHIVE_DIR = "archive/bug-backlog"
 TF_TAG = "tf"
 
 CRASH_TOKENS = (
@@ -76,6 +79,24 @@ def _open_tf_rows_by_surface(repo_root: Path) -> dict[str, dict]:
         if surface:
             rows.setdefault(str(surface), rec)
     return rows
+
+
+def _archived_tf_row_id(repo_root: Path, surface: str) -> str | None:
+    """Id of an archived `tf` row on `surface`, or None.
+
+    A row file is `<date>-<slug of title>-<digest>.yaml` and a TF title starts `TF: <surface>`, so the
+    name narrows the candidates before any file is read; each candidate is then checked on its own
+    `surface` and `tf` tag. Trap: the slug is capped, so a prefix match alone is not an identity.
+    """
+    needle = _slug_from_title(f"TF: {surface}")
+    for path in sorted((repo_root / ARCHIVE_DIR).glob(f"*/????-??-??-{needle}*.yaml")):
+        try:
+            fm = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, yaml.YAMLError):
+            continue
+        if isinstance(fm, dict) and fm.get("surface") == surface and TF_TAG in (fm.get("tags") or []):
+            return path.stem
+    return None
 
 
 def _row_id(path: str) -> str:
@@ -155,6 +176,9 @@ def mint_tf_rows(
 ) -> list[str]:
     """Mint or reuse one open `tf` row per failing test file; returns row ids in first-seen file order.
 
+    A surface with no open row but an archived `tf` row mints nothing: the archived id is returned and
+    no write or manifest entry is made.
+
     Reuse is keyed on `surface` plus the `tf` tag among open rows, so a second call for the same run
     returns the same ids and writes nothing. With `run_dir`, each row is recorded in its
     `minted.jsonl` (`created: True` for a new row, False for a reused one): a reused row before its
@@ -180,6 +204,11 @@ def mint_tf_rows(
     ids: list[str] = []
     for file, group in grouped.items():
         rec = existing.get(file)
+        if rec is None:
+            archived = _archived_tf_row_id(repo_root, file)
+            if archived is not None:
+                ids.append(archived)
+                continue
         if rec is not None:
             updated = planned[file]
             _record(run_dir, rec["path"], created=False)

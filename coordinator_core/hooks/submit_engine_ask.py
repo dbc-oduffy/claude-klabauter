@@ -1667,6 +1667,16 @@ def _reserved_token_spent(root: Path, run_id: str) -> bool:
         return False
 
 
+def _reservation_spent(root: Path, run_id: str) -> bool:
+    """Whether a reserved run id is spent, a consumed-without-landing token included (`reservation_spent`)."""
+    from coordinator_core.ops.dispatch_emit.ask_gate import reservation_spent
+
+    try:
+        return reservation_spent(root, run_id)
+    except (OSError, ValueError):
+        return False
+
+
 def _spent_after_ensure(root: Path, run_id: str) -> bool:
     """Whether `run_id` still holds no live run token after the launcher ensured one; a stalled read is not spent."""
     from coordinator_core.ops.dispatch_emit import run_token
@@ -2767,7 +2777,7 @@ def _stored_refusal(record: dict) -> Optional[str]:
 def _unmarked_emitted_run(root: Path, sizing_rel: str) -> Optional[str]:
     """The newest `warp-<stem>-*` run bound to `sizing_rel` that stopped between stages without a halt
     marker (run.json bound, run-stage `staged` or `halted`, no halted.json), else None. One scandir and
-    three small reads, no git spawn; a landed, minted-only or marked run is not one."""
+    three small reads, no git spawn; a landed, minted-only, marked or token-retired run is not one."""
     import json
 
     from coordinator_core.ops._path_guard import safe_id
@@ -2796,7 +2806,9 @@ def _unmarked_emitted_run(root: Path, sizing_rel: str) -> Optional[str]:
         run = read_run(rd)
         if run is None or run.get("sizing_rel") != norm:
             return None
-        return name if kind in ("staged", "halted") else None
+        if kind not in ("staged", "halted"):
+            return None
+        return None if _reservation_spent(root, name) else name  # a spent token: the refire mints fresh
     return None
 
 
@@ -3418,10 +3430,10 @@ def _evaluate(
             why = _slice_deny(root, marker)
             if why:
                 return deny("PreToolUse", why)
-            if not _reserved_token_spent(root, marker[1]):
+            if not _reservation_spent(root, marker[1]):
                 reserved_run_id = marker[1]
             ask_parent_id = marker[0]
-    if reserved_run_id and _reserved_token_spent(root, reserved_run_id):
+    if reserved_run_id and _reservation_spent(root, reserved_run_id):
         reserved_run_id = None
 
     clash = None

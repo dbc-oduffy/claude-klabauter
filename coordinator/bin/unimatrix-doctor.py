@@ -66,8 +66,9 @@ def ssh_hostname(alias, run, no_window=0):
     return None
 
 
-def key_bodies(members):
-    return {m["relay_pub"].split()[1] for m in members}
+def key_bodies(members, mem):
+    """Every relay key body (`relay_pub` and each `relay_pubs`) of `members`: a line carrying any of them is signed."""
+    return {body for m in members for body in mem.member_key_bodies(m)}
 
 
 def unsigned_authorized_lines(path, signed):
@@ -117,7 +118,9 @@ def self_label(members, names):
 
 
 def inbound_asymmetric_problems(ctx, members, label, authorized_keys_readable):
-    """`asymmetric: <peer> -> <this box> missing` for each member whose relay key no forced line here carries."""
+    """`asymmetric: <peer> -> <this box> missing` for each member whose relay key addressed to this box
+    (`pair_key_for`) no forced line here carries."""
+    mem = ctx["membership"]
     if not authorized_keys_readable:
         return []
     pairs = _load("unimatrix_pair_contract", "lib/unimatrix_pair_contract.py").expected_directions(
@@ -129,7 +132,7 @@ def inbound_asymmetric_problems(ctx, members, label, authorized_keys_readable):
         member = by_box.get(frm.casefold())
         if to.casefold() != label.casefold() or member is None:
             continue
-        if member["relay_pub"].split()[1] not in held:
+        if mem.pair_key_for(member, label).split()[1] not in held:
             out.append(asymmetric(frm, to))
     return out
 
@@ -414,6 +417,9 @@ def diagnose(ctx):
             notes.append(f"pin {mem.fingerprint(pin)}")
         except mem.MembershipError as ex:
             probs.append(f"signer pin unusable: {ex}")
+    else:
+        probs.append("no signer pin is held; remedy: run unimatrix-pair.py pin <pubfile>, "
+                     "or let unimatrix-pair.py approve push it")
     if status == "bad":
         probs.append(why)
     elif status == "none":
@@ -422,7 +428,7 @@ def diagnose(ctx):
                      "(add --self-cidr <cidr> on a fresh collective)")
     else:
         verified = mem.verified_members(home, run=ctx["run"])
-        signed = key_bodies(verified)
+        signed = key_bodies(verified, mem)
         ctx["self_label"] = self_label(verified, names)
         probs.extend(inbound_asymmetric_problems(ctx, verified, ctx["self_label"], ctx["platform"] != "win32"))
     ak = ctx["authorized_keys"]
@@ -586,4 +592,7 @@ def main(argv=None, run=subprocess.run, resolve=socket.getaddrinfo, connect=sock
 
 
 if __name__ == "__main__":
+    if any(_a in ("-h", "--help") for _a in sys.argv[1:]):
+        print("usage: unimatrix-doctor [-h]\nunimatrix health diagnostic")
+        raise SystemExit(0)
     sys.exit(main(sys.argv[1:]))

@@ -248,4 +248,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    if any(_a in ("-h", "--help") for _a in sys.argv[1:]):
+        print("usage: unimatrix-peer-contract [-h]\nunimatrix peer-contract checker; usage: unimatrix-peer-contract <file>")
+        raise SystemExit(0)
     sys.exit(main())

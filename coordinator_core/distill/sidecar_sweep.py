@@ -38,6 +38,7 @@ from coordinator_core.distill._common import (
 __all__ = [
     "SidecarSweepResult",
     "find_sidecar_candidates",
+    "sidecar_candidate_ids",
     "sweep_sidecars",
 ]
 
@@ -72,6 +73,24 @@ def find_sidecar_candidates(scan_root: Path) -> list[Path]:
     return sorted(candidates)
 
 
+def sidecar_candidate_ids(scan_root: Path, repo_root: Path) -> list[str]:
+    """Sorted sidecar candidates under `scan_root` as repo-root-relative ids. Spawns nothing
+    and applies no reference guard: the guard runs at delete time (`delete_guard`), so a
+    reporting caller (`distill.scope`) must not pay its `rg`.
+
+    SECURITY-ADJACENT — every id MUST be forward-slash. It is fed to `rg --fixed-strings`
+    by the guard and every in-repo document spells its references with '/'; a
+    native-separator needle matches NOTHING and a still-referenced sidecar would read
+    delete-eligible (fail-open on Windows). The id is also the wire `path` field."""
+    ids: list[str] = []
+    for candidate in find_sidecar_candidates(scan_root):
+        try:
+            ids.append(rel_id(candidate, repo_root))
+        except ValueError:
+            ids.append(candidate.as_posix())
+    return ids
+
+
 def sweep_sidecars(scan_root: Path, repo_root: Path) -> SidecarSweepResult:
     """Sweep `scan_root` for sidecar candidates and gate each on the shared
     active-reference guard (scoped to docs/ tasks/ archive/ under
@@ -87,23 +106,7 @@ def sweep_sidecars(scan_root: Path, repo_root: Path) -> SidecarSweepResult:
     deletion_manifest: list[dict] = []
     retained: list[dict] = []
 
-    # SECURITY-ADJACENT — every rel_str MUST be forward-slash. Each is fed to
-    # `active_reference_guard_many`, which passes the whole set to `rg --fixed-strings`,
-    # and every in-repo document spells its references with '/'. A native-separator
-    # needle (`docs\plans\x.md` on Windows) therefore matches NOTHING, the guard
-    # returns "no active references found", and a still-referenced sidecar is
-    # reported DELETE-ELIGIBLE. That is the guard failing OPEN on Windows, not a
-    # cosmetic id nit. Mirrors the same fix in distill/delete_guard.py.
-    # rel_str is also emitted as the wire `path` field below, so POSIX is
-    # correct for both uses.
-    candidates = find_sidecar_candidates(scan_root)
-    rel_strs: list[str] = []
-    for candidate in candidates:
-        try:
-            rel_str = rel_id(candidate, repo_root)
-        except ValueError:
-            rel_str = candidate.as_posix()
-        rel_strs.append(rel_str)
+    rel_strs = sidecar_candidate_ids(scan_root, repo_root)
 
     # Batched: one `rg -f <patternfile>` call for the whole candidate set instead of
     # one `active_reference_guard` (and one `rg` process) per candidate — the

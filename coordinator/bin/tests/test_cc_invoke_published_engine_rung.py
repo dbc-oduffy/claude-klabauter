@@ -169,13 +169,27 @@ class TestNoBashSubprocessAnywhere(unittest.TestCase):
             )
 
 
+def _engine_shaped_root(base: Path) -> Path:
+    """An engine-shaped tree the gated ladder accepts as an env root: a
+    stamped `coordinator_core/` carrying a copy of the real `engine_root`
+    module. The gate refuses unverified roots (claude-klabauter is never an engine), so
+    a bare fake path like `/from/env` no longer resolves."""
+    core = base / "coordinator_core"
+    core.mkdir(parents=True)
+    (core / "_engine_stamp").write_text("test-stamp\n", encoding="utf-8")
+    return base
+
+
 class TestNoNewSpawnOnEarlyRungs(unittest.TestCase):
     """AC-no-new-spawn-early-rungs: rungs 1, 1.5, 3 must resolve with zero
     subprocess.run calls — no NEW spawn was added to any of them by this chunk."""
 
     def test_rung1_env_var_no_spawn(self) -> None:
+        tmp_ctx = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_ctx.cleanup)
+        env_root = _engine_shaped_root(Path(tmp_ctx.name) / "env-tree")
         with (
-            unittest.mock.patch.dict(os.environ, {"COORDINATOR_ENGINE_ROOT": "/from/env"}, clear=False),
+            unittest.mock.patch.dict(os.environ, {"COORDINATOR_ENGINE_ROOT": str(env_root)}, clear=False),
             unittest.mock.patch("subprocess.run") as mock_run,
             # Rung 1 delegates to the real gate, which reads
             # COORDINATOR_ENGINE_ROOT back unchanged when set. Forcing the
@@ -190,7 +204,7 @@ class TestNoNewSpawnOnEarlyRungs(unittest.TestCase):
             ),
         ):
             resolved = _mod._resolve_claude_klabauter_root()
-        self.assertEqual(resolved, "/from/env")
+        self.assertEqual(resolved, str(env_root))
         mock_run.assert_not_called()
 
     def test_rung1_5_pointer_file_no_spawn(self) -> None:
@@ -472,12 +486,13 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
             published = str(Path(tmp) / "published-engine")
             Path(published).mkdir()
             settings_home = self._settings_home(tmp, published=published)
+            env_root = _engine_shaped_root(Path(tmp) / "deliberate-tree")
 
             with (
                 unittest.mock.patch.dict(
                     os.environ,
                     {
-                        "COORDINATOR_ENGINE_ROOT": "/deliberate/test/tree",
+                        "COORDINATOR_ENGINE_ROOT": str(env_root),
                         "COORDINATOR_SETTINGS_HOME": str(settings_home),
                     },
                     clear=False,
@@ -493,5 +508,5 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
             ):
                 resolved = _mod._resolve_claude_klabauter_root()
 
-        self.assertEqual(resolved, "/deliberate/test/tree")
+        self.assertEqual(resolved, str(env_root))
         mock_run.assert_not_called()

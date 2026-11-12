@@ -51,6 +51,7 @@ def _edit_payload(home):
     return {
         "tool_name": "Edit",
         "tool_input": {"file_path": str(home / ".claude" / "CLAUDE.md")},
+        "cwd": str(home),
     }
 
 
@@ -63,20 +64,12 @@ def _is_deny(result):
     return bool(result) and result["hookSpecificOutput"].get("permissionDecision") == "deny"
 
 
-def _is_advisory(result):
-    return (
-        result is not None
-        and "permissionDecision" not in result["hookSpecificOutput"]
-        and "[doctrine-surface guard]" in result["hookSpecificOutput"]["additionalContext"]
-    )
-
-
 @pytest.mark.parametrize("profile", ["author", "consumer"])
 def test_defaults_on_with_no_config(author_box, monkeypatch, profile):
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", profile)
     mp.reset_cache()
     assert mp.feature_enabled("doctrine_edit_gate") is True
-    assert _is_advisory(guard_doctrine_surface_edits.check(_edit_payload(author_box)))
+    assert _is_deny(guard_doctrine_surface_edits.check(_edit_payload(author_box)))
 
 
 def test_defaults_on_an_author_profile(author_box):
@@ -103,12 +96,7 @@ def test_every_enforcement_point_is_quiet_when_off(author_box, monkeypatch):
 
 def test_enforcement_points_when_on(author_box, monkeypatch):
     _set_gate(monkeypatch, "on")
-    assert _is_advisory(guard_doctrine_surface_edits.check(_edit_payload(author_box)))
-    assert not _is_deny(guard_doctrine_surface_edits.check(_edit_payload(author_box)))
+    assert _is_deny(guard_doctrine_surface_edits.check(_edit_payload(author_box)))
     (author_box / "CLAUDE.md").write_text("x\n", encoding="utf-8")
     payload = {**_bash_write_payload(), "cwd": str(author_box)}
-    result = guard_doctrine_surface_bash_write.check(payload, ["CLAUDE.md"])
-    assert not _is_deny(result)
-    hso = result["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow"
-    assert hso["additionalContext"].startswith("Advisory:")
+    assert _is_deny(guard_doctrine_surface_bash_write.check(payload, ["CLAUDE.md"]))

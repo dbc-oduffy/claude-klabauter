@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -103,7 +104,7 @@ def _run_argv(
     if not admission.admitted:
         raise OSError(f"admission: {admission.reason}")
     sink = open(log, "ab" if append else "wb") if log is not None else subprocess.DEVNULL
-    from coordinator_core.testing import baseline_export
+    from coordinator_core.testing import baseline_export, scoped_pytest
 
     # An export carries no .git of its own: confine git there so it cannot adopt an enclosing repo.
     from coordinator_core.diagnostics.contained_run import spawn_in_capped_job
@@ -112,7 +113,13 @@ def _run_argv(
     env = guarded_child_env(
         os.environ if (Path(cwd) / ".git").exists() else baseline_export.export_env(cwd)
     )
+    run_holder: Optional[Path] = None
     try:
+        if "pytest" in argv and not scoped_pytest.has_basetemp(argv):
+            run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(cwd, scoped_pytest.new_run_slug())
+            at = argv.index("pytest") + 1
+            argv = [*argv[:at], "--basetemp", str(basetemp), *argv[at:]]
+            env = scoped_pytest.tmp_env(env, tmp)
         proc, close = spawn_in_capped_job(
             argv,
             popen_kwargs=dict(
@@ -133,6 +140,8 @@ def _run_argv(
     finally:
         if log is not None:
             sink.close()
+        if run_holder is not None:
+            shutil.rmtree(run_holder, ignore_errors=True)
 
 
 #: ``main`` return code for a session never started because the shared deadline was already spent.
@@ -413,7 +422,7 @@ def _launch_plan(root: Path, tests: list[str], *, keep_tier: bool = False) -> "t
     ``keep_tier`` (the fallback when a runner needs it). A string return is the reason no command could
     be built."""
     from coordinator_core import resolve_validation_cmd
-    from coordinator_core.ops.dispatch_emit import test_interpreter as ti
+    from coordinator_core.ops.dispatch_emit import interpreter_pin as ti
 
     scopes: dict[str, list[str]] = {}
     for t in tests:

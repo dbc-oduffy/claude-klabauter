@@ -2903,7 +2903,7 @@ _TRAILER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*: ")
 def _verify_reach_dirt(root: Path, record: dict, product: Sequence[str], deleted: Sequence[str]) -> dict:
     """Dirty tracked paths the landing set's tests can read, outside the landing set: the record's
     ``reach_dirt`` unioned with a land-time check. Attribution is the caller's (`_split_reach_dirt`)."""
-    from coordinator_core.ops.dispatch_emit.test_reach import foreign_dirt, reach_paths, seeds_for_landing
+    from coordinator_core.ops.dispatch_emit.landing_reach import foreign_dirt, reach_paths, seeds_for_landing
 
     landing = {*product, *deleted}
     recorded = record.get("reach_dirt") if isinstance(record.get("reach_dirt"), dict) else {}

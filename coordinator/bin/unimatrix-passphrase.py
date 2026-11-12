@@ -61,7 +61,7 @@ def _op(args, run):
     try:
         r = run(["op", *args], capture_output=True, text=True, timeout=OP_TIMEOUT, stdin=subprocess.DEVNULL,
                 creationflags=_no_window())
-    except FileNotFoundError:
+    except (FileNotFoundError, NotADirectoryError):
         raise PassphraseSourceMissing("passphrase_source_missing: op CLI not found on PATH; install the "
                                       "1Password CLI or mint with --unencrypted-key") from None
     except subprocess.TimeoutExpired:

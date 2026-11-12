@@ -237,6 +237,9 @@ def _nt_main(monkeypatch, tmp_path, *, real):
     inherited = os.pathsep.join([str(alias), str(real_dir)])
     monkeypatch.setenv("PATH", inherited)
     monkeypatch.setenv("ProgramFiles", str(pf))
+    # Import before faking os.name: pathlib refuses to build module-level Paths once os.name is "nt" on a POSIX host.
+    sys.path.insert(0, str(launch.HERE.parents[1]))
+    import coordinator_core.codex_runner.codex_spawn_env  # noqa: F401
     monkeypatch.setattr(launch.os, "name", "nt")
     monkeypatch.setattr(launch.shutil, "which", lambda n: "codex.exe")
     seen = {}

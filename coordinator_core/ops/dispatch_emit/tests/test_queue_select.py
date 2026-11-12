@@ -652,11 +652,67 @@ def test_load_row_schema_gate_reads_the_profile_schema_and_closure_fields(tmp_pa
 
     profile = SimpleNamespace(
         schema="lesson-entry.schema.json",
-        closure=SimpleNamespace(status_field="status", stamp_fields=("closed_at", "closed_by")),
+        closure=SimpleNamespace(status_field="status", stamp_fields=("closed_at", "closed_by"), closed_values={}),
     )
     gate = load_row_schema_gate(profile, tmp_path)
     assert gate.closure_fields == {"status", "closed_at", "closed_by"} and "scope" in gate.schema["required"]
     assert load_row_schema_gate(SimpleNamespace(schema="nope.schema.json", closure=profile.closure), tmp_path) is None
+
+
+def _closed_gate(closed=("applied", "resolved")):
+    gate = _lesson_gate()
+    return type(gate)(
+        schema=gate.schema, closure_fields=gate.closure_fields, status_field="status",
+        closed_values=frozenset(closed),
+    )
+
+
+@pytest.mark.parametrize("raw", ["applied", '"applied"', "'applied'"])
+def test_admission_declines_a_closed_status_row_with_the_status_in_the_reason(tmp_path, raw):
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    good = dict(created="2026-09-21", title="t", body="b", scope="project", from_repo="x")
+    _write_row(queue_dir / "open-row.yaml", status="open", **good)
+    (queue_dir / "done.yaml").write_text(
+        "".join(f"{k}: {json.dumps(v)}\n" for k, v in good.items()) + f"status: {raw}\n", encoding="utf-8"
+    )
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path, row_schema_gate=_closed_gate())
+    assert [e.row_id for e in manifest.entries] == ["open-row"]
+    (declined,) = manifest.declined
+    assert declined.row_id == "done" and declined.reason == "admission: row status applied is closed"
+
+
+def test_admission_keeps_absent_or_unrecognised_status_rows(tmp_path):
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    good = dict(created="2026-09-21", title="t", body="b", scope="project", from_repo="x")
+    _write_row(queue_dir / "nostatus.yaml", **good)
+    _write_row(queue_dir / "odd.yaml", status="pending", **good)
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path, row_schema_gate=_closed_gate())
+    assert sorted(e.row_id for e in manifest.entries) == ["nostatus", "odd"] and manifest.declined == ()
+
+
+def test_gate_without_closed_values_admits_rows_unchanged(tmp_path):
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    good = dict(created="2026-09-21", title="t", body="b", scope="project", from_repo="x")
+    _write_row(queue_dir / "a.yaml", status="open", **good)
+    _write_row(queue_dir / "b.yaml", status="open", **good)
+    gated = _select(queue=[queue_dir], repo_root=tmp_path, row_schema_gate=_closed_gate())
+    ungated = _select(queue=[queue_dir], repo_root=tmp_path)
+    assert len(gated.entries) == len(ungated.entries) == 2 and gated.declined == ()
+
+
+def test_load_row_schema_gate_carries_the_closed_value_set(tmp_path):
+    from types import SimpleNamespace
+
+    from coordinator_core.ops.dispatch_emit.queue_select import load_row_schema_gate
+
+    closure = SimpleNamespace(
+        status_field="status", stamp_fields=("closed_at",), closed_values={"fix": "applied", "refute-close": "wontfix"}
+    )
+    gate = load_row_schema_gate(SimpleNamespace(schema="lesson-entry.schema.json", closure=closure), tmp_path)
+    assert gate.status_field == "status" and gate.closed_values == {"applied", "wontfix"}
 
 
 def _accounted_ids(manifest):

@@ -4,7 +4,7 @@ widest import closure and largest test directory), on throwaway clones of this r
 
 Process time is this process plus descendants (`Profiler.tree_ms`); wall clock is never recorded.
 `spawns` counts `Popen` constructions. `added_git_spawns` counts those made inside
-`test_reach.reach_paths` / `foreign_dirt` (0 when the module is absent, as at the baseline).
+`landing_reach.reach_paths` / `foreign_dirt` (0 when the module is absent, as at the baseline).
 One row per axis; the bar is `BAR_MS` per op.
 
     python coordinator_core/benchmarks/land_gate_reach_profile.py [--json] [--source-repo PATH]
@@ -64,7 +64,7 @@ LANDING_SET = (
 )
 MARK = "\n# land_gate_reach_profile: dirty edit\n"
 _REACH_FNS = ("reach_paths", "foreign_dirt", "seeds_for_landing")
-_ATTRIBUTED_FILES = ("measured_rev.py", "land_run.py", "test_reach.py")
+_ATTRIBUTED_FILES = ("measured_rev.py", "land_run.py", "landing_reach.py")
 _TOP_FRAMES = 8
 _MEASURED_REV_LEGS = {
     "parse": ("unparseable_py",),
@@ -115,7 +115,7 @@ class Row:
 
 def _measure(axis: str, call, **attribution) -> tuple:
     """Run `call()` once inside a process-time + descendants bracket; returns `(row, result)`.
-    Spawns are `Popen` constructions; those inside a `test_reach` function are `added_git_spawns`."""
+    Spawns are `Popen` constructions; those inside a `landing_reach` function are `added_git_spawns`."""
     prof = Profiler(attribute=False)
     state = {"spawns": 0, "added": 0, "depth": 0}
     real_init = subprocess.Popen.__init__
@@ -127,11 +127,11 @@ def _measure(axis: str, call, **attribution) -> tuple:
 
     undo = []
     try:
-        from coordinator_core.ops.dispatch_emit import land_run, measured_rev, test_reach  # noqa: F401
+        from coordinator_core.ops.dispatch_emit import land_run, landing_reach, measured_rev  # noqa: F401
     except ImportError:
-        test_reach = None
+        landing_reach = None
         from coordinator_core.ops.dispatch_emit import measured_rev  # noqa: F401
-    if test_reach is not None:
+    if landing_reach is not None:
         def counted(fn):
             def wrapper(*a, **k):
                 state["depth"] += 1
@@ -142,7 +142,7 @@ def _measure(axis: str, call, **attribution) -> tuple:
 
             return wrapper
 
-        for mod in (test_reach, measured_rev):
+        for mod in (landing_reach, measured_rev):
             for name in _REACH_FNS:
                 if hasattr(mod, name):
                     real = getattr(mod, name)
@@ -163,7 +163,7 @@ def _measure(axis: str, call, **attribution) -> tuple:
         subprocess.Popen.__init__ = real_init
         for mod, name, real in undo:
             setattr(mod, name, real)
-    attribution["reach_module_present"] = test_reach is not None
+    attribution["reach_module_present"] = landing_reach is not None
     if error:
         attribution["error"] = error
     return Row(axis, max(ms, tree_ms), state["spawns"], state["added"], attribution), result
@@ -294,7 +294,7 @@ def profile_land_run(parent: Path, source: Path, stack: ExitStack, overlay=()) -
     row.attribution["overlay"] = list(overlay)
     rows = [row]
     try:
-        from coordinator_core.ops.dispatch_emit.test_reach import foreign_dirt, reach_paths
+        from coordinator_core.ops.dispatch_emit.landing_reach import foreign_dirt, reach_paths
     except ImportError:
         return rows
     reach_row, reach = _measure(REACH_CHECK, lambda: reach_paths(root, [*LANDING_SET]), landing_set=list(LANDING_SET))
@@ -313,7 +313,7 @@ def _warm_imports() -> None:
     is not an op's cost."""
     import importlib
 
-    for name in ("land_run", "measured_rev", "landing_integrity", "test_reach", "tests._review_fixture"):
+    for name in ("land_run", "measured_rev", "landing_integrity", "landing_reach", "tests._review_fixture"):
         try:
             importlib.import_module(f"coordinator_core.ops.dispatch_emit.{name}")
         except ImportError:

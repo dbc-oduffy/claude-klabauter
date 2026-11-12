@@ -1,8 +1,9 @@
 """Behavioral tests for coordinator_core.write_guards.guard_doctrine_surface_edits.check:
 which paths are protected, which edits are exempt, and the advisory it returns.
 
-The guard never denies and reads no sentinel file. Protection means an
-`additionalContext` advisory; owning-root anchoring decides which paths match.
+A fresh doctrine-edit sentinel is admitted for every test here (the autouse fixture), so
+protection means an `additionalContext` advisory; owning-root anchoring decides which paths
+match. The deny without the sentinel is pinned in test_em_doctrine_write_deny.py.
 """
 
 from __future__ import annotations
@@ -17,6 +18,11 @@ from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.write_guards import guard_doctrine_surface_edits as guard
 
 pytestmark = [pytest.mark.cadence]
+
+
+@pytest.fixture(autouse=True)
+def _sentinel_admitted(monkeypatch):
+    monkeypatch.setattr(guard, "sentinel_present", lambda cwd: True)
 
 
 def _context(result) -> str:

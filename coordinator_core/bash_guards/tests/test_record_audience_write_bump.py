@@ -71,18 +71,20 @@ def test_warn_level_returns_the_advisory_envelope_not_a_record(monkeypatch, buil
     assert "additionalContext" in hso
 
 
-def test_doctrine_deny_is_an_advisory_envelope_at_every_level(monkeypatch):
+def test_class_write_deny_holds_the_floor_at_every_level(monkeypatch):
+    from coordinator_core.write_guards import _doctrine_edit_sentinel as sentinel
+
     payload = {"tool_name": "Bash", "tool_input": {"command": "echo x > CLAUDE.md"}, "cwd": ""}
     monkeypatch.setattr(doctrine, "feature_enabled", lambda name: True)
     monkeypatch.setattr(doctrine, "_is_onboarding_write", lambda *a, **k: False)
+    monkeypatch.setattr(doctrine, "sentinel_present", lambda cwd: False)
 
     for level in ("strict", "warn", "off"):
         _set_level(monkeypatch, level)
         result = doctrine.check(payload, ["CLAUDE.md"])
-        assert isinstance(result, dict), level
-        hso = result["hookSpecificOutput"]
-        assert hso["permissionDecision"] == "allow", level
-        assert hso["additionalContext"].startswith("Advisory: this command writes a governed"), level
+        assert isinstance(result, AlternativeRecord), level
+        assert result.verdict_kind == "deny", level
+        assert sentinel.DENY_REASON == result.em_text, level
 
 
 def test_doctrine_still_allows_an_unrelated_command(monkeypatch):
@@ -101,16 +103,9 @@ def test_doctrine_sizing_deny_is_an_advisory_envelope():
     assert hso["additionalContext"].startswith("Advisory: this command writes the sizing")
 
 
-def test_doctrine_advisory_is_an_advisory_record(monkeypatch):
-    from coordinator_core.guard_messages.render import render
-    from coordinator_core.guard_messages.alternative_record import Audience
-
+def test_gate_off_leaves_a_class_write_quiet(monkeypatch):
     monkeypatch.setattr(doctrine, "feature_enabled", lambda name: False)
     monkeypatch.setattr(doctrine, "_is_onboarding_write", lambda *a, **k: False)
     _set_level(monkeypatch, "warn")
     payload = {"tool_name": "Bash", "tool_input": {"command": "echo x > CLAUDE.md"}, "cwd": ""}
-    record = doctrine.check(payload, ["CLAUDE.md"])
-    assert isinstance(record, AlternativeRecord)
-    assert record.verdict_kind == "advisory"
-    env = render(record, Audience.EM)["hookSpecificOutput"]
-    assert env["additionalContext"] == doctrine.doctrine_surface_advisory()["hookSpecificOutput"]["additionalContext"]
+    assert doctrine.check(payload, ["CLAUDE.md"]) is None

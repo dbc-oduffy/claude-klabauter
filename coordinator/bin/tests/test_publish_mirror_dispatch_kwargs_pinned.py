@@ -119,8 +119,17 @@ _DELIBERATELY_OPTIONAL_KWARGS = frozenset({"foreign_dir_names", "only_paths", "r
 #: `dispatch_mirror_like`'s own docstring for the full reasoning.
 _NEVER_FORWARDED_KWARGS = frozenset({"injected_paths"})
 
+#: `preserve_paths` is a sync-layer hold in `sync_mirror` (empty default) that no
+#: dispatch caller supplies yet. Passing it unconditionally would FATAL a stale
+#: consumer override that lacks it. Wiring it through `bind_kwargs`/
+#: `dispatch_mirror_like` is a separate feature; drop this exclusion when it lands.
+_SYNC_LAYER_ONLY_KWARGS = frozenset({"preserve_paths"})
+
 _PIN_EXCLUSIONS = (
-    _STRUCTURALLY_SEPARATE_KWARGS | _DELIBERATELY_OPTIONAL_KWARGS | _NEVER_FORWARDED_KWARGS
+    _STRUCTURALLY_SEPARATE_KWARGS
+    | _DELIBERATELY_OPTIONAL_KWARGS
+    | _NEVER_FORWARDED_KWARGS
+    | _SYNC_LAYER_ONLY_KWARGS
 )
 
 

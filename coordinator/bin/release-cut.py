@@ -27,10 +27,10 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _EXCLUDES = (":(exclude)docs", ":(exclude)state")
@@ -40,18 +40,28 @@ class CutError(Exception):
     """A refusal; the message is the whole operator-facing text."""
 
 
-def _git(root: Path, *args: str, env: dict | None = None, stdin: bytes | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(root),
-        env=env,
-        input=stdin,
-        capture_output=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+class _Git(NamedTuple):
+    """A git outcome in the bytes shape the call sites read."""
+
+    returncode: int
+    stdout: bytes
+    stderr: bytes
 
 
-def _text(cp: subprocess.CompletedProcess) -> str:
+def _git(root: Path, *args: str, env: dict | None = None, stdin: bytes | None = None) -> _Git:
+    """Run git through the shared runner, fail-loud when the engine is not colocated."""
+    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_colocated_engine_on_path
+
+    require_colocated_engine_on_path(__file__)
+    from coordinator_core.git.run import run_git
+
+    res = run_git(list(args), cwd=str(root), env=env, input=stdin, binary=True)
+    stderr = "git timed out" if res.timed_out and not res.stderr else res.stderr
+    return _Git(res.returncode, res.stdout_bytes, stderr.encode("utf-8", "replace"))
+
+
+def _text(cp: _Git) -> str:
     return (cp.stderr or b"").decode("utf-8", "replace").strip()
 
 
@@ -167,12 +177,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.repo_root:
             root = Path(args.repo_root).resolve()
         else:
-            engine_root = str(Path(__file__).resolve().parents[2])
-            if engine_root not in sys.path:
-                sys.path.insert(0, engine_root)
-            from coordinator_core.git.repo_root import show_toplevel
+            import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+            from repo_identity import resolve_checked_repo_root
 
-            top = show_toplevel()
+            top, verdict = resolve_checked_repo_root(explicit_root=None)
+            if verdict["verdict"] == "MISMATCH":
+                print(verdict["message"], file=sys.stderr)
             if top is None:
                 raise CutError("release-cut: not inside a git repo; pass --repo-root")
             root = Path(top)
