@@ -35,6 +35,14 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
+REAL_CMDLINE = pre.process_cmdline
+
+
+@pytest.fixture(autouse=True)
+def interactive_agy(monkeypatch):
+    monkeypatch.setattr(pre, "process_cmdline", lambda pid: "agy chat")
+
+
 @pytest.fixture
 def ls_server():
     srv = socket.socket()
@@ -745,3 +753,41 @@ def test_agy_leg_log_path_resolves_at_call_time(tmp_path, monkeypatch):
     assert leg.log_path() == str(tmp_path / "late.log")
     leg.log("hello-late")
     assert "hello-late" in (tmp_path / "late.log").read_text()
+
+
+PRINT_LINES = ['agy -p="Run exactly: git grep x" --output-format json', "agy.exe --print hi", "agy --print=hi", "agy -p hi"]
+
+
+@pytest.mark.parametrize("line", PRINT_LINES)
+def test_print_mode_passes_ask_through_with_no_overwrite_and_no_spawn(home, monkeypatch, line):
+    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
+    monkeypatch.setattr(pre, "process_cmdline", lambda pid: line)
+    spawned = []
+    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: spawned.append(cmd))
+    stub_guard(monkeypatch, {"decision": "ask"})
+    out = pre.decide(run_payload(cmd="git grep -n x -- coordinator/tests"), 4242)
+    assert out == {"decision": "ask"} and "overwrite" not in out
+    assert spawned == []
+
+
+@posix_rewrite
+def test_interactive_agy_still_rewrites_and_unreadable_cmdline_is_not_print_mode(home, monkeypatch):
+    assert "overwrite" in pre.decide(run_payload(), 4242)
+    monkeypatch.setattr(pre, "process_cmdline", lambda pid: None)
+    assert "overwrite" in pre.decide(run_payload(), 4242)
+    assert pre.agy_print_mode(None, read=lambda pid: "agy -p x") is False
+
+
+@posix_rewrite
+def test_no_rewrite_text_carries_a_json_literal_or_unquoted_payload(home):
+    new = pre.decide(run_payload(cmd="git grep -n zzz -- README.md; New-Item x"), 4242)["overwrite"]["CommandLine"]
+    prefix, _, rest = new.partition("; git grep")
+    assert rest == " -n zzz -- README.md; New-Item x"
+    assert not any(tok in prefix for tok in ('{"', "false", "true", "null", "<stdin>"))
+    import shlex
+    shlex.split(prefix)
+
+
+def test_process_cmdline_reads_a_real_process():
+    line = REAL_CMDLINE(os.getpid())
+    assert line and ("python" in line.lower() or "pytest" in line.lower())

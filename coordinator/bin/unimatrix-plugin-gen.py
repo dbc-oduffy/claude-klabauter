@@ -295,6 +295,17 @@ import sys
 from pathlib import Path
 
 
+RESULT_KEYS = ("toolResult", "toolOutput", "toolResponse", "result", "output")
+
+
+def agy_event(p):
+    """The hook event of an agy tool payload: its own name, else PostToolUse when it carries a tool result."""
+    name = p.get("hookEventName") or p.get("hook_event_name")
+    if name:
+        return str(name)
+    return "PostToolUse" if any(k in p for k in RESULT_KEYS) else "PreToolUse"
+
+
 def to_claude(raw):
     """(payload bytes for the door, True) for an agy `toolCall` event, else (raw, False)."""
     try:
@@ -310,7 +321,7 @@ def to_claude(raw):
         name, args = "Bash", {"command": str(args.get("CommandLine") or "")}
     ws = p.get("workspacePaths")
     cwd = str(ws[0]) if isinstance(ws, list) and ws else p.get("cwd") if isinstance(p.get("cwd"), str) else ""
-    out = {"hook_event_name": p.get("hookEventName") or p.get("hook_event_name") or "PreToolUse",
+    out = {"hook_event_name": agy_event(p),
            "session_id": str(p.get("conversationId") or "") or None, "cwd": cwd or None,
            "tool_name": name, "tool_input": args}
     return json.dumps(out).encode("utf-8"), True
@@ -369,7 +380,7 @@ def main(argv):
         return rc
     if pass_2 and rc == 2:
         rc = 0
-    sys.stdout.write(json.dumps(to_agy(rc, out, err)))
+    sys.stdout.write("{}" if json.loads(payload)["hook_event_name"] == "PostToolUse" else json.dumps(to_agy(rc, out, err)))
     return 0
 
 

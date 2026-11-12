@@ -1957,9 +1957,9 @@
     "coordinator/bin/tests/test_tier_u_grant_cli.py": "548b1cad081eabf07f940fec5870dfaccf11ef35",
     "coordinator/bin/tests/test_timeout_is_not_absence.py": "3141c85e164a3730bc7fdab5a0d8325fbe560a3c",
     "coordinator/bin/tests/test_trim_file_cache_cli.py": "4089a31f06729a19932347d0584e0287974be761",
-    "coordinator/bin/tests/test_unimatrix_agy_hook.py": "ef6dd3fc106bb9a3c4665f0d95e8b507d0a31382",
+    "coordinator/bin/tests/test_unimatrix_agy_hook.py": "2ec0b73c74091e7cf0752f9bd289f063e34e11d4",
     "coordinator/bin/tests/test_unimatrix_agy_leg_win32.py": "1646b6c3541b7e3b0d0855707febaeaae746d771",
-    "coordinator/bin/tests/test_unimatrix_agy_plugin_gen.py": "fc62026325864bed05cf944127490cf79e1c9e55",
+    "coordinator/bin/tests/test_unimatrix_agy_plugin_gen.py": "3b29d70ca4c261b874b9ba43249ddc97a842f8d7",
     "coordinator/bin/tests/test_unimatrix_autolink.py": "5971068df06e8858337cef27549b627e1ba0f1a1",
     "coordinator/bin/tests/test_unimatrix_box_mux.py": "20dac0967b8ba4c264270382a500fdd458f82ff0",
     "coordinator/bin/tests/test_unimatrix_bridge_delivery.py": "78455e5fb70cd75de3e83377baa0e7d23f426a7b",
@@ -2067,7 +2067,7 @@
     "coordinator/bin/uhura-mode.ps1": "782ce6fe40f6eb5d3ad576dfd915e094fa324dfb",
     "coordinator/bin/uhura-mode.py": "9725ee90833cc79414e296e4354854ef96075cc5",
     "coordinator/bin/unimatrix-agy-hook-launch.py": "6481b82a90b56b627fcd17b87bce03b4522463e3",
-    "coordinator/bin/unimatrix-agy-hook-pretool.py": "8618df454bc4a873f470f8d9cd6e5f1d56343e84",
+    "coordinator/bin/unimatrix-agy-hook-pretool.py": "326b94bec5b17ce7b60f67908d41a864ec374c16",
     "coordinator/bin/unimatrix-agy-hook-sessionstart.py": "b3d11b7d99eeaa64446b1ba95a286a1a134de264",
     "coordinator/bin/unimatrix-agy-leg.py": "2e621d8531d7829cdb87a6ae2470fc5bcb49c8a8",
     "coordinator/bin/unimatrix-autolink.py": "0776c0c648f3ce0bff5c8a7e6822403f7b6beabb",
@@ -2093,7 +2093,7 @@
     "coordinator/bin/unimatrix-peer-contract.py": "107bd36b86d3f541c746fdceb992ea16a47b220a",
     "coordinator/bin/unimatrix-peer-grok.py": "518aaf09ab1afed909abd6e50a02728ae4147610",
     "coordinator/bin/unimatrix-peer-router.py": "54f9561d75c119a62f116939188be6317ca12ebf",
-    "coordinator/bin/unimatrix-plugin-gen.py": "cacd44dafd2b66ba2570e952bac9f123c20b2078",
+    "coordinator/bin/unimatrix-plugin-gen.py": "e4ab4e5cd9bb360bbc1660eecde3b10efba42142",
     "coordinator/bin/unimatrix-rekey.py": "0cc380ddf0e5b3767a6d9452d8f193cbc0f760dd",
     "coordinator/bin/unimatrix-relay.py": "c3ccad2eb0e62c5e45aa36bc72e66a76e151fc2d",
     "coordinator/bin/unimatrix-reshape.py": "4d7d16fce4a79ea205dfe1e62b06c53578f01eb0",
@@ -2430,8 +2430,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "1e45e0837f16a3c54540a2133d211304c1c06a42",
-    "coordinator_core/_engine_stamp": "29bdf1e4c55800ec1c9b2878aee66623acb906cc",
+    "coordinator_core/_engine_published_at": "dee6068423e05ccd686b6208927c2f2fb096385c",
+    "coordinator_core/_engine_stamp": "e813a1de3b39b2bc180b15148f17434c48c61131",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -11855,5 +11855,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "80925f69965d0b7747f9048e8a583008fb6e0d5f"
+  "source_head": "d8b8025ac9bdc46d367342476fc88f7309982996"
 }

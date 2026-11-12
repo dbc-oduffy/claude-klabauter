@@ -15,6 +15,9 @@ approves the exact command. Every other path also answers "ask": agy fails close
 invalid JSON, or a reply without `decision`, and "ask" keeps agy's own approval behaviour where
 "allow" would silently widen it.
 
+A headless agy (`-p`/`--print` on the agy ancestor's command line) gets no rewrite and no launcher
+spawn: the guard's answer passes through so agy's own permissions.allow decides.
+
 A leg is current only if it is alive, was started under this same agy process (the nearest agy ancestor of the hook; none found is never current),
 and its language server still accepts connections. An agy restart changes the token and port, so a
 leg that survives one is stale even though its pid is alive. A `pending` leg (started by SessionStart
@@ -134,6 +137,78 @@ def agy_ancestor_pid(read=None, start=None, max_depth=MAX_ANCESTOR_DEPTH):
     return None
 
 
+def _nt_cmdline(pid):
+    """Command line of a 64-bit Windows process read from its PEB (no subprocess); None on any failure."""
+    import ctypes
+    from ctypes import wintypes
+    if ctypes.sizeof(ctypes.c_void_p) != 8:
+        return None
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        nt = ctypes.WinDLL("ntdll")
+        k32.OpenProcess.restype = ctypes.c_void_p
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.ReadProcessMemory.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
+                                          ctypes.POINTER(ctypes.c_size_t)]
+        k32.CloseHandle.argtypes = [ctypes.c_void_p]
+        nt.NtQueryInformationProcess.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong,
+                                                 ctypes.POINTER(ctypes.c_ulong)]
+        handle = k32.OpenProcess(0x1010, False, pid)  # QUERY_INFORMATION | VM_READ
+        if not handle:
+            return None
+        try:
+            def read(addr, size):
+                buf = ctypes.create_string_buffer(size)
+                got = ctypes.c_size_t(0)
+                if not k32.ReadProcessMemory(handle, ctypes.c_void_p(addr), buf, size, ctypes.byref(got)):
+                    return None
+                return buf.raw[:got.value]
+
+            pbi = (ctypes.c_void_p * 6)()
+            if nt.NtQueryInformationProcess(handle, 0, pbi, ctypes.sizeof(pbi), None) != 0 or not pbi[1]:
+                return None
+            params = read(pbi[1] + 0x20, 8)  # PEB.ProcessParameters
+            if not params:
+                return None
+            ustr = read(int.from_bytes(params, "little") + 0x70, 16)  # RTL_USER_PROCESS_PARAMETERS.CommandLine
+            if not ustr:
+                return None
+            length, buf_addr = int.from_bytes(ustr[:2], "little"), int.from_bytes(ustr[8:16], "little")
+            text = read(buf_addr, length) if length and buf_addr else None
+            return text.decode("utf-16-le", "replace") if text else None
+        finally:
+            k32.CloseHandle(handle)
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
+def process_cmdline(pid):
+    """Space-joined command line of `pid`, or None when it cannot be read."""
+    if os.name == "nt":
+        return _nt_cmdline(pid)
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+        return raw.replace(b"\0", b" ").decode("utf-8", "replace").strip() or None
+    except OSError:
+        pass
+    try:
+        out = subprocess.run(["ps", "-o", "args=", "-p", str(pid)], capture_output=True, text=True, timeout=2)
+        return out.stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+PRINT_FLAG_RE = re.compile(r"\s(?:-p|--print)(?:[=\s]|$)")
+
+
+def agy_print_mode(agy_pid, read=None):
+    """True when the agy process runs headless (`-p`/`--print`). Unknown agy pid or unreadable line: False."""
+    if agy_pid is None:
+        return False
+    line = (read or process_cmdline)(agy_pid)
+    return bool(line and PRINT_FLAG_RE.search(" " + line))
+
+
 def pid_alive(pid):
     """True while `pid` runs. os.kill(pid, 0) means CTRL_C_EVENT on Windows, so ask the roster helper there."""
     if os.name == "nt":
@@ -239,6 +314,8 @@ def bootstrap_rewrite(payload, agy_pid):
     if (not isinstance(conv, str) or not CONV_RE.match(conv) or call.get("name") != "run_command"
             or not isinstance(cmd, str) or not cmd or leg_current(conv, agy_pid)):
         return None
+    if agy_print_mode(agy_pid):
+        return None  # a headless run keeps no leg; a rewrite would break the user's permissions.allow match
     prefix = launch_prefix(conv, agy_pid)
     if prefix is None:
         spawn_launcher(conv, agy_pid)

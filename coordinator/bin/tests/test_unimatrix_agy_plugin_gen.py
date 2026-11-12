@@ -617,6 +617,23 @@ def test_shim_agy_pass_2_allows_a_door_exit_2_and_quiet_drops_stderr(plugin, tmp
     assert rc == 0 and json.loads(out) == {"decision": "allow"} and err == ""
 
 
+@pytest.mark.parametrize("event", [
+    {"hookEventName": "PostToolUse", "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}},
+    {"toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}, "toolResult": {"exitCode": 0}},
+])
+def test_shim_posttooluse_reply_carries_no_decision_key(plugin, tmp_path, monkeypatch, capfd, event):
+    rc, out, _, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stdout.write('{}')\n", event=event)
+    assert rc == 0 and "decision" not in json.loads(out)
+    assert door_in["hook_event_name"] == "PostToolUse"
+    rc, out, _, _ = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stderr.write('x'); sys.exit(2)\n", event=event)
+    assert rc == 0 and json.loads(out) == {}
+
+
+def test_shim_pretooluse_reply_still_carries_a_decision(plugin, tmp_path, monkeypatch, capfd):
+    rc, out, _, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stdout.write('{}')\n")
+    assert json.loads(out) == {"decision": "allow"} and door_in["hook_event_name"] == "PreToolUse"
+
+
 def test_shim_keeps_a_claude_shaped_payload_and_its_empty_verdict_unchanged(plugin, tmp_path, monkeypatch, capfd):
     ev = {"tool_name": "Bash", "tool_input": {"command": "coordinator-invoke x"}, "cwd": "C:\\coordinator-content-repo"}
     rc, out, _, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stdout.write('{}')\n", event=ev)
