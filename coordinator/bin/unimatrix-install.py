@@ -1495,13 +1495,16 @@ def _refuse_real_agent_dir(root):
         raise guard.TestHomeRefusal("login_agent_dir", root) from None
 
 
-def register_login_agent(dest_dir, agent_dir=None, schtasks=None):
+def register_login_agent(dest_dir, agent_dir=None, schtasks=None, launchctl=None, uid=None):
     """Register one run-once-at-login agent for the installed autolink; return (state, where).
 
     state is "created", "updated" or "present" (plist / systemd unit), "registered" (Windows HKCU Run value,
     needs no elevation; overwritten in place and any legacy scheduled task removed), or "skipped"
     (no login-agent mechanism here, or the registry write failed).
-    Plain file writes on macOS and Linux: picked up at next login, no process spawned.
+    Plain file writes on macOS and Linux, picked up at next login. On macOS an "updated" plist whose label is
+    loaded is booted out and bootstrapped again: launchd keeps running the old ProgramArguments until logout,
+    and an interpreter swap there leaves the job on a binary without the Local Network grant ("No route to
+    host" from the agent while every ssh-session context links).
     """
     if sys.platform == "win32":
         wr = _winreg()
@@ -1529,7 +1532,23 @@ def register_login_agent(dest_dir, agent_dir=None, schtasks=None):
     if sys.platform != "darwin" and not link.is_symlink():
         link.parent.mkdir(parents=True, exist_ok=True)
         link.symlink_to(f"../{LOGIN_UNIT}")
+    # A caller-chosen agent_dir with the real launchctl would boot out this box's live agent: reload only
+    # the OS agent dir, or under an injected launchctl.
+    if sys.platform == "darwin" and state == "updated" and (launchctl or not agent_dir):
+        state = _reload_login_agent(target, launchctl, uid)
     return state, str(target)
+
+
+def _reload_login_agent(target, launchctl=None, uid=None):
+    """Reload a loaded agent so launchd runs the plist now on disk; "updated" when nothing was loaded."""
+    run = launchctl or run_launchctl
+    domain = f"gui/{uid if uid is not None else os.getuid()}"
+    loaded = run("print", f"{domain}/{LOGIN_AGENT_LABEL}")
+    if loaded is None or loaded.returncode != 0:
+        return "updated"
+    run("bootout", f"{domain}/{LOGIN_AGENT_LABEL}")
+    boot = run("bootstrap", domain, str(target))
+    return "updated and reloaded" if boot is not None and boot.returncode == 0 else "updated, reload FAILED"
 
 
 def unregister_login_agent(agent_dir=None, schtasks=None):
@@ -2202,7 +2221,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         print(f"PARTIAL INSTALL: not installed: {', '.join(missing)}", file=out)
         rc = rc or 7
     try:
-        state, where = register_login_agent(dest, agent_dir, schtasks)
+        state, where = register_login_agent(dest, agent_dir, schtasks, launchctl)
         print(f"login agent {state}: {where}" if state != "skipped" else f"WARN: login agent not registered: {where}", file=out)
     except OSError as exc:
         print(f"WARN: login agent not registered: {exc}", file=out)

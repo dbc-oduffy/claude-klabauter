@@ -2755,3 +2755,44 @@ def test_every_lib_module_an_installed_script_loads_by_path_is_vendored():
 def test_install_scripts_copies_the_pair_contract(tmp_path):
     ui.install_scripts(ui._BIN_DIR, tmp_path)
     assert (tmp_path / "lib" / "unimatrix_pair_contract.py").is_file()
+
+
+def _launchctl_recorder(loaded=True):
+    calls = []
+
+    def run(*args):
+        calls.append(args)
+        rc = 0 if (args[0] != "print" or loaded) else 113
+        return subprocess.CompletedProcess(["launchctl", *args], rc, "", "")
+    return calls, run
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="launchd only")
+def test_updated_plist_reloads_the_loaded_agent(tmp_path):
+    # launchd keeps the old ProgramArguments until logout: the Mini's agent ran python3.15 for hours
+    # after the plist named pyenv 3.13, and only the stale binary lacked the Local Network grant.
+    (tmp_path / f"{ui.LOGIN_AGENT_LABEL}.plist").write_bytes(b"stale")
+    calls, run = _launchctl_recorder(loaded=True)
+    state, where = ui.register_login_agent(tmp_path, tmp_path, launchctl=run, uid=501)
+    assert state == "updated and reloaded"
+    assert [c[0] for c in calls] == ["print", "bootout", "bootstrap"]
+    assert calls[2] == ("bootstrap", "gui/501", where)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="launchd only")
+def test_unchanged_or_unloaded_agent_is_not_reloaded(tmp_path):
+    calls, run = _launchctl_recorder(loaded=True)
+    ui.register_login_agent(tmp_path, tmp_path, launchctl=run, uid=501)
+    assert ui.register_login_agent(tmp_path, tmp_path, launchctl=run, uid=501)[0] == "present"
+    assert calls == []
+    (tmp_path / f"{ui.LOGIN_AGENT_LABEL}.plist").write_bytes(b"stale")
+    calls2, run2 = _launchctl_recorder(loaded=False)
+    assert ui.register_login_agent(tmp_path, tmp_path, launchctl=run2, uid=501)[0] == "updated"
+    assert [c[0] for c in calls2] == ["print"]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="launchd only")
+def test_custom_agent_dir_without_injected_launchctl_never_touches_launchd(tmp_path, monkeypatch):
+    (tmp_path / f"{ui.LOGIN_AGENT_LABEL}.plist").write_bytes(b"stale")
+    monkeypatch.setattr(ui, "run_launchctl", lambda *a: pytest.fail(f"real launchctl called: {a}"))
+    assert ui.register_login_agent(tmp_path, tmp_path)[0] == "updated"
