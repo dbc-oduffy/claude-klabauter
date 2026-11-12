@@ -50,8 +50,15 @@ def test_cwd_decoy_engine_cannot_shadow_the_stamped_engine(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     root, imported, has_claim_writer = proc.stdout.split("\n")[:3]
-    assert Path(root).resolve() == _REPO.resolve()
-    assert Path(imported).resolve().is_relative_to(_REPO.resolve())
+    # The dispatch gate may redirect a source checkout to its published twin
+    # (DR-326), so the stamped engine is whatever root the seam reports -- not
+    # necessarily _REPO. The invariant is that the cwd decoy never wins.
+    assert not Path(root).resolve().is_relative_to(tmp_path.resolve())
+    # cc_invoke may already have bound coordinator_core from the source checkout
+    # (the accepted source-twin pair), so the import may sit under _REPO or root.
+    imported_path = Path(imported).resolve()
+    assert not imported_path.is_relative_to(decoy.parent.resolve())
+    assert imported_path.is_relative_to(Path(root).resolve()) or imported_path.is_relative_to(_REPO.resolve())
     assert has_claim_writer == "True"
 
 

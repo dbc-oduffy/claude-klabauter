@@ -198,8 +198,12 @@ class FullCliSizingExitCriterionTest(unittest.TestCase):
                 **_NO_CONSOLE,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertTrue(out_path.exists())
-            fields = yaml.safe_load(out_path.read_text())
+            # A flat `--out` under a sharded tree lands in its month shard; the CLI
+            # prints the path it actually wrote as the first stdout line.
+            written = Path(result.stdout.splitlines()[0].strip())
+            self.assertEqual(written.name, out_path.name)
+            self.assertTrue(written.exists())
+            fields = yaml.safe_load(written.read_text())
             self.assertEqual(
                 fields.get("exit_criterion"), {"statement": "S", "accepted": None}
             )

@@ -492,6 +492,14 @@ def test_a_forced_interpreter_other_than_autolinks_pinned_one_is_a_split(box, tm
     assert "unimatrix-install.py --install" in split[0]
 
 
+def test_the_installs_rewrite_clears_the_split_the_doctor_reports(box, tmp_path):
+    pinned = box.al.pinned_python(box.al._roster())
+    _forced(box, tmp_path / "pyenv" / "python3")
+    assert "interpreter split" in box.main(platform="linux")[1]
+    assert load("unimatrix-install").rewrite_forced_interpreters(box.ak, pinned) == 1
+    assert "interpreter split" not in box.main(platform="linux")[1]
+
+
 def test_a_forced_interpreter_equal_to_the_pinned_one_or_a_bare_name_is_no_split(box):
     _forced(box, box.al.pinned_python(box.al._roster()))
     assert "interpreter split" not in box.main(platform="linux")[1]

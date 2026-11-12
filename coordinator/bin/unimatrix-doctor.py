@@ -299,7 +299,7 @@ def interpreter_split_problems(ctx):
     def same(a, b):
         return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
 
-    return [f"interpreter split: authorized_keys forces {interp} but autolink and mirror-all run {pinned}; {REMEDY_INSTALL}"
+    return [f"interpreter split: authorized_keys forces {interp} but autolink and mirror-all run {pinned}; {REMEDY_INSTALL} (it rewrites the forced interpreter in the local authorized_keys)"
             for interp in dict.fromkeys(forced) if not same(interp, pinned)]
 
 

@@ -163,10 +163,13 @@ class TestPlanTemplateEmitsLiveDispositionVocabulary(unittest.TestCase):
         # 3.22.0 -> 3.23.0 (900eac166a) re-looked: optional `premise_close`; a
         # wont_do row carrying it is exempt from the legacy pm_approved rule;
         # no row-level `required` delta.
+        # 3.23.0 -> 3.24.0 (086111d644) re-looked: optional boolean
+        # `expect_partial`, and `register_rows` loses `minItems: 1` (a pure
+        # loosening); no row-level `required` delta.
         # Two optional properties landed with no version bump: `disjoint_parallel`
         # (aa613642fd) and `em_run` (29de62970c); no row-level `required` delta.
         # Equality, never a range -- see the docstring note.
-        self.assertEqual(schema.get("x-schema-version"), "3.23.0")
+        self.assertEqual(schema.get("x-schema-version"), "3.24.0")
         for row in rows:
             jsonschema.validate(instance=row, schema=schema)
 

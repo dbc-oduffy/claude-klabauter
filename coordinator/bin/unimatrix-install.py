@@ -59,6 +59,8 @@ VENDORED_SCRIPTS = (
     "unimatrix-file.py",
     "unimatrix-file-relay.py",
     "unimatrix-passphrase.py",
+    "unimatrix-control.py",
+    "headless-em-launch.py",
 )
 
 AUTOLINK_SCRIPT = "unimatrix-autolink.py"
@@ -300,7 +302,7 @@ def _copy_if_changed(src, dst):
     shutil.copy2(src, dst)
 
 
-VENDORED_LIB = ("python_interp.py", "unimatrix_box_mux.py", "unimatrix_relay_sessions.py")  # sibling lib/ modules the installed scripts load by path
+VENDORED_LIB = ("python_interp.py", "unimatrix_box_mux.py", "unimatrix_relay_sessions.py", "session_detach.py")  # sibling lib/ modules the installed scripts load by path
 
 
 def _lib(name):
@@ -340,17 +342,21 @@ def forced_command_interpreter(pin_value=_PIN_UNREAD):
     return _lib("python_interp").unimatrix_python(pin_value, homebrew=HOMEBREW_PYTHONS) or sys.executable
 
 
-def authorized_keys_line(dest_dir, interpreter=None, key_body="<key-body>", file_peer=None):
+def authorized_keys_line(dest_dir, interpreter=None, key_body="<key-body>", file_peer=None, control=False):
     """Paste-ready `restrict,command=...` authorized_keys line; `key_body` defaults to the <key-body> placeholder.
     A path with a space is quoted inside the command and each inner quote escaped for sshd.
     `file_peer` (the calling box) makes it the file key's line: the separate unimatrix-file-relay.py
-    forced command with a fixed `--peer <box>`."""
+    forced command with a fixed `--peer <box>`. `control` makes it the control key's line: the separate
+    unimatrix-control.py forced command (launch/wake only), comment `unimatrix-control`."""
+    if control and file_peer is not None:
+        raise ValueError("a key is the control key or the file key, not both")
     interp = interpreter or forced_command_interpreter()
-    relay = str(Path(dest_dir) / ("unimatrix-file-relay.py" if file_peer is not None else "unimatrix-relay.py"))
-    parts = [f'\\"{p}\\"' if " " in p else p for p in (interp, relay)]
+    script = "unimatrix-control.py" if control else (
+        "unimatrix-file-relay.py" if file_peer is not None else "unimatrix-relay.py")
+    parts = [f'\\"{p}\\"' if " " in p else p for p in (interp, str(Path(dest_dir) / script))]
     if file_peer is not None:
         parts += ["--peer", file_peer]
-    return f'restrict,command="{" ".join(parts)}" ssh-ed25519 {key_body} unimatrix'
+    return f'restrict,command="{" ".join(parts)}" ssh-ed25519 {key_body} {"unimatrix-control" if control else "unimatrix"}'
 
 
 FAR_DEST_DIR = "~/.coordinator-claude-settings/unimatrix"
@@ -514,12 +520,33 @@ def file_key(run=subprocess.run, unencrypted=False, remint=False, on_mint=None):
     return priv, f"ssh-ed25519 {body}", fp.stdout.split()[1]
 
 
-def render_ssh_config_block(alias, key_path):
+CONTROL_ALIAS_PREFIX = "unimatrix-control-"
+
+
+def control_key(box, run=subprocess.run, unencrypted=False, remint=False, on_mint=None):
+    """(private key path, public key body) of this box's control key for far box `box`, minted at
+    ~/.ssh/unimatrix_control_<box> when absent; never overwrites (bar `remint`) and never touches the relay or file key.
+    RuntimeError when `box` has no usable characters, the mint fails, or the public key is unreadable;
+    PassphraseSourceMissing / OnePasswordLocked (RuntimeError) when the passphrase source cannot be reached."""
+    safe = _ALIAS_UNSAFE.sub("-", box)
+    if not safe.strip("-"):
+        raise RuntimeError(f"box {box!r} has no usable characters for a key file name")
+    priv = Path.home() / ".ssh" / f"unimatrix_control_{safe}"
+    if remint or not priv.is_file():
+        _mint(priv, "unimatrix-control", run, unencrypted, remint, on_mint)
+    pub = Path(str(priv) + ".pub")
+    if not pub.is_file():
+        raise RuntimeError(f"{pub} is missing; cannot read the public key of {priv}")
+    return priv, _pub_body(pub)
+
+
+def render_ssh_config_block(alias, key_path, host_alias=None):
     """The near-side `~/.ssh/config` block for the pair; printed, never written. The peer is named by
-    hostname (`<name>.local` unless the name is already dotted), never an IP literal."""
+    hostname (`<name>.local` unless the name is already dotted), never an IP literal. `host_alias` names the
+    `Host` entry when it differs from the peer (the control key's `unimatrix-control-<box>`)."""
     name = alias.rsplit("@", 1)[-1]
     host = name if "." in name else f"{name}.local"
-    return (f"Host {alias}\n"
+    return (f"Host {host_alias or alias}\n"
             f"    HostName {host}\n"
             f"    AddressFamily inet\n"
             f"    IdentityFile {Path(key_path).as_posix()}\n"
@@ -579,16 +606,17 @@ def probe_far(alias, run=subprocess.run):
     return None
 
 
-def install_over_link(alias, body, run=subprocess.run):
+def install_over_link(alias, body, run=subprocess.run, control=False):
     """Append the pair's authorized_keys line on the far box over an already-authorized BatchMode link.
     Returns (status, line): status is added | present | admin | no-link | failed; `line` is the line with the far
-    box's own interpreter and relay directory (None for no-link). Never prompts, never sudo, never the relay key."""
+    box's own interpreter and relay directory (None for no-link); `control` makes it the control key's line.
+    Never prompts, never sudo, never the relay key."""
     far = probe_far(alias, run)
     if far is None:
         return "no-link", None
     py, plat, interp, home = far
     join = ntpath.join if plat == "win32" else posixpath.join
-    line = authorized_keys_line(join(home, "unimatrix"), interp, body)
+    line = authorized_keys_line(join(home, "unimatrix"), interp, body, control=control)
     try:
         r = _ssh_batch(alias, py, _APPEND_PROGRAM.format(body=body, line=line), run)
     except (OSError, subprocess.SubprocessError):
@@ -596,6 +624,47 @@ def install_over_link(alias, body, run=subprocess.run):
     out = (r.stdout or "").strip().splitlines()
     status = out[-1] if r.returncode == 0 and out else ""
     return (status if status in ("added", "present", "admin") else "failed"), line
+
+
+_RELAY_FORCED_SCRIPT = "unimatrix-relay.py"
+_FORCED_COMMAND = re.compile(r'command="((?:\\"|[^"])*)"')
+_FORCED_INTERP = re.compile(r'^(\s*)(\\"(.*?)\\"|\S+)')
+
+
+def _same_interpreter(a, b):
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def rewrite_forced_interpreters(path, interpreter):
+    """Rewrite, in the local authorized_keys at `path`, the absolute interpreter of every uncommented line forcing
+    unimatrix-relay.py that names a different interpreter than `interpreter` (compared by realpath + normcase).
+    Key body, options, other lines, line endings and file mode are untouched; a bare interpreter is never judged.
+    Returns the number of lines rewritten (0 when the file is absent or unreadable)."""
+    path = Path(path).resolve()
+    try:
+        text = path.read_text(encoding="utf-8", newline="")
+    except OSError:
+        return 0
+    token = f'\\"{interpreter}\\"' if " " in interpreter else interpreter
+    changed = 0
+    lines = []
+    for line in text.splitlines(keepends=True):
+        m = _FORCED_COMMAND.search(line)
+        if m and not line.lstrip().startswith("#") and _RELAY_FORCED_SCRIPT in line:
+            im = _FORCED_INTERP.match(m.group(1))
+            old = im and (im.group(3) if im.group(3) is not None else im.group(2))
+            if old and (os.path.isabs(old) or old.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", old)) \
+                    and not _same_interpreter(old, interpreter):
+                inner = m.group(1)[:im.start(2)] + token + m.group(1)[im.end(2):]
+                line = line[:m.start(1)] + inner + line[m.end(1):]
+                changed += 1
+        lines.append(line)
+    if changed:
+        tmp = path.with_name(path.name + ".unimatrix-tmp")
+        tmp.write_text("".join(lines), encoding="utf-8", newline="")
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    return changed
 
 
 def agy_hooks_path():
@@ -1783,8 +1852,9 @@ def trust_codex_hook(hooks_path, timeout=30):
 def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
          codex_hooks=None, codex_trust=None, codex_rules=None, agy_rules=None, codex_exec_rule=None,
          agy_skills_json=None, codex_skills=None, agent_dir=None, schtasks=None, pair_run=None,
-         router_live=None, restart_router=None, launchctl=None, relay_ps=None, relay_kill=None):
-    """`launchctl` (argv tail -> CompletedProcess), `relay_ps` (() -> ps text) and `relay_kill` (pid -> None)
+         router_live=None, restart_router=None, launchctl=None, relay_ps=None, relay_kill=None, authorized_keys=None):
+    """`authorized_keys` overrides the local file whose stale forced-command interpreters --install rewrites;
+    an overridden `hooks_path` otherwise skips it. `launchctl` (argv tail -> CompletedProcess), `relay_ps` (() -> ps text) and `relay_kill` (pid -> None)
     replace the real launchctl, `ps` and SIGTERM, which an overridden `hooks_path` otherwise skips.
     `router_live(dest) -> bool` and `restart_router(dest, say) -> dict` replace the installed autolink's
     router check and restart. `hooks_path` overrides agy's file. Codex's file defaults to codex_hooks_path(), or to a sibling
@@ -1841,9 +1911,12 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
                     "authorized_keys line and ssh config block")
     ap.add_argument("--file-key", action="store_true", help="mint (or read) this box's file-transfer key, "
                     "separate from the relay key, and print its public line and fingerprint for the membership signer")
-    ap.add_argument("--unencrypted-key", action="store_true", help="with --pair or --file-key: mint the private key "
+    ap.add_argument("--control-key", metavar="BOX", help="mint or read the control key for a far box "
+                    "(~/.ssh/unimatrix_control_<BOX>) and print its authorized_keys line and the "
+                    f"{CONTROL_ALIAS_PREFIX}<BOX> ssh config block; the control key can only launch or wake a session")
+    ap.add_argument("--unencrypted-key", action="store_true", help="with --pair, --file-key or --control-key: mint the private key "
                     "without a passphrase (for boxes with no 1Password); the default mint is passphrase-encrypted")
-    ap.add_argument("--remint", action="store_true", help="with --pair or --file-key: delete the existing private "
+    ap.add_argument("--remint", action="store_true", help="with --pair, --file-key or --control-key: delete the existing private "
                     "key, its .pub and its 1Password passphrase item, then mint anew")
     ap.add_argument("--plugin-root", metavar="DIR", help="seed Codex and agy doctrine and skills from this plugin "
                     "root (doctrine in DIR.parent or DIR, skills in DIR/skills) instead of this script's own location")
@@ -1861,6 +1934,32 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             return 6
         print(f"file key: {priv}\nfingerprint: {fp}\n"
               f"file_pub (give to the membership signer; verify the fingerprint there): {pub_line}", file=out)
+        return 0
+    if args.control_key is not None:
+        try:
+            priv, body = control_key(args.control_key, run=pair_run or subprocess.run, unencrypted=args.unencrypted_key,
+                                     remint=args.remint, on_mint=lambda ref: print(
+                                         f"minted a passphrase-encrypted private key\npassphrase: {ref}", file=out))
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
+            print(f"REFUSE: {exc}", file=out)
+            return 6
+        print(f"control key for {args.control_key}: {priv}", file=out)
+        print("ssh config block for this box (add to ~/.ssh/config):", file=out)
+        print(render_ssh_config_block(args.control_key, priv, host_alias=f"{CONTROL_ALIAS_PREFIX}{args.control_key}"),
+              file=out)
+        status, line = install_over_link(args.control_key, body, run=pair_run or subprocess.run, control=True)
+        if status == "no-link":
+            print(f"no authorized link to {args.control_key}: paste on the far box (interpreter and path are "
+                  f"placeholders: {FAR_INTERPRETER} and {FAR_DEST_DIR}; use the far box's absolute ones):\n"
+                  f"{authorized_keys_line(FAR_DEST_DIR, FAR_INTERPRETER, body, control=True)}", file=out)
+        elif status == "failed":
+            print(f"install over the link to {args.control_key} failed: paste this line on the far box:\n{line}", file=out)
+        elif status == "admin":
+            print(f"{args.control_key} is a Windows administrator account: nothing written. Append this line to "
+                  f"%ProgramData%\\ssh\\administrators_authorized_keys on the far box:\n{line}", file=out)
+        else:
+            print(f"authorized_keys line {'already present' if status == 'present' else 'added'} on {args.control_key}; "
+                  f"line:\n{line}", file=out)
         return 0
     if args.pair is not None:
         try:
@@ -1984,6 +2083,16 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         print(f"relay sessions reaped: {len(stale)} orphaned, {len(mismatched)} on replaced code"
               + (f"; could not signal pid {', '.join(map(str, failed))}" if failed else ""), file=out)
     restart_failed = False
+    if authorized_keys is None and hooks_path is None:
+        authorized_keys = Path.home() / ".ssh" / "authorized_keys"
+    if authorized_keys is not None:
+        try:
+            rewrote = rewrite_forced_interpreters(authorized_keys, forced_command_interpreter())
+        except OSError as exc:
+            rewrote = 0
+            print(f"WARN: authorized_keys forced-command interpreters not rewritten: {exc}", file=out)
+        if rewrote:
+            print(f"authorized_keys: {rewrote} forced-command interpreter(s) rewritten to {forced_command_interpreter()}", file=out)
     router_live = router_live or router_is_live
     if router_live(dest) and (digest_before != router_closure_digest(dest)
                               or not (dest / "router" / "router.pid.json").is_file()):
@@ -1997,6 +2106,8 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
           f"{authorized_keys_line(dest)}", file=out)
     print(f"authorized_keys line for the far side's file key (fill <key-body> and <box>, this box's name): "
           f"{authorized_keys_line(dest, file_peer='<box>')}", file=out)
+    print(f"authorized_keys line for the far side's control key (launch/wake only; fill <key-body>): "
+          f"{authorized_keys_line(dest, control=True)}", file=out)
     engine_root, provenance = resolve_engine_root()
     hp = Path(hooks_path) if hooks_path else agy_hooks_path()
     if want_agy:

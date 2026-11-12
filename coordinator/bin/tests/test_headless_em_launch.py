@@ -42,7 +42,10 @@ def _fire(monkeypatch, child_env):
     return authority.require_fire_authority("s.py", None, cwd=None, native=True, backend="codex")
 
 
-@pytest.mark.parametrize("family", hel.FAMILIES)
+EXEC_FAMILIES = tuple(f for f in hel.FAMILIES if f != "claude")
+
+
+@pytest.mark.parametrize("family", EXEC_FAMILIES)
 def test_launched_em_passes_require_fire_authority(family, monkeypatch):
     rc, calls, env = _run(family, extra=["-m", "x"])
     assert rc == 0
@@ -91,7 +94,7 @@ def test_missing_cli_exits_127_and_writes_no_grant(home):
 
 
 def test_unknown_family_refused(home):
-    rc, calls, _ = _run("claude")
+    rc, calls, _ = _run("gemini")
     assert rc == hel.REFUSED and not calls and not (home / "state").exists()
 
 
@@ -119,7 +122,8 @@ def _win_prepare(family, which, capsys, **kw):
 @pytest.mark.parametrize("family", hel.FAMILIES)
 def test_windows_native_exe_on_path_used_as_is(family, capsys):
     rc, out = _win_prepare(family, lambda n: f"pathbin/{n}" if n.endswith(".exe") else None, capsys)
-    assert rc == 0 and json.loads(out.out)["argv"] == [f"pathbin/{family}.exe"]
+    tail = ["--bg"] if family == "claude" else []
+    assert rc == 0 and json.loads(out.out)["argv"] == [f"pathbin/{family}.exe", *tail]
 
 
 def test_windows_codex_cmd_shim_maps_to_native_exe(tmp_path, capsys):
@@ -224,3 +228,78 @@ def test_non_windows_codex_launch_leaves_the_env_without_a_path_change(tmp_path)
     env, inherited, *_ = _pwsh_env(tmp_path)
     rc, calls, env = _run("codex", env=env)
     assert rc == 0 and env["Path"] == inherited and "PATH" not in env
+
+
+class _Done:
+    def __init__(self, stdout="", returncode=0, stderr=""):
+        self.stdout, self.returncode, self.stderr = stdout, returncode, stderr
+
+
+def _bg(platform, capsys, stdout="started 1a2b3c4d\n", returncode=0, **kw):
+    seen = []
+
+    def runner(argv, **k):
+        seen.append((argv, k))
+        return _Done(stdout, returncode)
+
+    execs = []
+    rc = hel.launch("claude", [], which=lambda n: "claude.exe" if platform == "win32" else "/bin/claude",
+                    execv=lambda *a: execs.append(a), environ={}, platform=platform, runner=runner,
+                    cwd="/repo", **kw)
+    out = capsys.readouterr()
+    assert not execs
+    return rc, seen, out
+
+
+def test_claude_grant_is_accepted():
+    """write_headless_em_grant accepts claude and the grant matches."""
+    token = g.write_headless_em_grant("s1", "claude")
+    assert g.headless_em_grant_matches({g.HEADLESS_EM_TOKEN_ENV: token}, "s1", "claude")
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_claude_launch_runs_bg_with_name_and_returns_printed_id(platform, capsys):
+    rc, seen, out = _bg(platform, capsys, name="fleet-a")
+    (argv, kw), = seen
+    assert rc == 0
+    assert argv[1:] == ["--bg", "-n", "fleet-a"]
+    assert kw["cwd"] == "/repo" and kw["capture_output"] is True and kw["timeout"] == hel.BG_TIMEOUT_S
+    assert g.headless_em_grant_matches(kw["env"], kw["env"][hel.SESSION_ENV], "claude")
+    assert json.loads(out.out) == {"name": "fleet-a", "id": "1a2b3c4d", "session_id": kw["env"][hel.SESSION_ENV]}
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_claude_resume_runs_bg_resume_id(platform, capsys):
+    rc, seen, out = _bg(platform, capsys, resume="1a2b3c4d")
+    assert rc == 0 and seen[0][0][1:] == ["--bg", "--resume", "1a2b3c4d"]
+    assert json.loads(out.out)["id"] == "1a2b3c4d"
+
+
+def test_claude_uuid_id_is_returned(capsys):
+    uid = "0b6f8a52-1c3d-4e5f-8a9b-0c1d2e3f4a5b"
+    rc, _, out = _bg("linux", capsys, stdout=f"session {uid}\n", name="n")
+    assert rc == 0 and json.loads(out.out)["id"] == uid
+
+
+@pytest.mark.parametrize("kw", [{"stdout": "no id here\n"}, {"returncode": 1}])
+def test_claude_bg_failure_or_missing_id_is_refused(kw, capsys):
+    rc, _, out = _bg("linux", capsys, name="n", **kw)
+    assert rc == hel.REFUSED and out.out == ""
+
+
+def test_name_on_non_claude_family_refused(home):
+    rc, calls, _ = _run("codex", name="x")
+    assert rc == hel.REFUSED and not calls and not (home / "state").exists()
+
+
+def test_windows_non_claude_exec_still_refused(home):
+    rc, calls, env = _run("grok", platform="win32")
+    assert rc == hel.REFUSED and not calls and not (home / "state").exists()
+
+
+def test_main_forwards_name_resume_cwd(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(hel, "launch", lambda family, extra, **k: seen.update(k, family=family) or 0)
+    assert hel.main(["claude", "--name", "n1", "--cwd", "/r"]) == 0
+    assert seen["name"] == "n1" and seen["cwd"] == "/r" and seen["resume"] is None
+    assert hel.main(["claude", "--resume", "abc123"]) == 0 and seen["resume"] == "abc123"

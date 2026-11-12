@@ -49,6 +49,19 @@ def _doctrine_beside_plugin(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_home_authorized_keys(monkeypatch, tmp_path):
+    # --install rewrites ~/.ssh/authorized_keys by default: an unisolated test is redirected to a scratch file.
+    real = (Path.home() / ".ssh" / "authorized_keys").resolve()
+    scratch = tmp_path / "autouse-authorized_keys"
+    original = ui.rewrite_forced_interpreters
+
+    def guarded(path, interpreter):
+        return original(scratch if Path(path).resolve() == real else path, interpreter)
+
+    monkeypatch.setattr(ui, "rewrite_forced_interpreters", guarded)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_scheduler(monkeypatch):
     monkeypatch.setattr(ui, "run_schtasks", lambda *a: None)
     fake = _FakeWinreg()
@@ -112,7 +125,10 @@ def test_range_constant_and_scripts():
         "unimatrix-file.py",
         "unimatrix-file-relay.py",
         "unimatrix-passphrase.py",
+        "unimatrix-control.py",
+        "headless-em-launch.py",
     )
+    assert "session_detach.py" in ui.VENDORED_LIB
 
 
 def test_publish_list_names_the_membership_scripts():
@@ -2594,3 +2610,126 @@ def test_ssh_config_block_names_the_peer_by_hostname_never_an_ip(alias, host):
     assert "    AddressFamily inet\n" in block
     assert "<address" not in block
     assert f"Host {alias}\n" in block
+
+
+def test_control_line_names_the_control_script_and_comment():
+    line = ui.authorized_keys_line("/home/me/unimatrix", "/usr/bin/python3", "KB", control=True)
+    assert line == 'restrict,command="/usr/bin/python3 /home/me/unimatrix/unimatrix-control.py" ssh-ed25519 KB unimatrix-control'  # abs-path-ok: synthetic line, never opened
+    assert "unimatrix-relay.py" not in line and "--peer" not in line
+    with pytest.raises(ValueError):
+        ui.authorized_keys_line("/d", "/p", control=True, file_peer="b")
+
+
+def test_default_install_prints_a_control_key_line_after_the_relay_and_file_lines(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    dest = tmp_path / "home" / "unimatrix"
+    rc, out = _run(["--install"], "2.1.316", dest, tmp_path / "gemini" / "hooks.json")
+    assert rc == 0
+    lines = [l for l in out.splitlines() if "restrict,command=" in l]
+    assert len(lines) == 3 and "unimatrix-relay.py" in lines[0] and "unimatrix-file-relay.py" in lines[1]
+    assert f"{dest / 'unimatrix-control.py'}\" ssh-ed25519" in lines[2] and lines[2].endswith(" unimatrix-control")
+    assert {"unimatrix-control.py", "headless-em-launch.py"} <= {p.name for p in dest.iterdir()}
+
+
+def test_install_vendors_session_detach_beside_the_launch_chain(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    (tmp_path / "src" / "lib").mkdir()
+    (tmp_path / "src" / "lib" / "session_detach.py").write_text("# stub\n", encoding="utf-8")
+    dest = tmp_path / "home" / "unimatrix"
+    rc, _ = _run(["--install"], "2.1.316", dest, tmp_path / "gemini" / "hooks.json")
+    assert rc == 0 and (dest / "lib" / "session_detach.py").is_file()
+
+
+def test_control_key_mints_beside_ssh_and_prints_alias_block_and_control_line(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    fake_home = tmp_path / "userhome"
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+    buf = io.StringIO()
+    box = _PairBox()
+    assert ui.main(["--control-key", "machine-a", "--unencrypted-key"], out=buf, pair_run=box) == 0
+    text = buf.getvalue()
+    key = fake_home / ".ssh" / "unimatrix_control_machine_a"
+    assert key.is_file() and f"control key for machine-a: {key}" in text
+    assert "Host unimatrix-control-machine-a\n" in text and "    HostName machine-a.local\n" in text
+    assert any(l.startswith('restrict,command="') and "unimatrix-control.py" in l
+               and l.endswith("ssh-ed25519 AAAAPAIRBODY unimatrix-control") for l in text.splitlines())
+    assert not [c for c in box.calls if c[0] != "ssh" and "unimatrix.keys" in " ".join(c)]
+
+
+def test_control_install_over_link_writes_the_control_line(monkeypatch, tmp_path):
+    far = tmp_path / "far"
+    far.mkdir()
+    status, line = ui.install_over_link("x", "AAAAPAIRBODY", run=_FarBox(far), control=True)
+    assert status == "added" and line.endswith(" unimatrix-control") and "unimatrix-control.py" in line
+    assert (far / ".ssh" / "authorized_keys").read_text(encoding="utf-8") == line + "\n"
+
+
+def test_control_key_never_overwrites_and_refuses_an_empty_box(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    fake_home = tmp_path / "userhome"
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+    key = fake_home / ".ssh" / "unimatrix_control_x"
+    key.parent.mkdir(parents=True)
+    key.write_text("MINE", encoding="utf-8")
+    Path(str(key) + ".pub").write_text("ssh-ed25519 EXISTINGBODY c\n", encoding="utf-8")
+    box = _PairBox()
+    assert ui.control_key("x", run=box) == (key, "EXISTINGBODY")
+    assert key.read_text(encoding="utf-8") == "MINE" and not [c for c in box.calls if c[0] == "ssh-keygen"]
+    with pytest.raises(RuntimeError):
+        ui.control_key("///", run=box)
+
+
+_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabcdefgh unimatrix"
+
+
+def _install_with_keys(monkeypatch, tmp_path, text):
+    _stub_src(monkeypatch, tmp_path)
+    keys = tmp_path / "ssh" / "authorized_keys"
+    keys.parent.mkdir()
+    keys.write_bytes(text.encode("utf-8"))
+    keys.chmod(0o640)
+    buf = io.StringIO()
+    rc = ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "home" / "unimatrix", out=buf,
+                 hooks_path=tmp_path / "gemini" / "hooks.json", authorized_keys=keys)
+    return rc, buf.getvalue(), keys
+
+
+def test_install_rewrites_a_stale_forced_interpreter_and_only_that(monkeypatch, tmp_path):
+    new = ui.forced_command_interpreter()
+    stale = tmp_path / "stale" / "python3"
+    other = f'restrict,command="{stale} /d/unimatrix-file-relay.py --peer b" {_KEY}'
+    commented = f'# restrict,command="{stale} /d/unimatrix-relay.py" {_KEY}'
+    bare = f'restrict,command="python3 /d/unimatrix-relay.py" {_KEY}'
+    unrelated = "ssh-rsa AAAAB3 me@box"
+    text = "\n".join([f'restrict,command="{stale} /d/unimatrix-relay.py --x" {_KEY}', other, commented, bare, unrelated]) + "\r\n"
+    rc, out, keys = _install_with_keys(monkeypatch, tmp_path, text)
+    assert rc == 0 and f"rewritten to {new}" in out
+    assert keys.read_bytes().decode() == text.replace(str(stale), new, 1)
+    if os.name == "posix":
+        assert keys.stat().st_mode & 0o777 == 0o640
+
+
+def test_install_leaves_an_already_correct_forced_interpreter_untouched(monkeypatch, tmp_path):
+    text = f'restrict,command="{ui.forced_command_interpreter()} /d/unimatrix-relay.py" {_KEY}\n'
+    rc, out, keys = _install_with_keys(monkeypatch, tmp_path, text)
+    assert rc == 0 and "rewritten" not in out and keys.read_text(encoding="utf-8") == text
+
+
+def test_rewrite_handles_a_windows_shaped_quoted_interpreter_and_a_spaced_target(tmp_path):
+    keys = tmp_path / "authorized_keys"
+    keys.write_text(f'restrict,command="\\"C:\\Old Py\\python.exe\\" \\"C:\\u\\unimatrix-relay.py\\"" {_KEY}\n', encoding="utf-8")  # abs-path-ok: synthetic Windows line, never opened
+    assert ui.rewrite_forced_interpreters(keys, "D:/new py/python.exe") == 1
+    assert keys.read_text(encoding="utf-8") == (  # abs-path-ok: synthetic Windows line, never opened
+        f'restrict,command="\\"D:/new py/python.exe\\" \\"C:\\u\\unimatrix-relay.py\\"" {_KEY}\n')
+    assert ui.rewrite_forced_interpreters(keys, "D:/new py/python.exe") == 0
+    assert ui.rewrite_forced_interpreters(tmp_path / "absent", "/x/python3") == 0  # abs-path-ok: synthetic, never opened
+
+
+@pytest.mark.skipif(os.name != "posix", reason="symlinks")
+def test_rewrite_keeps_a_symlinked_authorized_keys_a_symlink(tmp_path):
+    real = tmp_path / "real_keys"
+    real.write_text(f'restrict,command="{tmp_path}/old/python3 /d/unimatrix-relay.py" {_KEY}\n', encoding="utf-8")
+    link = tmp_path / "authorized_keys"
+    link.symlink_to(real)
+    assert ui.rewrite_forced_interpreters(link, "/x/python3") == 1  # abs-path-ok: synthetic interpreter, never opened
+    assert link.is_symlink() and "/x/python3" in real.read_text(encoding="utf-8")  # abs-path-ok: synthetic, never opened

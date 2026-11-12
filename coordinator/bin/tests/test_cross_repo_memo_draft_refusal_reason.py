@@ -2,7 +2,8 @@
 
 The op's refusal envelope carries no reason field by contract; the reason rides
 a side channel (child stderr cold, the `_stderr` frame field warm). These tests
-drive the real CLI against an isolated registry and sender repo under tmp_path.
+drive the real CLI against an isolated registry and sender repo under tmp_path, dispatching
+to the stamped published engine (a claude-klabauter tree is never an engine root).
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ import pytest
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _BIN = Path(__file__).resolve().parents[1]
-_ENGINE_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _init_repo(path: Path) -> None:
@@ -26,7 +26,7 @@ def _init_repo(path: Path) -> None:
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
-def _draft(tmp_path: Path, warm: str, extra: list[str] | None = None, to: str = "no-such-receiver-em"):
+def _draft(tmp_path: Path, engine_root: str, warm: str, extra: list[str] | None = None, to: str = "no-such-receiver-em"):
     sender = tmp_path / "sender_repo"
     _init_repo(sender)
     home = tmp_path / "home"
@@ -38,7 +38,7 @@ def _draft(tmp_path: Path, warm: str, extra: list[str] | None = None, to: str = 
         **os.environ,
         "CLAUDE_HOME": str(home),
         "COORDINATOR_SETTINGS_HOME": str(home),
-        "COORDINATOR_ENGINE_ROOT": str(_ENGINE_ROOT),
+        "COORDINATOR_ENGINE_ROOT": engine_root,
         "COORDINATOR_WARM": warm,
     }
     return subprocess.run(
@@ -51,15 +51,15 @@ def _draft(tmp_path: Path, warm: str, extra: list[str] | None = None, to: str = 
 
 
 @pytest.mark.parametrize("warm", ["0", "1"])
-def test_refused_draft_prints_the_engine_reason(tmp_path, warm):
-    proc = _draft(tmp_path, warm)
+def test_refused_draft_prints_the_engine_reason(tmp_path, warm, stamped_engine_env):
+    proc = _draft(tmp_path, stamped_engine_env, warm)
     assert proc.returncode != 0
     assert "fleet op setup error" in proc.stderr, proc.stderr
 
 
 @pytest.mark.parametrize("warm", ["0", "1"])
-def test_refused_partial_scoped_to_prints_its_reason(tmp_path, warm):
-    proc = _draft(tmp_path, warm, ["--scoped-to-artifact", "docs/x.md"], to="sender_repo-em")
+def test_refused_partial_scoped_to_prints_its_reason(tmp_path, warm, stamped_engine_env):
+    proc = _draft(tmp_path, stamped_engine_env, warm, ["--scoped-to-artifact", "docs/x.md"], to="sender_repo-em")
     assert proc.returncode != 0
     assert "scoped_to.seam is required" in proc.stderr, proc.stderr
 

@@ -1,11 +1,11 @@
-"""Launcher-written grant that lets a headless codex|agy|grok session be admitted as an EM.
+"""Launcher-written grant that lets a headless codex|agy|grok|claude session be admitted as an EM.
 
 The launcher calls `write_headless_em_grant` before spawning the session and hands the returned
 token to that session's env under `HEADLESS_EM_TOKEN_ENV`. Only the token's digest is stored,
 bound to the session id and family, so reading the grant yields no usable token and an env
 variable alone proves nothing. The verifier reads exactly one file, derived from the session id.
 
-Writer consumer: the headless codex|agy|grok launcher, which must call `write_headless_em_grant`
+Writer consumer: the headless codex|agy|grok|claude launcher, which must call `write_headless_em_grant`
 for the grant to exist; until it does, no session is admitted by this route.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pathlib import Path
 #: Name carries the `COORDINATOR_ALLOW_` prefix of `warm.env_forwarding.CALLER_PREFIXES`, so it
 #: reaches the guard's `params["env"]` without wiring; a name outside the prefixes is dropped.
 HEADLESS_EM_TOKEN_ENV = "COORDINATOR_ALLOW_HEADLESS_EM_TOKEN"
-HEADLESS_EM_FAMILIES = ("codex", "agy", "grok")
+HEADLESS_EM_FAMILIES = ("codex", "agy", "grok", "claude")  # claude: launched via `claude --bg`
 SETTINGS_HOME_KEY = "COORDINATOR_SETTINGS_HOME"
 
 

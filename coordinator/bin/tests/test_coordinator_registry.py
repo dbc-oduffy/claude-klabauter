@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -16,77 +17,21 @@ import pytest  # noqa: E402
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 # ---------------------------------------------------------------------------
-# AC-1: KNOWN_TYPES — exact 31-type set
+# AC-1: KNOWN_TYPES — exact set, derived from the manifest
 #
-# Golden pin derived from schemas/coordinator-registry.manifest.json (source
-# of truth). Reconciled 2026-07-25: this pin had drifted silently because the
-# hand-rolled fail_test() helper (fixed in 23f65fce) let these assertions run
-# to completion without ever raising, so three real upstream manifest edits
-# in coordinator-content-repo never got mirrored here:
-#   - "flight-recorder" REMOVED — DoE commit 3aa9a79f ("C8(subsume): retire
-#     flight-recorder — rm schema, repoint registry+artifact-shape to
-#     run-report") deleted the flight-recorder schema and repointed the
-#     registry to run-report; the type was subsumed, not merely renamed.
-#   - "run-report" ADDED — the same 3aa9a79f repoint.
-#   - "tier-u-grant" ADDED — DoE commit 58cdc600 ("Tier-U grant token schema +
-#     manifest registration").
-#   - "sizing-object" ADDED — DoE commit adf618d5 ("register sizing-object
-#     doc-type — manifest row + drift-guard fixture").
-#   - "subagent-sidecar" ADDED — manifest registration closing AC-10's unmet
-#     half (agent-side decision-object container scaffolder, schemaName null
-#     — schema-of-record is schemas/decision-object.schema.json $defs/
-#     subagent_sidecar, not a standalone file); retires the coordinator-doc-
-#     new / type_enum.py local shims that pre-dated this manifest row.
-# Reconciled 2026-08-02 (stale-test cleanup, triage-F): DoE commit 410eae0d1
-# ("manifest + skills: --type and kind now agree", deliverable
-# dlv-baton-kind-vocabulary-one-axis-per-field-1be219) renamed the docTypes
-# entries so the --type flag agrees with the kind value each scaffolds:
-#   - "spinoff-roadmap" RENAMED to "roadmap-baton" (legacy spelling remains a
-#     permanent CLI-side alias in coordinator-doc-new, not a second manifest
-#     row).
-#   - "spinoff-goal" RENAMED to "goal-seed" (same alias treatment).
-#   - "spinoff-roadmap-creator" RENAMED to "roadmap-seed" (same alias
-#     treatment).
-# Prior reconciliation history (2026-07-12: spike-result, strategic-self-
-# description, workflow; 2026-07-11: spinoff-goal, spinoff-roadmap-creator,
-# goal, recovery) retained below for context. Do NOT weaken this to a
-# subset/superset check — it is an exact-set pin; add new entries here in the
-# same commit that adds a type to the manifest.
+# The expected set is read from the same manifest file the registry resolves
+# (reg._MANIFEST_PATH: schemas/coordinator-registry.manifest.json, source of
+# truth), not hand-copied: a hand-typed list drifted on every upstream manifest
+# edit. Reconstruction rule is restated here (docTypes[].type | queueTypes) so
+# the test still catches a registry that stops honoring the manifest.
 # ---------------------------------------------------------------------------
-_EXPECTED_KNOWN_TYPES: frozenset[str] = frozenset({
-    "handoff",
-    "spinoff",
-    "roadmap-baton",
-    "goal-seed",
-    "roadmap-seed",
-    "recovery",
-    "memo",
-    "plan",
-    "decision",
-    "audit-record",
-    "problem-set",
-    "completion",
-    "completion-receipt",
-    "goal",
-    "health-status",
-    "run-report",
-    "research-synthesis",
-    "review-findings",
-    "review",
-    "prior-art-check",
-    "plan-coverage-check",
-    "docs-check",
-    "improvement-queue",
-    "bug-backlog",
-    "debt-backlog",
-    "lesson",
-    "spike-result",
-    "strategic-self-description",
-    "workflow",
-    "tier-u-grant",
-    "sizing-object",
-    "subagent-sidecar",
-})
+def _manifest_known_types() -> frozenset[str]:
+    with open(reg._MANIFEST_PATH, encoding="utf-8") as f:
+        m = json.load(f)
+    return frozenset(d["type"] for d in m["docTypes"]) | frozenset(m["queueTypes"])
+
+
+_EXPECTED_KNOWN_TYPES: frozenset[str] = _manifest_known_types()
 
 
 def test_known_types():
@@ -94,7 +39,7 @@ def test_known_types():
 
 
 def test_known_types_count():
-    assert len(reg.KNOWN_TYPES) == 32
+    assert len(reg.KNOWN_TYPES) == len(_EXPECTED_KNOWN_TYPES) > 0
 
 
 def test_sidecar_types():

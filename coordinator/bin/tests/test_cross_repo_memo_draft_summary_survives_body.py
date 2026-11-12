@@ -1,4 +1,7 @@
-"""`cross-repo-memo draft --body-file` keeps the explicit --summary, and a body-derived summary fits send's cap."""
+"""`cross-repo-memo draft --body-file` keeps the explicit --summary, and a body-derived summary fits send's cap.
+
+Dispatches to the stamped published engine (a claude-klabauter tree is never an engine root).
+"""
 
 from __future__ import annotations
 
@@ -15,10 +18,9 @@ from coordinator_core.frontmatter import schema_validate
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _BIN = Path(__file__).resolve().parents[1]
-_ENGINE_ROOT = Path(__file__).resolve().parents[3]
 
 
-def _draft(tmp_path: Path, body: str, summary: str | None) -> str:
+def _draft(tmp_path: Path, engine_root: str, body: str, summary: str | None) -> str:
     sender = tmp_path / "sender_repo"
     sender.mkdir()
     receiver = tmp_path / "receiver_repo"
@@ -38,7 +40,7 @@ def _draft(tmp_path: Path, body: str, summary: str | None) -> str:
         **os.environ,
         "CLAUDE_HOME": str(home),
         "COORDINATOR_SETTINGS_HOME": str(home),
-        "COORDINATOR_ENGINE_ROOT": str(_ENGINE_ROOT),
+        "COORDINATOR_ENGINE_ROOT": engine_root,
         "COORDINATOR_WARM": "0",
     }
     argv = [sys.executable, str(_BIN / "cross-repo-memo.py"), "draft", "summary-survives",
@@ -61,23 +63,23 @@ def _summary_of(text: str) -> str:
     return raw
 
 
-def test_explicit_summary_survives_body_file(tmp_path):
-    text = _draft(tmp_path, "Body sentence that must not become the summary. More.\n", "Short explicit tldr")
+def test_explicit_summary_survives_body_file(tmp_path, stamped_engine_env):
+    text = _draft(tmp_path, stamped_engine_env, "Body sentence that must not become the summary. More.\n", "Short explicit tldr")
     assert _summary_of(text) == "Short explicit tldr"
 
 
-def test_derived_summary_passes_send_cap(tmp_path):
+def test_derived_summary_passes_send_cap(tmp_path, stamped_engine_env):
     body = "Word " * 60 + "ends here. Tail sentence.\n"
-    text = _draft(tmp_path, body, None)
+    text = _draft(tmp_path, stamped_engine_env, body, None)
     summary = _summary_of(text)
     assert 0 < len(summary) <= 240
     assert schema_validate._memo_cf_summary_length_cap({"summary": summary}) is None
 
 
-def test_derived_summary_with_quotes_and_backticks_passes_send_cap(tmp_path):
+def test_derived_summary_with_quotes_and_backticks_passes_send_cap(tmp_path, stamped_engine_env):
     body = ('`cross-repo-memo draft x --title "..." --body-file "a.md"` derived ' + 'word ' * 40
             + 'and "quoted" ends here. Tail sentence.\n')
-    text = _draft(tmp_path, body, None)
+    text = _draft(tmp_path, stamped_engine_env, body, None)
     raw = re.search(r"^summary: \"(.*)\"$", text, re.MULTILINE).group(1)
     assert 0 < len(raw) <= 240
     assert schema_validate._memo_cf_summary_length_cap({"summary": raw}) is None

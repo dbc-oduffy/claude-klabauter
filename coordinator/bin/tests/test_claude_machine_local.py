@@ -44,6 +44,9 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
+    # Subject is the live <settings-home>/bin reader; the autouse isolation fixture would point
+    # it at an empty tmp home with no _machine_local.py.
+    pytest.mark.real_home,
 ]
 
 # ---------------------------------------------------------------------------

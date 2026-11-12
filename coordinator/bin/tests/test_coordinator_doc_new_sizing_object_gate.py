@@ -495,6 +495,11 @@ class EndToEndSizingCascadeClosesTest(unittest.TestCase):
                 **_NO_CONSOLE,
             )
             self.assertEqual(sizing_result.returncode, 0, sizing_result.stderr)
+            # The scaffolder buckets sizings under a YYYY-MM subdir and reports
+            # the real destination as the first stdout line; --out is a request.
+            sizing_out = Path(sizing_result.stdout.splitlines()[0].strip())
+            self.assertTrue(sizing_out.is_file(), sizing_result.stdout)
+            sizing_rel = sizing_out.resolve().relative_to(repo.resolve()).as_posix()
             sizing_doc = yaml.safe_load(sizing_out.read_text(encoding="utf-8"))
             minted_id = sizing_doc["deliverable_id"]
             self.assertIsNotNone(minted_id)
@@ -505,7 +510,7 @@ class EndToEndSizingCascadeClosesTest(unittest.TestCase):
                     sys.executable, str(_CLI_PATH), "--type", "plan",
                     "--title", "End to end cascade closure plan",
                     "--deliverable-id", minted_id,
-                    "--sizing-object", "state/sizings/2026-08-10-e2e.yaml",
+                    "--sizing-object", sizing_rel,
                     "--out", str(plan_out),
                 ],
                 cwd=str(repo),
