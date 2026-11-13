@@ -109,3 +109,28 @@ def test_round_does_not_push_when_import_gate_fails(tmp_path, monkeypatch):
     assert " — FAIL" in out and " — PASS" not in out
     assert "engine-import-gate:  mod -> ImportError: x" in out
     assert not [c for c in spy.calls if c and str(c[0]) == "git" and "push" in [str(x) for x in c]]
+
+
+def test_entrypoints_and_package_level_tests_are_not_imported(tmp_path):
+    """Importing `__main__` runs it; a `test_*` module may raise pytest's Skipped. Either
+    used to kill the probe outright, which refused the push as 'probe did not run'."""
+    root = _tree(tmp_path, provider_has_def=True)
+    pkg = root / "coordinator_core" / "testing"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "__main__.py").write_text("raise SystemExit(2)\n", encoding="utf-8")
+    (pkg / "test_y.py").write_text("raise KeyboardInterrupt\n", encoding="utf-8")
+
+    names = _mod._engine_modules_to_import(
+        str(root), ["coordinator_core/testing/__main__.py", "coordinator_core/testing/test_y.py"]
+    )
+
+    assert "coordinator_core.testing.__main__" not in names
+    assert "coordinator_core.testing.test_y" not in names
+
+
+def test_a_base_exception_at_import_does_not_kill_the_probe(tmp_path):
+    root = _tree(tmp_path, provider_has_def=True)
+    (root / "coordinator_core" / "boom.py").write_text("raise SystemExit(3)\n", encoding="utf-8")
+
+    assert _mod._engine_import_failures(str(root), ["coordinator_core/boom.py"]) is None
