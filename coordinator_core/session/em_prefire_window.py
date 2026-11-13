@@ -7,7 +7,9 @@ Negative-spec:
   - No full-transcript walk: a pending delta over `em_turn_count.READ_CAP` jumps the offset to the
     tail and marks the record `partial` (counts are then a floor).
   - A subagent record (`isSidechain`) is never counted, and never opens or disarms a window.
-  - The `Skill` disarm is a closed literal tuple; a prefix match on `coordinator:` is refused.
+  - The `Skill` disarm is a closed literal tuple of skill-mandated procedures (pickup, handoff,
+    review, close-out, lesson emit, ceremonies); a prefix match on `coordinator:` is refused, so a
+    skill outside the tuple (e.g. `plan`) leaves the window armed.
   - A lifecycle verb counts toward no budget only as an invocation (`lifecycle_op`); a mention counts.
 """
 
@@ -33,7 +35,7 @@ OPENING_TEXT_CAP = 8 * 1024
 
 # Skill-directed git ceremonies: also disarm when the PM's slash command is only a command-name record.
 CEREMONY_SKILLS = ("consolidate-git", "merging-to-main")
-# Pickup, handoff, review and close-out class skills of DoE coordinator/skills, plus the ceremonies; exact names only.
+# Pickup, handoff, review, close-out and lesson-emit class skills of DoE coordinator/skills, plus the ceremonies; exact names only.
 DISARM_SKILLS = (
     "pickup",
     "handoff",
@@ -43,6 +45,7 @@ DISARM_SKILLS = (
     "quick-wrap",
     "workstream-complete",
     "finishing-a-development-branch",
+    "learn-lessons",
 ) + CEREMONY_SKILLS
 _CEREMONY_OPEN_RE = re.compile(
     r"\A\s*(?:<command-message>[^<]*</command-message>\s*)?<command-name>/?(?:coordinator:)?(?:%s)</command-name>"

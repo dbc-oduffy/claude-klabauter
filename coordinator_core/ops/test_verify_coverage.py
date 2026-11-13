@@ -789,3 +789,39 @@ def test_genuine_dispatch_reference_still_flagged(tmp_path):
     assert r["exit"] == 1, r["json"]
     refs = {v["ref"] for v in r["json"]["violations"]}
     assert "coordinator:totally-undocumented-worker" in refs
+
+
+# ---------------------------------------------------------------------------
+# --repo: the default sweep root is the target repo, not cwd
+# ---------------------------------------------------------------------------
+
+
+def test_repo_flag_sweeps_target_from_foreign_cwd(tmp_path, monkeypatch):
+    root = _scaffold(tmp_path, {"coordinator": {"skills": ["plan"]}})
+    target = tmp_path / "target"
+    _write(
+        target / "coordinator/docs/wiki/some-doc.md",
+        "# doc\n\nDispatch `coordinator:totally-undocumented-worker` to do the work.\n",
+    )
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.chdir(other)
+
+    with_repo = _run(root, extra=["--repo", str(target)])
+    assert with_repo["exit"] == 1, with_repo["json"]
+    assert with_repo["json"]["sweepRoot"] == str(target)
+    refs = {v["ref"] for v in with_repo["json"]["violations"]}
+    assert "coordinator:totally-undocumented-worker" in refs
+
+    without_repo = _run(root)
+    assert without_repo["exit"] == 0, without_repo["json"]
+
+
+def test_explicit_sweep_root_outranks_repo(tmp_path, monkeypatch):
+    root = _scaffold(tmp_path, {"coordinator": {"skills": ["plan"]}})
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    monkeypatch.chdir(tmp_path)
+    r = _run(root, clean, extra=["--repo", str(tmp_path / "missing")])
+    assert r["exit"] == 0, r["json"]
+    assert r["json"]["sweepRoot"] == str(clean)

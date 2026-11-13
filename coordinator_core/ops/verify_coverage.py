@@ -105,17 +105,27 @@ from coordinator_core.content_root import read_pointer_files
 
 
 _USAGE = (
-    "Usage: verify-coverage [--root <path>] [--sweep-root <path>] "
-    "[--json] [--report-only]"
+    "Usage: verify-coverage [--repo <path>] [--root <path>] [--sweep-root <path>] "
+    "[--json] [--report-only]\n"
+    "  --repo <path>  target repo; the default sweep root (cwd otherwise)"
 )
 
 
 def parse_args(argv: List[str]) -> dict:
-    args = {"root": None, "sweep_root": None, "json": False, "report_only": False}
+    args = {
+        "root": None,
+        "sweep_root": None,
+        "repo": None,
+        "json": False,
+        "report_only": False,
+    }
     i = 0
     while i < len(argv):
         tok = argv[i]
-        if tok == "--root":
+        if tok == "--repo":
+            i += 1
+            args["repo"] = argv[i] if i < len(argv) else None
+        elif tok == "--root":
             i += 1
             args["root"] = argv[i] if i < len(argv) else None
         elif tok == "--sweep-root":
@@ -504,7 +514,9 @@ def main(argv: List[str]) -> int:
         return args["_exit"]
 
     root = args["root"] or default_root()
-    sweep_root = args["sweep_root"] or default_sweep_root()
+    sweep_root = args["sweep_root"] or (
+        os.path.abspath(args["repo"]) if args["repo"] else default_sweep_root()
+    )
     if not os.path.exists(root):
         print(f"Plugin root not found: {root}", file=sys.stderr)
         return 2

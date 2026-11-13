@@ -199,3 +199,80 @@ def test_strip_orphans_cli_rejects_with_exit_1(tmp_path):
     assert result.returncode == 1
     assert "STRIP-ORPHAN-REJECT:" in result.stderr
     assert "repo-L1" in result.stderr
+
+
+def test_repo_flag_resolves_relative_cutoff_dir_from_foreign_cwd(tmp_path):
+    target = tmp_path / "target"
+    d = target / "tasks" / "learn-lessons-2026-06-01"
+    d.mkdir(parents=True)
+    (d / "COMPLETE").write_text("")
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+
+    with_repo = subprocess.run(
+        [sys.executable, str(_SCRIPT), "--repo", str(target), "cutoff", "tasks"],
+        capture_output=True,
+        text=True,
+        cwd=foreign,
+        **no_console_creationflags(),
+    )
+    assert with_repo.returncode == 0, with_repo.stderr
+    assert with_repo.stdout.strip() == "2026-06-01"
+
+    without_repo = subprocess.run(
+        [sys.executable, str(_SCRIPT), "cutoff", "tasks"],
+        capture_output=True,
+        text=True,
+        cwd=foreign,
+        **no_console_creationflags(),
+    )
+    assert without_repo.returncode == 1
+
+
+def test_repo_flag_resolves_relative_orphan_files_from_foreign_cwd(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "records.yaml").write_text(
+        yaml.safe_dump({"records": [{"id": "a", "change_kind": "wiki-append"}]})
+    )
+    (target / "strip.yaml").write_text(yaml.safe_dump({"strip": [{"id": "ghost"}]}))
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable, str(_SCRIPT), "--repo", str(target),
+            "check-strip-orphans", "records.yaml", "strip.yaml",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=foreign,
+        **no_console_creationflags(),
+    )
+    assert result.returncode == 1
+    assert "ghost" in result.stderr
+
+
+def _load_reconcile_trampoline():
+    spec = importlib.util.spec_from_file_location(
+        "learn_lessons_reconcile_candidates",
+        _BIN_DIR / "learn-lessons-reconcile-candidates.py",
+    )
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+def test_reconcile_trampoline_repo_flag_resolves_relative_paths():
+    mod = _load_reconcile_trampoline()
+    assert mod._apply_repo(["wiki/x.md", "text"]) == ["wiki/x.md", "text"]
+    out = mod._apply_repo(["--repo", "/r", "wiki/x.md", "--text-file", "t.txt"])
+    assert out == [
+        str(Path("/r") / "wiki/x.md"),
+        "--text-file",
+        str(Path("/r") / "t.txt"),
+    ]
+    assert mod._apply_repo(["wiki/x.md", "--repo", "/r", "inline"]) == [
+        str(Path("/r") / "wiki/x.md"),
+        "inline",
+    ]

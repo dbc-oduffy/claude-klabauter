@@ -303,6 +303,43 @@ def test_out_must_end_workflow_mjs(tmp_path):
     assert out_path.read_text(encoding="utf-8") == "existing committed spine\n"
 
 
+def test_bad_out_refusal_names_accepted_shape(tmp_path, capsys):
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True)
+    plan_path = repo_root / "p.md"
+    plan_path.write_text("---\n---\n\n# P\n", encoding="utf-8")
+    rc = cli_module.main(["--plan", str(plan_path), "--out", str(repo_root / "p.mjs")])
+    assert rc == cli_module.EXIT_USAGE
+    assert "<name>.workflow.mjs" in capsys.readouterr().err
+
+
+def test_bad_appetite_refusal_names_valid_presets(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        cli_module.main(["--queue", "q", "--profile", "x", "--appetite", "small", "--out", "a.workflow.mjs"])
+    err = capsys.readouterr().err
+    assert "hunt" in err and "standard" in err and "sweep" in err
+
+
+def test_repo_flag_resolves_relative_paths_from_foreign_cwd(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "p.md").write_text(
+        "---\n---\n\n# A plan\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: C1\n  title: Do a thing\n  writes: [\"a.txt\"]\n  body: |\n"
+        "    Write a.txt.\n```\n",
+        encoding="utf-8",
+    )
+    foreign = tmp_path / "elsewhere"
+    foreign.mkdir()
+    monkeypatch.chdir(foreign)
+    assert cli_module.main(["--repo", str(tmp_path / "nope")]) == cli_module.EXIT_USAGE
+    rc = cli_module.main(["--repo", str(repo_root), "--plan", "p.md", "--out", "p.workflow.mjs"])
+    assert rc == cli_module.EXIT_OK
+    assert (repo_root / "p.workflow.mjs").exists()
+    assert not (foreign / "p.workflow.mjs").exists()
+    assert Path.cwd() == foreign.resolve()
+
+
 def test_preamble_recorded_in_receipt(tmp_path, monkeypatch):
     """#89 K2: --preamble FILE is read, hashed, and both are recorded in
     the emission receipt."""

@@ -286,6 +286,18 @@ class TestNegative:
         assert rc == 0
         assert out.splitlines() == [str(nonexistent / ".claude")]
 
+    def test_repo_flag_is_accepted_and_output_unchanged(self, tmp_path: Path):
+        claude_home = tmp_path / ".claude"
+        claude_home.mkdir(parents=True)
+        _make_machine_local(claude_home / "bin", repos={})
+
+        env = _env_for(tmp_path)
+        rc_plain, out_plain, _ = _run_main([], env)
+        rc_repo, out_repo, _ = _run_main(["--repo", str(tmp_path / "elsewhere")], env)
+
+        assert rc_plain == rc_repo == 0
+        assert out_repo == out_plain
+
     def test_empty_registry_keys_still_exits_zero(self, tmp_path: Path):
         claude_home = tmp_path / ".claude"
         claude_home.mkdir(parents=True)

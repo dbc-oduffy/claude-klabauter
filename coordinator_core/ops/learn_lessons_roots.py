@@ -235,6 +235,8 @@ def resolve_roots() -> List[str]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # Machine-wide enumeration with no cwd dependence: ``--repo <path>`` is
+    # accepted and ignored so callers can pass it uniformly across the helpers.
     deduped = resolve_roots()
     if deduped:
         sys.stdout.write("\n".join(deduped) + "\n")

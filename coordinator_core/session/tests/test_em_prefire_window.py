@@ -121,6 +121,11 @@ def test_fire_skill_revise_flags(tmp_path):
     assert st["fired"] and st["fire_seen"]
     st = run(tmp_path, [user(), tool_use("a", "Skill", {"skill": "coordinator:pickup"})])
     assert st["disarmed"]
+    for form in ("learn-lessons", "coordinator:learn-lessons"):
+        st = run(tmp_path, [user(), tool_use("a", "Skill", {"skill": form})])
+        assert st["disarmed"], form
+    st = run(tmp_path, [user(), tool_use("a", "Skill", {"skill": "coordinator:learn-lessons-x"})])
+    assert not st["disarmed"]
     st = run(tmp_path, [user(), tool_use("a", "Skill", {"skill": "coordinator:plan"})])
     assert not st["disarmed"]
     st = run(tmp_path, [user(), tool_use("a", "Skill", {"skill": "coordinator:something-else"})])

@@ -113,6 +113,39 @@ def test_unregistered_repo_prints_hint_and_exits_zero(tmp_path, monkeypatch, cap
     assert "machine-local set repos.some_repo " in captured.err
 
 
+def test_repo_flag_targets_repo_from_foreign_cwd(tmp_path, monkeypatch, capsys):
+    home_parent = tmp_path / "home"
+    (home_parent / ".claude").mkdir(parents=True)
+    target = tmp_path / "target-repo"
+    target.mkdir()
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    monkeypatch.setenv("CLAUDE_HOME", str(home_parent))
+    monkeypatch.chdir(foreign)
+    monkeypatch.setenv("PATH", "/nonexistent-bin-dir-for-test")
+
+    for argv in (["--repo", str(target)], [f"--repo={target}"]):
+        assert main(argv) == 0
+        err = capsys.readouterr().err
+        assert "target-repo" in err
+        assert "foreign" not in err
+        assert "machine-local set repos.target_repo " in err
+
+
+def test_repo_flag_meta_repo_is_silent_noop_from_foreign_cwd(tmp_path, monkeypatch, capsys):
+    home_parent = tmp_path / "home"
+    claude_home = home_parent / ".claude"
+    claude_home.mkdir(parents=True)
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    monkeypatch.setenv("CLAUDE_HOME", str(home_parent))
+    monkeypatch.chdir(foreign)
+
+    assert main(["--repo", str(claude_home)]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+
+
 def test_missing_machine_local_falls_through_to_hint(tmp_path, monkeypatch, capsys):
     home_parent = tmp_path / "home"
     claude_home = home_parent / ".claude"

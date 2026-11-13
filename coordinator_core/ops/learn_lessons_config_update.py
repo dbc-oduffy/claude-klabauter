@@ -16,6 +16,8 @@ Otherwise print a one-line hint to stderr advising registration via
 machine-local. NEVER mutates a tracked file. Always returns 0 (idempotent;
 safe as a Phase 0 call).
 
+``--repo <path>`` names the repo to check instead of cwd.
+
 Port of: learn-lessons-config-update.sh (DoE b5a4192c, 2026-07-20)
 Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292
 
@@ -88,10 +90,20 @@ def _slugify(name: str) -> str:
     return slug.strip("_")
 
 
+def _repo_arg(argv: List[str]) -> Optional[str]:
+    """Value of ``--repo <path>`` / ``--repo=<path>`` in argv; None when absent."""
+    for i, tok in enumerate(argv):
+        if tok == "--repo":
+            return argv[i + 1] if i + 1 < len(argv) else None
+        if tok.startswith("--repo="):
+            return tok[len("--repo="):]
+    return None
+
+
 def main(argv: List[str]) -> int:
     claude_home = os.path.join(os.environ.get("CLAUDE_HOME", os.path.expanduser("~")), ".claude")
 
-    cwd = _norm(os.getcwd())
+    cwd = _norm(_repo_arg(argv) or os.getcwd())
     home_norm = _norm(claude_home)
 
     if cwd == home_norm:

@@ -407,6 +407,15 @@ def test_allowlisted_skill_disarms_but_other_skills_do_not(env):
     assert g.evaluate(env.payload(tid="cur2")) is None
 
 
+def test_learn_lessons_skill_silences_the_nag_and_no_skill_window_still_nags(env):
+    env.write(user())
+    env.survey(8)
+    assert g.evaluate(env.payload()) is not None
+    env.write(use("ll", "Skill", {"skill": "coordinator:learn-lessons"}))
+    for i in range(4):
+        assert g.evaluate(env.payload(tid=f"cur{i}")) is None
+
+
 def _command_user(name: str) -> str:
     return user(f"<command-message>{name}</command-message>\n<command-name>/{name}</command-name>")
 

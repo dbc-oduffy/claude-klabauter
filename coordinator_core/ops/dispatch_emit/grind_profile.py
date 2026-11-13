@@ -682,7 +682,8 @@ def resolve_appetite(profile: Profile, appetite: str, overrides: dict | None = N
     necessarily the run host, and a cpu_count-dependent clamp would make
     the emitted bytes vary with the emitting host."""
     if appetite not in vocab.APPETITE_PRESETS:
-        raise ProfileError("unknown_appetite_preset", detail=f"unknown appetite: {appetite!r}")
+        raise ProfileError("unknown_appetite_preset", detail=f"unknown appetite: {appetite!r} (valid: {', '.join(sorted(vocab.APPETITE_PRESETS))})",
+        )
     if appetite not in profile.appetite:
         raise ProfileError(
             "unknown_appetite_preset", detail=f"profile {profile.name!r} has no {appetite!r} preset"

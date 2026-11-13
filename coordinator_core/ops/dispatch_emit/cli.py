@@ -130,6 +130,7 @@ from coordinator_core.ops.dispatch_emit.mark_landed import (
 from coordinator_core.ops.dispatch_emit.grind_admission import NOT_ADMITTED_EXTRA_KEY
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError
 from coordinator_core.session.core import resolve_session_id
+from coordinator_core.contract import grind_vocab
 
 _REQUIRED_OUT_SUFFIX = ".workflow.mjs"
 
@@ -485,7 +486,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "<coordinator content root>/queue-profiles)",
     )
     parser.add_argument(
-        "--appetite", default="standard", help="queue-grind appetite preset (queue route)"
+        "--appetite",
+        default="standard",
+        choices=sorted(grind_vocab.APPETITE_PRESETS),
+        help="queue-grind appetite preset (queue route; default: standard)",
+    )
+    parser.add_argument(
+        "--repo",
+        dest="repo_dir",
+        default=None,
+        help="run as if from this repo's root: relative paths resolve against it and "
+        "--repo-root defaults to it (no cd needed from a foreign cwd)",
     )
     parser.add_argument(
         "--where", default=None, metavar="JSON", help="where override, JSON DNF (queue route)"
@@ -1486,7 +1497,29 @@ def _report_close_route_emit(result: dict, args: argparse.Namespace) -> int:
 
 
 def main(argv: "Optional[list[str]]" = None) -> int:
+    """CLI entry. `--repo DIR` runs the whole invocation as if from DIR (cwd restored on return)."""
     argv = list(argv if argv is not None else sys.argv[1:])
+    pre = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    pre.add_argument("--repo", dest="repo_dir", default=None)
+    repo_dir = pre.parse_known_args(argv)[0].repo_dir
+    if repo_dir is None:
+        return _main(argv)
+    target = Path(repo_dir).expanduser()
+    if not target.is_dir():
+        print(f"emit-dispatch-workflow: ERROR — --repo {repo_dir!r} is not a directory", file=sys.stderr)
+        return EXIT_USAGE
+    target = target.resolve()
+    if not any(a == "--repo-root" or a.startswith("--repo-root=") for a in argv):
+        argv += ["--repo-root", str(target)]
+    prior = os.getcwd()
+    os.chdir(target)
+    try:
+        return _main(argv)
+    finally:
+        os.chdir(prior)
+
+
+def _main(argv: "list[str]") -> int:
     if argv[:1] == ["--retest-targeted"]:
         from coordinator_core.ops.dispatch_emit import retest_targeted
 
@@ -1950,8 +1983,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     if out_path is not None and not out_path.name.endswith(_REQUIRED_OUT_SUFFIX):
         print(
             f"emit-dispatch-workflow: ERROR — --out {args.out_path!r} does not end "
-            f"{_REQUIRED_OUT_SUFFIX!r} -- refusing to write an emitted script over a "
-            f"path that is not named as one. Name --out ending {_REQUIRED_OUT_SUFFIX!r}.",
+            f"{_REQUIRED_OUT_SUFFIX!r}. Accepted shape: <name>{_REQUIRED_OUT_SUFFIX} "
+            f"(e.g. --out {out_path.with_name('run' + _REQUIRED_OUT_SUFFIX)}).",
             file=sys.stderr,
         )
         return EXIT_USAGE
