@@ -165,3 +165,58 @@ def test_release_of_an_unwritable_file_still_reports_ok(host, monkeypatch):
 
     monkeypatch.setattr(host, "release_command", fail)
     assert _call("box_memory.release", {"key": "k", "pid": 5})["result"] == {"ok": True}
+
+
+@pytest.fixture
+def dials(monkeypatch):
+    calls, rows = [], []
+    monkeypatch.setattr(hcc, "_engine_call", lambda method, params: calls.append(method))
+    from coordinator_core.warm import telemetry
+
+    monkeypatch.setattr(telemetry, "record_sandbox_advisory_admit", lambda **kw: rows.append(kw))
+    return calls, rows
+
+
+def _deny(*a):
+    raise PermissionError("sandbox denied")
+
+
+def test_in_engine_admit_with_a_denied_reservation_write_never_dials_the_engine(host, monkeypatch, dials):
+    calls, rows = dials
+    monkeypatch.setattr(host, "register_command", _deny)
+    r = _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0, "register_pid": 9})["result"]
+    assert r["admitted"] is False
+    assert calls == []
+    assert rows == [{"key": "k", "pid": 9}]
+
+
+def test_in_engine_register_and_release_permission_errors_never_dial_the_engine(host, monkeypatch, dials):
+    calls, rows = dials
+    monkeypatch.setattr(host, "register_command", _deny)
+    monkeypatch.setattr(host, "release_command", _deny)
+    with hcc.in_engine():
+        assert hcc.register_spawn("k", 1.0, 5, host) is False
+        hcc.release_spawn("k", 5, host)
+    assert calls == []
+    assert len(rows) == 2
+
+
+def test_in_engine_admit_before_spawn_takes_the_advisory_arm(host, monkeypatch, dials):
+    calls, rows = dials
+    monkeypatch.setattr(host, "read_memory_status", _deny)
+    with hcc.in_engine():
+        v = hcc.admit_before_spawn("k", 1.0, host, 9)
+    assert v.admitted and "advisory" in v.reason
+    assert calls == []
+    assert rows == [{"key": "k", "pid": 9}]
+
+
+def test_outside_the_engine_the_permission_error_arms_still_dial(host, monkeypatch, dials):
+    calls, rows = dials
+    monkeypatch.setattr(host, "register_command", _deny)
+    monkeypatch.setattr(host, "release_command", _deny)
+    monkeypatch.setattr(host, "read_memory_status", _deny)
+    hcc.register_spawn("k", 1.0, 5, host)
+    hcc.release_spawn("k", 5, host)
+    hcc.admit_before_spawn("k", 1.0, host, 9)
+    assert calls == ["box_memory.register", "box_memory.release", "box_memory.admit"]

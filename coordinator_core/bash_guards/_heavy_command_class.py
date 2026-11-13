@@ -17,6 +17,7 @@ TRAP: a scoped run is not a light run. One scoped vitest file has held an 8.6 GB
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import dataclasses
 import os
 import re
@@ -672,10 +673,34 @@ def _holders_suffix(host: Any, adm_path: Any) -> str:
         return ""
 
 
+_IN_ENGINE: contextvars.ContextVar[bool] = contextvars.ContextVar("box_memory_in_engine", default=False)
+
+
+@contextlib.contextmanager
+def in_engine():
+    """Mark the enclosed body as running inside the engine: a PermissionError arm there takes the
+    advisory path instead of dialing the engine again."""
+    token = _IN_ENGINE.set(True)
+    try:
+        yield
+    finally:
+        _IN_ENGINE.reset(token)
+
+
+def _record_advisory(key: str, pid: Optional[int]) -> None:
+    try:
+        from coordinator_core.warm import telemetry
+
+        telemetry.record_sandbox_advisory_admit(key=key, pid=pid)
+    except Exception:
+        pass
+
+
 def _engine_call(method: str, params: dict) -> Optional[dict]:
     """One warm-engine JSON-RPC call from inside a sandbox; None when the engine is unreachable.
     `hook_path=True`: a miss goes cold at once and never boots an engine that would inherit the
-    sandbox token. Imported lazily to keep the default path's import budget."""
+    sandbox token. Imported lazily to keep the default path's import budget.
+    Callers on a PermissionError arm gate on `_IN_ENGINE` first: inside the engine this would recurse."""
     try:
         from coordinator_core.warm.client import try_warm_dispatch
 
@@ -696,14 +721,9 @@ def _admit_via_engine(
         params["register_pid"] = register_pid
     if session_id:
         params["session_id"] = session_id
-    reply = _engine_call("box_memory.admit", params)
+    reply = None if _IN_ENGINE.get() else _engine_call("box_memory.admit", params)
     if reply is None:
-        try:
-            from coordinator_core.warm import telemetry
-
-            telemetry.record_sandbox_advisory_admit(key=key, pid=register_pid)
-        except Exception:
-            pass
+        _record_advisory(key, register_pid)
         return SpawnAdmission(
             True, "ADMIT %s: advisory, memory unreadable under sandbox and engine unreachable" % key,
             key, peak_gib)
@@ -801,7 +821,9 @@ def register_spawn(key: str, peak_gib: float, pid: int, host: Any = None) -> boo
         host.register_command(host.admission_file(), key, pid, peak_gib)
         return True
     except PermissionError:
-        # Trap: inside the engine (`box_memory.admit` -> `_admit_local`) this arm would dial the engine itself.
+        if _IN_ENGINE.get():
+            _record_advisory(key, pid)
+            return False
         reply = _engine_call("box_memory.register", {"key": key, "peak_gib": peak_gib, "pid": pid})
         result = reply.get("result") if reply else None
         return bool(isinstance(result, dict) and result.get("ok"))
@@ -815,6 +837,9 @@ def release_spawn(key: str, pid: int, host: Any = None) -> None:
         host = host or _load_box_memory_host()
         host.release_command(host.admission_file(), key, pid)
     except PermissionError:
+        if _IN_ENGINE.get():
+            _record_advisory(key, pid)
+            return
         _engine_call("box_memory.release", {"key": key, "pid": pid})
     except Exception:
         pass

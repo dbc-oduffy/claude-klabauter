@@ -67,10 +67,11 @@ def admit(params, repo_root=None):
     p = _checked("box_memory.admit", params, _ADMIT_SCHEMA)
     from coordinator_core.bash_guards import _heavy_command_class as hcc
 
-    verdict = hcc._admit_local(
-        p["key"], float(p["default_peak_gib"]), hcc._load_box_memory_host(), p.get("register_pid"),
-        wait_kw=None, session_id=p.get("session_id", ""),
-    )
+    with hcc.in_engine():
+        verdict = hcc._admit_local(
+            p["key"], float(p["default_peak_gib"]), hcc._load_box_memory_host(), p.get("register_pid"),
+            wait_kw=None, session_id=p.get("session_id", ""),
+        )
     return {
         "admitted": bool(verdict.admitted), "reason": verdict.reason, "key": verdict.key,
         "peak_gib": verdict.peak_gib, "measured": True,
@@ -85,7 +86,8 @@ def register(params, repo_root=None):
 
     host = hcc._load_box_memory_host()
     try:
-        host.register_command(host.admission_file(), p["key"], p["pid"], float(p["peak_gib"]))
+        with hcc.in_engine():
+            host.register_command(host.admission_file(), p["key"], p["pid"], float(p["peak_gib"]))
     except OSError:
         return {"ok": False}
     return {"ok": True}
@@ -99,7 +101,8 @@ def release(params, repo_root=None):
 
     host = hcc._load_box_memory_host()
     try:
-        host.release_command(host.admission_file(), p["key"], p["pid"])
+        with hcc.in_engine():
+            host.release_command(host.admission_file(), p["key"], p["pid"])
     except OSError:
         pass
     return {"ok": True}

@@ -78,6 +78,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
 
 from coordinator_core import dispatch_abandon
+from coordinator_core.git_lock_retry import DEFAULT_BACKOFF_SCHEDULE_S
 from coordinator_core.git import index_write
 from coordinator_core.warm import dispatch_fence
 from coordinator_core.git.git_dir import resolve_git_dir, resolve_git_common_dir
@@ -2137,7 +2138,8 @@ def _reset_index_paths(repo: Union[str, Path], paths: Sequence[str]) -> bool:
 
 
 #: Pause after each lock-busy post-ref splice attempt; one more attempt than entries.
-_SPLICE_LOCK_BACKOFF_SECS = (0.02, 0.04, 0.08, 0.16)
+#: Sleeping, not spinning: the schedule must outlast a live peer's index hold.
+_SPLICE_LOCK_BACKOFF_SECS = DEFAULT_BACKOFF_SCHEDULE_S
 
 _HEX_RE = re.compile(r"[0-9a-f]+")
 
