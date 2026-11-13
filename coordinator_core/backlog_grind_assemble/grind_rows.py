@@ -1080,6 +1080,32 @@ def _first_user_text(path: Path) -> Optional[str]:
     return None
 
 
+def _marker_texts(path: Path, marker: str) -> list[str]:
+    """Message texts (user/assistant string or text blocks) of the transcript ``path`` carrying ``marker``,
+    in file order. Lines without the marker are skipped before parsing."""
+    out: list[str] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if marker not in line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                message = obj.get("message") if isinstance(obj, dict) else None
+                content = message.get("content") if isinstance(message, dict) else None
+                if isinstance(content, str):
+                    out.append(content)
+                elif isinstance(content, list):
+                    out.extend(
+                        b["text"] for b in content if isinstance(b, dict) and isinstance(b.get("text"), str)
+                    )
+    except OSError:
+        return []
+    return out
+
+
 def _record_token_from_transcript(open_marker: str) -> tuple[Optional[str], str]:
     """``(urlenc token, "")`` read from this session's newest agent transcript carrying ``open_marker``
     whose segment (``<len> <sha256>\\n<token>``) passes the ``check_relay`` gate against the digest the
@@ -1100,37 +1126,47 @@ def _record_token_from_transcript(open_marker: str) -> tuple[Optional[str], str]
         except OSError:
             return 0.0
 
-    files = sorted(
-        claude_home.glob(f"projects/*/{session}/subagents/workflows/*/agent-*.jsonl"), key=_mtime, reverse=True
+    # Agent transcripts carry the marker in their first user line; the firing session's own main
+    # transcript (projects/<any>/<session>.jsonl) carries it in a later message, so it is scanned whole.
+    agent_files = sorted(
+        claude_home.glob(f"projects/*/{session}/subagents/**/agent-*.jsonl"), key=_mtime, reverse=True
     )
-    for transcript in files:
-        text = _first_user_text(transcript)
-        if text is None or open_marker not in text:
+    main_files = sorted(claude_home.glob(f"projects/*/{session}.jsonl"), key=_mtime, reverse=True)
+    candidates: list[tuple[Path, list[str]]] = []
+    for transcript in agent_files:
+        first = _first_user_text(transcript)
+        candidates.append((transcript, [first] if first is not None else []))
+    for transcript in main_files:
+        candidates.append((transcript, _marker_texts(transcript, open_marker)))
+    for transcript, texts in candidates:
+        texts = [t for t in texts if open_marker in t]
+        if not texts:
             continue
         refusal = (
             f"{contract.RELAY_CORRUPT_HEAD}: --{contract.RECORD_FROM_TRANSCRIPT_FLAG} found no segment "
             f"between {open_marker!r} and {close_marker!r} in {transcript.name}"
         )
-        # Trap: the harness indents every line of a computed prompt, so the markers and the segment
-        # lines arrive with leading spaces; match whole stripped lines, never raw offsets.
-        lines = [ln.strip() for ln in text.replace("\r\n", "\n").split("\n")]
-        for i, line in enumerate(lines):
-            if line != open_marker:
-                continue
-            try:
-                end = lines.index(close_marker, i + 1)
-            except ValueError:
-                continue
-            parts = contract.split_record_segment("\n".join(ln for ln in lines[i + 1:end] if ln))
-            if parts is None:
-                continue
-            token, length, sha256 = parts
-            bad = contract.check_relay(
-                contract.RECORD_FROM_TRANSCRIPT_FLAG, token, length, sha256, contract.RECORD_SEGMENT_CAUSE
-            )
-            if bad is None:
-                return token, ""
-            refusal = bad
+        for text in reversed(texts):
+            # Trap: the harness indents every line of a computed prompt, so the markers and the segment
+            # lines arrive with leading spaces; match whole stripped lines, never raw offsets.
+            lines = [ln.strip() for ln in text.replace("\r\n", "\n").split("\n")]
+            for i, line in enumerate(lines):
+                if line != open_marker:
+                    continue
+                try:
+                    end = lines.index(close_marker, i + 1)
+                except ValueError:
+                    continue
+                parts = contract.split_record_segment("\n".join(ln for ln in lines[i + 1:end] if ln))
+                if parts is None:
+                    continue
+                token, length, sha256 = parts
+                bad = contract.check_relay(
+                    contract.RECORD_FROM_TRANSCRIPT_FLAG, token, length, sha256, contract.RECORD_SEGMENT_CAUSE
+                )
+                if bad is None:
+                    return token, ""
+                refusal = bad
         return None, refusal
     return None, (
         f"--{contract.RECORD_FROM_TRANSCRIPT_FLAG}: no agent transcript of session {session} carries {open_marker!r}"

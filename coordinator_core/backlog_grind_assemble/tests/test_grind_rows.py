@@ -973,6 +973,53 @@ class TestRunRecordFromTranscript:
         assert "no agent transcript" in capsys.readouterr().err
         assert not (repo / "state").exists()
 
+    def _write_main_transcript(self, home: Path, project: str, prompt: str) -> Path:
+        d = home / "projects" / project
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / f"{self.SESSION}.jsonl"
+        lines = [
+            json.dumps({"type": "user", "message": {"role": "user", "content": "unrelated first prompt"}}),
+            json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}}),
+        ]
+        f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return f
+
+    def test_marker_in_firing_session_main_transcript_lands_regardless_of_repo_root(self, tmp_path, monkeypatch):
+        from urllib.parse import quote
+
+        from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+
+        record = _record(v="main")
+        token = quote(json.dumps(record), safe="")
+        open_m, close_m = contract.record_markers(self.RUN_ID)
+        home, repo = tmp_path / "home", tmp_path / "experiments"
+        repo.mkdir()
+        self._write_main_transcript(home, "-general-work", self._prompt(open_m, close_m, token))
+        self._env(monkeypatch, home)
+        assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_OK
+        landed = repo / "state" / "queue-grind" / "bug" / "runs" / f"{self.RUN_ID}.json"
+        assert json.loads(landed.read_text(encoding="utf-8"))["v"] == "main"
+
+    def test_main_transcript_of_another_session_is_not_scanned(self, tmp_path, monkeypatch, capsys):
+        from urllib.parse import quote
+
+        from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+
+        token = quote(json.dumps(_record(v="x")), safe="")
+        open_m, close_m = contract.record_markers(self.RUN_ID)
+        home, repo = tmp_path / "home", tmp_path / "repo"
+        repo.mkdir()
+        other = home / "projects" / "p"
+        other.mkdir(parents=True)
+        (other / "some-other-session.jsonl").write_text(
+            json.dumps({"type": "user", "message": {"role": "user", "content": self._prompt(open_m, close_m, token)}})
+            + "\n",
+            encoding="utf-8",
+        )
+        self._env(monkeypatch, home)
+        assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_USAGE
+        assert not (repo / "state").exists()
+
     def test_transcript_flag_with_another_record_source_is_usage(self, tmp_path):
         exit_code = grind_rows.main(
             [

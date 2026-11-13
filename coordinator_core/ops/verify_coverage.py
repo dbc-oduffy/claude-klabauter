@@ -192,6 +192,15 @@ def discover_artifacts(root: str) -> dict:
                 if os.path.exists(skill_file):
                     skills[f"{plugin}:{entry.name}"] = skill_file
 
+        # An engine-homed skill ships as a Workflow script (`workflows/<name>.js|.mjs`),
+        # addressed `<plugin>:<name>` -- e.g. `coordinator:engine-ask`.
+        workflows_dir = os.path.join(plugin_dir, "workflows")
+        if os.path.isdir(workflows_dir):
+            for entry in sorted(os.scandir(workflows_dir), key=lambda e: e.name):
+                stem, ext = os.path.splitext(entry.name)
+                if entry.is_file() and ext in (".js", ".mjs"):
+                    skills.setdefault(f"{plugin}:{stem}", entry.path)
+
         agents_dir = os.path.join(plugin_dir, "agents")
         if os.path.exists(agents_dir):
             for entry in sorted(os.scandir(agents_dir), key=lambda e: e.name):
@@ -254,6 +263,11 @@ def gitignored_dirs(root: str) -> Set[str]:
     }
 
 
+EXCLUDED_SUBPATHS: Set[Tuple[str, str]] = {("docs", "research"), ("naked-vs-coordinator", "runs")}
+"""(parent, child) directory pairs the walk skips: point-in-time research records whose
+bare `research` basename would over-match live trees if excluded by name alone."""
+
+
 def walk_markdown(
     root: str,
     exclude: Optional[Set[str]] = None,
@@ -286,6 +300,8 @@ def walk_markdown(
                 if entry.name in ("node_modules", ".git") or entry.name in exclude:
                     continue
                 if entry.name == "worktrees" and os.path.basename(d) == ".claude":
+                    continue
+                if (os.path.basename(d), entry.name) in EXCLUDED_SUBPATHS:
                     continue
                 if ignored_dirs and os.path.normcase(os.path.normpath(full)) in ignored_dirs:
                     continue
@@ -580,6 +596,9 @@ def main(argv: List[str]) -> int:
     # reviews/ and .coordinator-local/ (plan-sidecars) are the same day's DoE and
     # example-game-repo halts (cross-repo/inbox/2026-10-12-coordinator-content-repo-em-verify-coverage-
     # historical-carveout.md).
+    #
+    # runs/ (per-run DELIVERY records) and docs/research/ are point-in-time records
+    # too, and quote names since retired (EXCLUDED_SUBPATHS scopes research to docs/ and runs to naked-vs-coordinator/).
     #
     # A gitignored tree holds no doctrine surface whatever it is named; `ignored_dirs`
     # is the general rule and the basenames above cover the TRACKED historical classes.

@@ -134,6 +134,32 @@ def test_nonempty_unparseable_log_fails_loud(tmp_path):
         compute_harvest_debt(specs_dir, log_path)
 
 
+@pytest.mark.parametrize(
+    "header",
+    [
+        "# Distillation Log (canonical)\n# Columns: run | path | disposition | fate\n",
+        "# Distillation Log\n\n| run | path | disposition | fate |\n|---|---|---|---|\n",
+    ],
+)
+def test_canonical_header_only_log_is_zero_rows(tmp_path, header):
+    specs_dir = _seed_specs(tmp_path, ["a.md"])
+    log_path = _write_log(tmp_path, header)
+    result = compute_harvest_debt(specs_dir, log_path)
+    assert result.harvested_count == 0
+    assert result.harvest_debt == ["2026-07/a.md"]
+
+
+def test_header_plus_unparseable_content_still_fails_loud(tmp_path):
+    specs_dir = _seed_specs(tmp_path, ["a.md"])
+    log_path = _write_log(
+        tmp_path,
+        "# Distillation Log (canonical)\n# Columns: run | path | disposition | fate\n"
+        "garbage that is not a row\n",
+    )
+    with pytest.raises(DistillationLogUnparseableError):
+        compute_harvest_debt(specs_dir, log_path)
+
+
 def test_run_header_only_log_is_legitimately_zero_rows(tmp_path):
     # A log containing only a bare run header (a run that opened but has not
     # logged any rows yet) is NOT the same defect -- it must not raise.

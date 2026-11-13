@@ -45,6 +45,31 @@ def test_refuses_output_path_outside_scratch(tmp_path, bad) -> None:
         _handler({"tag_counts": _COUNTS, "output_path": bad}, repo_root=_common_dir(tmp_path))
 
 
+def test_run_id_alone_defaults_output_path(tmp_path) -> None:
+    reply = _handler({"tag_counts": _COUNTS, "run_id": "r9"}, repo_root=_common_dir(tmp_path))
+    assert reply["output_path"] == "state/scratch/artifact-distillation/r9/curated.json"
+    assert (tmp_path / reply["output_path"]).is_file()
+    assert reply["curated_verdict_count"] == 3
+
+
+def test_explicit_output_path_wins_over_run_id(tmp_path) -> None:
+    reply = _handler(
+        {"tag_counts": _COUNTS, "run_id": "r9", "output_path": "state/scratch/x.json"},
+        repo_root=_common_dir(tmp_path),
+    )
+    assert reply["output_path"] == "state/scratch/x.json"
+
+
+@pytest.mark.parametrize("bad", [None, "", "../x", "a/b", "..", 5])
+def test_refuses_missing_or_unsafe_run_id_without_output_path(tmp_path, bad) -> None:
+    params = {"tag_counts": _COUNTS}
+    if bad is not None:
+        params["run_id"] = bad
+    with pytest.raises(ValueError, match="run_id"):
+        _handler(params, repo_root=_common_dir(tmp_path))
+    assert not (tmp_path / "state").exists()
+
+
 def test_refuses_degraded_curation_and_writes_nothing(tmp_path) -> None:
     with pytest.raises(ValueError):
         _handler({"tag_counts": {}, "output_path": "state/scratch/x.json"}, repo_root=_common_dir(tmp_path))

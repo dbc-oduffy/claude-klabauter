@@ -10,8 +10,11 @@ that op stays pure.
 Wire params:
     tag_counts (dict[str, int], REQUIRED), keep_threshold (int, optional) — as for
         distill.curate_clusters.
-    output_path (str, REQUIRED) — repo-relative target, confined to
+    output_path (str, optional) — repo-relative target, confined to
         ``state/scratch/``; written whole, atomically (create-or-full-rewrite).
+    run_id (str, optional) — when ``output_path`` is absent, the target defaults to
+        ``state/scratch/artifact-distillation/<run_id>/curated.json``. One of the two
+        is required.
 
 File shape: the ``distill.curate_clusters`` return verbatim (``verdicts``, ``counts``,
 ``threshold_applied``, ``threshold_auto``, ``nugget_drop_share``, ``contradictionClusters``,
@@ -26,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -36,6 +40,8 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.wire_paths import rel_id
 
 _SCRATCH_PREFIX = ("state", "scratch")
+_DEFAULT_DIR = (*_SCRATCH_PREFIX, "artifact-distillation")
+_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def curated_file_payload(result: dict) -> dict:
@@ -85,8 +91,17 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "(_origin_worktree); repo_root is None."
         )
     output_path = params.get("output_path")
-    if not isinstance(output_path, str) or not output_path:
-        raise ValueError("distill.write_curated_clusters requires an output_path param")
+    if output_path is None or output_path == "":
+        run_id = params.get("run_id")
+        if not isinstance(run_id, str) or not _RUN_ID_RE.fullmatch(run_id):
+            raise ValueError(
+                "distill.write_curated_clusters requires output_path, or run_id "
+                "(letters, digits, '.', '_', '-') to default it to "
+                f"{'/'.join(_DEFAULT_DIR)}/<run_id>/curated.json"
+            )
+        output_path = "/".join((*_DEFAULT_DIR, run_id, "curated.json"))
+    elif not isinstance(output_path, str):
+        raise ValueError("distill.write_curated_clusters: output_path must be a string")
 
     keep_threshold = params.get("keep_threshold", _AUTO)
     if keep_threshold is not _AUTO and (

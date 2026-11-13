@@ -389,6 +389,69 @@ def test_a_live_docs_page_with_the_same_ref_is_still_flagged(tmp_path):
     assert r["json"]["violations"][0]["ref"] == "coordinator:ghost-thing"
 
 
+def test_engine_homed_workflow_skill_resolves(tmp_path):
+    root = _scaffold(
+        tmp_path,
+        {"coordinator": {"skills": ["plan"]}},
+        {
+            "coordinator/workflows/engine-ask.js": "export const meta = {name: 'engine-ask'}\n",
+            "coordinator/workflows/review-wave.mjs": "export const meta = {}\n",
+            "coordinator/workflows/_shared/helper.js": "x\n",
+            "docs/reference/live-page.md": (
+                "# Live\n\nCall `coordinator:engine-ask` and `coordinator:review-wave`.\n"
+            ),
+        },
+    )
+    r = _run(root, root)
+    assert r["exit"] == 0, r["json"]
+    assert "coordinator:engine-ask" in vc.discover_artifacts(str(root))["skills"]
+    assert "coordinator:_shared" not in vc.discover_artifacts(str(root))["skills"]
+
+
+def test_nonexistent_workflow_ref_still_flagged(tmp_path):
+    root = _scaffold(
+        tmp_path,
+        {"coordinator": {"skills": ["plan"]}},
+        {
+            "coordinator/workflows/engine-ask.js": "x\n",
+            "docs/reference/live-page.md": "# Live\n\nCall `coordinator:engine-bogus`.\n",
+        },
+    )
+    r = _run(root, root)
+    assert r["exit"] == 1, r["json"]
+    assert r["json"]["violations"][0]["ref"] == "coordinator:engine-bogus"
+
+
+def test_run_records_and_docs_research_excluded_from_sweep(tmp_path):
+    root = _scaffold(
+        tmp_path,
+        {"coordinator": {"skills": ["plan"]}},
+        {
+            "naked-vs-coordinator/runs/r1/DELIVERY.md": "Used `coordinator:delivery-verifier`.\n",
+            "docs/research/2026-01-x.md": "Quotes `coordinator:test-evidence-parser`.\n",
+        },
+    )
+    r = _run(root, root)
+    assert r["exit"] == 0, r["json"]
+
+
+def test_research_exclusion_is_scoped_to_docs_not_every_research_dir(tmp_path):
+    root = _scaffold(
+        tmp_path,
+        {"coordinator": {"skills": ["plan"]}},
+        {
+            "docs/reference/live.md": "Dispatch `coordinator:ghost-thing`.\n",
+            "coordinator/research/live.md": "Dispatch `coordinator:ghost-two`.\n",
+        },
+    )
+    r = _run(root, root)
+    assert r["exit"] == 1, r["json"]
+    assert {v["ref"] for v in r["json"]["violations"]} == {
+        "coordinator:ghost-thing",
+        "coordinator:ghost-two",
+    }
+
+
 def test_non_excluded_dir_with_same_bogus_ref_is_flagged(tmp_path):
     root = _scaffold(
         tmp_path,
