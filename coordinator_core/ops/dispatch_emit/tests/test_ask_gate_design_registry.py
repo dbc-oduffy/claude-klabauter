@@ -103,3 +103,57 @@ def test_halted_verdicts_carry_no_brief(repo):  # noqa: F811
 
 def test_gate_verdict_default_brief_is_empty():
     assert GateVerdict("s", None).design_brief == ""
+
+
+UNREG_URL = "https://claude.ai/artifact/unreg-canvas-777"
+UNREG_ANCHOR = "design-registry:canvas-unreg-canvas-777"
+
+
+def _anchors(repo):
+    return [str(r.get(rr.ROW_ANCHOR) or "") for r in _rows(repo)]
+
+
+def test_an_unregistered_board_in_the_intent_mints_a_canvas_row_with_empty_scope(repo):  # noqa: F811
+    _git(repo)
+    _registry(repo)
+    _put(repo, intent=f"build the nudge from {UNREG_URL}")
+    verdict = gate(repo, REL, mint_design_rows=True)
+    assert verdict.halt is None
+    assert _anchors(repo).count(UNREG_ANCHOR) == 1
+    assert "unreg-canvas-777" in verdict.design_brief and "register" in verdict.design_brief
+    gate(repo, REL, mint_design_rows=True)
+    assert _anchors(repo).count(UNREG_ANCHOR) == 1
+
+
+def test_a_board_named_in_a_register_row_source_text_mints_a_canvas_row(repo):  # noqa: F811
+    _git(repo)
+    _put(
+        repo,
+        requirement_register={"rows": [{
+            "id": "R1", "source_text": f"see {UNREG_URL}", "anchor": "", "surface": "visual",
+            "status": "open", "claimed_by": [],
+        }]},
+    )
+    gate(repo, REL, mint_design_rows=True)
+    assert UNREG_ANCHOR in _anchors(repo)
+
+
+def test_a_registered_board_outside_scope_mints_no_canvas_duplicate(repo):  # noqa: F811
+    _git(repo)
+    _registry(repo)
+    _put(repo, intent="restyle https://claude.ai/artifact/fixture-canvas-001")
+    verdict = gate(repo, REL, writes=["src/app/other/page.tsx"], mint_design_rows=True)
+    assert not [a for a in _anchors(repo) if a.startswith("design-registry:canvas-")]
+    assert "Unregistered canvas boards" not in verdict.design_brief
+
+
+def test_no_registry_file_still_briefs_an_unregistered_board(repo):  # noqa: F811
+    _put(repo, intent=f"build from {UNREG_URL}")
+    verdict = gate(repo, REL)
+    assert "unreg-canvas-777" in verdict.design_brief and "no registry file" in verdict.design_brief
+
+
+def test_a_sizing_naming_no_board_and_no_scope_gets_no_brief(repo):  # noqa: F811
+    _registry(repo)
+    _put(repo)
+    assert gate(repo, REL).design_brief in ("", None)

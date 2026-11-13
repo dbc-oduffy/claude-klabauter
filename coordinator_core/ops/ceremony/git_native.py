@@ -3940,7 +3940,7 @@ def _within_one_index_read(func):
 
 @_emit_admission_advisory
 @_within_one_index_read
-def commit_scoped(
+def _commit_scoped_unfolded(
     paths: Sequence[str],
     msg_file: Union[str, Path],
     cwd: Union[str, Path],
@@ -4501,6 +4501,93 @@ def commit_scoped(
         detect_rollback=detect_rollback,
         declared_reverts=declared_reverts,
     )
+    return result
+
+
+def _fold_atlas_freshness(
+    root: Path, path_list: List[str]
+) -> Tuple[List[str], Dict[str, bytes], list]:
+    """Plan and apply the atlas drift repair for `path_list`.
+
+    Returns `(paths_with_repaired_pages, {page: prior_bytes}, facts)`. Spawn-free: `added` is read
+    off HEAD's tree spine in-process. Any failure records a best-effort `fold_error` and returns
+    the original paths with nothing written.
+    """
+    from coordinator_core.cartography import atlas_freshness as af
+
+    written: List[str] = []
+    prior: Dict[str, bytes] = {}
+    try:
+        deleted = [p for p in path_list if not (root / p).exists()]
+        head = _head_blobs(root, path_list)
+        added = [p for p in path_list if head.get(p) is None and p not in deleted]
+        plans, facts = af.plan_repair(root, path_list, deleted, added)
+        for plan in plans:
+            try:
+                prior[plan.page_relpath] = (root / plan.page_relpath).read_bytes()
+            except OSError:
+                continue
+        written = af.apply_repair(root, plans)
+        by_page = {pl.page_relpath: pl.files_delta for pl in plans}
+        at = af._today()
+        facts = list(facts) + [
+            af.ActedFact(pg, "", "repaired", f"files: {by_page.get(pg, 0):+d}", at) for pg in written
+        ]
+    except Exception as exc:  # noqa: BLE001 -- the fold never blocks a commit
+        _restore_pages(root, prior, written)
+        try:
+            af.record_acted(root, [af.ActedFact("", "", "fold_error", f"{type(exc).__name__}: {exc}"[:300])], "")
+        except Exception:  # noqa: BLE001
+            pass
+        return path_list, {}, []
+    existing = set(path_list)
+    return [*path_list, *[p for p in written if p not in existing]], {p: prior[p] for p in written if p in prior}, facts
+
+
+def _restore_pages(root: Path, prior: Dict[str, bytes], pages: Sequence[str]) -> None:
+    """Write each page's pre-fold bytes back; best-effort, so a failed commit leaves no fold residue."""
+    for page in pages:
+        if page in prior:
+            try:
+                (root / page).write_bytes(prior[page])
+            except OSError:
+                pass
+
+
+def commit_scoped(
+    paths: Sequence[str],
+    msg_file: Union[str, Path],
+    cwd: Union[str, Path],
+    **kwargs: Any,
+) -> GitResult:
+    """Commit exactly `paths`; semantics and kwargs are those of `_commit_scoped_unfolded`.
+
+    Before the mechanism choice, the atlas pages `paths` touch are repaired (`files:` count) and
+    staged into the same commit; what the engine did is recorded in the acted ledger after the
+    commit lands. A failed commit restores every page the fold rewrote.
+    """
+    path_list = list(paths)
+    root = Path(cwd)
+    prior: Dict[str, bytes] = {}
+    facts: list = []
+    if path_list:
+        path_list, prior, facts = _fold_atlas_freshness(root, path_list)
+    try:
+        result = _commit_scoped_unfolded(path_list, msg_file, cwd, **kwargs)
+    except BaseException:
+        _restore_pages(root, prior, list(prior))
+        raise
+    if not result.ok:
+        _restore_pages(root, prior, list(prior))
+        return result
+    if facts:
+        try:
+            from coordinator_core.cartography import atlas_freshness as af
+
+            head = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
+            af.record_acted(root, facts, head if len(head) == 40 else "unknown")
+        except Exception:  # noqa: BLE001 -- the ledger is advisory; the commit already landed
+            pass
     return result
 
 

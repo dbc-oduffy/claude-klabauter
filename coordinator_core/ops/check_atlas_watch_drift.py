@@ -24,6 +24,11 @@ Behavior summary (always returns rc 0 — informational):
              `MALFORMED <name>: <name>.watch.py output unparseable`.
            * Otherwise emit the line verbatim.
        - Else (no `.watch.py`): emit `FRESH <name> (no watch script)`.
+     Before either, the acted ledger (`atlas_freshness.read_acted`) is read once:
+     a page with an acted row whose `at` date is newer than its
+     `last_attested` date (absent/unparseable counts as older) emits
+     `ACTED <name> sha=<sha> kind=<kind>` instead, skipping the `.watch.py`
+     spawn and the STALE line for that page — the engine already acted on it.
   3. STALE walk (default-on, suppressible via `--no-stale-walk`):
      For each atlas page, parse frontmatter `last_attested:` date. If age in
      days exceeds `--stale-days N` (default 30), emit
@@ -37,7 +42,8 @@ CLI: --stale-days N              (default 30; alias --last-attested-stale-days;
      --no-stale-walk             (suppress STALE walk entirely)
 
 Negative-spec: does NOT modify any atlas page, does NOT trigger any audit,
-does NOT read or write `Last full audit`. Pure read. Bad/missing args and
+does NOT read or write `Last full audit`. Pure read (the acted ledger is read,
+never written). Bad/missing args and
 "not a git repo" / "no atlas dir" both degrade to an `ERROR ...` line (for
 bad args) or silent empty output (for missing repo/dir context) — the
 overall process ALWAYS returns rc 0, matching the bash oracle's
@@ -55,6 +61,7 @@ from datetime import date
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from coordinator_core.cartography.atlas_freshness import read_acted
 from coordinator_core.ops._git_root_util import git_root as _resolve_git_root
 
 _PROG = "check-atlas-watch-drift"
@@ -150,6 +157,27 @@ def _watch_line(repo_root: Path, systems_dir: Path, base: str) -> str:
     return f"MALFORMED {base}: {base}.watch.py output unparseable"
 
 
+def _acted_line(atlas_path: Path, base: str, acted: dict) -> Optional[str]:
+    """Return `ACTED <name> sha=<sha> kind=<kind>` when the ledger holds a fact
+    for this page dated after its `last_attested` (ISO dates order as strings);
+    an absent/unparseable `last_attested` is older than any acted fact."""
+    fact = acted.get(f"docs/architecture/systems/{base}.md")
+    if fact is None or not fact.at:
+        return None
+    attested = ""
+    try:
+        for candidate in atlas_path.read_text(encoding="utf-8").splitlines():
+            if candidate.startswith("last_attested:"):
+                m = re.match(r"^last_attested:\s*(\d{4}-\d{2}-\d{2})", candidate)
+                attested = m.group(1) if m else ""
+                break
+    except OSError:
+        attested = ""
+    if fact.at > attested:
+        return f"ACTED {base} sha={fact.sha} kind={fact.kind}"
+    return None
+
+
 def _stale_line(atlas_path: Path, base: str, stale_days: int, today: date) -> Optional[str]:
     """Return a `STALE ...` line if the atlas page's `last_attested` is aged
     past the threshold, OR if the field is absent/unparseable, else None.
@@ -230,9 +258,16 @@ def run(argv: List[str], cwd: Optional[Path] = None) -> Tuple[List[str], int]:
     atlas_pages = sorted(systems_dir.glob("*.md"))
     lines: List[str] = []
 
+    acted = read_acted(repo_root)
+    acted_bases = set()
     for atlas in atlas_pages:
         base = atlas.stem
-        lines.append(_watch_line(repo_root, systems_dir, base))
+        acted_line = _acted_line(atlas, base, acted) if acted else None
+        if acted_line is not None:
+            acted_bases.add(base)
+            lines.append(acted_line)
+        else:
+            lines.append(_watch_line(repo_root, systems_dir, base))
 
     if run_stale_walk:
         # Local calendar date — mirrors the bash oracle's `date +%s` (local
@@ -240,6 +275,8 @@ def run(argv: List[str], cwd: Optional[Path] = None) -> Tuple[List[str], int]:
         today = date.today()
         for atlas in atlas_pages:
             base = atlas.stem
+            if base in acted_bases:
+                continue
             stale = _stale_line(atlas, base, stale_days or _DEFAULT_STALE_DAYS, today)
             if stale is not None:
                 lines.append(stale)

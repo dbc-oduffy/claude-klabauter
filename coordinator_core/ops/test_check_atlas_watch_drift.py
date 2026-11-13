@@ -328,6 +328,64 @@ def test_no_atlas_dir_returns_empty(tmp_path):
     assert lines == []
 
 
+def _write_acted(repo, page, at, sha="abc1234", kind="repaired"):
+    import json
+
+    ledger = Path(repo) / ".coordinator-local" / "freshness" / "atlas-acted.jsonl"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    row = {"page": f"docs/architecture/systems/{page}.md", "sha": sha, "kind": kind, "detail": "", "at": at}
+    ledger.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+
+_DRIFT_WATCH = '#!/usr/bin/env python3\nprint("DRIFT mike expected=1 got=2")\n'
+
+
+def test_acted_page_newer_than_attested_emits_acted_and_skips_watch(tmp_path):
+    repo, systems = _init_repo(tmp_path)
+    old = (date.today() - timedelta(days=90)).isoformat()
+    _write_atlas(systems, "mike", last_attested=old)
+    _write_watch(systems, "mike", _DRIFT_WATCH)
+    _write_acted(repo, "mike", date.today().isoformat())
+
+    lines, rc = run([], cwd=Path(repo))
+    assert rc == 0
+    assert lines == ["ACTED mike sha=abc1234 kind=repaired"], lines
+
+
+def test_acted_page_older_than_attested_still_runs_watch(tmp_path):
+    repo, systems = _init_repo(tmp_path)
+    today = date.today().isoformat()
+    _write_atlas(systems, "mike", last_attested=today)
+    _write_watch(systems, "mike", _DRIFT_WATCH)
+    _write_acted(repo, "mike", (date.today() - timedelta(days=3)).isoformat())
+
+    lines, _ = run([], cwd=Path(repo))
+    assert lines == ["DRIFT mike expected=1 got=2"], lines
+
+
+def test_acted_page_without_attestation_emits_acted(tmp_path):
+    repo, systems = _init_repo(tmp_path)
+    _write_atlas(systems, "mike")
+    _write_acted(repo, "mike", date.today().isoformat(), kind="content_drift")
+
+    lines, _ = run([], cwd=Path(repo))
+    assert lines == ["ACTED mike sha=abc1234 kind=content_drift"], lines
+
+
+def test_acted_ledger_only_covers_its_own_page(tmp_path):
+    repo, systems = _init_repo(tmp_path)
+    old = (date.today() - timedelta(days=90)).isoformat()
+    _write_atlas(systems, "mike", last_attested=old)
+    _write_atlas(systems, "nov", last_attested=old)
+    _write_acted(repo, "mike", date.today().isoformat())
+
+    lines, _ = run([], cwd=Path(repo))
+    assert "ACTED mike sha=abc1234 kind=repaired" in lines
+    assert "FRESH nov (no watch script)" in lines
+    assert any(ln.startswith("STALE nov") for ln in lines), lines
+    assert not any(ln.startswith("STALE mike") for ln in lines), lines
+
+
 def test_no_git_repo_returns_empty(tmp_path):
     lines, rc = run([], cwd=Path(tmp_path))
     assert rc == 0

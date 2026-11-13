@@ -6509,7 +6509,8 @@ def compose_ask_script(
         "  const _widenList = [...(typeof _widened !== 'undefined' ? _widened : []), "
         "...((typeof _selfCorrection !== 'undefined' && _selfCorrection ? _selfCorrection.widened ?? [] : [])"
         ".map((p) => ({ row: 'review', path: p })))]; "
-        "if (_widenList.length && _nextAction && _nextAction.params) { _nextAction.params.widened = _widenList; }"
+        "if (_widenList.length && _nextAction && _nextAction.params) { _nextAction.params.widened = _widenList; } "
+        "if (_widenList.length && _halted && typeof _halted === 'object') { _halted.widened = _widenList; }"
     )
     b.append(
         f"  if (_resumeLedger && _nextAction && _nextAction.params && _gate.{RESUME_LEDGER_KEY}.inline_review "

@@ -4808,6 +4808,16 @@ class _ServerContext:
             # Completion delivery is engine work, even when no caller invokes an op.
             # Supersession and vanished-ladder retirement remain independent arms.
             idle.mark_invocation()
+        try:
+            import importlib
+
+            autofire = importlib.import_module("coordinator_core.distill.autofire")
+            if autofire.on_idle_tick(self.served_repos()):
+                idle.mark_invocation()
+        except Exception:  # noqa: BLE001 -- no autofire failure may escape the tick
+            import logging
+
+            logging.getLogger(__name__).warning("distill autofire tick failed", exc_info=True)
         from coordinator_core.session_ceremonies import retry_pending_notifications
 
         if retry_pending_notifications():

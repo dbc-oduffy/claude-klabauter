@@ -25,7 +25,8 @@ DESIGN_SURFACE = "visual"
 #: senior-front-end review sidecar, never the harvest output.
 DEFAULT_MET_BY_CLAUSE = (
     " Default met_by for a design-registry item judged 'met' with no ratification file of its own: "
-    "the senior-front-end review sidecar of the review wave named here (it must name the item's board); "
+    "the senior-front-end review sidecar of the review wave named here (it must name the item's board, "
+    "carry a `Side-by-side:` image line, and a `Render path:` line for `Tier: web-only` or `Tier: desktop-only` UI); "
     "never the harvest output or its directory. Wave senior-front-end review sidecars: "
 )
 #: Review verdicts that never meet a design row.
@@ -72,7 +73,9 @@ def brief_text(hits: Sequence[Mapping], registry_rel: Optional[str]) -> str:
         "it is the source the row is judged against. Meet each entry with a senior-front-end review "
         "or carry a ratified `design-deviation` block "
         "(`entry:`, `ratified_by:`), and declare `front-end` in review_signals. A senior-front-end "
-        "reviewer writes one `Board: <url>` line in its sidecar for each board it checked."
+        "reviewer writes one `Board: <url>` line in its sidecar for each board it checked, one "
+        "`Side-by-side: <repo-relative image path>` line for the rendered comparison image, and, for "
+        "single-tier UI (`Tier: web-only` or `Tier: desktop-only`), a `Render path: <how it was rendered>` line."
     ]
     for hit in hits:
         out.append("")
@@ -229,7 +232,44 @@ def _body_verdict(text: str) -> str:
     return re.sub(r"[\s-]+", "_", m.group(1).strip()).upper() if m else ""
 
 
-def _record_refusal(target: Path, board: str) -> Optional[str]:
+_SIDE_BY_SIDE_LINE = re.compile(r"(?m)^Side-by-side: (\S+)\s*$")
+_SINGLE_TIER_LINE = re.compile(r"(?m)^Tier: (?:web-only|desktop-only)\s*$")
+_RENDER_PATH_LINE = re.compile(r"(?m)^Render path: *(\S.*?)\s*$")
+_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+
+
+def _has_image_magic(path: Path) -> bool:
+    """True when the file's leading bytes are a PNG, JPEG or WEBP signature."""
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(12)
+    except OSError:
+        return False
+    return head.startswith((b"\x89PNG\r\n", b"\xff\xd8\xff")) or (head[:4] == b"RIFF" and head[8:12] == b"WEBP")
+
+
+def _render_refusal(root: Path, text: str, row_text: str) -> Optional[str]:
+    """Why a review record that names the board still carries no render evidence, else None:
+    every `Side-by-side:` path must be an existing image file outside docs/plans and the harvest
+    source, and single-tier UI must state its `Render path:`."""
+    paths = _SIDE_BY_SIDE_LINE.findall(text)
+    if not paths:
+        return "cites no Side-by-side image"
+    judged = _judged_source(root, row_text)
+    for rel in paths:
+        found = _contained_file(root, rel)
+        if (
+            found is None or found.suffix.lower() not in _IMAGE_SUFFIXES or not _has_image_magic(found)
+            or _in_plans(root, found) or _is_judged_source(found, judged)
+        ):
+            return f"Side-by-side {rel} is no image file under the repo root"
+    if _SINGLE_TIER_LINE.search(text) or _SINGLE_TIER_LINE.search(row_text):
+        if not _RENDER_PATH_LINE.search(text):
+            return "is single-tier UI with no Render path line"
+    return None
+
+
+def _record_refusal(root: Path, target: Path, board: str, row_text: str) -> Optional[str]:
     """Why `target` is no senior-front-end review of `board`, or None when it is."""
     try:
         text = target.read_text(encoding="utf-8-sig")
@@ -244,7 +284,7 @@ def _record_refusal(target: Path, board: str) -> Optional[str]:
         return f"carries verdict {verdict or '(none)'}"
     if board not in text:
         return "does not name the board"
-    return None
+    return _render_refusal(root, text, row_text)
 
 
 def _wave_agent_type(root: Path, entry: Mapping) -> str:
@@ -262,7 +302,7 @@ def _wave_agent_type(root: Path, entry: Mapping) -> str:
         return ""
 
 
-def _wave_refusal(root: Path, entry: Mapping, board: str) -> Optional[str]:
+def _wave_refusal(root: Path, entry: Mapping, board: str, row_text: str) -> Optional[str]:
     """Why this wave return is no senior-front-end review of `board`, or None when it is.
     The verdict comes from the schema-validated return, never from the sidecar."""
     if _wave_agent_type(root, entry) != SENIOR_FRONT_END:
@@ -280,7 +320,9 @@ def _wave_refusal(root: Path, entry: Mapping, board: str) -> Optional[str]:
         text = target.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
         return "is unreadable"
-    return None if board in text else "does not name the board"
+    if board not in text:
+        return "does not name the board"
+    return _render_refusal(root, text, row_text)
 
 
 def evidence_refusal(
@@ -305,7 +347,8 @@ def evidence_refusal(
     prefix = f"design row {row.get(rr.ROW_ID)} ({eid})"
     first = ""
 
-    judged = _judged_source(root, str(row.get(rr.ROW_TEXT) or ""))
+    row_text = str(row.get(rr.ROW_TEXT) or "")
+    judged = _judged_source(root, row_text)
 
     def passes(rel: str, label: str) -> bool:
         nonlocal first
@@ -324,7 +367,7 @@ def evidence_refusal(
         if target in cited_files:
             first = first or f"{label} {rel} is a plan, which cannot ratify"
             return False
-        why = _record_refusal(target, board) if board else "names no board URL on the row"
+        why = _record_refusal(root, target, board, row_text) if board else "names no board URL on the row"
         if why is None:
             return True
         first = first or f"{label} {rel} {why}"
@@ -337,7 +380,7 @@ def evidence_refusal(
     for entry in wave_reviews:
         if not isinstance(entry, Mapping) or _wave_agent_type(root, entry) != SENIOR_FRONT_END:
             continue
-        why = _wave_refusal(root, entry, board)
+        why = _wave_refusal(root, entry, board, row_text)
         if why is None:
             return None
         first = first or f"wave review {entry.get('sidecar_path')} {why}"

@@ -431,13 +431,16 @@ def gate(
 
     root = Path(repo_root)
     route_payload = None
+    sizing = None
     try:
         sizing = load_sizing(root, sizing_rel)
         scope = _design_scope(sizing, writes)
         route_payload, _ = design_route.read(sizing, sizing_rel)
     except SizingFireRefused:
         scope = []
+        sizing = None
     hits, error = dr.lookup(root, scope) if scope else ([], None)
+    canvas = _canvas_hits(root, sizing, hits or []) if sizing is not None and not error else []
     registry = dr.registry_path(root)
     try:
         shown = registry.relative_to(root.resolve()).as_posix()
@@ -451,13 +454,55 @@ def gate(
     )
     if route_payload is not None and verdict.design_route is None:
         verdict = replace(verdict, design_route=route_payload)
-    if verdict.halt is not None or not scope:
+    if verdict.halt is not None or not (scope or canvas):
         return verdict
     registry_rel = shown if registry.is_file() else None
-    brief = dc.brief_text(hits or [], registry_rel)
-    if mint_design_rows and hits:
-        dc.mint_rows(root, sizing_rel, hits)
+    brief = dc.brief_text(hits or [], registry_rel) if scope else ""
+    if canvas:
+        brief = "\n\n".join(part for part in (brief, _canvas_brief(canvas, registry_rel)) if part)
+    minted = list(hits or []) + canvas
+    if mint_design_rows and minted:
+        dc.mint_rows(root, sizing_rel, minted)
     return replace(verdict, design_brief=brief) if brief else verdict
+
+
+def _canvas_hits(root: Path, sizing: dict, hits: list) -> list:
+    """Hits for canvas boards the sizing names that no registry entry carries.
+
+    A board counts as registered when any entry of the whole registry names it, scope-matched or not.
+    """
+    from coordinator_core import design_registry as dr
+
+    texts = [str(sizing.get("intent") or "")]
+    for row in (sizing.get("requirement_register") or {}).get("rows") or []:
+        if isinstance(row, dict):
+            texts.append(str(row.get("source_text") or ""))
+    entries, _ = dr.load(root)
+    known = {m.group(1) for h in hits if (m := dr.ARTIFACT_URL_RE.search(str(h.get("board_url") or "")))}
+    known |= {m.group(1) for e in entries or [] if (m := dr.ARTIFACT_URL_RE.search(str(e.get("board") or "")))}
+    out: list = []
+    for text in texts:
+        for match in dr.ARTIFACT_URL_RE.finditer(text):
+            if match.group(1) in known:
+                continue
+            known.add(match.group(1))
+            out.append({
+                "id": f"canvas-{match.group(1)}", "board_url": match.group(0), "artboards": [],
+                "status": "unregistered", "paths": [],
+            })
+    return out
+
+
+def _canvas_brief(canvas: list, registry_rel: Optional[str]) -> str:
+    """Brief block naming each unregistered canvas board and the registration the author owes."""
+    where = registry_rel or "the design registry (no registry file exists yet)"
+    lines = [
+        f"Unregistered canvas boards named by this sizing: register each in {where} "
+        "(`id`, `board`, `artboards`, `harvest`, `sources`, `status`) and meet its design row with a "
+        "senior-front-end review that writes `Board: <url>` and a `Side-by-side: <repo-relative image path>` line for it."
+    ]
+    lines += [f"- {hit['board_url']} (row design-registry:{hit['id']})" for hit in canvas]
+    return "\n".join(lines)
 
 
 _SIZING_STEM_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-(?:[0-9a-f]{6}-\d+-)?")

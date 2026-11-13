@@ -22,6 +22,13 @@ SIDECAR = "state/reviews/wave-sfe.md"
 NOTED = "state/reviews/noted-sfe.md"
 
 
+def _shot(root):
+    """A real side-by-side image under `root`, returned as the `Side-by-side:` record line."""
+    (root / "shots").mkdir(exist_ok=True)
+    (root / "shots" / "sbs.png").write_bytes(b"\x89PNG\r\n")
+    return "Side-by-side: shots/sbs.png\n"
+
+
 @pytest.fixture
 def run(tmp_path):
     (tmp_path / ".git").mkdir()
@@ -45,7 +52,7 @@ def run(tmp_path):
 
 def test_case1_wave_sidecar_meets_the_row(run):
     root, run_dir, verdict = run
-    (root / SIDECAR).write_text(f"Board: {BOARD}\n", encoding="utf-8")
+    (root / SIDECAR).write_text(f"Board: {BOARD}\n{_shot(root)}", encoding="utf-8")
     ir = {"wave_reviews": [{"agent_type": "coordinator:senior-front-end", "sidecar_path": SIDECAR, "verdict": "APPROVED"}]}
     assert _ledger_gate(root, run_dir, verdict, inline_review=ir)[0] is None
 
@@ -53,7 +60,8 @@ def test_case1_wave_sidecar_meets_the_row(run):
 def test_case2_revise_noted_review_meets_the_row(run):
     root, run_dir, verdict = run
     (root / NOTED).write_text(
-        f"---\nagent_type: coordinator:senior-front-end\nverdict: APPROVED\n---\nBoard: {BOARD}\n", encoding="utf-8"
+        f"---\nagent_type: coordinator:senior-front-end\nverdict: APPROVED\n---\nBoard: {BOARD}\n{_shot(root)}",
+        encoding="utf-8",
     )
     rl.revise(root, RUN, note=f"the review is at {NOTED}.")
     assert _ledger_gate(root, run_dir, verdict, inline_review={})[0] is None

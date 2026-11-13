@@ -307,7 +307,7 @@ await fn(
   { run_stamp: '20261017T000000Z', script_path: 'x.mjs', profile_dir: 'pd', repo_root: '/r', run_token: 'tok' },
   agent, () => {}, () => {}, budget, async (xs) => Promise.all(xs),
 );
-const record = JSON.parse(decodeURIComponent([...ledgerPrompt.matchAll(/printf %s (\S+) >> \S+\.rec/g)].map((m) => m[1]).join('')));
+const record = JSON.parse(decodeURIComponent(/\nRUNREC-OPEN-\S+\n[^\n]*\n(\S+)\nRUNREC-CLOSE-/.exec(ledgerPrompt)[1]));
 const rulingFix = (fixPrompts.row0 || []);
 console.log(JSON.stringify({
   adjudicates: labels.filter((l) => l === 'adjudicate').length,

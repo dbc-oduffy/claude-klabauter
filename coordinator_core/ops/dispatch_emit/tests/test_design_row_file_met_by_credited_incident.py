@@ -26,12 +26,12 @@ _ANCHOR = "design-registry:gsd-tiled-chrome"
 _NO_SHA = "met_by: the commit sha that carries the credited work"
 
 
-def _resume(*, notes, r2_evidence):
+def _resume(*, notes, r2_evidence, r1_evidence="no sha here"):
     return {
         "run_id": "ask-prior", "plan": _RESUME["plan"], "blocking": ["R1", "R2"], "halt_sha": "a" * 40,
         "unlanded": [], "revise_notes": notes,
         "remaining": {
-            "R1": {"remaining": ["update the sizing"], "evidence": "no sha here"},
+            "R1": {"remaining": ["update the sizing"], "evidence": r1_evidence},
             "R2": {"remaining": ["update the sizing"], "evidence": r2_evidence},
         },
     }
@@ -62,7 +62,11 @@ def test_a_design_row_met_by_its_review_file_stays_met_when_the_revise_note_name
 
 
 def test_a_file_met_by_credited_only_by_the_row_evidence_stays_met(monkeypatch):
-    resume = _resume(notes=["R1 and R2 are ruled met by the landed work"], r2_evidence=f"the review in {_WORK}")
+    resume = _resume(
+        notes=["R1 and R2 are ruled met by the landed work"],
+        r1_evidence=f"landed in {_WORK}",
+        r2_evidence=f"the review in {_WORK}",
+    )
     out = _run(_script(monkeypatch), verify=_verdict([_REVIEW]), resume=resume)
     assert out["result"]["halted_by"] is None, out["result"]["halted_by"]
     assert "commit" in _labels(out)

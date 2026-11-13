@@ -32,9 +32,11 @@ def test_met_with_met_by_naming_no_evidence_file_is_also_not_met(run):
 def test_empty_met_by_does_not_downgrade_a_row_with_default_evidence(run):
     root, ledger, design, _ = run
     review = root / "review.md"
+    (root / "shots").mkdir()
+    (root / "shots" / "sbs.png").write_bytes(b"\x89PNG\r\n")
     review.write_text(
         "---\nagent_type: coordinator:senior-front-end\nverdict: APPROVED\n---\n"
-        "Checked https://claude.ai/design/p/abc123\n",
+        "Checked https://claude.ai/design/p/abc123\nSide-by-side: shots/sbs.png\n",
         encoding="utf-8",
     )
     wave = [{"agent_type": "coordinator:senior-front-end", "sidecar_path": "review.md", "verdict": "APPROVED"}]

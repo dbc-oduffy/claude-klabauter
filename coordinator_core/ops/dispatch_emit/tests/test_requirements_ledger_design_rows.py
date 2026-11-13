@@ -48,8 +48,17 @@ def _verdict(ledger, design, **item):
 
 def _review(root, name="review.md", reviewer="coordinator:senior-front-end", verdict="APPROVED"):
     path = root / name
-    path.write_text(f"---\nagent_type: {reviewer}\nverdict: {verdict}\n---\nChecked {BOARD}\n", encoding="utf-8")
+    path.write_text(
+        f"---\nagent_type: {reviewer}\nverdict: {verdict}\n---\nChecked {BOARD}\n{_shot(root)}", encoding="utf-8"
+    )
     return name
+
+
+def _shot(root):
+    """A real side-by-side image under `root`, returned as the `Side-by-side:` record line."""
+    (root / "shots").mkdir(exist_ok=True)
+    (root / "shots" / "sbs.png").write_bytes(b"\x89PNG\r\n")
+    return "Side-by-side: shots/sbs.png\n"
 
 
 def test_met_with_senior_front_end_record_passes(run):
@@ -108,7 +117,7 @@ def test_render_labels_design_row_by_origin(run):
 
 def test_judge_wave_review_and_noted_path_meet_a_design_row(run):
     root, ledger, design, _ = run
-    (root / "wave.md").write_text(f"Board: {BOARD}\n", encoding="utf-8")
+    (root / "wave.md").write_text(f"Board: {BOARD}\n{_shot(root)}", encoding="utf-8")
     wave = [{"agent_type": "coordinator:senior-front-end", "sidecar_path": "wave.md", "verdict": "APPROVED"}]
     assert rl.judge(ledger, _verdict(ledger, design, status="met"), repo_root=root, wave_reviews=wave)["pass"]
     bad = [{**wave[0], "verdict": "REJECTED"}]

@@ -15,6 +15,7 @@ pytestmark = pytest.mark.complete
 
 REL = "state/sizings/2026-10-16-design.yaml"
 BOARD = "https://claude.ai/design/p/abc123"
+SBS = "Side-by-side: shots/sbs.png\n"
 OTHER_BOARD = "https://claude.ai/design/p/zzz999"
 HIT = {
     "id": "settings", "board_url": BOARD, "artboards": ["Desktop", "Mobile"], "status": "designed",
@@ -34,6 +35,8 @@ def _sizing():
 @pytest.fixture
 def repo(tmp_path):
     (tmp_path / ".git").mkdir()
+    (tmp_path / "shots").mkdir()
+    (tmp_path / "shots" / "sbs.png").write_bytes(b"\x89PNG\r\n")
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / REL).write_text(yaml.safe_dump(_sizing(), sort_keys=False), encoding="utf-8")
     rl.start(tmp_path, "ask-20261016T000000-abc123")
@@ -65,7 +68,7 @@ def _record(repo, rel="reviews/fe.md", *, reviewer=None, agent_type=None, verdic
         fm.append(f"agent_type: {agent_type}")
     if verdict:
         fm.append(f"verdict: {verdict}")
-    return _write(repo, rel, "---\n" + "\n".join(fm) + f"\n---\nReviewed {body}\n")
+    return _write(repo, rel, "---\n" + "\n".join(fm) + f"\n---\nReviewed {body}\n{SBS}")
 
 
 def test_constants_and_vocabulary():
@@ -144,7 +147,7 @@ def test_refusing_or_absent_verdict_fails(repo, verdict):
 
 def _body_record(repo, section, fm_verdict=None):
     fm = "reviewer: senior-front-end\n" + (f"verdict: {fm_verdict}\n" if fm_verdict else "")
-    return _write(repo, "reviews/body.md", f"---\n{fm}---\nReviewed {BOARD}\n\n{section}\n")
+    return _write(repo, "reviews/body.md", f"---\n{fm}---\nReviewed {BOARD}\n{SBS}\n{section}\n")
 
 
 @pytest.mark.parametrize("section", ["## Verdict\n\n**APPROVED**", "## Verdict\n\nApproved with notes: tidy up"])
@@ -228,15 +231,15 @@ def _wave(path, agent_type="coordinator:senior-front-end", verdict="APPROVED"):
 
 def test_wave_default_passes_without_met_by(repo):
     row = _row(repo)
-    side = _write(repo, "reviews/wave.md", f"agent_type: review-findings\nBoard: {BOARD}\n")
+    side = _write(repo, "reviews/wave.md", f"agent_type: review-findings\nBoard: {BOARD}\n{SBS}")
     assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(side)]) is None
     assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(side, verdict="approved")]) is None
 
 
 def test_wave_return_without_agent_type_falls_back_to_sidecar_frontmatter(repo):
     row = _row(repo)
-    sfe = _write(repo, "reviews/sfe.md", f"---\nagent_type: coordinator:senior-front-end\n---\nBoard: {BOARD}\n")
-    code = _write(repo, "reviews/code.md", f"---\nagent_type: coordinator:code-reviewer\n---\nBoard: {BOARD}\n")
+    sfe = _write(repo, "reviews/sfe.md", f"---\nagent_type: coordinator:senior-front-end\n---\nBoard: {BOARD}\n{SBS}")
+    code = _write(repo, "reviews/code.md", f"---\nagent_type: coordinator:code-reviewer\n---\nBoard: {BOARD}\n{SBS}")
     assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(sfe, agent_type=None)]) is None
     assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(code, agent_type=None)]) is not None
 
@@ -247,14 +250,14 @@ def test_wave_return_without_agent_type_falls_back_to_sidecar_frontmatter(repo):
 ])
 def test_wave_default_refusals(repo, kw):
     row = _row(repo)
-    side = _write(repo, "reviews/wave.md", f"Board: {BOARD}\n")
+    side = _write(repo, "reviews/wave.md", f"Board: {BOARD}\n{SBS}")
     why = dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(side, **kw)])
     assert why is not None and "met_by names no file" in why
 
 
 def test_wave_sidecar_under_plans_or_wrong_board_refuses(repo):
     row = _row(repo)
-    plan = _write(repo, "docs/plans/p.md", f"Board: {BOARD}\n")
+    plan = _write(repo, "docs/plans/p.md", f"Board: {BOARD}\n{SBS}")
     other = _write(repo, "reviews/other.md", f"Board: {OTHER_BOARD}\n")
     assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(plan)]) is not None
     assert "board" in dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(other)])
@@ -274,7 +277,7 @@ def test_noted_path_meets_row_with_record_checks(repo):
 def test_failed_met_by_does_not_end_the_search(repo):
     row = _row(repo)
     bad = _record(repo, "reviews/bad.md", reviewer="coordinator:code-reviewer")
-    side = _write(repo, "reviews/wave.md", f"Board: {BOARD}\n")
+    side = _write(repo, "reviews/wave.md", f"Board: {BOARD}\n{SBS}")
     assert dc.evidence_refusal(repo, row, {"met_by": [bad]}, None, wave_reviews=[_wave(side)]) is None
     why = dc.evidence_refusal(repo, row, {"met_by": [bad]}, None)
     assert "senior-front-end" in why and "no revise-noted review" in why
@@ -309,3 +312,86 @@ def test_refusal_is_one_sentence_naming_the_row(repo):
     row = _row(repo)
     why = dc.evidence_refusal(repo, row, {"met_by": []}, None)
     assert row[rr.ROW_ID] in why and "settings" in why
+
+
+def _fe(repo, extra, rel="reviews/r.md", board=BOARD):
+    return _write(repo, rel, f"---\nreviewer: senior-front-end\nverdict: APPROVED\n---\nReviewed {board}\n{extra}")
+
+
+def test_no_side_by_side_line_is_refused(repo):
+    row = _row(repo)
+    rec = _fe(repo, "")
+    assert "Side-by-side" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
+    wave = _write(repo, "reviews/w.md", f"Board: {BOARD}\n")
+    assert "Side-by-side" in dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(wave)])
+
+
+@pytest.mark.parametrize("path", ["shots/missing.png", "shots/note.txt", "shots", "../escape.png", "docs/plans/x.png"])
+def test_side_by_side_must_be_an_existing_contained_image(repo, path):
+    row = _row(repo)
+    _write(repo, "shots/note.txt", "x\n")
+    _write(repo, "docs/plans/x.png", "x\n")
+    rec = _fe(repo, f"Side-by-side: {path}\n")
+    why = dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
+    assert "no image file under the repo root" in why and path in why
+
+
+def test_side_by_side_png_suffix_without_image_bytes_is_refused(repo):
+    row = _row(repo)
+    _write(repo, "shots/fake.png", "not an image\n")
+    rec = _fe(repo, "Side-by-side: shots/fake.png\n")
+    assert "no image file under the repo root" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
+
+
+@pytest.mark.parametrize("name,head", [
+    ("a.png", b"\x89PNG\r\n\x1a\n"), ("b.jpg", b"\xff\xd8\xff\xe0"), ("c.webp", b"RIFF\x00\x00\x00\x00WEBP"),
+])
+def test_side_by_side_with_image_signature_is_accepted(repo, name, head):
+    row = _row(repo)
+    (repo / "shots" / name).write_bytes(head)
+    rec = _fe(repo, f"Side-by-side: shots/{name}\n")
+    assert dc.evidence_refusal(repo, row, {"met_by": [rec]}, None) is None
+
+
+def test_every_side_by_side_path_must_resolve(repo):
+    row = _row(repo)
+    rec = _fe(repo, SBS + "Side-by-side: shots/gone.png\n")
+    assert "shots/gone.png" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
+
+
+def test_harvest_directory_image_is_not_a_side_by_side(repo):
+    row = _row(repo)
+    _write(repo, "docs/design/settings/frame.png", "x\n")
+    rec = _fe(repo, "Side-by-side: docs/design/settings/frame.png\n")
+    assert "no image file" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
+
+
+@pytest.mark.parametrize("tier", ["web-only", "desktop-only"])
+def test_single_tier_needs_a_render_path(repo, tier):
+    row = _row(repo)
+    rec = _fe(repo, f"{SBS}Tier: {tier}\n")
+    assert "Render path" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
+    empty = _fe(repo, f"{SBS}Tier: {tier}\nRender path:   \n", rel="reviews/e.md")
+    assert "Render path" in dc.evidence_refusal(repo, row, {"met_by": [empty]}, None)
+    ok = _fe(repo, f"{SBS}Tier: {tier}\nRender path: playwright against vite dev server\n", rel="reviews/ok.md")
+    assert dc.evidence_refusal(repo, row, {"met_by": [ok]}, None) is None
+
+
+def test_single_tier_declared_on_the_row_needs_a_render_path(repo):
+    row = _row(repo)
+    row = {**row, rr.ROW_TEXT: row[rr.ROW_TEXT] + "\nTier: web-only"}
+    rec = _fe(repo, SBS)
+    assert "Render path" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
+
+
+def test_wave_single_tier_needs_a_render_path(repo):
+    row = _row(repo)
+    bad = _write(repo, "reviews/w1.md", f"Board: {BOARD}\n{SBS}Tier: web-only\n")
+    good = _write(repo, "reviews/w2.md", f"Board: {BOARD}\n{SBS}Tier: web-only\nRender path: headless chrome\n")
+    assert "Render path" in dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(bad)])
+    assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(good)]) is None
+
+
+def test_brief_text_asks_for_render_lines():
+    text = dc.brief_text([HIT], "docs/design/registry.yaml")
+    assert "Side-by-side: <" in text and "Render path: <" in text

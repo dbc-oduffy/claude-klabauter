@@ -186,6 +186,25 @@ def test_stage_reply_schema_carries_the_parked_reply():
         jsonschema.validate({"parked": "plan", "plan_path": 3}, rs.STAGE_REPLY_SCHEMA)
 
 
+def test_stage_wait_park_reply_with_its_remedy_validates_and_keeps_the_blockers():
+    from coordinator_core.ops.dispatch_emit import ask_contract as ac
+    from coordinator_core.ops.dispatch_emit import ask_stage
+
+    blockers = ["ask-20261113T012537-15d3ff", "ask-20261110T161823-979415"]
+    reply = {
+        ac.PARKED_REPLY_KEY: ask_stage.STAGE_WAIT_PARKED,
+        "plan_path": None,
+        "waiting": {"blockers": blockers, "deadline": None},
+        "remedy": f"A blocker known dead: {ask_stage.release_remedy(blockers)}.",
+    }
+    jsonschema.validate(reply, rs.STAGE_REPLY_SCHEMA)
+    assert all(b in reply["remedy"] for b in blockers)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({**reply, "remedy": 3}, rs.STAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({**reply, "unknown_key": "x"}, rs.STAGE_REPLY_SCHEMA)
+
+
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import stage_root  # noqa: E402,F401
 
 

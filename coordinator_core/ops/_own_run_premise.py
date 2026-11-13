@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import List, Optional
 
 from coordinator_core.ops._path_guard import safe_id
+from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit import halted_withheld_index as _index
 from coordinator_core.ops.dispatch_emit import kept_work
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
@@ -90,6 +91,9 @@ def own_run_paths(repo_root: Path, sizing_rel: str) -> dict:
         if os.path.isfile(file):
             entry = _index._parse(file)
             paths.update(entry.paths if entry else ())
+    elif status == "resumed":
+        # mark_resumed drops the index entry; the marker still names what the halt withheld.
+        paths.update(_index._norm(p) for p in halted_run.halted_withheld(root / RECORD_DIR_ROOT / run_id) if p)
     paths.update(_kept_paths(root / RECORD_DIR_ROOT / run_id))
     return {path: run_id for path in paths}
 

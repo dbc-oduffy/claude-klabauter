@@ -141,6 +141,10 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
         if siblings is not None:
             refusal["siblings"] = siblings
         return refusal
+    if halted.get("widened"):
+        from coordinator_core.ops.dispatch_emit import in_run_widen
+
+        in_run_widen.record_widens(worktree_root / record_dir_rel, halted["widened"])
     hold_sid = params.get("session_id")
     if landing_hold.is_held(str(worktree_root), hold_sid):
         landing_hold.defer(str(worktree_root), hold_sid, "halted_record", params)
