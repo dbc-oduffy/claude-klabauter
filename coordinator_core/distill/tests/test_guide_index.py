@@ -73,6 +73,16 @@ def test_fenced_hash_lines_and_frontmatter_are_not_headings(tmp_path):
     assert by_slug["sharding"]["outline"][0] == "# Relay sharding"
 
 
+def test_long_headings_clip_at_a_word_boundary_with_an_ellipsis(tmp_path):
+    long = "Dogfood-context / tool-preference / orientation system-prompt layering and more"
+    short = "Short title"
+    _write(tmp_path, "docs/wiki/w.md", f"## {long}\n## {short}\n")
+    outline = build_index(tmp_path, {"w": "docs/wiki/w.md"})["guides"][0]["outline"]
+    assert outline[0] == "## Dogfood-context / tool-preference / orientation…"
+    assert outline[1] == f"## {short}"  # short titles are untouched, no ellipsis
+    assert long.startswith(outline[0][3:-1] + " ")  # clipped text is a whole-word prefix of the title
+
+
 def test_outline_stays_within_entry_byte_bound(tmp_path):
     _write(tmp_path, "docs/wiki/big.md", "".join(f"## {'h' * 80} {i}\n" for i in range(40)))
     idx = build_index(tmp_path, {"big": "docs/wiki/big.md"})

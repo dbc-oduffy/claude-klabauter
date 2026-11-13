@@ -2453,8 +2453,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "417a18c141871f12f1e58b1add716e1573c7f082",
-    "coordinator_core/_engine_stamp": "75a7274be4812af55e81ad2a7e210ab7b035ad2f",
+    "coordinator_core/_engine_published_at": "f6a85e611ed36121939a914559c2c4600b353c6f",
+    "coordinator_core/_engine_stamp": "98ae11b6b7f8996163bc4fa84ab03a4b4f70e935",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -3972,7 +3972,7 @@
     "coordinator_core/distill/autofire_launch.py": "5f82e077f795996f03111522363cfdb8801aa65b",
     "coordinator_core/distill/curation_status.py": "66bf21bd57238736a96b2e05af6ea12e9f47341d",
     "coordinator_core/distill/delete_guard.py": "20e14070e0ebbe6bf5083593ea3e4874e520932e",
-    "coordinator_core/distill/guide_index.py": "f0e412213606153b3521e061c6d59799df0c59f2",
+    "coordinator_core/distill/guide_index.py": "8393bf87d7396655f408d3ef0d788e3855efcc7a",
     "coordinator_core/distill/harvest_debt.py": "75401eb70b5d4f3fd09244ba5ab3d29ddb4b2a23",
     "coordinator_core/distill/log_append.py": "d396c38f407d23e7f08291581822123273494174",
     "coordinator_core/distill/log_normalize.py": "9d82acc67b15a0776dca0202345ef6f6bd652fea",
@@ -3994,7 +3994,7 @@
     "coordinator_core/distill/tests/test_curation_status.py": "1fff3d65920d83d1cd988b39723b21c3e0d35ff7",
     "coordinator_core/distill/tests/test_delete_guard.py": "19d52e05cc09dc1f1451c86705aac729c03dc55a",
     "coordinator_core/distill/tests/test_delete_guard_harvested_classes.py": "73d661dae8005395e00b517268c468a76d6e177a",
-    "coordinator_core/distill/tests/test_guide_index.py": "3de18dfe54f60cd6899644f3ed42ff2b4b54f930",
+    "coordinator_core/distill/tests/test_guide_index.py": "97c04ff5d0502cdf9e50ffde19ba65bab007e6cd",
     "coordinator_core/distill/tests/test_harvest_debt.py": "7efd5c496019d0c4f711ab58bb385677fb190b37",
     "coordinator_core/distill/tests/test_log_append.py": "6e276bccf17403173150cdc6a5c855fa89ed11a3",
     "coordinator_core/distill/tests/test_log_normalize.py": "7d04cb46ffb123d4d59a94fd377de5669bc551ad",
@@ -12009,5 +12009,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "408829a17417e94dc6f0bf72ad4a8286c3b57f49"
+  "source_head": "23bfd47d90d9586ab1fc1c54ff7b5e6e2cefb033"
 }

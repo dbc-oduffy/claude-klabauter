@@ -102,10 +102,21 @@ def _split_markdown(text: str) -> tuple[list[tuple[int, str]], str]:
     return headings, "\n".join(body)
 
 
+def _clip_title(title: str) -> str:
+    """Whole words only; a clipped title ends in an explicit ellipsis. The outline travels inside
+    a digest-checked slice, so a mid-word cut gets "repaired" by the reader and breaks the digest."""
+    if len(title) <= _OUTLINE_TITLE_MAX:
+        return title
+    head = title[: _OUTLINE_TITLE_MAX + 1]
+    cut = head.rfind(" ")
+    words = title[:cut].rstrip() if cut > 0 else title.split(" ", 1)[0]
+    return words + "…"
+
+
 def _outline(headings: list[tuple[int, str]], slug: str, path: str) -> list[str]:
     out: list[str] = []
     for level, title in headings[:_OUTLINE_MAX_HEADINGS]:
-        out.append(f"{'#' * level} {title[:_OUTLINE_TITLE_MAX]}")
+        out.append(f"{'#' * level} {_clip_title(title)}")
     while out and len(json.dumps({"slug": slug, "path": path, "outline": out}, separators=(",", ":")).encode()) > _ENTRY_MAX_BYTES:
         out.pop()
     return out
