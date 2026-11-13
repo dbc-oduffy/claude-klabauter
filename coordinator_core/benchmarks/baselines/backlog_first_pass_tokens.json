@@ -1,0 +1,64 @@
+{
+  "bar": 1000000,
+  "base": {
+    "batch_count": 1,
+    "dispatches_total": 30,
+    "files_outside_this_projection": 2145,
+    "input_bytes_by_phase": {
+      "load": 324538,
+      "scan": 280722
+    },
+    "input_bytes_total": 605260,
+    "scope_counts": {
+      "batches": 1,
+      "cohort_excluded": 3325,
+      "completed": 1154,
+      "deferred": 412,
+      "harvest": 258,
+      "harvest_debt_total": 663,
+      "harvest_debt_warn": 0,
+      "log_cited_plan_count": 711,
+      "logs": 371,
+      "mechanical": 0,
+      "memos": 190,
+      "not_admitted": 1733,
+      "plans": 220,
+      "scannable": 48,
+      "sidecars": 98,
+      "skip": 141
+    },
+    "scoped_file_count": 48,
+    "scoped_files_sha256": "856d2098dd913189be6c5884ddb4ae2c5a779b5aa38f11df8f5300e4c3903150",
+    "total_tokens": 151315,
+    "unreadable_file_count": 0
+  },
+  "base_over_bar": false,
+  "end": {
+    "artifacts_cited": 306,
+    "artifacts_not_opened": 138,
+    "artifacts_opened": 143,
+    "artifacts_path_only": 25,
+    "digest_tokens": 13119,
+    "process_ms": 230.2,
+    "process_ms_warm": 59.1,
+    "process_time_source": "invoke child cpu",
+    "rag_gap_forms": [
+      "changelog_resolve",
+      "doc_outline"
+    ],
+    "spawns": 0,
+    "synthesis_overhead_per_topic": 1500,
+    "topics": 109,
+    "total_tokens": 176619,
+    "weeks_total": 33,
+    "weeks_walked": 33
+  },
+  "end_method": "sum of TopicDigest token_proxy plus fixed per-topic synthesis overhead, bytes/4",
+  "end_mode": "backlog.triage_pass",
+  "end_passed": true,
+  "end_under_bar": true,
+  "method": "distill.scope projection priced by project_run_cost, bytes/4",
+  "mode": "baseline",
+  "repo_key": "repos.doe_claude",
+  "schema": "backlog-first-pass-tokens/v1"
+}

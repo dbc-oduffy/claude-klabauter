@@ -69,6 +69,8 @@ __all__ = [
     "fit_scan_tier",
     "attach_relevant_guides",
     "guide_paths",
+    "load_backlog_digests",
+    "topic_units",
 ]
 
 #: Required top-level fields of the CONSUMER (Workflow script) input shape —
@@ -88,15 +90,73 @@ CONSUMER_TOP_LEVEL_FIELDS: tuple[str, ...] = (
 CONSUMER_BATCH_FIELDS: tuple[str, ...] = ("batchId", "files", "description", "formatHints")
 
 
+def load_backlog_digests(repo_root: str | Path, run_id: str) -> dict[str, Any] | None:
+    """The backlog pass's ``digests.json`` for ``run_id`` under ``repo_root``, or None when the
+    file is absent, unreadable, or lacks a ``topics`` list (callers then keep the per-file path)."""
+    from coordinator_core.ops.backlog_triage_pass import OUT_DIR_REL  # noqa: PLC0415
+
+    if not run_id or ".." in run_id or "/" in run_id or "\\" in run_id:
+        return None
+    try:
+        data = json.loads((Path(repo_root) / OUT_DIR_REL / run_id / "digests.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and isinstance(data.get("topics"), list) else None
+
+
+def topic_units(digests: dict[str, Any]) -> list[dict[str, Any]]:
+    """One synthesis unit per TopicDigest, in digest order."""
+    return [
+        {
+            "topic": t["topic_key"],
+            "text": t.get("text", ""),
+            "tokens": t.get("tokens", 0),
+            "paths": list(t.get("paths", [])),
+        }
+        for t in digests["topics"]
+    ]
+
+
+def _topic_batches(digests: dict[str, Any], hints: dict[str, Any]) -> list[dict[str, Any]]:
+    units = topic_units(digests)
+    return [
+        {
+            "batchId": f"topic-{idx}",
+            "files": u["paths"],
+            "description": f"Topic {idx} of {len(units)}: {u['topic']} ({u['tokens']} tokens)",
+            "formatHints": dict(hints),
+            "topic": u["topic"],
+            "digest": u["text"],
+        }
+        for idx, u in enumerate(units, start=1)
+    ]
+
+
 def translate_to_workflow_input(
     manifest: dict[str, Any],
     *,
     repo_root: str,
     format_hints: dict[str, Any] | None = None,
     relevant_guides: list[list[dict[str, Any]]] | None = None,
+    digests: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     check_schema_version(manifest)
     hints = dict(format_hints) if format_hints is not None else {}
+
+    if digests is not None:
+        # One unit per topic; the manifest's per-file batches are not consulted.
+        topic_batches = _topic_batches(digests, hints)
+        wiki_slugs = wiki_slugs_as_dict(manifest)
+        return {
+            "runId": manifest["run_id"],
+            "repoRoot": repo_root,
+            "batches": topic_batches,
+            "wikiDirs": list(manifest["wiki_dirs"]),
+            "wikiSlugs": wiki_slugs,
+            "batch_count": len(topic_batches),
+            "total_file_count": sum(len(b["files"]) for b in topic_batches),
+            "wikiSlugCount": len(wiki_slugs),
+        }
 
     producer_batches: list[list[str]] = manifest["batches"]
     batches_out: list[dict[str, Any]] = []
@@ -421,6 +481,10 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
             _OP_KEY_SCOPE dependency — the caller already resolved a repo
             root via distill.scope's own dispatch).
         format_hints (dict, optional) — applied uniformly to every batch.
+        backlog_run_id (str, optional) — run whose ``state/scratch/backlog-pass/<id>/digests.json``
+            to read (default the manifest's run_id). When that file exists, ``batches`` is one
+            ``topic-N`` unit per TopicDigest (carrying ``topic`` and ``digest``) and no split runs; a topic whose digest is over the tier is named in
+            ``over_tier_batches``. Absent, the per-file path above is unchanged.
 
     Batches whose scan prompt projects over the long-prompt tier are digested, then split
     (``fit_scan_tier``); the returned ``batch_count`` is over the resulting batches. Batches a split
@@ -444,6 +508,29 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
     repo_root_param = params.get("repo_root")
     if not repo_root_param:
         raise ValueError("distill.workflow_input requires a non-empty 'repo_root' param")
+
+    backlog_digests = load_backlog_digests(
+        repo_root_param, params.get("backlog_run_id") or manifest["run_id"]
+    )
+    if backlog_digests is not None:
+        payload = translate_to_workflow_input(
+            manifest,
+            repo_root=repo_root_param,
+            format_hints=params.get("format_hints"),
+            digests=backlog_digests,
+        )
+        errors = validate_workflow_input(payload)
+        if errors:
+            raise ValueError(
+                "distill.workflow_input produced a payload that fails its own "
+                f"contract check: {errors}"
+            )
+        still_over = [
+            b["batchId"] for b in payload["batches"] if over_tier(estimate_tokens(len(b["digest"].encode("utf-8"))))
+        ]
+        if still_over:
+            payload["over_tier_batches"] = still_over
+        return payload
 
     wiki_slugs = wiki_slugs_as_dict(manifest)
     payload = translate_to_workflow_input(

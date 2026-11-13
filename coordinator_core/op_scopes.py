@@ -426,6 +426,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "updatedocs.gates":                       "common_dir",
     "updatedocs.sweeps":                      "common_dir",
     "distill.scope":                          "common_dir",
+    "post_run.finish":                       "show_top",
+    "backlog.triage_pass":                    "common_dir",
     # memo.fate_partition (C16, DR-228 § D6 scratch-tier) — keyed on git_common_dir:
     # handler resolves the caller's worktree via main_worktree_root(repo_root) and
     # reads main-worktree-rooted cross-repo/archive/*.md, writing its shard under

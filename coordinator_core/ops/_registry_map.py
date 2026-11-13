@@ -400,6 +400,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "docindex.emit":                          "coordinator_core.ops.docindex_emit",
     "memo.triage":                            "coordinator_core.ops.memo_triage",
     "distill.scope":                          "coordinator_core.ops.distill_scope",
+    "post_run.finish":                        "coordinator_core.ops.post_run_finish",
+    "backlog.triage_pass":                    "coordinator_core.ops.backlog_triage_pass",
     "distill.workflow_input":                 "coordinator_core.ops.distill_workflow_input",
     "memo.fate_partition":                    "coordinator_core.ops.memo_fate_partition",
     "workflow.validate":                      "coordinator_core.ops.workflow_validate",

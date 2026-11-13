@@ -112,6 +112,7 @@ HOMES = frozenset({
     "parked",
     "pending-patches",
     "plan-blitz",
+    "post-run",
     "problems",
     "queue-grind",
     "records",

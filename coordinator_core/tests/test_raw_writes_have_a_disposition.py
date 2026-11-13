@@ -316,6 +316,10 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
+    'coordinator_core/post_run/h1_normalize.py': ('in-repo-non-state', 'docs/wiki page rewrites normalising the H1, never state/: normalize'),
+    'coordinator_core/post_run/linkfix.py': ('in-repo-non-state', 'docs/wiki and docs/decisions page rewrites repairing links, never state/: fix'),
+    'coordinator_core/post_run/nav_index.py': ('in-repo-non-state', 'docs/wiki nav and _index page rewrites, never state/: rebuild'),
+    'coordinator_core/post_run/p5_audit.py': ('in-repo-non-state', 'evidence files under the post-run record home written for the scoped commit: run'),
     'coordinator_core/ops/backlog_pass_ledger.py': ('in-repo-non-state', 'mkdir of the backlog-pass record home; ledger rows go through atomic_append.append_line: record_run'),
     'coordinator_core/ops/repo_setup.py': ('outside-repo', 'rendered template files (open "w") and the .gitignore append (open "a") under the caller-supplied target root, never the engine checkout state/: _write_new, .gitignore block'),
     'coordinator_core/agent_pipe/__main__.py': ('outside-repo', 'relay worker result.json (tmp + os.replace), argv.json and agent log under <settings-home>/agent-pipe/runs/<run_id>, never the repo: _relay'),
@@ -355,6 +359,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/index_distribution/newer_index_marker.py': ('in-repo-non-state', 'newer-index marker json via tmp + os.replace under the repo index-distribution dir, never state/: write_marker'),
     'coordinator_core/backlog_grind_assemble/grind_fix_paths.py': ('in-repo-non-state', 'per-row fix-paths json via tmp + os.replace under the caller-supplied <run_dir>/fix-paths, a run-artifact dir, never state/: write'),
     'coordinator_core/cartography/atlas_catchup.py': ('ignored-target', 'watermark and pending json via tmp + os.replace under the gitignored .coordinator-local/freshness/: _write_json'),
+    'coordinator_core/ops/weekly_doc_files.py': ('ignored-target', 'wiki-tokens.json page-token cache via tmp + os.replace under the gitignored .coordinator-local/cache/plan-wiki-map/ (or the machine-local override): _wiki_index'),
     'coordinator_core/cartography/atlas_freshness.py': ('in-repo-non-state', 'files: frontmatter line rewrite of docs/architecture/systems pages (write_bytes) and acted-fact JSON lines appended to the gitignored .coordinator-local/freshness/atlas-acted.jsonl, never state/: apply_repair, record_acted'),
     'coordinator_core/distill/autofire.py': ('ignored-target', 'autofire claim file (os.open O_CREAT|O_EXCL, then write_text) at the gitignored .coordinator-local/distill-autofire/claim.json: _launch_claimed'),
     'coordinator_core/distill/autofire_launch.py': ('ignored-target', 'fire.mjs marker script written under the gitignored .coordinator-local/distill-autofire/: launch'),

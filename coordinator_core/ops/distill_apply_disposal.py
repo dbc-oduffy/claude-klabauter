@@ -355,13 +355,14 @@ def verify_stamp_and_throttle(manifest: dict[str, Any]) -> None:
 
 async def verify_drain_ordering(
     worktree_root: Path, harvest_committed_sha: str
-) -> None:
+) -> list[str]:
     """Gate 5: harvest_committed_sha must (a) be an ancestor of HEAD via
     `git merge-base --is-ancestor` (never a bare `git cat-file -e`, which
     passes for a dangling/stashed/unmerged-branch object — F4) AND (b) its
     own commit must touch the canonical log or the wiki tree (containment —
     a caller cannot satisfy the gate with an arbitrary unrelated ancestor
-    sha). Raises ApplyDisposalError on either failure."""
+    sha). Returns the harvest commit's sorted path list (the one `git show` this gate already
+    runs). Raises ApplyDisposalError on either failure."""
     env = _make_git_env()
 
     rc, _out, _err = await _run_git(
@@ -399,6 +400,7 @@ async def verify_drain_ordering(
             "drain-ordering gate with an arbitrary ancestor unrelated to the "
             "harvest (DR-228 § D2b(vii))."
         )
+    return sorted(touched)
 
 
 # ---------------------------------------------------------------------------
@@ -1352,6 +1354,7 @@ class ApplyDisposalResult:
     failed: list[dict[str, str]]
     denorm_written: list[dict[str, str]] = field(default_factory=list)
     denorm_skipped: list[dict[str, str]] = field(default_factory=list)
+    harvest_paths: list[str] = field(default_factory=list)
 
 
 async def apply_disposal_manifest(
@@ -1368,7 +1371,7 @@ async def apply_disposal_manifest(
     in that case.
     """
     verify_stamp_and_throttle(manifest)
-    await verify_drain_ordering(worktree_root, harvest_committed_sha)
+    harvest_paths = await verify_drain_ordering(worktree_root, harvest_committed_sha)
 
     plan = compute_apply_plan(worktree_root, manifest)
 
@@ -1496,6 +1499,7 @@ async def apply_disposal_manifest(
         failed=failed,
         denorm_written=denorm_written,
         denorm_skipped=plan.denorm_skipped,
+        harvest_paths=harvest_paths,
     )
 
 
@@ -1548,6 +1552,39 @@ def write_apply_receipt(
     return target
 
 
+RUN_RESULT_NAME = "run-result.json"
+_P5_MACHINERY_PREFIXES = (".coordinator-local/", "state/scratch/")
+
+
+async def _p5_inputs(worktree_root: Path, run_dir: Path, own_paths: set[str]) -> dict:
+    """The p5 audit's inputs: the run result JSON at `<run_dir>/run-result.json` and one
+    `git status --porcelain` read of the tree, taken before the finish's transform steps so their
+    outputs never read as unexplained. `own_paths` (the receipt and manifest) and the engine's own
+    scratch (`.coordinator-local/`, `state/scratch/`) are dropped from the read. `{}` when the run
+    left no result file; the audit then does not run (so no unexplained-change check applies).
+    Raises ValueError on an unreadable result or a failed status read."""
+    path = run_dir / RUN_RESULT_NAME
+    if not path.is_file():
+        return {}
+    try:
+        result = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"p5 audit: {RUN_RESULT_NAME} unreadable: {exc}") from exc
+    if not isinstance(result, dict):
+        raise ValueError(f"p5 audit: {RUN_RESULT_NAME} must hold a JSON object")
+    rc, out, err = await _run_git(
+        "--no-optional-locks", "status", "--porcelain", "--untracked-files=all",
+        cwd=worktree_root, env=_make_git_env(),
+    )
+    if rc != 0:
+        raise ValueError(f"p5 audit: git status failed: {err.decode('utf-8', 'replace').strip()}")
+    porcelain = [
+        ln for ln in out.decode("utf-8", "replace").splitlines()
+        if (rel := ln[3:].replace("\\", "/")) not in own_paths and not rel.startswith(_P5_MACHINERY_PREFIXES)
+    ]
+    return {"result": result, "porcelain": porcelain}
+
+
 @register_op("distill.apply_disposal")
 async def _handler(params: dict, repo_root: Path | None = None) -> dict:
     """distill.apply_disposal handler.
@@ -1567,7 +1604,12 @@ async def _handler(params: dict, repo_root: Path | None = None) -> dict:
     precedent).
 
     Returns a dict with keys: run_id, deleted_tracked, deleted_untracked,
-    already_deleted, newly_blocked, failed, receipt_path.
+    already_deleted, newly_blocked, failed, receipt_path, post_run.
+
+    `post_run` is `post_run.finish(pipeline="distill")` run in process after the receipt lands:
+    its own scoped commit over the harvest commit's paths plus the receipt and manifest as
+    evidence, separate from the disposal's single commit (DR-228 § D3). A tail that fails is
+    reported in `post_run.exit_code`; the disposal itself has already landed.
     """
     if repo_root is None:
         raise ValueError(
@@ -1601,7 +1643,25 @@ async def _handler(params: dict, repo_root: Path | None = None) -> dict:
 
     receipt_path = write_apply_receipt(worktree_root, result)
 
+    from coordinator_core.ops.post_run_finish import _handler as post_run_finish  # noqa: PLC0415
+
+    evidence = [rel_id(receipt_path, worktree_root), rel_id(manifest_path, worktree_root)]
+    finish_params: dict = {
+        "pipeline": "distill",
+        "run_id": result.run_id,
+        "touched": result.harvest_paths,
+        "evidence": evidence,
+    }
+    try:
+        finish_params.update(await _p5_inputs(worktree_root, manifest_path.parent, set(evidence)))
+    except ValueError as exc:
+        tail = {"exit_code": 1, "pipeline": "distill", "run_id": result.run_id, "error": str(exc),
+                "commit": None}
+    else:
+        tail = await asyncio.to_thread(post_run_finish, finish_params, repo_root=worktree_root)
+
     return {
+        "post_run": tail,
         "run_id": result.run_id,
         "deleted_tracked": result.deleted_tracked,
         "deleted_untracked": result.deleted_untracked,

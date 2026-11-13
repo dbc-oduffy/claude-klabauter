@@ -433,6 +433,17 @@
       },
       "_rationale": "Two scoped commits through ceremony.commit_v2's handler, one over the scaffolded stubs and one over the frozen gate report, each with explicit paths. Zero spawns: blitz_stage reads the gitignore verdict in process (git/ignore_match.py over the index) and hands it to commit_v2 as `ignored_untracked`, so commit_v2 runs no `git check-ignore`; a matcher gap omits the param and commit_v2 asks git itself. The refusal of new gitignored paths stays load-bearing and the count does not grow with the number of stubs. Counted by coordinator_core/ops/tests/test_roadmap_blitz_stage_spawn_count.py with exact equality."
     },
+    "post_run.finish": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "commit_scoped": 0
+      },
+      "_rationale": "Two linkfix passes, h1_normalize and nav_index run in process over one directory walk (os.scandir, names only, no git), then one scoped commit through ceremony.commit_v2's handler with explicit paths. Zero spawns: the gitignore verdict is computed in process (git/ignore_match.py over the index) and handed to commit_v2 as `ignored_untracked`, so commit_v2 runs no `git check-ignore`; a matcher gap omits the param and commit_v2 asks git itself. The count does not grow with the number of pages. Counted by coordinator_core/ops/tests/test_post_run_finish_spawn_count.py with exact equality."
+    },
     "dispatch.ask_gate": {
       "target_ms": 300,
       "tolerance": {

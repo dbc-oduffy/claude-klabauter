@@ -343,6 +343,11 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/daily_log.py",
         ("_daily_log_handler",),
     ),
+    # Spawn-free: changelog-first walk over a source checkout, os.walk and file reads only (fec434), 2026-11-13.
+    "backlog.triage_pass": (
+        "coordinator_core/ops/backlog_triage_pass.py",
+        ("_handler",),
+    ),
     "dispatch.emit": (
         "coordinator_core/ops/dispatch_emit/op.py",
         ("_dispatch_emit",),
@@ -7450,6 +7455,14 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # plan.mise_prep_probe: one reachable git site (HEAD sha read in `_head_sha`); the census
     # leg's per-entry shell spawns are the counted carve-out, bounded by `_census_deadline`.
     "plan.mise_prep_probe": 1,
+    # ceremony.plan_wiki_map (56c85f, 2026-11-13): two git sites in weekly_doc_files, the batched
+    # fallback taken only when no example-retrieval-repo doc_files view serves (`_git`, `_plan_texts`);
+    # constant count per call, never per plan.
+    "ceremony.plan_wiki_map": 2,
+    # post_run.finish (f1d3c8, 2026-11-13): the one run_git site and the detached halt-resume spawn
+    # are both reached through ceremony.commit_v2, the single scoped commit at the end of the
+    # finish; the transform steps (linkfix, h1_normalize, nav_index, p5 audit) spawn nothing.
+    "post_run.finish": 2,
     # review.reverify: static reachable-site ceiling, not execution evidence. The one site is
     # foreign_halted_withheld's run_git (probe-open and revert legs), reached once per still-held
     # halted run, so the dynamic count scales with halted runs; not enrolled.
@@ -7628,7 +7641,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # 10 -> 11, 2026-10-28: `_common.active_reference_guard_many` is a new reachable site (the
     # batched active/basename guards of `delete_guard.prefetch_citations`). Process count did not
     # grow: measured 4 rg per prefetch at 1 and at 7 needles, replacing per-candidate guard spawns.
-    "distill.apply_disposal": 11,
+    # Raised 11->12 2026-11-13 (f1d3c8): the post_run.finish tail adds ceremony.commit_v2's detached
+    # halt-resume spawn; its run_git site was already reachable. The tail replaces the hand commit
+    # done after every distill shard, so the box runs fewer processes per run, not more.
+    "distill.apply_disposal": 12,
     "memo.transition": 4,
     "merge_assemble.apply": 1,
     # 8 -> 9 -> 8, 2026-10-22: sweep_scratch asks `_unborn_scratch_repo.scratch_clone_failures`
@@ -7888,7 +7904,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.subagent_zero_tool_use_detect": 1,
     # 10 -> 7, 2026-10-12: sweep_boot reaches build_cache; the same three sites left its reach.
     "hooks.sweep_boot": 7,
-    "learn_lessons_pipeline.apply": 2,
+    # Raised 2->4 2026-11-13 (f1d3c8): the post_run.finish tail adds ceremony.commit_v2's run_git
+    # and detached halt-resume spawn, one scoped commit per lessons run in place of the hand
+    # commits of evidence files every lessons run needed.
+    "learn_lessons_pipeline.apply": 4,
     "learn_lessons_pipeline.brief": 2,
     "memo.correct_note": 4,
     "memo.heal_inbox": 3,

@@ -3567,6 +3567,13 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Governing DR: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D6
     # ---------------------------------------------------------------------------
     "distill.scope": OpClass.MUTATING,
+    # backlog.triage_pass — MUTATING: DR-228 § D6 scratch-tier writer (ops/backlog_triage_pass.py).
+    # DR-208 five-question affirmation: 1 YES (digests.json + triage-ledger.json, atomic
+    # create-or-full-rewrite via claimed_write.replace_bytes); 2 No (no rag store write);
+    # 3 YES (the atomic replace); 4 YES (state/scratch/backlog-pass/<run-id>/, invoking repo only,
+    # never source_repo); 5 YES (readable by the distill workflow after return).
+    # D6: write-confined to its run dir, no delete, no commit, schema_version pinned.
+    "backlog.triage_pass": OpClass.MUTATING,
     # strategic.generate — MUTATING: writes state/strategic/self-description.draft.yaml
     # under the caller-supplied target_root (ops/strategic/draft_writer.py write_draft —
     # unconditional yaml.safe_dump to the draft path). Mirrors percolate.run
@@ -5370,6 +5377,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # roadmap-baton stubs under state/handoffs/ and freezes a gate report under
     # state/plan-blitz/. It commits nothing.
     "roadmap.blitz_stage": OpClass.MUTATING,
+
+    # post_run.finish — MUTATING: ops/post_run_finish.py rewrites a run's wiki pages
+    # (links, H1s, _index pages) and lands them plus the run's evidence files as one
+    # explicit-path scoped commit through ceremony.commit_v2.
+    "post_run.finish": OpClass.MUTATING,
 
     # memo.check_deliveries — COMPUTE_ONLY: ops/fleet/memo_send.py
     # `_memo_check_deliveries`'s own docstring states plainly "'memo.

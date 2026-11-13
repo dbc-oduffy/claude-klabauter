@@ -52,6 +52,11 @@ ensure_bin_lib_bound` — the one stdlib-only leaf that puts the bin dir on
 `sys.path` and evicts a foreign `sys.modules["lib"]`, and the only home of
 that ladder in the tree.
 
+Tail: after every directive lands (exit 0), `apply` calls `post_run.finish(pipeline="lessons")`
+in process over the run's declared writes (`session.declared_writes`): wiki pages are the
+transformed set, every other declared path is evidence. A non-zero apply exit skips the tail; a
+tail that does not finish clean returns `APPLY_EXIT_PARTIAL_MUTATION`.
+
 Spec backlink: docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md § C4
 
 Negative-spec:
@@ -70,6 +75,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Optional
@@ -91,6 +97,9 @@ from coordinator_core.learn_lessons_pipeline import (
 )
 from coordinator_core.learn_lessons_pipeline.run_stamp import stamp_run_complete
 from coordinator_core.run_watermark import Watermark
+from coordinator_core.session.declared_writes import collecting, declare_write
+
+_WIKI_PREFIX = "docs/wiki/"
 
 #: This assembler's own name for `apply_base.assert_dispatchable`'s
 #: `ASSEMBLER_DISPATCHABLE` lookup (§ C5) — matches the key
@@ -234,6 +243,9 @@ def _dispatch_stamp_run_complete(args: list[str], repo_root: Path) -> dict[str, 
     promoted = run_watermark.promote(
         repo_root, lessons_run_dir(runs_dir, run_date), LESSONS_WATERMARK_KIND
     )
+    declare_write(sentinel)
+    if promoted:
+        declare_write(promoted)
     return {"sentinel": str(sentinel), "watermark": str(promoted) if promoted else None}
 
 
@@ -264,10 +276,61 @@ def apply(
         run_watermark.stage(
             Path(staged["run_dir"]), Watermark(**staged["proposed"])
         )
-    return apply_base.execute_directives(
-        envelope["directives"],
-        envelope["judgment_points"],
-        repo_root,
-        _DISPATCH_TABLE,
-        assembler_name=ASSEMBLER_NAME,
+    with collecting() as declared:
+        exit_code, report = apply_base.execute_directives(
+            envelope["directives"],
+            envelope["judgment_points"],
+            repo_root,
+            _DISPATCH_TABLE,
+            assembler_name=ASSEMBLER_NAME,
+        )
+    for path in declared:
+        declare_write(path)
+    if exit_code != apply_base.APPLY_EXIT_OK:
+        return exit_code, report
+    return _finish_run(repo_root, envelope["directives"], declared, report)
+
+
+def _run_id(directives: list[dict[str, Any]]) -> str:
+    """The lessons run's id: `learn-lessons-<run_date>` from the stamp directive, else today (UTC)."""
+    for directive in directives:
+        if directive.get("op") == "stamp-run-complete" and len(directive.get("args") or []) > 1:
+            return f"learn-lessons-{directive['args'][1]}"
+    return f"learn-lessons-{datetime.now(timezone.utc).date().isoformat()}"
+
+
+def _split_declared(repo_root: Path, declared: list[str]) -> tuple[list[str], list[str]]:
+    """Declared writes inside `repo_root` as repo-relative posix paths: (wiki pages, evidence)."""
+    root = repo_root.resolve()
+    pages: list[str] = []
+    evidence: list[str] = []
+    for raw in dict.fromkeys(declared):
+        path = Path(raw)
+        try:
+            rel = (path if path.is_absolute() else root / path).resolve().relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if rel.startswith(_WIKI_PREFIX) and rel.endswith(".md"):
+            pages.append(rel)
+        else:
+            evidence.append(rel)
+    return pages, evidence
+
+
+def _finish_run(
+    repo_root: Path, directives: list[dict[str, Any]], declared: list[str], report: dict[str, Any]
+) -> tuple[int, dict[str, Any]]:
+    """The tail of a clean apply: `post_run.finish` over what the run declared it wrote, in
+    process. A tail that does not finish clean is `APPLY_EXIT_PARTIAL_MUTATION`."""
+    from coordinator_core.ops.post_run_finish import _handler as post_run_finish  # noqa: PLC0415
+
+    pages, evidence = _split_declared(repo_root, declared)
+    tail = post_run_finish(
+        {"pipeline": "lessons", "run_id": _run_id(directives), "touched": pages, "evidence": evidence},
+        repo_root=repo_root,
     )
+    report["post_run"] = tail
+    if tail.get("exit_code") != 0:
+        report["failed_directive"] = "post_run.finish"
+        return apply_base.APPLY_EXIT_PARTIAL_MUTATION, report
+    return apply_base.APPLY_EXIT_OK, report

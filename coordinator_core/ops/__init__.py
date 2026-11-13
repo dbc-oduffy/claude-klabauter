@@ -532,6 +532,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.docindex_emit", 'registers "docindex.emit"'),
     ("coordinator_core.ops.memo_triage", 'registers "memo.triage"'),
     ("coordinator_core.ops.distill_scope", 'registers "distill.scope"'),
+    ("coordinator_core.ops.post_run_finish", 'registers "post_run.finish"'),
+    ("coordinator_core.ops.backlog_triage_pass", 'registers "backlog.triage_pass"'),
     ("coordinator_core.ops.distill_workflow_input", 'registers "distill.workflow_input"'),
     ("coordinator_core.ops.workflow_validate", 'registers "workflow.validate"'),
     ("coordinator_core.ops.workflow_scaffold", 'registers "workflow.scaffold"'),

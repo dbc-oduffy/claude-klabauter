@@ -1466,3 +1466,167 @@ def test_tracked_rm_process_count_does_not_grow_with_the_set(
         f"3-candidate batch cost {len(rm_spawns)} `git rm` spawns against "
         f"{rm_spawns_for_one} for 1: {rm_spawns}"
     )
+
+
+# ---------------------------------------------------------------------------
+# post_run.finish tail (distill): its own scoped commit after the disposal commit.
+# ---------------------------------------------------------------------------
+
+_SID = "00000000-0000-4000-8000-000000000000"
+
+
+def _init_repo_with_wiki_harvest(tmp_path: Path) -> str:
+    """Root commit; a harvest commit adding the log plus one wiki page with a wrong H1; the
+    candidate commit. Returns the harvest sha."""
+    _git("init", "-q", "-b", "main", cwd=tmp_path)
+    _git("config", "user.email", "test@example.com", cwd=tmp_path)
+    _git("config", "user.name", "Test", cwd=tmp_path)
+    (tmp_path / "README.md").write_text("root\n", encoding="utf-8")
+    _git("add", "--", "README.md", cwd=tmp_path)
+    _git("commit", "-q", "-m", "root commit", cwd=tmp_path)
+
+    log = tmp_path / "state" / "distillation-log.md"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("## Run seed\n- seed -> EPHEMERAL, seed (run: seed)\n", encoding="utf-8")
+    page = tmp_path / "docs" / "wiki" / "harvest" / "page.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text("---\ntitle: Harvested\n---\n# Wrong\n\nBody.\n", encoding="utf-8")
+    _git("add", "--", "state/distillation-log.md", "docs/wiki/harvest/page.md", cwd=tmp_path)
+    _git("commit", "-q", "-m", "harvest commit", cwd=tmp_path)
+    harvest = _git("rev-parse", "HEAD", cwd=tmp_path)
+
+    (tmp_path / "state" / "cross-repo-commitments").mkdir(parents=True, exist_ok=True)
+    handoff = tmp_path / "archive" / "handoffs" / "eligible.md"
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    handoff.write_text(
+        "---\nshipped_in: 68b27420\nstatus: consumed\ndeployment_state: shipped\n"
+        "realized_by: inline\n---\nbody\n",
+        encoding="utf-8",
+    )
+    _git("add", "--", "archive/handoffs/eligible.md", cwd=tmp_path)
+    _git("commit", "-q", "-m", "add candidate", cwd=tmp_path)
+    return harvest
+
+
+def _dispatch_apply(tmp_path: Path, harvest: str, run_id: str) -> dict:
+    import coordinator_core.ipc as ipc
+    import coordinator_core.ops  # noqa: F401 — eager registration
+
+    def _msg(i: int, method: str, params: dict) -> dict:
+        return {"jsonrpc": "2.0", "id": i, "method": method, "params": params,
+                "_origin_worktree": str(tmp_path)}
+
+    for i, (method, params) in enumerate(
+        [
+            ("distill.assemble_disposal_manifest",
+             {"run_id": run_id, "candidates": ["archive/handoffs/eligible.md"]}),
+            ("distill.stamp_disposal",
+             {"run_id": run_id, "by": "pm", "at": "2026-07-23T10:00:00Z",
+              "note": "approved, mass-throttle-ack (single-candidate fixture)"}),
+        ],
+        start=1,
+    ):
+        assert "result" in _run(ipc.dispatch_message(_msg(i, method, params)))
+    return _run(ipc.dispatch_message(
+        _msg(3, "distill.apply_disposal", {"run_id": run_id, "harvest_committed_sha": harvest})
+    ))
+
+
+@_requires_rg
+def test_default_param_apply_ends_in_post_run_finish_as_its_own_commit(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
+    harvest = _init_repo_with_wiki_harvest(tmp_path)
+    before = _git("rev-list", "--count", "HEAD", cwd=tmp_path)
+
+    applied = _dispatch_apply(tmp_path, harvest, "2026-07-23-04h00")
+
+    assert "result" in applied, applied.get("error")
+    result = applied["result"]
+    assert result["deleted_tracked"] == ["archive/handoffs/eligible.md"]
+    tail = result["post_run"]
+    assert tail["pipeline"] == "distill" and tail["exit_code"] == 0, tail
+    assert tail["commit"]["committed"] is True
+    page = (tmp_path / "docs/wiki/harvest/page.md").read_text(encoding="utf-8")
+    assert page.startswith("---\ntitle: Harvested\n---\n# Harvested\n")
+    assert (tmp_path / "docs/wiki/harvest/_index.md").is_file()
+    tracked = _git("ls-files", cwd=tmp_path).splitlines()
+    assert result["receipt_path"] in tracked
+    assert "docs/wiki/harvest/_index.md" in tracked
+    subjects = _git("log", "--format=%s", f"-{int(_git('rev-list', '--count', 'HEAD', cwd=tmp_path)) - int(before)}",
+                    cwd=tmp_path).splitlines()
+    assert any(s.startswith("distill: apply disposal for run 2026-07-23-04h00") for s in subjects)
+    assert any(s.startswith("distill: post-run finish for 2026-07-23-04h00") for s in subjects)
+    porcelain = [
+        ln[3:] for ln in _git("status", "--porcelain", "-uall", cwd=tmp_path).splitlines()
+        if not ln[3:].startswith((".coordinator-local/", "state/scratch/"))
+    ]
+    assert porcelain == []
+
+
+def _write_run_result(tmp_path: Path, run_id: str, promoted: list[str]) -> None:
+    run_dir = tmp_path / "state" / "scratch" / "artifact-distillation" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "run-result.json").write_text(
+        json.dumps({"run_id": run_id, "promoted_files": promoted, "distillation_log_rows": []}),
+        encoding="utf-8",
+    )
+
+
+def _seed_run_result_after_manifest(tmp_path: Path, monkeypatch, run_id: str, promoted: list[str]) -> None:
+    import coordinator_core.ops.distill_apply_disposal as dad
+
+    real = dad.write_apply_receipt
+
+    def _receipt(root, result, **kw):
+        _write_run_result(tmp_path, run_id, promoted)
+        return real(root, result, **kw)
+
+    monkeypatch.setattr(dad, "write_apply_receipt", _receipt)
+
+
+@_requires_rg
+def test_p5_audit_fails_the_tail_on_an_unexplained_tree_change(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
+    harvest = _init_repo_with_wiki_harvest(tmp_path)
+    (tmp_path / "stray.txt").write_text("x\n", encoding="utf-8")
+    _seed_run_result_after_manifest(tmp_path, monkeypatch, "2026-07-23-07h00", ["docs/wiki/harvest/page.md"])
+    head = _git("rev-parse", "HEAD", cwd=tmp_path)
+
+    tail = _dispatch_apply(tmp_path, harvest, "2026-07-23-07h00")["result"]["post_run"]
+
+    assert tail["exit_code"] == 1 and tail["unexplained"] == ["stray.txt"] and tail["commit"] is None
+    assert _git("log", "--format=%s", "-1", cwd=tmp_path).startswith("distill: apply disposal")
+    assert _git("rev-parse", "HEAD", cwd=tmp_path) != head
+
+
+@_requires_rg
+def test_p5_audit_passes_when_every_change_is_explained(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
+    harvest = _init_repo_with_wiki_harvest(tmp_path)
+    _seed_run_result_after_manifest(tmp_path, monkeypatch, "2026-07-23-08h00", ["docs/wiki/harvest/page.md"])
+
+    tail = _dispatch_apply(tmp_path, harvest, "2026-07-23-08h00")["result"]["post_run"]
+
+    assert tail["exit_code"] == 0, tail
+    assert tail["commit"]["committed"] is True
+
+
+@_requires_rg
+def test_a_refused_apply_skips_the_tail(tmp_path: Path, monkeypatch):
+    from coordinator_core.ops import post_run_finish
+
+    calls: list[dict] = []
+    monkeypatch.setattr(post_run_finish, "_handler", lambda params, repo_root=None: calls.append(params) or {})
+    harvest = _init_repo_with_wiki_harvest(tmp_path)
+
+    with pytest.raises(ValueError):
+        _run(_handler({"run_id": "2026-07-23-05h00", "harvest_committed_sha": harvest},
+                      repo_root=tmp_path / ".git"))
+
+    assert calls == []
+
+
+def test_verify_drain_ordering_returns_the_harvest_commit_paths(tmp_path: Path):
+    shas = _init_repo_with_commits(tmp_path)
+
+    assert _run(verify_drain_ordering(tmp_path, shas["harvest"])) == ["state/distillation-log.md"]

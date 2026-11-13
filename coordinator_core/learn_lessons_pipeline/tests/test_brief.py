@@ -174,3 +174,42 @@ def test_brief_is_read_only(tmp_path, monkeypatch):
     after = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
 
     assert before == after
+
+
+def _digests_fixture(repo_root: Path, run_id: str) -> None:
+    import json
+
+    d = repo_root / "state" / "scratch" / "backlog-pass" / run_id
+    d.mkdir(parents=True)
+    topics = [
+        {"topic_key": "alpha", "tokens": 10, "text": "A digest", "paths": ["docs/plans/a.md"]},
+        {"topic_key": "beta", "tokens": 7, "text": "B digest", "paths": ["docs/plans/b.md", "docs/plans/c.md"]},
+    ]
+    (d / "digests.json").write_text(json.dumps({"topics": topics}), encoding="utf-8")
+
+
+def test_digests_present_yield_one_unit_per_topic(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    (repo_root / "state" / "lessons").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "fx"))
+    _digests_fixture(repo_root, "run-1")
+
+    envelope = brief(repo_root=repo_root, roots=[], backlog_run_id="run-1")
+
+    bd = envelope["artifact"]["backlog_digests"]
+    assert [u["topic"] for u in bd["units"]] == ["alpha", "beta"]
+    assert bd["path"] == "state/scratch/backlog-pass/run-1/digests.json"
+    assert [d["id"] for d in envelope["directives"]][0] == "d-extract-lessons"
+
+
+def test_digests_absent_leaves_brief_unchanged(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    (repo_root / "state" / "lessons").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "fx"))
+
+    plain = brief(repo_root=repo_root, roots=[])
+    missing = brief(repo_root=repo_root, roots=[], backlog_run_id="no-such-run")
+
+    assert "backlog_digests" not in missing["artifact"]
+    assert missing["artifact"] == plain["artifact"]
+    assert missing["directives"] == plain["directives"]

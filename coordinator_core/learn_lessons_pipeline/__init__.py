@@ -90,7 +90,10 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from coordinator_core.run_watermark import Watermark
 
 #: The full set of on-disk CLIs this module's `directives[]` may name
 #: (bareword, no `.py` suffix — the same shape `workstream_complete`'s own
@@ -136,7 +139,7 @@ def lessons_since(repo_root: Path, cutoff: Optional[str]) -> Optional[str]:
     return wm.cursor if wm is not None and wm.cursor else cutoff
 
 
-def proposed_watermark(run_date: str):
+def proposed_watermark(run_date: str) -> "Watermark":
     """Watermark a completed run proposes: cursor = this run's date. `--since` is a
     date-string lower bound (`extract-lessons.py :: extract`), so the cursor is a lesson
     date, not a sha or path set, and `base_sha` is unused (empty)."""
@@ -216,7 +219,9 @@ def build_directives(
     return directives
 
 
-def brief(repo_root: Path, *, roots: Optional[list[str]] = None) -> dict[str, Any]:
+def brief(
+    repo_root: Path, *, roots: Optional[list[str]] = None, backlog_run_id: Optional[str] = None
+) -> dict[str, Any]:
     """Computes and returns the learn-lessons pipeline decision object: the
     8-key envelope whose `directives[]` names extract -> verify ->
     outbox-drain -> assert-outbox-empty -> age-sweep -> run-stamp, in that
@@ -232,7 +237,11 @@ def brief(repo_root: Path, *, roots: Optional[list[str]] = None) -> dict[str, An
     (`ops.learn_lessons_cutoff.derive_cutoff`) — never chosen by this
     function's caller. When no completed central run is reachable,
     `d-age-sweep` is withheld and `gates["age_sweep"]` records why,
-    `d-extract-lessons` still fires with `--since` omitted."""
+    `d-extract-lessons` still fires with `--since` omitted.
+
+    `backlog_run_id` names a backlog pass whose `digests.json` exists under `repo_root`:
+    the artifact then carries `backlog_digests` (path plus one synthesis unit per topic)
+    and the directives stay as above. Absent file or no run id: the envelope is unchanged."""
     from coordinator_core.contract.decision_object.envelope import build_envelope  # noqa: PLC0415
     from coordinator_core.ops.learn_lessons_cutoff import (  # noqa: PLC0415
         derive_cutoff,
@@ -263,16 +272,31 @@ def brief(repo_root: Path, *, roots: Optional[list[str]] = None) -> dict[str, An
         f"cutoff={cutoff!r}."
     )
 
-    return build_envelope(
-        artifact={
-            "cutoff": cutoff,
-            "run_date": run_date,
-            "since": since,
-            "watermark": {
-                "run_dir": str(lessons_run_dir(runs_dir, run_date)),
-                "proposed": asdict(proposed_watermark(run_date)),
-            },
+    artifact: dict[str, Any] = {
+        "cutoff": cutoff,
+        "run_date": run_date,
+        "since": since,
+        "watermark": {
+            "run_dir": str(lessons_run_dir(runs_dir, run_date)),
+            "proposed": asdict(proposed_watermark(run_date)),
         },
+    }
+    if backlog_run_id:
+        from coordinator_core.ops.backlog_triage_pass import OUT_DIR_REL  # noqa: PLC0415
+        from coordinator_core.ops.distill_workflow_input import (  # noqa: PLC0415
+            load_backlog_digests,
+            topic_units,
+        )
+
+        digests = load_backlog_digests(repo_root, backlog_run_id)
+        if digests is not None:
+            artifact["backlog_digests"] = {
+                "path": f"{OUT_DIR_REL}/{backlog_run_id}/digests.json",
+                "units": topic_units(digests),
+            }
+
+    return build_envelope(
+        artifact=artifact,
         preflight={"consumes_manifest": list(CONSUMES_MANIFEST)},
         gates=gates,
         directives=directives,

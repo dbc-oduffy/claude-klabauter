@@ -155,6 +155,17 @@
       "timeout_s": 30.0
     },
     {
+      "description": "backlog.triage_pass handler: changelog-first, model-free triage of a repo's backlog.\n\nParams:\n    run_id (str, REQUIRED) — names the output directory; a plain token, never a path.\n    source_repo (str, optional) — the checkout whose changelogs are walked, read-only;\n        default the invoking repo. Relative paths resolve against the invoking repo.\n\nWrites state/scratch/backlog-pass/<run_id>/digests.json and triage-ledger.json under the\ninvoking repo only. repo_root (injected): git common dir of the originating worktree.",
+      "module": "coordinator_core.ops.backlog_triage_pass",
+      "name": "backlog.triage_pass",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "backlog.triage_pass handler: changelog-first, model-free triage of a repo's backlog.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "Return ``{exit_code, count, rows}`` for every live awaiting_gate handoff.\n\ncoordinator_core.ops.baton_awaiting_gate_recheck — \"baton.awaiting_gate_recheck\" op (COMPUTE_ONLY).\n\nPurpose: list every live ``state/handoffs/*.md`` baton or seed parked at\n``deployment_state: awaiting_gate`` with who holds the gate, how long it has been\nparked, and whether the gate's machine-checkable condition is now met. The ping\nitself is a memo the EM sends; each row carries a ready-to-run ``cross-repo-memo\ndraft`` command line for the holder.\n\nParams (all optional): ``holder`` (keep only rows whose holder matches,\ncase-insensitive), ``today`` (ISO date override for the parked-days arithmetic).\n\nRow: ``{path, handoff_id, kind, holder, holder_source, parked_since, parked_days,\nchecks, machine_condition_met, memo_draft}``. ``holder`` is the ``gate_holder``\nfield when present (``holder_source: field``), else the name after \"gated on /\nawaiting / waiting on / blocked on\" in the gate prose (``inferred``), else None.\n``checks`` are the machine-checkable items: each ``blocked_by`` id (met when that\nbaton is ``shipped``) and each commit sha cited in the gate prose (met when it\nnames an object in this repo; a sha absent here is unverifiable and excluded).\n``unparsed_conditions`` lists doc/plan paths the gate prose names that no check covers.\n``machine_condition_met`` is True when every check is met and nothing is unparsed,\nFalse when any check is unmet, None when nothing is machine-checkable or an\nunparsed condition remains.\n\nNegative-spec:\n  - Writes nothing and spawns nothing: cited shas resolve against the loose objects\n    and pack indexes in-process.\n  - Does NOT send the ping and does NOT stamp ``last_gate_recheck``.",
       "module": "coordinator_core.ops.baton_awaiting_gate_recheck",
       "name": "baton.awaiting_gate_recheck",
@@ -663,6 +674,17 @@
       "timeout_s": 30.0
     },
     {
+      "description": "JSON-RPC \"ceremony.plan_wiki_map\" handler.\n\nParams: `since` / `until` (ISO date; default the last 7 days through tomorrow),\n`max_plans` (default 50). repo_root (injected by ipc.dispatch_message): git_common_dir\nof the originating worktree; the handler reads the main worktree. Writes only the\nwiki-text token cache `weekly_doc_files` keeps.",
+      "module": "coordinator_core.ops.ceremony.plan_wiki_map",
+      "name": "ceremony.plan_wiki_map",
+      "op_class": "compute_only",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"ceremony.plan_wiki_map\" handler.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "Launch a native quick_wrap phase asynchronously; read ceremony.result after its completion notice. Accepted is not ceremony-completed.\n\nBounded, provider-neutral doors to the six existing session ceremonies.\n\nThe op writes one request and detaches one composition worker. The worker uses\nthe native ceremony implementation; its duration is never charged to a warm op.\nAn accepted phase is not a completed ceremony. Its persisted result and pushed\nnotice name pending decisions, native directives, and emitted workflow fires.",
       "module": "coordinator_core.ops.session_ceremonies",
       "name": "ceremony.quick_wrap",
@@ -1005,6 +1027,17 @@
         "type": "object"
       },
       "summary": "JSON-RPC changelog.compute_day_fields handler.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "JSON-RPC changelog.daily_log handler.\n\nOptional params: ``since``, ``until`` (ISO-8601 or epoch seconds; default the 24h ending now).\nReturns ``{since, until, count, entries, degraded, text}``; ``entries`` are ranked by sizing descending.",
+      "module": "coordinator_core.ops.daily_log",
+      "name": "changelog.daily_log",
+      "op_class": "compute_only",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC changelog.daily_log handler.",
       "timeout_s": 30.0
     },
     {
@@ -2274,7 +2307,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "distill.apply_disposal handler.\n\nParams:\n    run_id (str, REQUIRED) — locates the stamped disposal-manifest at\n        state/scratch/artifact-distillation/<run_id>/disposal-manifest.json\n        (the SAME well-known path C12/C13 use — this op never accepts a\n        bare manifest_path).\n    harvest_committed_sha (str, REQUIRED) — the sha the drain-ordering\n        gate verifies is an ancestor of HEAD AND touches the canonical\n        log or wiki tree.\n\nrepo_root (injected by ipc.dispatch_message): git_common_dir of the\noriginating worktree (_OP_KEY_SCOPE=\"common_dir\"). Fails loud when\nrepo_root is None (no silent meta-repo fallback, matching C12/C13's AC5\nprecedent).\n\nReturns a dict with keys: run_id, deleted_tracked, deleted_untracked,\nalready_deleted, newly_blocked, failed, receipt_path.",
+      "description": "distill.apply_disposal handler.\n\nParams:\n    run_id (str, REQUIRED) — locates the stamped disposal-manifest at\n        state/scratch/artifact-distillation/<run_id>/disposal-manifest.json\n        (the SAME well-known path C12/C13 use — this op never accepts a\n        bare manifest_path).\n    harvest_committed_sha (str, REQUIRED) — the sha the drain-ordering\n        gate verifies is an ancestor of HEAD AND touches the canonical\n        log or wiki tree.\n\nrepo_root (injected by ipc.dispatch_message): git_common_dir of the\noriginating worktree (_OP_KEY_SCOPE=\"common_dir\"). Fails loud when\nrepo_root is None (no silent meta-repo fallback, matching C12/C13's AC5\nprecedent).\n\nReturns a dict with keys: run_id, deleted_tracked, deleted_untracked,\nalready_deleted, newly_blocked, failed, receipt_path, post_run.\n\n`post_run` is `post_run.finish(pipeline=\"distill\")` run in process after the receipt lands:\nits own scoped commit over the harvest commit's paths plus the receipt and manifest as\nevidence, separate from the disposal's single commit (DR-228 § D3). A tail that fails is\nreported in `post_run.exit_code`; the disposal itself has already landed.",
       "module": "coordinator_core.ops.distill_apply_disposal",
       "name": "distill.apply_disposal",
       "op_class": "mutating",
@@ -2340,7 +2373,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "distill.workflow_input handler.\n\nParams:\n    manifest (dict, REQUIRED) — a distill.scope scope-manifest (the\n        producer shape; typically loaded from distill.scope's own\n        input_json_path result field by the caller).\n    repo_root (str, REQUIRED) — repoRoot to stamp into the output; this\n        op performs no repo derivation of its own (pure translation, no\n        _OP_KEY_SCOPE dependency — the caller already resolved a repo\n        root via distill.scope's own dispatch).\n    format_hints (dict, optional) — applied uniformly to every batch.\n\nThe ``repo_root`` HANDLER ARG (engine-injected, per dispatch_message's\ncalling convention) is ALWAYS None for this op — it carries no\n_OP_KEY_SCOPE entry, so scope defaults to \"none\" (a pure computation over\ncaller-supplied data, per DEC-5/op-scoping precedent for translation-only\nops, e.g. distill.curate_clusters) and is intentionally unused here. The\noutput's ``repoRoot`` field instead comes from ``params[\"repo_root\"]`` —\nthe plain JSON-RPC param, not the engine-injected common_dir.",
+      "description": "distill.workflow_input handler.\n\nParams:\n    manifest (dict, REQUIRED) — a distill.scope scope-manifest (the\n        producer shape; typically loaded from distill.scope's own\n        input_json_path result field by the caller).\n    repo_root (str, REQUIRED) — repoRoot to stamp into the output; this\n        op performs no repo derivation of its own (pure translation, no\n        _OP_KEY_SCOPE dependency — the caller already resolved a repo\n        root via distill.scope's own dispatch).\n    format_hints (dict, optional) — applied uniformly to every batch.\n    backlog_run_id (str, optional) — run whose ``state/scratch/backlog-pass/<id>/digests.json``\n        to read (default the manifest's run_id). When that file exists, ``batches`` is one\n        ``topic-N`` unit per TopicDigest (carrying ``topic`` and ``digest``) and no split runs; a topic whose digest is over the tier is named in\n        ``over_tier_batches``. Absent, the per-file path above is unchanged.\n\nBatches whose scan prompt projects over the long-prompt tier are digested, then split\n(``fit_scan_tier``); the returned ``batch_count`` is over the resulting batches. Batches a split\ncannot bring under the tier (a lone file larger than it) are named in ``over_tier_batches``,\npresent only when non-empty.\n\nThe ``repo_root`` HANDLER ARG (engine-injected, per dispatch_message's\ncalling convention) is ALWAYS None for this op — it carries no\n_OP_KEY_SCOPE entry, so scope defaults to \"none\" (a pure computation over\ncaller-supplied data, per DEC-5/op-scoping precedent for translation-only\nops, e.g. distill.curate_clusters) and is intentionally unused here. The\noutput's ``repoRoot`` field instead comes from ``params[\"repo_root\"]`` —\nthe plain JSON-RPC param, not the engine-injected common_dir.",
       "module": "coordinator_core.ops.distill_workflow_input",
       "name": "distill.workflow_input",
       "op_class": "compute_only",
@@ -5670,6 +5703,17 @@
         "type": "object"
       },
       "summary": "JSON-RPC \"plugin_health.sentinel\" handler.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "JSON-RPC \"post_run.finish\" handler; `repo_root` is the originating worktree. See module docstring.\n\ncoordinator_core.ops.post_run_finish -- `post_run.finish`: the deterministic tail of a distill or lessons run.\n\nMUTATING adapter that composes the `coordinator_core.post_run` steps over one run's scope, in\norder: linkfix -> h1_normalize -> nav_index -> linkfix -> commit_step. The second linkfix pass\nfollows nav_index because new or rewritten `_index.md` pages carry links of their own; H1\nchanges move no paths. No LLM call, no archive, no per-file git spawn.\n\nparams:\n    pipeline: \"lessons\" | \"distill\" (required).\n    run_id: the run's identifier, named in the commit message (required).\n    touched: repo-relative paths the run wrote (default []).\n    evidence: repo-relative evidence files the run wrote, committed untransformed (default []).\n    wiki_paths: repo-relative wiki roots (default [\"docs/wiki\"]).\n    session_id: forwarded to commit_v2.\n    result: distill only; the run result JSON handed to the p5 audit (default {}).\n    porcelain: distill only; the `git status --porcelain --untracked-files=all` lines the caller already\n        read (default []); a collapsed untracked-directory line would read as one unexplained path.\n\nDistill runs call `post_run.p5_audit.run(result, porcelain)` before the commit: a non-empty\n`unexplained` fails the finish with `exit_code` 1 and no commit, and the audit's `evidence` paths\njoin the commit's evidence set.\n\nResidual links (unresolvable or ambiguous) never halt the commit: halting would leave a dirty\ntree and a hand step. They come back in `residual` as an advisory. A `commit_v2` refusal is\nreturned as `exit_code` 1 with `commit.error`, never swallowed; the steps are idempotent, so a\nrerun converges.",
+      "module": "coordinator_core.ops.post_run_finish",
+      "name": "post_run.finish",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"post_run.finish\" handler; `repo_root` is the originating worktree. See module docstring.",
       "timeout_s": 30.0
     },
     {

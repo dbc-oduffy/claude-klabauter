@@ -371,3 +371,64 @@ def test_handler_names_a_batch_no_split_can_bring_under_the_tier(tmp_path):
     assert over["over_tier_batches"] == ["batch-1"]
     fine = _handler({"manifest": _tier_manifest([["small.md"]]), "repo_root": str(tmp_path)}, repo_root=None)
     assert "over_tier_batches" not in fine
+
+
+def _write_digests(root, run_id):
+    import json
+
+    d = root / "state" / "scratch" / "backlog-pass" / run_id
+    d.mkdir(parents=True)
+    topics = [
+        {"topic_key": "alpha", "tokens": 10, "text": "A digest", "paths": ["docs/plans/a.md"]},
+        {"topic_key": "beta", "tokens": 7, "text": "B digest", "paths": ["docs/plans/b.md", "docs/plans/c.md"]},
+    ]
+    (d / "digests.json").write_text(json.dumps({"topics": topics}), encoding="utf-8")
+
+
+def test_handler_with_digests_emits_one_unit_per_topic(tmp_path):
+    _write_digests(tmp_path, "2026-08-06-15h20")
+    payload = _handler({"manifest": _sample_manifest(), "repo_root": str(tmp_path)}, repo_root=None)
+    assert [b["batchId"] for b in payload["batches"]] == ["topic-1", "topic-2"]
+    assert [b["topic"] for b in payload["batches"]] == ["alpha", "beta"]
+    assert payload["batches"][1]["digest"] == "B digest"
+    assert payload["batch_count"] == 2 and payload["total_file_count"] == 3
+    assert validate_workflow_input(payload) == []
+
+
+def test_handler_reports_only_the_over_tier_topic_digest(tmp_path):
+    import json
+
+    from coordinator_core.distill.prompt_tier import BYTES_PER_TOKEN, LONG_PROMPT_TIER_TOKENS
+
+    _write_digests(tmp_path, "run-x")
+    path = tmp_path / "state" / "scratch" / "backlog-pass" / "run-x" / "digests.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["topics"][1]["text"] = "x" * ((LONG_PROMPT_TIER_TOKENS + 1) * BYTES_PER_TOKEN)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    payload = _handler(
+        {"manifest": _sample_manifest(), "repo_root": str(tmp_path), "backlog_run_id": "run-x"}, repo_root=None
+    )
+    assert payload["over_tier_batches"] == ["topic-2"]
+    clean = _handler({"manifest": _sample_manifest(), "repo_root": str(tmp_path), "backlog_run_id": "nope"}, repo_root=None)
+    assert "over_tier_batches" not in clean
+
+
+def test_handler_backlog_run_id_param_selects_the_digests(tmp_path):
+    _write_digests(tmp_path, "other-run")
+    payload = _handler(
+        {"manifest": _sample_manifest(), "repo_root": str(tmp_path), "backlog_run_id": "other-run"},
+        repo_root=None,
+    )
+    assert payload["batch_count"] == 2
+
+
+def test_handler_without_digests_keeps_per_file_batches(tmp_path):
+    payload = _handler({"manifest": _sample_manifest(), "repo_root": str(tmp_path)}, repo_root=None)
+    assert [b["batchId"] for b in payload["batches"]] == ["batch-1", "batch-2"]
+    assert all("topic" not in b for b in payload["batches"])
+
+
+def test_backlog_run_id_escaping_the_pass_dir_is_ignored(tmp_path):
+    from coordinator_core.ops.distill_workflow_input import load_backlog_digests
+
+    assert load_backlog_digests(tmp_path, "../x") is None
