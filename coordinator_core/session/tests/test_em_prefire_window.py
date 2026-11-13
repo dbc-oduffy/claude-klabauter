@@ -139,7 +139,7 @@ def _cmd(name: str, tail: str = "") -> str:
 
 
 def test_ceremony_skills_disarm_as_skill_use_and_as_command_record(tmp_path):
-    for skill in ("consolidate-git", "merging-to-main"):
+    for skill in ("consolidate-git", "merging-to-main", "distill", "update-docs"):
         for form in (skill, "coordinator:" + skill):
             st = run(tmp_path, [user(), tool_use("a", "Skill", {"skill": form})])
             assert st["disarmed"], form
@@ -155,6 +155,8 @@ def test_command_record_disarm_is_limited_to_ceremonies_at_window_open(tmp_path)
         "<command-name>/plan</command-name>",
         "<command-name>/pickup</command-name>",
         "<command-name>/consolidate-gitx</command-name>",
+        "<command-name>/distillx</command-name>",
+        "<command-name>/update-docs-now</command-name>",
         "please run <command-name>/consolidate-git</command-name> for me",
     ):
         assert not run(tmp_path, [user(text)])["disarmed"], text

@@ -420,7 +420,7 @@ def _command_user(name: str) -> str:
     return user(f"<command-message>{name}</command-message>\n<command-name>/{name}</command-name>")
 
 
-@pytest.mark.parametrize("skill", ["consolidate-git", "merging-to-main"])
+@pytest.mark.parametrize("skill", ["consolidate-git", "merging-to-main", "distill", "update-docs"])
 @pytest.mark.parametrize("via", ["skill", "command"])
 def test_pm_ceremony_never_nags_across_repeated_calls(env, skill, via):
     env.write(_command_user(skill) if via == "command" else user())

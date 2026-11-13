@@ -34,7 +34,7 @@ COUNTED_TOOLS = ("Read", "Grep", "Glob", "Bash")
 OPENING_TEXT_CAP = 8 * 1024
 
 # Skill-directed git ceremonies: also disarm when the PM's slash command is only a command-name record.
-CEREMONY_SKILLS = ("consolidate-git", "merging-to-main")
+CEREMONY_SKILLS = ("consolidate-git", "merging-to-main", "distill", "update-docs")
 # Pickup, handoff, review, close-out and lesson-emit class skills of DoE coordinator/skills, plus the ceremonies; exact names only.
 DISARM_SKILLS = (
     "pickup",

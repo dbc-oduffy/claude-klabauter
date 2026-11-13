@@ -149,7 +149,7 @@ def test_repomap_gate_stale_generates_with_fallback_note(tmp_path, capsys):
     assert "repomap generated (rag_state=stale, fallback)" in out
 
 
-def test_repomap_gate_missing_generator_is_non_fatal(tmp_path, capsys):
+def test_repomap_gate_missing_generator_exits_2(tmp_path, capsys):
     args = _ns(
         repo_root=str(tmp_path),
         rag_state="unknown",
@@ -157,8 +157,25 @@ def test_repomap_gate_missing_generator_is_non_fatal(tmp_path, capsys):
         generate_repomap_cli=str(tmp_path / "does-not-exist.py"),
     )
     rc = _mod._cmd_repomap_gate(args)
-    assert rc == 0
-    assert "unresolvable" in capsys.readouterr().out
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "unresolvable" in captured.err
+    assert captured.out == ""
+
+
+def test_repomap_gate_unspawnable_generator_exits_2(tmp_path, capsys, monkeypatch):
+    generator = tmp_path / "fake-generate-repomap.py"
+    generator.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+    monkeypatch.setattr(_mod._gates(), "_run", lambda *a, **k: None)
+    args = _ns(
+        repo_root=str(tmp_path),
+        rag_state="absent",
+        check_rag_state_cli=None,
+        generate_repomap_cli=str(generator),
+    )
+    rc = _mod._cmd_repomap_gate(args)
+    assert rc == 2
+    assert "could not be spawned" in capsys.readouterr().err
 
 
 def test_repomap_gate_generator_failure_propagates(tmp_path):

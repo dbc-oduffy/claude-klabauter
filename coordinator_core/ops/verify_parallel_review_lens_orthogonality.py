@@ -4,8 +4,9 @@ gate structural-invariant checker (lens-domain orthogonality + chunk disjointnes
 
 Purpose: assert the parallel-code-review gate's two structural properties:
   (1) STATIC (no args): the orthogonal lens domains in the skill's lens-domain
-      manifest (3 specialist workers + code-semantics-as-a-class) (a) have agent
-      files on disk and (b) do not share any lens_domain value.
+      manifest (specialist workers + code-semantics-as-a-class) (a) have their
+      reviewer file on disk (`agents/<file>` or `bin/<file>` under the content
+      root) and (b) do not share any lens_domain value.
   (2) RUNTIME (--chunk-manifest <tsv>): the N code-semantics chunk partitions
       are disjoint by file-scope — no file appears in two chunks. Runs the
       static check first, then the chunk-disjointness check.
@@ -67,7 +68,7 @@ from coordinator_core.content_root import read_content_root as _resolve_content_
 _PROG = "verify-parallel-review-lens-orthogonality.sh"  # literal program-name prefix, matches bash oracle's $0
 _MIN_REVIEWER_COUNT = 4
 
-_AGENT_PATH_RE = re.compile(r"`agents/([^`]+)`")
+_REVIEWER_PATH_RE = re.compile(r"`(agents|bin)/([^`]+)`")
 
 
 def _extract_manifest_lines(skill_text: str) -> List[str]:
@@ -115,8 +116,12 @@ def _parse_row(line: str) -> Optional[Tuple[str, str]]:
     return reviewer, lens_domain
 
 
-def static_check(skill_file: Path, agents_dir: Path) -> Tuple[List[str], bool]:
-    """Static lens-orthogonality check. Returns (diagnostic_lines, passed)."""
+def static_check(skill_file: Path, content_dir: Path) -> Tuple[List[str], bool]:
+    """Static lens-orthogonality check. Returns (diagnostic_lines, passed).
+
+    A reviewer cell names `agents/<file>` or `bin/<file>`; each resolves under
+    content_dir (the content root holding skills/, agents/ and bin/).
+    """
     if not skill_file.is_file():
         return (
             [
@@ -142,15 +147,15 @@ def static_check(skill_file: Path, agents_dir: Path) -> Tuple[List[str], bool]:
         reviewer, lens_domain = row
         reviewer_count += 1
 
-        m = _AGENT_PATH_RE.search(reviewer)
+        m = _REVIEWER_PATH_RE.search(reviewer)
         if m:
-            agent_path = agents_dir / m.group(1)
-            if not agent_path.is_file():
-                out.append(f"FAIL: Agent file missing for reviewer '{reviewer}':")
-                out.append(f"  Expected: {agent_path}")
+            reviewer_path = content_dir / m.group(1) / m.group(2)
+            if not reviewer_path.is_file():
+                out.append(f"FAIL: Reviewer file missing for reviewer '{reviewer}':")
+                out.append(f"  Expected: {reviewer_path}")
                 passed = False
         else:
-            out.append(f"FAIL: Could not parse agent path from reviewer cell: '{reviewer}'")
+            out.append(f"FAIL: Could not parse reviewer path from reviewer cell: '{reviewer}'")
             passed = False
 
         if lens_domain in seen_domains:
@@ -290,9 +295,8 @@ def run(
         )
 
     skill_file = content_dir / "skills" / "parallel-code-review" / "SKILL.md"
-    agents_dir = content_dir / "agents"
 
-    lines, passed = static_check(skill_file, agents_dir)
+    lines, passed = static_check(skill_file, content_dir)
     if not passed:
         return lines, [], 1
 

@@ -28,8 +28,10 @@ Origin: verify-skill-anchor-links.sh (DoE b5a4192c, 2026-07-20)
 Exit codes (parity-critical — the whole point of the 2026-07-27 incident):
   0 — CHECKED, no dead anchors (may still be nonzero OK/QUALIFIED/UNRESOLVED)
   1 — CHECKED, one or more DEAD anchors found
-  2 — COULD NOT CHECK: the manifest is present but broken, or plugin_root
-      itself is unresolvable or missing from disk
+  2 — COULD NOT CHECK: the manifest is present but broken, plugin_root
+      itself is unresolvable or missing from disk, or one or more allowlisted
+      consumer files were SKIPPED (not found) — results are still printed,
+      but the run looked at less than it names
 
 Result kinds:
   OK          — cited path resolved AND the section exists in that file
@@ -75,12 +77,11 @@ Negative-spec:
     - Does NOT walk the whole repo for SKILL.md files — the consumer list is
       a hardcoded allowlist (`_HARDCODED_CONSUMERS`); extend the list here
       (not via directory scan) when a new super-skill anchors into doctrine.
-    - A missing consumer file is SKIPPED (stderr note), not an error —
-      mirrors the bash oracle's `[ ! -f "$consumer" ]` early-continue. But if
-      EVERY consumer is missing (the whole allowlist has rotted), that is
-      COULD NOT CHECK (exit 2), not a clean 0 with zero coverage — a partial
-      skip stays informational; a total wipeout is not "found nothing," it
-      is "looked at nothing."
+    - A missing consumer file is SKIPPED (stderr note) and the remaining
+      consumers are still scanned and printed, but ANY skipped consumer makes
+      the run COULD NOT CHECK (exit 2), never a clean 0 — a stale allowlist
+      entry is not "found nothing," it is "looked at less than it names."
+      Fix the allowlist, not the exit code.
     - A `§` occurrence with no path-shaped citation immediately before it
       (format drift in the punctuation between path and `§`) is counted as
       `dropped_section_lines` — a diagnostic-only visibility signal (stderr
@@ -120,7 +121,6 @@ from coordinator_core.content_root import read_content_root
 _HARDCODED_CONSUMERS = (
     "skills/plan/SKILL.md",
     "skills/review/SKILL.md",
-    "skills/review-code/SKILL.md",
 )
 
 _MANIFEST_BASENAME = "doctrine-surfaces.json"
@@ -496,11 +496,11 @@ def main(argv: List[str]) -> int:
         )
 
     counts = {"OK": 0, "QUALIFIED": 0, "DEAD": 0, "UNRESOLVED": 0}
-    exit_code = 0
+    exit_code = 2 if report.skipped else 0
 
     for r in report.results:
         counts[r.kind] += 1
-        if r.kind == "DEAD":
+        if r.kind == "DEAD" and exit_code == 0:
             exit_code = 1
         print(f"{r.kind:<10} {r.consumer_rel}:{r.line_no}  {r.cited_path} § {r.value}")
 

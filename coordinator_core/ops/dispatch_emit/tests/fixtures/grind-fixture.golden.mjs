@@ -340,6 +340,9 @@ const _UNDO_EXEMPT = ["commit-failed", "peer-dirty"];
 function _undoPaths(row) {
   return Array.from(new Set(row.touchedFiles.concat(row.createdFiles || []).concat(row.removedFiles || []))).filter((p) => _outOfRootPaths([p]).length === 0);
 }
+function _outOfRootWritten(row) {
+  return _outOfRootPaths(Array.from(new Set(row.touchedFiles.concat(row.createdFiles || []).concat(row.removedFiles || []))));
+}
 function _hasWrites(row) { return row.fixReported || (row.createdFiles || []).length > 0 || (row.removedFiles || []).length > 0; }
 
 async function _rejectUndoCall(row) {
@@ -351,10 +354,12 @@ async function _rejectUndoCall(row) {
 async function _handBackRow(rowId, type, reason, tradeoff, ruling) {
   const row = _rows[rowId];
   row.done = true;
+  const _leftOut = _outOfRootWritten(row);
+  const _leftNote = _leftOut.length > 0 ? '; ' + "not undone (outside repo_root, left dirty)" + ': ' + _leftOut.join(', ') : '';
   if (_UNDO_EXEMPT.includes(type) || !_hasWrites(row) || _undoPaths(row).length === 0) {
     const _left = _undoPaths(row);
     if (type === 'peer-dirty' && _hasWrites(row) && _left.length > 0) { reason = reason + '; ' + "not undone (a peer's edits sit on these paths)" + ': ' + _left.join(', '); }
-    _handBack(rowId, type, reason, tradeoff, ruling); return;
+    _handBack(rowId, type, reason + _leftNote, tradeoff, ruling); return;
   }
   row.undoReason = `the row was handed back ${type}: ${reason}`;
   let _undone;
@@ -364,7 +369,7 @@ async function _handBackRow(rowId, type, reason, tradeoff, ruling) {
     _handBack(rowId, 'stage-dead', 'undo-failed: the row was handed back ' + type + ' and its edits may remain in the tree' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + ' -- the row stays open; restore the touched files by hand');
     return;
   }
-  _handBack(rowId, type, reason + '; undone', tradeoff, ruling);
+  _handBack(rowId, type, reason + '; undone' + (_leftOut.length > 0 ? ' in repo_root' : '') + _leftNote, tradeoff, ruling);
 }
 async function _applyRouteRow(row, rowId, route, reason) {
   if (route.kind === 'handback') { await _handBackRow(rowId, route.value, reason); }

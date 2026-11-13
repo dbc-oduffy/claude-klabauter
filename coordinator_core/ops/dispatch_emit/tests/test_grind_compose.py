@@ -2633,6 +2633,43 @@ def test_python_and_emitted_undo_helpers_agree(py_row, js_row):
     assert seen["paths"] == gc._undo_paths(row)
 
 
+def test_an_out_of_root_escape_with_in_root_writes_names_the_paths_left_dirty_not_a_bare_undone():
+    mixed = {"outcome": "done", "touched_files": ["/etc/outside.conf", "src/r0.py"]}
+    result, kinds, _sink = _run_logged(
+        [("b0", ["r0"])], _undo_script(mixed, undo={"outcome": "undone"}),
+    )
+    assert kinds.count("verify") == 1
+    reason = [h for h in result["handed_back"] if h["row"] == "r0"][0]["reason"]
+    assert not reason.endswith("; undone")
+    assert f"{gc._NOT_UNDONE_OUT_OF_ROOT}: /etc/outside.conf" in reason
+
+
+def test_an_out_of_root_only_escape_with_no_undo_call_names_the_paths_left_dirty():
+    fix = {"outcome": "done", "touched_files": ["/etc/a.conf"], "created_files": ["/etc/b.conf"]}
+    result, kinds, _sink = _run_logged([("b0", ["r0"])], _undo_script(fix, undo={"outcome": "undone"}))
+    assert "verify" not in kinds
+    reason = [h for h in result["handed_back"] if h["row"] == "r0"][0]["reason"]
+    assert f"{gc._NOT_UNDONE_OUT_OF_ROOT}: /etc/a.conf, /etc/b.conf" in reason
+    assert not reason.endswith("; undone")
+
+
+def test_a_hand_back_with_only_in_root_writes_still_ends_undone():
+    result, _kinds, _sink = _run_logged(
+        [("b0", ["r0"])], _undo_script({**_WRITES, "outcome": "NEEDS_PLAN"}, undo={"outcome": "undone"}),
+    )
+    reason = [h for h in result["handed_back"] if h["row"] == "r0"][0]["reason"]
+    assert reason.endswith("; undone") and gc._NOT_UNDONE_OUT_OF_ROOT not in reason
+
+
+def test_the_emitted_hand_back_names_out_of_root_paths_left_dirty_in_both_branches():
+    script = _compose()
+    body = script[script.index("async function _handBackRow("):]
+    body = body[: body.index("\n}\n")]
+    assert json.dumps(gc._NOT_UNDONE_OUT_OF_ROOT) in body
+    assert body.count("_leftNote") == 3 and "reason + '; undone', " not in body
+    assert "_outOfRootPaths(" in _golden_function("_outOfRootWritten")
+
+
 def test_a_removed_only_row_is_a_write_with_an_undo_set():
     row = gc.Row(row_id="r0", path="r0", batch_id="b0", removed_files=["state/bug-backlog/gone.yaml"])
     assert gc._has_writes(row) is True

@@ -50,7 +50,8 @@ keeps its type with ``; undone`` appended -- or becomes ``stage-dead`` (``undo-f
 undo does not return ``undone``. ``commit-failed`` is exempt: ``grind-row settle-run`` lands
 those rows. ``peer-dirty`` is exempt too: undo withholds only paths a live peer *claims*, and
 PEER_DIRTY reports unclaimed dirt, so its reason names the paths left in the tree. A row whose
-fix reported no writes makes no undo call.
+fix reported no writes makes no undo call. A row that wrote out-of-root paths never ends in a bare
+``; undone``: its reason names those paths as left dirty.
 
 STAGE_OUTPUT_TOKENS / batch_reserve live here, not a separate module.
 Calibration source (measured once at authoring time, 2026-09-21): this
@@ -376,6 +377,7 @@ _SETTLE_HINT_TWIN =" -- land the finished rows with `grind-row settle-run`"
 _UNDO_FAILED_HEAD = "undo-failed: verify rejected the fix twice and its edits may remain in the tree"
 _UNDO_FAILED_TAIL = " -- the row stays open; restore the touched files by hand"
 _NOT_UNDONE_PEER = "not undone (a peer's edits sit on these paths)"
+_NOT_UNDONE_OUT_OF_ROOT = "not undone (outside repo_root, left dirty)"
 _HISTORICAL_UNDO_FAILED_HEAD = "undo-failed: the fix wrote historical records and its edits may remain in the tree"
 
 
@@ -407,6 +409,11 @@ def _has_writes(row: Row) -> bool:
 def _undo_paths(row: Row) -> list[str]:
     """The in-root paths a row's undo restores. Twin: ``_undoPaths``."""
     return [p for p in _union(row.touched_files, row.created_files, row.removed_files) if not _out_of_root_paths([p])]
+
+
+def _out_of_root_written(row: Row) -> list[str]:
+    """The out-of-root paths a row wrote, which no undo reverts. Twin: ``_outOfRootWritten``."""
+    return _out_of_root_paths(_union(row.touched_files, row.created_files, row.removed_files))
 
 
 def _nonlanding_undo_failed_head(htype: str) -> str:
@@ -656,10 +663,12 @@ def run_admission(
         """Hand back a non-landing row, undoing its writes first unless its type is exempt. Twin: ``_handBackRow``."""
         row.done = True
         undo_set = _undo_paths(row)
+        left = _out_of_root_written(row)
+        left_note = f"; {_NOT_UNDONE_OUT_OF_ROOT}: {', '.join(left)}" if left else ""
         if htype in _UNDO_EXEMPT or not _has_writes(row) or not undo_set:
             if htype == "peer-dirty" and _has_writes(row) and undo_set:
                 reason = f"{reason}; {_NOT_UNDONE_PEER}: {', '.join(undo_set)}"
-            _handback(row, htype, reason, tradeoff, ruling)
+            _handback(row, htype, reason + left_note, tradeoff, ruling)
             return
         if undo_paths_sink is not None:
             undo_paths_sink.append({"row": row.row_id, "paths": list(undo_set)})
@@ -670,7 +679,7 @@ def run_admission(
         if undo_result.get("outcome") != "undone":
             _handback(row, "stage-dead", _undo_failed_reason(undo_result, _nonlanding_undo_failed_head(htype)))
             return
-        _handback(row, htype, f"{reason}; undone", tradeoff, ruling)
+        _handback(row, htype, f"{reason}; undone{' in repo_root' if left else ''}{left_note}", tradeoff, ruling)
 
     def _apply_route_row(row: Row, action: tuple[str, str], reason: str) -> None:
         kind, value = action
@@ -2172,6 +2181,10 @@ def compose_grind_script(
         "  return Array.from(new Set(row.touchedFiles.concat(row.createdFiles || [])"
         ".concat(row.removedFiles || []))).filter((p) => _outOfRootPaths([p]).length === 0);\n"
         "}\n"
+        "function _outOfRootWritten(row) {\n"
+        "  return _outOfRootPaths(Array.from(new Set(row.touchedFiles.concat(row.createdFiles || [])"
+        ".concat(row.removedFiles || []))));\n"
+        "}\n"
         "function _hasWrites(row) { return row.fixReported || (row.createdFiles || []).length > 0 || (row.removedFiles || []).length > 0; }"
     )
     reject_raw = stages.compose_verify_op_call(
@@ -2188,10 +2201,12 @@ def compose_grind_script(
         "async function _handBackRow(rowId, type, reason, tradeoff, ruling) {\n"
         "  const row = _rows[rowId];\n"
         "  row.done = true;\n"
+        "  const _leftOut = _outOfRootWritten(row);\n"
+        f"  const _leftNote = _leftOut.length > 0 ? '; ' + {json.dumps(_NOT_UNDONE_OUT_OF_ROOT)} + ': ' + _leftOut.join(', ') : '';\n"
         "  if (_UNDO_EXEMPT.includes(type) || !_hasWrites(row) || _undoPaths(row).length === 0) {\n"
         "    const _left = _undoPaths(row);\n"
         f"    if (type === 'peer-dirty' && _hasWrites(row) && _left.length > 0) {{ reason = reason + '; ' + {json.dumps(_NOT_UNDONE_PEER)} + ': ' + _left.join(', '); }}\n"
-        "    _handBack(rowId, type, reason, tradeoff, ruling); return;\n"
+        "    _handBack(rowId, type, reason + _leftNote, tradeoff, ruling); return;\n"
         "  }\n"
         "  row.undoReason = `the row was handed back ${type}: ${reason}`;\n"
         "  let _undone;\n"
@@ -2202,7 +2217,7 @@ def compose_grind_script(
         " + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + '" + _UNDO_FAILED_TAIL + "');\n"
         "    return;\n"
         "  }\n"
-        "  _handBack(rowId, type, reason + '; undone', tradeoff, ruling);\n"
+        "  _handBack(rowId, type, reason + '; undone' + (_leftOut.length > 0 ? ' in repo_root' : '') + _leftNote, tradeoff, ruling);\n"
         "}\n"
         "async function _applyRouteRow(row, rowId, route, reason) {\n"
         "  if (route.kind === 'handback') { await _handBackRow(rowId, route.value, reason); }\n"

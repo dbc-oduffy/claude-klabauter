@@ -43,16 +43,41 @@ def _make_repo(tmp_path: Path, skill_md: str = _GOOD_SKILL_MD) -> Path:
 def test_static_check_passes_with_four_orthogonal_lenses(tmp_path):
     repo = _make_repo(tmp_path)
     skill_file = repo / "coordinator" / "skills" / "parallel-code-review" / "SKILL.md"
-    agents_dir = repo / "coordinator" / "agents"
-    lines, passed = static_check(skill_file, agents_dir)
+    lines, passed = static_check(skill_file, repo / "coordinator")
     assert passed is True
     assert any(line.startswith("OK (static): 4 orthogonal lenses") for line in lines)
 
 
 def test_static_check_fails_on_missing_skill_file(tmp_path):
-    lines, passed = static_check(tmp_path / "nope" / "SKILL.md", tmp_path / "agents")
+    lines, passed = static_check(tmp_path / "nope" / "SKILL.md", tmp_path)
     assert passed is False
     assert any("Skill file not found" in line for line in lines)
+
+
+_BIN_ROW_SKILL_MD = _GOOD_SKILL_MD.replace(
+    "| test-evidence-parser (`agents/test-evidence-parser.md`) | tests | ... |",
+    "| weekly-gate-tests (`bin/weekly-gate-tests.py`) | tests | ... |",
+)
+
+
+def test_static_check_passes_bin_reviewer_row_when_file_exists(tmp_path):
+    repo = _make_repo(tmp_path, _BIN_ROW_SKILL_MD)
+    bin_dir = repo / "coordinator" / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "weekly-gate-tests.py").write_text("# bin\n", encoding="utf-8")
+    skill_file = repo / "coordinator" / "skills" / "parallel-code-review" / "SKILL.md"
+    lines, passed = static_check(skill_file, repo / "coordinator")
+    assert passed is True, lines
+    assert not any("Could not parse" in line for line in lines)
+
+
+def test_static_check_fails_bin_reviewer_row_when_file_missing(tmp_path):
+    repo = _make_repo(tmp_path, _BIN_ROW_SKILL_MD)
+    skill_file = repo / "coordinator" / "skills" / "parallel-code-review" / "SKILL.md"
+    lines, passed = static_check(skill_file, repo / "coordinator")
+    assert passed is False
+    assert any("file missing" in line for line in lines)
+    assert any(line.strip() == f"Expected: {repo / 'coordinator' / 'bin' / 'weekly-gate-tests.py'}" for line in lines)
 
 
 def test_static_check_fails_on_missing_agent_file(tmp_path):
@@ -62,10 +87,9 @@ def test_static_check_fails_on_missing_agent_file(tmp_path):
     )
     repo = _make_repo(tmp_path, skill_md)
     skill_file = repo / "coordinator" / "skills" / "parallel-code-review" / "SKILL.md"
-    agents_dir = repo / "coordinator" / "agents"
-    lines, passed = static_check(skill_file, agents_dir)
+    lines, passed = static_check(skill_file, repo / "coordinator")
     assert passed is False
-    assert any("Agent file missing" in line for line in lines)
+    assert any("file missing" in line for line in lines)
 
 
 def test_static_check_fails_on_lens_domain_collision(tmp_path):
@@ -75,8 +99,7 @@ def test_static_check_fails_on_lens_domain_collision(tmp_path):
     )
     repo = _make_repo(tmp_path, skill_md)
     skill_file = repo / "coordinator" / "skills" / "parallel-code-review" / "SKILL.md"
-    agents_dir = repo / "coordinator" / "agents"
-    lines, passed = static_check(skill_file, agents_dir)
+    lines, passed = static_check(skill_file, repo / "coordinator")
     assert passed is False
     assert any("Lens-domain collision" in line for line in lines)
 
@@ -93,8 +116,7 @@ def test_static_check_fails_below_minimum_reviewer_count(tmp_path):
 """
     repo = _make_repo(tmp_path, skill_md)
     skill_file = repo / "coordinator" / "skills" / "parallel-code-review" / "SKILL.md"
-    agents_dir = repo / "coordinator" / "agents"
-    lines, passed = static_check(skill_file, agents_dir)
+    lines, passed = static_check(skill_file, repo / "coordinator")
     assert passed is False
     assert any("Expected at least 4 orthogonal-lens rows" in line for line in lines)
 
@@ -106,10 +128,9 @@ def test_static_check_fails_on_unparseable_reviewer_cell(tmp_path):
     )
     repo = _make_repo(tmp_path, skill_md)
     skill_file = repo / "coordinator" / "skills" / "parallel-code-review" / "SKILL.md"
-    agents_dir = repo / "coordinator" / "agents"
-    lines, passed = static_check(skill_file, agents_dir)
+    lines, passed = static_check(skill_file, repo / "coordinator")
     assert passed is False
-    assert any("Could not parse agent path" in line for line in lines)
+    assert any("Could not parse reviewer path" in line for line in lines)
 
 
 def test_chunk_check_passes_on_disjoint_partitions(tmp_path):
@@ -175,7 +196,7 @@ def test_run_chunk_manifest_runs_static_then_chunk(tmp_path):
 
 
 def test_run_static_fail_short_circuits_before_chunk_check(tmp_path):
-    lines, passed = static_check(tmp_path / "nope" / "SKILL.md", tmp_path / "agents")
+    lines, passed = static_check(tmp_path / "nope" / "SKILL.md", tmp_path)
     assert passed is False
     stdout, stderr, rc = run(
         ["--chunk-manifest", "/does/not/matter.tsv"], content_root=str(tmp_path)

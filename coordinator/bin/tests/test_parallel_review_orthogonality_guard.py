@@ -182,8 +182,7 @@ class TestStaticFailureMarkerDrift(unittest.TestCase):
                 "---\n",
                 encoding="utf-8",
             )
-            agents_dir = Path(tmp) / "agents"
-            out_lines, passed = static_check(skill_file, agents_dir)
+            out_lines, passed = static_check(skill_file, Path(tmp))
 
         self.assertFalse(passed)
         self.assertIn(

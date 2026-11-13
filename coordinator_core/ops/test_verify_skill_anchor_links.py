@@ -40,6 +40,8 @@ def _make_tree(tmp_path: Path, skill_md_body: str) -> Path:
     (plugin_root / "snippets" / "doctrine-b.md").write_text(DOCTRINE_B)
     (repo_root / "global-doctrine" / "CLAUDE.md").write_text(GLOBAL_DOCTRINE)
     (plugin_root / "skills" / "plan" / "SKILL.md").write_text(skill_md_body)
+    (plugin_root / "skills" / "review").mkdir(parents=True)
+    (plugin_root / "skills" / "review" / "SKILL.md").write_text("# review\n")
     return plugin_root
 
 
@@ -197,7 +199,9 @@ def test_bare_section_marker_with_drifted_punctuation_is_dropped_but_counted(tmp
     assert report.dropped_section_lines == 1
 
 
-def test_missing_consumer_is_skipped_not_errored(tmp_path):
+def test_missing_consumer_is_skipped_by_scan_and_forces_exit_2_through_main(
+    tmp_path, monkeypatch, capsys
+):
     root = _make_tree(
         tmp_path, "_See `coordinator/snippets/doctrine-a.md` § How to Decide._\n"
     )
@@ -206,6 +210,24 @@ def test_missing_consumer_is_skipped_not_errored(tmp_path):
     assert report.error == ""
     assert len(report.skipped) == 1
     assert len(report.results) == 1
+
+    (root / "skills" / "review" / "SKILL.md").unlink()
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(root))
+    assert main([]) == 2
+    captured = capsys.readouterr()
+    assert "SKIPPED (not found)" in captured.err
+    assert "skills/review/SKILL.md" in captured.err.replace("\\", "/")
+    assert "summary:" in captured.out
+
+
+def test_skipped_consumer_exit_2_outranks_a_dead_anchor(tmp_path, monkeypatch, capsys):
+    root = _make_tree(
+        tmp_path, "_See `coordinator/snippets/doctrine-a.md` § Nonexistent Heading._\n"
+    )
+    (root / "skills" / "review" / "SKILL.md").unlink()
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(root))
+    assert main([]) == 2
+    assert "DEAD" in capsys.readouterr().out
 
 
 def test_all_consumers_missing_is_could_not_check_not_a_clean_zero(tmp_path):
@@ -407,7 +429,7 @@ def test_main_list_mode(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "skills/plan/SKILL.md" in out
     assert "skills/review/SKILL.md" in out
-    assert "skills/review-code/SKILL.md" in out
+    assert "review-code" not in out
 
 
 def test_main_list_mode_does_not_require_any_doctrine_file(tmp_path, monkeypatch, capsys):
