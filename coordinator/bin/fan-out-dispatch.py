@@ -359,24 +359,17 @@ def _machine_local_get(key: str) -> str:
     not catch `UnicodeDecodeError`, silently reopening the "unexpected
     exception propagates" failure mode this docstring says doesn't exist.)
     """
-    import shutil
-
-    exe = shutil.which("machine-local")
-    if not exe:
-        return ""
     try:
-        proc = subprocess.run(
-            [exe, "get", key],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            **_no_console_kw(),
-        )
-        if proc.returncode == 0:
-            return proc.stdout.strip()
-    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
+        claude_klabauter_root = _resolve_claude_klabauter_root_silent()
+        if claude_klabauter_root and claude_klabauter_root not in sys.path:
+            sys.path.insert(0, claude_klabauter_root)
+        from coordinator_core import machine_local_spawn
+
+        value, ok = machine_local_spawn.get(machine_local_spawn.kernel_path(), key)
+    except Exception as exc:
         print(f"fan-out-dispatch: machine-local get {key!r} failed: {exc}", file=sys.stderr)
-    return ""
+        return ""
+    return value.strip() if ok and value else ""
 
 
 def _memory_probe() -> str:

@@ -331,6 +331,36 @@ def _console_python():
     return found
 
 
+def _machine_local_spawn():
+    """`coordinator_core.machine_local_spawn` with the engine on sys.path, or None when no engine resolves."""
+    try:
+        from coordinator_core import machine_local_spawn
+        return machine_local_spawn
+    except ImportError:
+        pass
+    try:
+        sys.path.insert(0, str(_BIN_DIR))
+        import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+        from cc_invoke import ensure_engine_on_path
+
+        ensure_engine_on_path(str(_BIN_DIR / "unimatrix-install.py"))
+        from coordinator_core import machine_local_spawn
+        return machine_local_spawn
+    except Exception:
+        return None
+
+
+def _machine_local_run(run, argv):
+    """Run a machine-local reader argv: the injected `run` when a caller supplied one, else the bounded helper.
+
+    A helper that is absent, fails to start or outlives its ceiling reads as exit 2 with a stderr line."""
+    if run is not subprocess.run:
+        return run(argv, capture_output=True, text=True, timeout=30, creationflags=_sibling("unimatrix-roster.py").no_window())
+    helper = _machine_local_spawn()
+    done = helper.run_bounded(argv) if helper else None
+    return done or subprocess.CompletedProcess(argv, 2, "", "machine-local spawn unavailable, failed or timed out")
+
+
 HOMEBREW_PYTHONS = ("/opt/homebrew/bin/python3", "/usr/local/bin/python3")  # literal: the installer must import without lib/ beside it
 _PIN_UNREAD = object()
 PYTHON_PIN_KEY = "unimatrix.python"
@@ -508,8 +538,7 @@ def pair_key(alias, run=subprocess.run, unencrypted=False, remint=False, on_mint
             raise RuntimeError(f"{reader} is missing; an unrecorded pair key would not be found next run")
         if remint or not priv.is_file():
             _mint(priv, "unimatrix", run, unencrypted, remint, on_mint)
-        rec = run([_console_python(), str(reader), "set", f"{autolink.KEYS_PREFIX}{alias}", str(priv)],
-                  capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
+        rec = _machine_local_run(run, [_console_python(), str(reader), "set", f"{autolink.KEYS_PREFIX}{alias}", str(priv)])
         if rec.returncode:
             raise RuntimeError(f"recording {autolink.KEYS_PREFIX}{alias} failed: "
                                f"{(rec.stderr or rec.stdout or '').strip()[:200]}")
@@ -530,8 +559,7 @@ def recorded_pair_keys(run=subprocess.run, peers=None):
     reader = roster.settings_home() / "bin" / "_machine_local.py"
     if not reader.is_file():
         raise RuntimeError(f"{reader} is missing; recorded pair keys cannot be listed")
-    r = run([_console_python(), str(reader), "get", autolink.REGISTRY_KEY],
-            capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
+    r = _machine_local_run(run, [_console_python(), str(reader), "get", autolink.REGISTRY_KEY])
     if r.returncode not in (0, 1):
         raise RuntimeError(f"reading {autolink.REGISTRY_KEY} failed: {(r.stderr or r.stdout or '').strip()[:200]}")
     asked = {t for t in (peers or ()) if autolink.ALIAS_RE.fullmatch(t)}
@@ -1680,9 +1708,8 @@ def _write_pin(interp):
     if not reader.is_file():
         return False
     try:
-        rec = subprocess.run([_console_python(), str(reader), "set", PYTHON_PIN_KEY, interp], capture_output=True,
-                             text=True, timeout=30, creationflags=roster.no_window())
-    except (OSError, subprocess.SubprocessError):
+        rec = _machine_local_run(subprocess.run, [_console_python(), str(reader), "set", PYTHON_PIN_KEY, interp])
+    except OSError:
         return False
     return rec.returncode == 0
 

@@ -81,6 +81,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from coordinator_core import machine_local_spawn
 from coordinator_core._settings_home import resolve_machine_local_cli
 from coordinator_core._content_root_primitive import content_root_for
 from coordinator_core.temp_layout import managed_tempdir
@@ -115,7 +116,6 @@ _SUBTYPE_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
 _CONVENTION_HEADING_RE = re.compile(r"^##\s+.*convention", re.IGNORECASE)
 
 _GIT_TIMEOUT = 30
-_MACHINE_LOCAL_TIMEOUT = 15
 _RENDER_TREE_TIMEOUT = 120
 _PNPM_INSTALL_TIMEOUT = 900
 _PNPM_TYPECHECK_TIMEOUT = 300
@@ -183,17 +183,9 @@ def _register_repo(project_name: str, target: str) -> int:
         print(f"{_PROG}: machine-local not found -- cannot register repos.{slug}", file=sys.stderr)
         return 1
 
-    try:
-        proc = subprocess.run(
-            [ml_bin, "set", f"repos.{slug}", target_abs],
-            capture_output=True,
-            text=True,
-            timeout=_MACHINE_LOCAL_TIMEOUT,
-            stdin=subprocess.DEVNULL,
-            **_CREATIONFLAGS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"{_PROG}: machine-local set repos.{slug} failed: {exc}", file=sys.stderr)
+    proc = machine_local_spawn.run_bounded([ml_bin, "set", f"repos.{slug}", target_abs])
+    if proc is None:
+        print(f"{_PROG}: machine-local set repos.{slug} failed to launch or outlived its ceiling", file=sys.stderr)
         return 1
     if proc.returncode != 0:
         print(

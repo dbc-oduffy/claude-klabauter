@@ -228,17 +228,24 @@ def box_variants(box):
 
 
 def _default_read_key(name):
-    """The machine-local value of `name` (one reader spawn), '' when the reader is missing or fails."""
+    """The machine-local value of `name` through the bounded engine reader, '' when the reader is missing or fails."""
     roster = _mod("unimatrix-roster.py")
     reader = roster.settings_home() / "bin" / "_machine_local.py"
     if not reader.is_file():
         return ""
     try:
-        r = subprocess.run([roster.console_python(), str(reader), "get", name], capture_output=True, text=True,
-                           timeout=30, creationflags=_no_window())
-    except (OSError, subprocess.SubprocessError):
+        if str(HERE) not in sys.path:
+            sys.path.insert(0, str(HERE))
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        import cc_invoke
+
+        cc_invoke.ensure_engine_on_path(__file__)
+        from coordinator_core import machine_local_spawn
+
+        value, ok = machine_local_spawn.get(str(reader), name)
+    except Exception:
         return ""
-    return r.stdout.strip() if not r.returncode else ""
+    return value.strip() if ok and value else ""
 
 
 def default_address_fn(read_key=None):

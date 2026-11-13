@@ -90,6 +90,7 @@ from typing import Iterator, List, Optional
 
 from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
+from coordinator_core import machine_local_spawn
 from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.owner_safe_rmtree import make_removable
 from coordinator_core.benchmarks.timer import SUBPROCESS_CREATIONFLAGS
@@ -222,19 +223,10 @@ def _real_machine_local_exe() -> str:
 
 def _real_machine_local_dump() -> dict:
     exe = _real_machine_local_exe()
-    proc = subprocess.run(
-        [exe, "dump"],
-        capture_output=True,
-        text=True,
-        timeout=_MACHINE_LOCAL_DUMP_TIMEOUT_S,
-        creationflags=SUBPROCESS_CREATIONFLAGS,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"percolate_round_ab: 'machine-local dump' failed (rc={proc.returncode}): "
-            f"{proc.stderr.strip()}"
-        )
-    return json.loads(proc.stdout)
+    dump = machine_local_spawn.dump(exe, ())
+    if dump is None:
+        raise RuntimeError("percolate_round_ab: 'machine-local dump' failed or outlived its ceiling")
+    return dump
 
 
 def resolve_live_mirror_path() -> Path:

@@ -68,9 +68,34 @@ _PARSED = "halt-index-entry"
 _FRESH = "halt-index-fresh"
 
 
-def _parse(file) -> Optional[RunEntry]:
-    """The entry in `file`, parsed once per open `call_io_scope`; `_store` and `remove_run` drop it."""
-    return call_io_scope.memo(_PARSED, os.fspath(file), lambda: _parse_file(file))
+_STAT_CACHE: dict = {}  # abs file path -> (st_mtime_ns, st_size, RunEntry | None); process-wide
+
+
+def _parse(file, st=None) -> Optional[RunEntry]:
+    """The entry in `file`: parsed once per open `call_io_scope`, and across scopes while the file's
+    (mtime_ns, size) is unchanged. `st` is a stat the caller already holds (a scandir entry's).
+    `_store` and `remove_run` drop the path; a missing file reads None and is never cached."""
+    key = os.fspath(file)
+    return call_io_scope.memo(_PARSED, key, lambda: _parse_stat_keyed(file, key, st))
+
+
+def _parse_stat_keyed(file, key: str, st) -> Optional[RunEntry]:
+    try:
+        st = st if st is not None else os.stat(key)
+    except OSError:
+        _STAT_CACHE.pop(key, None)
+        return None
+    sig = (st.st_mtime_ns, st.st_size)
+    hit = _STAT_CACHE.get(key)
+    if hit is not None and hit[:2] == sig:
+        return hit[2]
+    entry = _parse_file(file)
+    _STAT_CACHE[key] = (*sig, entry)
+    return entry
+
+
+def _drop_cached(repo_root: Path, run_id: str) -> None:
+    _STAT_CACHE.pop(os.fspath(_run_file(repo_root, run_id)), None)
 
 
 def _parse_file(file) -> Optional[RunEntry]:
@@ -99,6 +124,7 @@ def _parse_file(file) -> Optional[RunEntry]:
 def _store(repo_root: Path, run_id: str, entry: RunEntry) -> None:
     """Write `entry`, or drop the file when it holds neither paths nor declared."""
     call_io_scope.invalidate(_PARSED)
+    _drop_cached(repo_root, run_id)
     forget_fresh()
     if not entry.paths and not entry.declared:
         remove_run(repo_root, run_id)
@@ -167,6 +193,7 @@ def record_declared(
 def remove_run(repo_root: Path, run_id: str) -> None:
     """Drop the run's entry; absent is a no-op."""
     call_io_scope.invalidate(_PARSED)
+    _drop_cached(repo_root, run_id)
     forget_fresh()
     try:
         _run_file(repo_root, run_id).unlink()
@@ -236,20 +263,35 @@ def entries(repo_root: Path) -> dict:
     index = _dir(root)
     if not (index / SENTINEL).exists():
         rebuild(root)
-    try:
-        names = sorted(os.listdir(index))
-    except OSError:
-        return {}
     out: dict = {}
+    for run_id, entry in _scan(index):
+        if entry is not None:
+            out[run_id] = entry
+    return out
+
+
+def _scan(index: Path):
+    """`(run id, entry)` per `*.json` in `index`, from one scandir whose entries carry the stat the
+    parse cache keys on; stops at the read deadline (a stalled disk: the rest read as unreadable)."""
+    try:
+        listing = list(os.scandir(index))
+    except OSError:
+        return
+    root = os.fspath(index)
+    live = {os.path.join(root, d.name) for d in listing}
+    for stale in [k for k in _STAT_CACHE if os.path.dirname(k) == root and k not in live]:
+        _STAT_CACHE.pop(stale, None)  # a file deleted out of band would otherwise stay cached forever
     deadline = _clock() + READ_DEADLINE_SECS
-    for name in names:
+    for de in sorted(listing, key=lambda d: d.name):
+        name = de.name
         if name.endswith(".json"):
             if _clock() >= deadline:
-                break  # a stalled disk: the remaining run files read as unreadable
-            entry = _parse(index / name)
-            if entry is not None:
-                out[name[: -len(".json")]] = entry
-    return out
+                return
+            try:
+                st = de.stat()
+            except OSError:
+                continue
+            yield name[: -len(".json")], _parse(os.path.join(root, name), st)
 
 
 def run_entry(repo_root: Path, run_id: str) -> Optional[RunEntry]:
@@ -292,21 +334,7 @@ def _fresh_entry(root: str, run_id: str) -> Optional[RunEntry]:
 def run_ids(repo_root: Path) -> list[str]:
     """Sorted run ids whose entry holds withheld paths; empty when the index is unreadable. A run
     indexed only for its declared footprint is not listed."""
-    root = Path(repo_root)
-    try:
-        names = sorted(os.listdir(_dir(root)))
-    except OSError:
-        return []
-    out = []
-    deadline = _clock() + READ_DEADLINE_SECS
-    for name in names:
-        if name.endswith(".json"):
-            if _clock() >= deadline:
-                break
-            entry = _parse(_dir(root) / name)
-            if entry is not None and entry.paths:
-                out.append(name[: -len(".json")])
-    return out
+    return [run_id for run_id, entry in _scan(_dir(Path(repo_root))) if entry is not None and entry.paths]
 
 
 def withheld_by_path(repo_root: Path) -> dict[str, str]:

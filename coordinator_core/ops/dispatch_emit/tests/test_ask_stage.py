@@ -365,3 +365,52 @@ def test_spine_refusal_names_the_plan_and_the_text_it_parsed(repo):
     msg = str(ei.value)
     assert msg.startswith(f"SPINE-REFUSED: {PLAN_REL}:") and "gate_kind" in msg
     assert f"sha256 {digest}" in msg
+
+
+def _kept_world(repo, kept_run, own_paths):
+    """`kept_run`'s record: t.py evicted (tree at HEAD bytes), declared write set `own_paths`."""
+    import subprocess
+
+    from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
+
+    def git(*a):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=repo, check=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+    if not (repo / ".git").exists():
+        git("init", "-q")
+    (repo / "t.py").write_bytes(b"a = 1\n")
+    git("add", "t.py")
+    git("commit", "-q", "-m", "A")
+    rec = repo / "state" / "warp" / kept_run
+    rec.mkdir(parents=True, exist_ok=True)
+    (rec / "manifest.json").write_text(
+        json.dumps({"rows": [], "doc_writes": [], "review_declared_paths": own_paths}), encoding="utf-8"
+    )
+    held = b"a = 1\nheld\n"
+    (rec / "withheld-blobs").mkdir()
+    (rec / "withheld-blobs" / blob_sha(held)).write_bytes(held)
+    (rec / "evicted.json").write_text(
+        json.dumps({"t.py": {"blob": blob_sha(held), "head": blob_sha(b"a = 1\n")}}), encoding="utf-8"
+    )
+    return held
+
+
+def test_kept_row_whose_evicted_path_is_outside_the_kept_runs_write_set_stages_fresh(repo):
+    from coordinator_core.ops.dispatch_emit import ask_stage, resume_snapshot
+
+    _kept_world(repo, "kept-run", ["other.py"])
+    snap = resume_snapshot.Snapshot(frozenset(), frozenset(), kept=frozenset({"R1"}), kept_run="kept-run")
+    assert ask_stage._kept_row_holds(repo, snap, "R1", "report.md") is False
+    assert (repo / "t.py").read_bytes() == b"a = 1\n"
+    refusals = json.loads((repo / "state" / "warp" / "kept-run" / "tree-write-refusals.json").read_text())
+    assert [(e["path"], e["reason"]) for e in refusals] == [("t.py", "outside-own-paths")]
+
+
+def test_kept_row_restores_an_owned_evicted_path_before_reading_the_kept_record(repo):
+    from coordinator_core.ops.dispatch_emit import ask_stage, resume_snapshot
+
+    held = _kept_world(repo, "kept-run", ["t.py"])
+    snap = resume_snapshot.Snapshot(frozenset(), frozenset(), kept=frozenset({"R1"}), kept_run="kept-run")
+    ask_stage._kept_row_holds(repo, snap, "R1", "report.md")  # no kept.json: False, but the restore ran
+    assert (repo / "t.py").read_bytes() == held

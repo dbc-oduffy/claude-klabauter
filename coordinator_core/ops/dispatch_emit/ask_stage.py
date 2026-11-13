@@ -411,7 +411,9 @@ def _kept_row_holds(root: Path, snap: Optional[resume_snapshot.Snapshot], row_id
         return False
     try:
         run_dir = record_dir(root, snap.kept_run)
-        halt_tree_evict.restore(root, run_dir)  # evicted bytes back first: kept.json fingerprints read them
+        # evicted bytes back first: kept.json fingerprints read them
+        if halt_tree_evict.restore_for_run(root, run_dir, snap.kept_run)["refused"]:
+            return False  # a fenced path stays evicted: the row stages as a fresh execute
         entry = kept_work.read(run_dir)["chunks"].get(row_id)
         if not kept_work.still_kept(root, entry, requirements_ledger.read_notes(run_dir), row_id, record_dir=run_dir):
             return False

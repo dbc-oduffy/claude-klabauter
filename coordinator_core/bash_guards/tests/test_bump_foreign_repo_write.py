@@ -31,6 +31,7 @@ pinned), and the "reads never bump" carve-out.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from coordinator_core.session_hub_path import hub_for_common
 from pathlib import Path
@@ -87,15 +88,27 @@ def _git(root: str, *args: str) -> None:
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
-def _init_repo(tmp_path: Path, name: str) -> Path:
-    root = tmp_path / name
-    root.mkdir()
+_REPO_TEMPLATE: list[Path] = []
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _repo_template(tmp_path_factory):
+    """One real `git init` + commit per module; `_init_repo` copies it instead of spawning six git processes per repo."""
+    root = tmp_path_factory.mktemp("repo-template")
     _git(str(root), "init", "-q")
     _git(str(root), "config", "user.email", "t@example.com")
     _git(str(root), "config", "user.name", "Test")
     (root / "README.md").write_text("init\n", encoding="utf-8")
     _git(str(root), "add", "README.md")
     _git(str(root), "commit", "-q", "-m", "init")
+    _REPO_TEMPLATE.append(root)
+    yield
+    _REPO_TEMPLATE.clear()
+
+
+def _init_repo(tmp_path: Path, name: str) -> Path:
+    root = tmp_path / name
+    shutil.copytree(_REPO_TEMPLATE[0], root)
     return root
 
 

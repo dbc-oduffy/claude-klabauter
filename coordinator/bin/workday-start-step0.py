@@ -79,8 +79,6 @@ Port of: coordinator-daily-branch.sh, DoE 2fbe0e77, 2026-07-19).
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -178,20 +176,18 @@ def _ensure_claude_klabauter_on_path() -> None:
 
 
 def _slug_self_heal(key: str, live_func, drift_label: str, machine_rename_option: bool) -> None:
-    ml_bin = os.environ.get("MACHINE_LOCAL_BIN", "machine-local")
-    resolved = shutil.which(ml_bin)
-    if resolved is None:
+    from coordinator_core import machine_local_spawn
+
+    impl = machine_local_spawn.kernel_path()
+    if not os.path.isfile(impl):
         return
-    has = subprocess.run([resolved, "has", key], capture_output=True, text=True,
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    if has.returncode != 0:
-        live = live_func()
-        subprocess.run([resolved, "set", key, live], capture_output=True, text=True,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    value, ok = machine_local_spawn.get(impl, key)
+    if not ok:
         return
-    get = subprocess.run([resolved, "get", "--default", "", key], capture_output=True, text=True,
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    persisted = get.stdout.strip() if get.returncode == 0 else ""
+    if value is None:
+        machine_local_spawn.run_bounded([sys.executable, impl, "set", key, live_func()])
+        return
+    persisted = value.strip()
     live = live_func()
     if persisted and persisted != live:
         _err(f"{drift_label}: persisted='{persisted}', "

@@ -1,6 +1,7 @@
 """halted_withheld_index: per-run files, replace-not-merge, malformed tolerance, sentinel backfill."""
 
 import json
+import os
 
 import pytest
 
@@ -60,6 +61,45 @@ def test_fresh_entry_is_decided_once_per_scope_until_a_marker_or_entry_is_rewrit
         assert idx.fresh_entry(tmp_path, "run-a") is None
         assert len(decided) == 3
     assert idx.fresh_entry(tmp_path, "run-a") is None and len(decided) == 4  # outside a scope nothing is held
+
+
+def test_second_listing_reads_no_run_file_and_a_rewrite_rereads_exactly_that_file(tmp_path, monkeypatch):
+    idx.rebuild(tmp_path)
+    for i in range(20):
+        idx.add_run(tmp_path, f"run-{i:02d}", [f"f{i}.py"])
+    idx._STAT_CACHE.clear()
+    reads = []
+    real = idx._parse_file
+    monkeypatch.setattr(idx, "_parse_file", lambda file: reads.append(str(file)) or real(file))
+    assert len(idx.entries(tmp_path)) == 20 and len(reads) == 20
+    reads.clear()
+    assert len(idx.entries(tmp_path)) == 20 and len(idx.run_ids(tmp_path)) == 20
+    assert reads == []
+    idx.add_run(tmp_path, "run-03", ["changed.py"])
+    reads.clear()
+    got = idx.entries(tmp_path)
+    assert got["run-03"].paths == ("changed.py",)
+    assert idx.run_ids(tmp_path) == sorted(got)
+    assert [os.path.basename(r) for r in reads] == ["run-03.json"]
+    # an out-of-band rewrite (another process) changes size/mtime: only that file is re-read
+    (tmp_path / idx.INDEX_DIR / "run-07.json").write_text(json.dumps({"paths": ["other-process-longer.py"]}), encoding="utf-8")
+    reads.clear()
+    assert idx.entries(tmp_path)["run-07"].paths == ("other-process-longer.py",)
+    assert [os.path.basename(r) for r in reads] == ["run-07.json"]
+    idx.remove_run(tmp_path, "run-07")
+    assert "run-07" not in idx.entries(tmp_path)
+
+
+def test_out_of_band_deleted_run_file_is_evicted_from_the_stat_cache(tmp_path):
+    idx.rebuild(tmp_path)
+    idx.add_run(tmp_path, "run-a", ["a.py"])
+    idx.add_run(tmp_path, "run-b", ["b.py"])
+    idx.entries(tmp_path)
+    gone = str(tmp_path / idx.INDEX_DIR / "run-a.json")
+    assert gone in idx._STAT_CACHE
+    os.remove(gone)
+    assert list(idx.entries(tmp_path)) == ["run-b"]
+    assert gone not in idx._STAT_CACHE
 
 
 def test_add_replaces_and_empty_removes(tmp_path):

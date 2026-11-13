@@ -80,6 +80,89 @@ def test_io_wait_records_do_not_count_but_hung_records_still_restart(tmp_path):
     assert out == "restart" and exits == [777]
 
 
+def _trigger(tmp_path, at, pid=1):
+    stall = tmp_path / "stall-dumps"
+    _dumps(stall, hang_restart.HANG_DUMP_THRESHOLD, end=at, pid=pid)
+    exits = []
+    out = hang_restart.maybe_restart(stall, server_pid=pid, now=at, exit_fn=exits.append)
+    return out, exits
+
+
+def _log_lines(tmp_path):
+    return _lines(tmp_path / hang_restart.HANG_RESTART_LOG_FILENAME)
+
+
+def test_each_consecutive_restart_waits_twice_as_long_up_to_the_cap(tmp_path):
+    base = hang_restart.RESTART_MIN_INTERVAL_SECS
+    t = NOW
+    assert _trigger(tmp_path, t)[0] == "restart"
+    for n in range(1, 4):
+        wait = base * 2 ** (n - 1)
+        assert _trigger(tmp_path, t + wait - 1, pid=n)[0] == "suppressed", n
+        t += wait
+        out, exits = _trigger(tmp_path, t, pid=100 + n)
+        assert out == "restart" and exits == [100 + n], n
+    lines = _log_lines(tmp_path)
+    assert any("action=suppressed reason=backoff" in line for line in lines)
+    restarts = [line for line in lines if "action=restart" in line]
+    assert [line.split("backoff_s=")[1].split()[0] for line in restarts] == ["0", "90", "180", "360"]
+
+
+def test_the_backoff_is_capped(tmp_path, monkeypatch):
+    monkeypatch.setattr(hang_restart, "RESTART_BACKOFF_CAP_SECS", 200.0)
+    t = NOW
+    for n in range(4):
+        assert _trigger(tmp_path, t, pid=n)[0] == "restart"
+        t += 200.0
+    assert _log_lines(tmp_path)[-1].count("backoff_s=200") == 1
+    assert _trigger(tmp_path, t - 1, pid=9)[0] == "suppressed"
+
+
+def test_a_quiet_window_resets_the_chain(tmp_path):
+    t = NOW
+    for n in range(3):
+        assert _trigger(tmp_path, t, pid=n)[0] == "restart"
+        t += hang_restart.RESTART_MIN_INTERVAL_SECS * 2**n
+    t += hang_restart.RESTART_QUIET_WINDOW_SECS
+    assert _trigger(tmp_path, t, pid=50)[0] == "restart"
+    # n is 1 again: the base floor, not the grown wait, applies.
+    later = t + hang_restart.RESTART_MIN_INTERVAL_SECS + 1
+    assert _trigger(tmp_path, later, pid=51)[0] == "restart"
+    assert "backoff_s=0 " in _log_lines(tmp_path)[-2]
+
+
+def test_every_log_line_carries_backoff_s(tmp_path):
+    assert _trigger(tmp_path, NOW)[0] == "restart"
+    assert _trigger(tmp_path, NOW + 20, pid=2)[0] == "suppressed"
+    lines = _log_lines(tmp_path)
+    assert len(lines) == 2 and all(" backoff_s=" in line for line in lines)
+    assert "backoff_s=90 " in lines[1]
+
+
+def test_decide_shares_the_log_the_holds_and_the_backoff(tmp_path):
+    assert hang_restart.decide(tmp_path, server_pid=5, source="client", now=NOW) == "restart"
+    assert hang_restart.decide(tmp_path, server_pid=5, source="client", now=NOW + 10) == "suppressed"
+    assert hang_restart.decide(tmp_path, server_pid=5, source="client", now=NOW + 91) == "restart"
+    # The next wait is the doubled one, for decide and for the dump-counting path alike.
+    assert _trigger(tmp_path, NOW + 91 + 100, pid=6)[0] == "suppressed"
+    lines = _log_lines(tmp_path)
+    assert all("source=client" in line for line in lines[:3])
+    (tmp_path / breadcrumb.HANDOVER_PENDING_FILENAME).write_text(json.dumps({"expires_at": NOW + 10_000}))
+    assert hang_restart.decide(tmp_path, server_pid=5, source="client", now=NOW + 1000) == "suppressed"
+    assert "reason=handover-hold" in _log_lines(tmp_path)[-1]
+
+
+def test_note_stall_honours_the_backoff(tmp_path, monkeypatch):
+    _fresh_marks(monkeypatch)
+    exits = []
+    for _ in range(hang_restart.HANG_DUMP_THRESHOLD):
+        hang_restart.note_stall(tmp_path / "stall-dumps", server_pid=7, exit_fn=exits.append)
+    for _ in range(hang_restart.HANG_DUMP_THRESHOLD):
+        out = hang_restart.note_stall(tmp_path / "stall-dumps", server_pid=8, exit_fn=exits.append)
+    assert exits == [7] and out == "suppressed"
+    assert "reason=backoff" in _log_lines(tmp_path)[-1]
+
+
 def test_second_trigger_inside_rate_limit_is_suppressed_without_exit(tmp_path):
     _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD)
     _run(tmp_path)
@@ -91,7 +174,7 @@ def test_second_trigger_inside_rate_limit_is_suppressed_without_exit(tmp_path):
     out = hang_restart.maybe_restart(stall, server_pid=888, now=later, exit_fn=exits.append)
     assert out == "suppressed" and exits == []
     lines = _lines(tmp_path / hang_restart.HANG_RESTART_LOG_FILENAME)
-    assert len(lines) == 2 and "action=suppressed reason=rate-limited" in lines[1]
+    assert len(lines) == 2 and "action=suppressed reason=backoff" in lines[1]
     # A third trigger the same second adds no duplicate suppressed line.
     hang_restart.maybe_restart(stall, server_pid=888, now=later, exit_fn=exits.append)
     assert len(_lines(tmp_path / hang_restart.HANG_RESTART_LOG_FILENAME)) == 2

@@ -1387,6 +1387,126 @@ def _indeterminate_envelope(
     }
 
 
+#: Consecutive unanswered calls (connect timeout / busy, or a read that outlived its full
+#: deadline) with no answered call in between, across every caller of one engine token, that
+#: mean the engine is hung rather than busy. A busy engine still answers one caller per accept
+#: tick and every answer clears the count, so a run of K with zero answers is not contention.
+UNANSWERED_RESTART_K = 5
+#: An unanswered run older than this is a stale file, not a chain.
+_UNANSWERED_CHAIN_SECS = 120.0
+#: The counter write and the restart decision each run under starved IO; either overrunning
+#: this reads as "no decision".
+_UNANSWERED_DEADLINE_SECS = 1.0
+_UNANSWERED_FILENAME = "unanswered.json"
+
+
+def _unanswered_path() -> Path:
+    """The counter file beside the discovery record (`breadcrumb.svc_dir`'s directory).
+
+    Re-derives `breadcrumb.svc_dir` / `_runtime_base` because importing `breadcrumb` pulls
+    `session.core` onto every call's hot path; `test_client_unanswering_restart.py` pins the
+    two derivations equal."""
+    import hashlib
+
+    base = (
+        os.environ.get("COORDINATOR_WARM_RUNTIME_BASE", "").strip()
+        or os.environ.get("LOCALAPPDATA")
+        or str(Path.home() / ".cache")
+    )
+    clone_hash = hashlib.sha1(str(_engine_clone_root().resolve()).encode("utf-8")).hexdigest()[:16]
+    return Path(base) / "coordinator" / "warm" / clone_hash / _UNANSWERED_FILENAME
+
+
+def _run_bounded(fn, deadline: float):
+    """`fn()`'s result, or None when it raised or outlived `deadline` (the leg is abandoned)."""
+    box: list = []
+
+    def _leg() -> None:
+        try:
+            box.append(fn())
+        except Exception:  # noqa: BLE001 -- an unreadable disk reads as no decision
+            pass
+
+    helper = threading.Thread(target=_leg, name="warm-unanswered", daemon=True)
+    helper.start()
+    helper.join(deadline)
+    return box[0] if box else None
+
+
+def _count_unanswered(token: str, now: float) -> int:
+    """One more unanswered call for `token`; the run restarts at 1 for another token or a stale file."""
+    path = _unanswered_path()
+    count = 1
+    # Read-modify-write is unlocked: a concurrent caller can lose an increment, which only delays
+    # the restart; a torn read falls back to 1.
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if record.get("token") == token and 0.0 <= now - float(record["last"]) < _UNANSWERED_CHAIN_SECS:
+            count = int(record["count"]) + 1
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    path.write_text(json.dumps({"token": token, "count": count, "last": now}), encoding="utf-8")
+    return count
+
+
+def _clear_unanswered() -> None:
+    """Drop the run counter: one unlink, run inline so an answered call spawns no thread."""
+    try:
+        os.unlink(_unanswered_path())
+    except OSError:
+        pass
+
+
+def _request_restart(count: int) -> Optional[str]:
+    """Ask `hang_restart.decide` about the live engine in the discovery record and, on
+    "restart", end it. The note names the outcome, or the backoff remaining when suppressed."""
+    from coordinator_core.warm import breadcrumb, hang_restart
+    from coordinator_core.warm.engine_root import current_engine_clone
+
+    root = current_engine_clone()
+    record = breadcrumb.read_breadcrumb(root) or {}
+    pid = record.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        return None
+    epoch = record.get("stable_pid_start_epoch")
+    if not breadcrumb.stable_pid_alive(pid, "", str(epoch if isinstance(epoch, int) else 0)):
+        return None
+    svc = breadcrumb.svc_dir(root)
+    verdict = hang_restart.decide(svc, server_pid=pid, source="client-unanswering")
+    if verdict == "restart":
+        hang_restart.exit_server(pid)
+        _clear_unanswered()
+        return (
+            f"engine pid {pid} left {count} consecutive calls unanswered; "
+            "restart requested, the next call spawns the replacement"
+        )
+    now = time.time()
+    lines = hang_restart._tail_lines(svc / hang_restart.HANG_RESTART_LOG_FILENAME)
+    reason, backoff = hang_restart._gate(svc, lines, now, hang_restart.RESTART_MIN_INTERVAL_SECS)
+    last, _ = hang_restart._last_line(lines, restart=True)
+    remaining = max(0.0, backoff - (now - last)) if last is not None else 0.0
+    return (
+        f"engine pid {pid} left {count} consecutive calls unanswered; restart suppressed "
+        f"({reason or 'hold'}), backoff remaining {remaining:.0f}s"
+    )
+
+
+def _note_unanswered(token: str) -> Optional[str]:
+    """Count one unanswered call against `token`; at `UNANSWERED_RESTART_K` request a backed-off
+    restart. Returns a note for the caller's text, or None for "no decision" (below K, a dead
+    pid, any OSError or overrun). Never raises."""
+    try:
+        count = _run_bounded(lambda: _count_unanswered(token, time.time()), _UNANSWERED_DEADLINE_SECS)
+        if count is None or count < UNANSWERED_RESTART_K:
+            return None
+        note = _run_bounded(lambda: _request_restart(count), _UNANSWERED_DEADLINE_SECS)
+    except Exception:  # noqa: BLE001 -- the call path never fails on a restart decision
+        return None
+    if note:
+        print(f"[warm-client] {note}", file=sys.stderr)
+    return note
+
+
 def try_warm_dispatch(
     msg: dict, *, read_deadline_secs: Optional[float] = None, hook_path: bool = False
 ) -> Optional[dict]:
@@ -1678,13 +1798,16 @@ def _try_warm_dispatch_inner(
             # never spawn (spawning here is the storm the table forbids).
             # Raised by `settimeout`, which sets NO errno, so it cannot be
             # classified by the `exc.errno` tests below.
+            _note_unanswered(token)
             _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
             return None
         except OSError as exc:
             if getattr(exc, "winerror", None) == ERROR_PIPE_BUSY:
+                _note_unanswered(token)
                 _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
                 return None
             if exc.errno in _CONTENDED_ERRNOS:
+                _note_unanswered(token)
                 # The same contended-server outcome reached without the
                 # deadline firing: a non-blocking-ish refusal from the
                 # accept queue (EAGAIN), or a connection the kernel set up
@@ -1694,6 +1817,7 @@ def _try_warm_dispatch_inner(
                 _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
                 return None
             if exc.errno == errno.EINVAL:
+                _note_unanswered(token)
                 # A second, distinct contended-pipe outcome -- see the
                 # module docstring's anti-storm table row for this branch
                 # (problem 4 of the 2026-08-19 concurrency problem set).
@@ -1740,11 +1864,13 @@ def _try_warm_dispatch_inner(
                 # it is WORKING. Keep waiting on the SAME read (never a second
                 # request) up to the mutation's own deadline.
                 if not _op_may_mutate(_classified_op_name(msg)):
+                    _note_unanswered(token)
                     _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
                     return None
                 mutation_deadline = _mutation_deadline_for(msg.get("method"))
                 line = pending.wait(max(0.0, mutation_deadline - liveness_secs))
                 if line is _TIMED_OUT:
+                    restart_note = _note_unanswered(token)
                     if _frame_is_replay_safe(msg):
                         _last_cold_bucket = COLD_BUCKET_MUTATION_DEADLINE_COLD_REPLAY
                         _params = msg.get("params")
@@ -1761,7 +1887,7 @@ def _try_warm_dispatch_inner(
                         return None
                     return _indeterminate_envelope(
                         msg,
-                        f"no response within {mutation_deadline}s",
+                        f"no response within {mutation_deadline}s" + (f"; {restart_note}" if restart_note else ""),
                         dispatch_key,
                         waited_secs=time.monotonic() - delivered_at,
                     )
@@ -1840,6 +1966,9 @@ def _try_warm_dispatch_inner(
             return _cold_or_indeterminate("malformed response frame")
         if not isinstance(response, dict) or "jsonrpc" not in response:
             return _cold_or_indeterminate("response is not a JSON-RPC envelope")
+
+        # An answer of any shape ends the unanswered run.
+        _clear_unanswered()
 
         # Re-emit the op's diagnostics on THIS process's stderr, which is where
         # a cold spawn would have put them and therefore the only stream the

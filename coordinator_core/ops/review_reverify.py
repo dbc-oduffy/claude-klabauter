@@ -120,6 +120,7 @@ from coordinator_core.git.index_write import (
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import review_reverify_probe as probe_io
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops.dispatch_emit.red_attribution import names_own_path_in_output
 from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused
 from coordinator_core.ops.owned_red import read_owned_red
 from coordinator_core.ops.pre_existing_ruling import ruled_pre_existing
@@ -737,14 +738,17 @@ def _untracked(repo_root: Path, rels: List[str]) -> Set[str]:
 def _sibling_owned(
     repo_root: Path, candidates: List[str], cause_files: Optional[Dict[str, List[str]]],
     footprint: Set[str], run_id: str, plan_path: str, untracked_only: Optional[Set[str]] = None,
+    failing_output: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[str], Dict[str, List[str]]]:
     """``(sibling_owned, foreign_red)``. ``sibling_owned``: unattributed nodes whose every caller-named
     cause file lies outside ``footprint`` and is withheld by a readable foreign halt record.
     ``foreign_red``: ``{node: [culprit paths]}`` for the rest whose every cause file lies outside
     ``footprint`` and is dirty versus HEAD (so HEAD passes) and none is held by an unreadable record.
     No cause files, an in-footprint one, or a clean one leaves the node blocking. A node in
-    ``untracked_only`` (green at the run base) classes only when every cause file is untracked: the base
-    export never held such a file, so green there says nothing about a tracked-dirty one."""
+    ``untracked_only`` (green at the run base) that names a footprint path or sits in a footprint test
+    file (``red_attribution``) classes only when every cause file is untracked: the base export never held
+    such a file, so green there says nothing about a tracked-dirty one. One naming no footprint path is a
+    peer's dirt whatever the base says, as in the land retest."""
     if not cause_files:
         return [], {}
     causes: Dict[str, List[str]] = {}
@@ -754,8 +758,12 @@ def _sibling_owned(
         if paths and not footprint.intersection(paths):
             causes[node] = paths
     if untracked_only and causes:
-        untracked = _untracked(repo_root, sorted({p for n, ps in causes.items() if n in untracked_only for p in ps}))
-        causes = {n: ps for n, ps in causes.items() if n not in untracked_only or set(ps) <= untracked}
+        gated = [n for n in causes if n in untracked_only]
+        own = names_own_path_in_output(failing_output, gated, footprint) | {
+            n for n in gated if not (failing_output or {}).get(n)
+        }  # no failure text: nothing to attribute from, keep the untracked-only check
+        untracked = _untracked(repo_root, sorted({p for n, ps in causes.items() if n in own for p in ps}))
+        causes = {n: ps for n, ps in causes.items() if n not in own or set(ps) <= untracked}
     if not causes:
         return [], {}
     from coordinator_core.ops.dispatch_emit.land_run import UNREADABLE_HALT_RECORD, foreign_halted_withheld
@@ -1030,6 +1038,7 @@ def review_reverify(
         cause_files = _derive_cause_files(repo_root, candidates, failing_output)
     sibling_owned, foreign_red = _sibling_owned(
         repo_root, candidates, cause_files, {*rels, *created}, run_id, plan_path, untracked_only=base_green,
+        failing_output=failing_output,
     )
     if sibling_owned or foreign_red:
         unattributed = [n for n in unattributed if n not in sibling_owned and n not in foreign_red]

@@ -19,8 +19,12 @@ from coordinator_core.session.output_tree_layout import locate
 from coordinator_core.session.record_homes import home_dir
 
 
+def _home_rel(kind: str) -> PurePosixPath:
+    return PurePosixPath(home_dir("", kind).replace(os.sep, "/"))
+
+
 def _warp_home() -> str:
-    return str(PurePosixPath(home_dir("", "warp").replace(os.sep, "/")))
+    return str(_home_rel("warp"))
 
 
 _SHARD_DIR = re.compile(r"^\d{4}-\d{2}$")
@@ -119,10 +123,28 @@ def _plan_evidence(root: Path, run_id: str, sizings: set[str]) -> frozenset[str]
     return frozenset(out)
 
 
-def _plan_docs(root: Path, sizings: set[str]) -> frozenset[str]:
+_SIZING_OBJECT = re.compile(r"^sizing_object:[ \t]*[\"']?([^\"'\r\n#]+?)[\"']?[ \t]*(?:#.*)?$", re.MULTILINE)
+_STAMP = re.compile(r"\d{8}T\d{6}")
+_FRONTMATTER_READ_CAP = 4096
+
+
+def _plan_names_sizing(root: Path, plan_rel: str, sizing_rel: str) -> bool:
+    """The plan's frontmatter `sizing_object:` names a sizing sharing `sizing_rel`'s stem."""
+    try:
+        with (root / plan_rel).open(encoding="utf-8") as fh:
+            head = fh.read(_FRONTMATTER_READ_CAP)
+    except OSError:
+        return False
+    match = _SIZING_OBJECT.search(head)
+    return bool(match) and PurePosixPath(match.group(1).strip().replace("\\", "/")).stem == PurePosixPath(sizing_rel).stem
+
+
+def _plan_docs(root: Path, sizings: set[str], chained: bool = False) -> frozenset[str]:
     """Each sizing's `plan:` edge when it is a `.md` sharing the sizing's stem: the engine-minted plan doc.
 
-    A plan the sizing merely points at keeps its own stem and stays foreign.
+    A plan the sizing merely points at keeps its own stem and stays foreign, except under `chained`
+    (a same-sizing predecessor run exists): a `docs/plans` plan whose own `sizing_object:` names the sizing
+    is the plan that predecessor minted for it.
     """
     out: set[str] = set()
     for rel in sizings:
@@ -133,10 +155,67 @@ def _plan_docs(root: Path, sizings: set[str]) -> frozenset[str]:
         if not match:
             continue
         pp = PurePosixPath(match.group(1).strip().replace("\\", "/"))
-        if pp.is_absolute() or ".." in pp.parts or pp.suffix != ".md" or pp.stem != PurePosixPath(rel).stem:
+        if pp.is_absolute() or ".." in pp.parts or pp.suffix != ".md":
+            continue
+        if pp.stem != PurePosixPath(rel).stem and not (
+            chained and pp.parts[:2] == ("docs", "plans") and _plan_names_sizing(root, str(pp), rel)
+        ):
             continue
         out.add(str(pp))
     return frozenset(out)
+
+
+def _handoff_docs(sizings: set[str]) -> frozenset[str]:
+    """`state/handoffs/<same tail>.md` for each `state/sizings/<tail>.yaml`: the baton the sizing's run minted."""
+    out: set[str] = set()
+    sizing_home, handoff_home = _home_rel("sizings"), _home_rel("handoffs")
+    for rel in sizings:
+        pp = PurePosixPath(rel)
+        if pp.parts[:len(sizing_home.parts)] == sizing_home.parts and pp.suffix in (".yaml", ".yml"):
+            out.add(str((handoff_home / PurePosixPath(*pp.parts[len(sizing_home.parts):])).with_suffix(".md")))
+    return frozenset(out)
+
+
+def _stamp(run_id: str) -> str:
+    found = _STAMP.findall(run_id)
+    return found[-1] if found else ""
+
+
+def _same_sizing_predecessors(root: Path, run_id: str, sizings: set[str]) -> tuple[str, ...]:
+    """Earlier runs bound to the same sizing (parked, halted or re-minted ahead of `run_id`), nearest chain first.
+
+    Candidates are the `resumed_from` chain plus record dirs named for the sizing's stem (`warp-<stem>-...`)
+    or its trailing hex (`ask-<stamp>-<hex>`) whose stamp precedes `run_id`'s; each is confirmed by its
+    `run.json` `sizing_rel` stem. One directory listing and one small read per candidate; no spawn.
+    """
+    stems = {PurePosixPath(s).stem for s in sizings if s}
+    if not stems:
+        return ()
+    from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
+
+    out: dict[str, None] = dict.fromkeys(_resumed_chain(root, run_id))
+    mine = _stamp(run_id)
+    try:
+        names = [p.name for p in record_dir(root, run_id).parent.iterdir()]
+    except OSError:
+        names = []
+    hexes = {s.rsplit("-", 1)[1] for s in stems if re.fullmatch(r"[0-9a-f]{6}", s.rsplit("-", 1)[-1])}
+    for name in sorted(names):
+        if name == run_id or name in out or not safe_id(name):
+            continue
+        stamp = _stamp(name)
+        if not (mine and stamp and stamp < mine):
+            continue
+        if any(name.startswith(f"warp-{stem}-") for stem in stems) or (
+            name.startswith("ask-") and name.rsplit("-", 1)[-1] in hexes
+        ):
+            out[name] = None
+    kept: list[str] = []
+    for name in out:
+        theirs = warp_run_deliverable.record_sizing_rel(root, name)
+        if theirs and PurePosixPath(theirs).stem in stems:
+            kept.append(name)
+    return tuple(kept)
 
 
 def own_artifact_paths(root: Path, run_id: str) -> OwnArtifacts:
@@ -146,10 +225,14 @@ def own_artifact_paths(root: Path, run_id: str) -> OwnArtifacts:
     root = Path(root)
     slice_rel, corrupt = _own_slice_sizing(root, run_id)
     sizings = {rel for rel in (warp_run_deliverable.record_sizing_rel(root, run_id), slice_rel) if rel}
+    predecessors = _same_sizing_predecessors(root, run_id, sizings)
+    plans = set(_plan_docs(root, sizings, chained=bool(predecessors)))
+    if predecessors:
+        plans |= _handoff_docs(sizings)
     return OwnArtifacts(
         sizings=frozenset(sizings),
         plan_evidence=_plan_evidence(root, run_id, sizings),
-        plan_docs=_plan_docs(root, sizings),
+        plan_docs=frozenset(plans),
         corrupt_parents=corrupt,
         record_prefix=f"{_warp_home()}/{run_id}/",
         delivery_note=delivery_note_locate(root, run_id),

@@ -87,6 +87,36 @@ def _console_python():
     return found
 
 
+def _machine_local_spawn():
+    """`coordinator_core.machine_local_spawn` with the engine on sys.path, or None when no engine resolves."""
+    try:
+        from coordinator_core import machine_local_spawn
+        return machine_local_spawn
+    except ImportError:
+        pass
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+        from cc_invoke import ensure_engine_on_path
+
+        ensure_engine_on_path(__file__)
+        from coordinator_core import machine_local_spawn
+        return machine_local_spawn
+    except Exception:
+        return None
+
+
+def _machine_local_run(run, argv):
+    """Run a machine-local reader argv: the injected `run` when a caller supplied one, else the bounded helper.
+
+    A helper that is absent, fails to start or outlives its ceiling reads as exit 2."""
+    if run is not subprocess.run:
+        return run(argv, capture_output=True, text=True, timeout=OP_TIMEOUT, creationflags=_no_window())
+    helper = _machine_local_spawn()
+    done = helper.run_bounded(argv) if helper else None
+    return done or subprocess.CompletedProcess(argv, 2, "", "machine-local spawn unavailable, failed or timed out")
+
+
 def _vault(run):
     reader = settings_home() / "bin" / "_machine_local.py"
     missing = PassphraseSourceMissing(f"passphrase_source_missing: op CLI vault unset; set machine-local key "
@@ -94,8 +124,7 @@ def _vault(run):
     if not reader.is_file():
         raise missing
     try:
-        r = run([_console_python(), str(reader), "get", VAULT_KEY], capture_output=True, text=True,
-                timeout=OP_TIMEOUT, creationflags=_no_window())
+        r = _machine_local_run(run, [_console_python(), str(reader), "get", VAULT_KEY])
     except (OSError, subprocess.SubprocessError):
         raise missing from None
     val = (r.stdout or "").strip() if not r.returncode else ""

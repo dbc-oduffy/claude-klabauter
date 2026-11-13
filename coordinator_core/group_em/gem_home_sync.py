@@ -1,8 +1,9 @@
 """Sync legs for the G-EM home: pull on entry, commit-pull-push at handoff and quick-wrap.
 
 Both legs return `{sync, paths, remote_opt_out}`. `sync` is `ok`, `noop` (no remote; the opt-out
-says why), `conflict` (rebase aborted, `paths` names the unmerged files) or `error` (git refused
-a step; `detail` carries its stderr). A conflict is never resolved here.
+says why), `refused` (dirty tree; `paths` names it, nothing touched), `conflict` (rebase
+aborted, `paths` names the unmerged files) or `error` (git refused a step; `detail` carries
+its stderr). A conflict is never resolved here.
 """
 
 from __future__ import annotations
@@ -42,10 +43,33 @@ def _no_remote_opt_out() -> str:
     return opt_out or "declined"
 
 
+def _dirty_paths(cwd: str) -> list[str] | None:
+    """Tracked paths with uncommitted changes (untracked files do not block a rebase).
+    None when `git status` itself failed."""
+    res = run_git(["status", "--porcelain", "-z", "--untracked-files=no"], cwd=cwd)
+    if res.returncode != 0:
+        return None
+    paths: list[str] = []
+    entries = iter(res.stdout.split("\0"))
+    for entry in entries:
+        if len(entry) < 4:
+            continue
+        paths.append(entry[3:])
+        if entry[0] in "RC" or entry[1] in "RC":
+            next(entries, None)  # -z rename/copy: the next entry is the origin path
+    return paths
+
+
 def _rebase(cwd: str, branch: str) -> dict | None:
-    """`pull --rebase --autostash` from origin; None on success, else a conflict or error report.
+    """`pull --rebase` from origin; None on success, else a refused, conflict or error report.
+    A dirty tree is `refused` with the dirty paths and nothing touched: no stash, ever.
     A conflict aborts the rebase and leaves the tree as it was."""
-    res = run_git(["pull", "--rebase", "--autostash", "origin", branch], cwd=cwd, remote=True)
+    dirty = _dirty_paths(cwd)
+    if dirty is None:
+        return _report("error", detail="git status failed")
+    if dirty:
+        return _report("refused", dirty, detail="dirty G-EM home; commit or discard, then retry")
+    res = run_git(["pull", "--rebase", "origin", branch], cwd=cwd, remote=True)
     if res.returncode == 0:
         return None
     unmerged = run_git(["diff", "--name-only", "--diff-filter=U"], cwd=cwd).stdout.split()
@@ -59,7 +83,7 @@ def _rebase(cwd: str, branch: str) -> dict | None:
 
 
 def pull_on_entry(home) -> dict:
-    """Pull the home's remote branch with `--rebase --autostash`; uncommitted edits survive.
+    """Pull the home's remote branch with `--rebase`; a dirty tree is `refused`, never stashed.
     No remote, or a remote with no such branch yet: `noop`. Never raises on git failure."""
     cwd = str(home)
     if not _has_origin(cwd):
@@ -72,7 +96,8 @@ def pull_on_entry(home) -> dict:
 
 def push_leg(home, message: str) -> dict:
     """Stage everything the home's ignore list lets through, commit when something is staged,
-    `pull --rebase --autostash`, then push. No remote: `noop` and nothing is committed or pushed."""
+    `pull --rebase` (refused if add/commit left a dirty tree), then push.
+    No remote: `noop` and nothing is committed or pushed."""
     cwd = str(home)
     if not _has_origin(cwd):
         return _report("noop", opt_out=_no_remote_opt_out())

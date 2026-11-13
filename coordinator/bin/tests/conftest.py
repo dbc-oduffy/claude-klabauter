@@ -315,6 +315,10 @@ def _stub_source_preflight(request, monkeypatch):
         raise
 
     monkeypatch.setattr(source_preflight, "check_source_published", lambda _source_dir, *_a, **_k: None)
+    if hasattr(source_preflight, "Withholding"):
+        monkeypatch.setattr(
+            source_preflight, "source_withholding", lambda _source_dir, *_a, **_k: source_preflight.Withholding()
+        )
 
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "plan-spine-check.py"

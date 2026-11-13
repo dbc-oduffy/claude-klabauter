@@ -2,8 +2,9 @@
 
 Contract (docs/reference/ask-spool.md): `run(repo_root) -> {minted, skipped, failed, notified, coalesced, withdrawn}`.
 An entry reaches `.minted` only with a run id: found already (`skipped`, no new mint) or minted
-through `submit_engine_ask.evaluate` on the stored payload. A failed mint leaves the entry
-pending with a bumped `attempts`; an entry is never deleted.
+through `submit_engine_ask.evaluate` on the stored payload, and only when `RUN_DIR_ROOT/<run_id>`
+exists. A failed mint, or a run id with no run dir, leaves the entry pending with a bumped
+`attempts`; an entry is never deleted.
 
 Traps:
 - The original emit may have minted before the spool existed (post-delivery spool) or may still
@@ -465,6 +466,8 @@ def run(
     `coalesced` joined the run another entry of the same sizing or run key holds, `withdrawn`
     was retired as stale (its sizing, plan or run is gone, or the plan's rows all closed).
     A drainer killed mid-entry leaves a claim that `stale_after_s` later returns to pending."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+
     repo_root = str(repo_root)
     root = Path(repo_root)
     counts = {"minted": 0, "skipped": 0, "failed": 0, "notified": 0, "coalesced": 0, "withdrawn": 0}
@@ -502,6 +505,8 @@ def run(
                 minted_now = run_id is None
                 if run_id is None:
                     run_id = _mint(root, header, parsed, evaluate, taken)
+                if not os.path.isdir(root / RUN_DIR_ROOT / run_id):
+                    raise RuntimeError(f"run {run_id} has no run dir")
         except Exception as exc:  # BaseException (a kill) leaves the claim for the stale reclaim
             _fail(repo_root, sid, path, header, payload, f"{type(exc).__name__}: {exc}", counts, loaded)
             continue

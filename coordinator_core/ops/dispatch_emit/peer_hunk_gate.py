@@ -89,23 +89,29 @@ def _sibling_spines(root: Path, run_ids: Iterable[str]) -> dict:
     else:
         runs_memo = state.setdefault("sibling_spines", {})
         plans_memo = state.setdefault("sibling_plan_spines", {})
+    run_ids = list(run_ids)
+    sizings_memo = state.setdefault("sibling_sizing_plans", {}) if state is not None else {}
+    if any((str(root), r) not in runs_memo for r in run_ids):
+        land_deadline.check("peer_hunk_gate.sibling_spine")  # once per call: a per-run check costs a ledger entry each
     out: dict = {}
     for run_id in run_ids:
         key = (str(root), run_id)
         if key not in runs_memo:
-            land_deadline.check("peer_hunk_gate.sibling_spine")
             try:
                 sizing_rel = warp_run_deliverable.record_sizing_rel(root, run_id)
                 spine: object = set()
                 if sizing_rel:
-                    try:
-                        sizing = yaml.load(
-                            (root / sizing_rel).read_text(encoding="utf-8"),
-                            Loader=SAFE_LOADER,
-                        ) or {}
-                    except FileNotFoundError:
-                        sizing = {}
-                    plan_rel = _norm(sizing.get("plan")) if isinstance(sizing, dict) else ""
+                    sizing_key = (str(root), sizing_rel)
+                    if sizing_key not in sizings_memo:
+                        try:
+                            sizing = yaml.load(
+                                (root / sizing_rel).read_text(encoding="utf-8"),
+                                Loader=SAFE_LOADER,
+                            ) or {}
+                        except FileNotFoundError:
+                            sizing = {}
+                        sizings_memo[sizing_key] = _norm(sizing.get("plan")) if isinstance(sizing, dict) else ""
+                    plan_rel = sizings_memo[sizing_key]
                     if plan_rel:
                         plan_key = (str(root), plan_rel)
                         if plan_key not in plans_memo:

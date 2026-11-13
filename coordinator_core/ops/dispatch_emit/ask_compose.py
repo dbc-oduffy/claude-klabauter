@@ -3253,7 +3253,6 @@ def _single_exit_review(blocks: list[str]) -> str:
     malformed_exit = f"return {{ halted: '{PREP_MALFORMED_HALT}'"
     malformed_guard = "  if (_malformed.length) {"
     slice_id_exit = f"return {{ halted: '{SLICE_ID_UNKNOWN_HALT}'"
-    slice_id_guard = "  if (_badSliceIdAt >= 0) {"
     out_of_group_guard = "  if (_outOfGroupAt >= 0) {"
     if (
         prep.count(malformed_exit) != 1
@@ -3262,8 +3261,7 @@ def _single_exit_review(blocks: list[str]) -> str:
         or prep.count(missing_exit) != 1
         or prep.count(_REVIEW_MISSING_GUARD) != 1
         or prep.count(_REVIEW_PREP_BIND) != 1
-        or prep.count(slice_id_exit) != 2
-        or prep.count(slice_id_guard) != 1
+        or prep.count(slice_id_exit) != 1
         or prep.count(out_of_group_guard) != 1
     ):
         raise AskComposeRefused("review prep block no longer has the prep-busy and review-missing exit shape single-exit composition rewrites")
@@ -3275,7 +3273,6 @@ def _single_exit_review(blocks: list[str]) -> str:
     prep = prep.replace(_REVIEW_PREP_BIND, "  if (!_halted) _reviewPrep = (() => {\n", 1)
     prep = prep.replace(slice_id_exit, slice_id_exit.replace("return ", "_halted = ", 1))
     prep = prep.replace(out_of_group_guard, "  if (!_halted && _outOfGroupAt >= 0) {", 1)
-    prep = prep.replace(slice_id_guard, "  if (!_halted && _badSliceIdAt >= 0) {", 1)
     prep = prep.replace(_REVIEW_NOOP_EXIT, "_halted = { halted: 'no-op',")
     prep = prep.replace(_REVIEW_SLICES_GUARD, "  if (!_halted && (!_reviewPrep || (!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && !_verifyOnly))) {", 1)
     prep = prep.replace(f"return {{ halted: '{NO_SLICES_HALT}'", f"_halted = {{ halted: '{NO_SLICES_HALT}'", 1)

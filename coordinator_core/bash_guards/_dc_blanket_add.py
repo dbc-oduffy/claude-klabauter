@@ -32,8 +32,11 @@ from coordinator_core.bash_guards._dc_git_shared import (
     _ps_git_bypass_segments,
 )
 from coordinator_core.bash_guards._dc_shell_text import (
+    _heredoc_expanded_substitutions,
+    _heredoc_shell_payloads,
     _join_backslash_newlines,
     _shell_c_unwrap_payloads,
+    _strip_heredoc_bodies,
 )
 from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.bash_guards._helpers import operator_override_note
@@ -45,7 +48,14 @@ from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 
 def _awk_quote_aware_split(cmd: str) -> List[str]:
     """Port of the awk quote-state-persists-across-newlines segment splitter
-    in block-blanket-git-add.sh. Splits on unquoted `;`, `&`, `|`."""
+    in block-blanket-git-add.sh. Splits on unquoted `;`, `&`, `|` and newline.
+
+    Heredoc bodies are dropped first: they are data for the consumer, and a
+    stray apostrophe in one would otherwise flip the quote state for the rest
+    of the command. Trap: an executing heredoc (`bash <<EOF`) loses its body
+    here too; callers that must scan it use `_heredoc_shell_payloads`."""
+    if "<<" in cmd:
+        cmd = _strip_heredoc_bodies(cmd)
     segs: List[str] = []
     seg: List[str] = []
     sq = dq = False
@@ -58,7 +68,7 @@ def _awk_quote_aware_split(cmd: str) -> List[str]:
             dq = not dq
             seg.append(ch)
             continue
-        if not sq and not dq and ch in (";", "&", "|"):
+        if not sq and not dq and ch in (";", "&", "|", "\n"):
             segs.append("".join(seg))
             seg = []
             continue
@@ -272,6 +282,15 @@ def check_blanket_git_add(
         return None
     cmd = _crlf_strip(cmd)
     cmd = _join_backslash_newlines(cmd)
+
+    # Heredoc bodies are data, not commands -- except a body an interpreter
+    # executes, which is re-scanned as a command of its own.
+    if "<<" in cmd:
+        for _hd_payload in _heredoc_shell_payloads(cmd) + _heredoc_expanded_substitutions(cmd):
+            _hd_result = check_blanket_git_add(_hd_payload, session_id, hook_payload)
+            if _hd_result is not None:
+                return _hd_result
+        cmd = _strip_heredoc_bodies(cmd)
 
     # C3: see `_ps_git_bypass_segments` docstring -- git's own argv is
     # unchanged across dialects; only the anti-bypass surface is new here.

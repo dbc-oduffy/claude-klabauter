@@ -387,19 +387,14 @@ def ml_set(
             f"fallback on PATH) — cannot clear {key}"
         )
         return False
+    from coordinator_core import machine_local_spawn
+
     env = dict(os.environ)
     if registry_dir:
         env["MACHINE_LOCAL_REGISTRY_DIR"] = registry_dir
-    try:
-        proc = subprocess.run(
-            argv + ["set", key, value],
-            env=env,
-            timeout=15,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"_uninstall_ml_set: {argv[0]} set {key} failed: {exc}", file=sys.stderr)
+    proc = machine_local_spawn.run_bounded(argv + ["set", key, value], env=env)
+    if proc is None:
+        print(f"_uninstall_ml_set: {argv[0]} set {key} failed to launch or outlived its ceiling", file=sys.stderr)
         return False
     return proc.returncode == 0
 

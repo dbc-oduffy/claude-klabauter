@@ -259,11 +259,18 @@ def machine_local_value(name):
     if not reader.is_file():
         return ""
     try:
-        r = subprocess.run([_roster().console_python(), str(reader), "get", name], capture_output=True, text=True, timeout=30,
-                           creationflags=_no_window())
-    except (OSError, subprocess.SubprocessError):
+        try:
+            from coordinator_core import machine_local_spawn
+        except ImportError:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from cc_invoke import ensure_engine_on_path
+
+            ensure_engine_on_path(str(BIN / "unimatrix-roster.py"))
+            from coordinator_core import machine_local_spawn
+        value, ok = machine_local_spawn.get(str(reader), name)
+    except Exception:  # no engine on this box: the value reads as unset
         return ""
-    return r.stdout.strip() if not r.returncode else ""
+    return value.strip() if ok and value else ""
 
 
 def verified_host(host, box, key, *, connect=None, read_key=None, verify=None, now=time.monotonic):

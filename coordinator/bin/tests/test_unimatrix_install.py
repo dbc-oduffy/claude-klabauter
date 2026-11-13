@@ -1158,6 +1158,46 @@ def test_main_success_says_wiring_verified_and_enforcement_unverified(monkeypatc
     assert "governance verified" not in out and "enforcement UNVERIFIED until the C6" in out
 
 
+# Split so the publish rename (authoring key -> published key) cannot collapse the two
+# registry keys into one: a repeated keyword is a SyntaxError in the published mirror.
+_AUTHORING_KEY = "project_" + "claude-klabauter"
+
+
+def _registry(monkeypatch, tmp_path, **repos):
+    ml = tmp_path / "machine-local"
+    ml.mkdir(exist_ok=True)
+    body = "[repos]\n" + "".join(f'{k} = "{Path(v).as_posix()}"\n' for k, v in repos.items())
+    (ml / "registry.local.toml").write_text(body, encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml))
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+
+
+def _stamped_root(path):
+    (path / "coordinator_core").mkdir(parents=True)
+    (path / "coordinator_core" / "_engine_stamp").write_text("stamped\n", encoding="utf-8")
+    return path
+
+
+def test_resolver_returns_published_klabauter_never_the_authoring_checkout(monkeypatch, tmp_path):
+    klabauter = _stamped_root(tmp_path / "klabauter")
+    authoring = _stamped_root(tmp_path / "authoring")
+    _registry(monkeypatch, tmp_path, **{"claude_klabauter": klabauter, _AUTHORING_KEY: authoring})
+    monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
+    root, prov = _REAL_RESOLVE()
+    assert root == str(klabauter) and "repos.claude_klabauter" in prov
+
+
+@pytest.mark.parametrize("repos", ["none", "unstamped", "authoring-only"])
+def test_resolver_refuses_naming_the_key_when_klabauter_is_not_published(monkeypatch, tmp_path, repos):
+    authoring = _stamped_root(tmp_path / "authoring")
+    kwargs = {"none": {}, "authoring-only": {_AUTHORING_KEY: authoring},
+              "unstamped": {"claude_klabauter": tmp_path}}[repos]
+    _registry(monkeypatch, tmp_path, **kwargs)
+    monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
+    root, prov = _REAL_RESOLVE()
+    assert root is None and "repos.claude_klabauter" in prov
+
+
 def test_default_install_resolves_engine_root_through_settings_home_door(monkeypatch, tmp_path):
     root = tmp_path / "door-root"
     (root / "coordinator_core").mkdir(parents=True)
@@ -1171,9 +1211,9 @@ def test_default_install_resolves_engine_root_through_settings_home_door(monkeyp
     (root / "coordinator_core" / "codex_status" / "hook.py").write_text("# capability fixture", encoding="utf-8")
     monkeypatch.setattr(ui, "resolve_engine_root", _REAL_RESOLVE)
     monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
-    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(root))
+    _registry(monkeypatch, tmp_path, claude_klabauter=root)
     home, rc, out = _default_install(monkeypatch, tmp_path)
-    assert rc == 0 and f"governance engine root: {root} (settings-home ladder)" in out
+    assert rc == 0 and f"governance engine root: {root} (published klabauter (repos.claude_klabauter))" in out
     assert "governance DEGRADED" not in out
     codex = _hooks_file(home / ".codex" / "hooks.json")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     agy = _hooks_file(home / ".gemini" / "config" / "hooks.json")[ui.AGY_HOOK_KEY]["PreToolUse"][0]["hooks"][0]["command"]
@@ -1181,15 +1221,18 @@ def test_default_install_resolves_engine_root_through_settings_home_door(monkeyp
 
 
 def test_degraded_line_names_the_resolver_failure_reason(monkeypatch, tmp_path):
-    bin_dir = tmp_path / "fakebin"
-    (bin_dir / "lib").mkdir(parents=True)
-    (bin_dir / "lib" / "cc_invoke.py").write_text(
-        "def resolve_engine_root(script_file):\n    raise RuntimeError('no engine root\\nfix it')\n",
-        encoding="utf-8")
+    bin_dir = tmp_path / "fakeplugin" / "bin"
+    shim_dir = tmp_path / "fakeplugin" / "lib" / "resolve-claude-klabauter"
+    shim_dir.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (shim_dir / "_resolve_claude_klabauter.py").write_text(
+        "def _resolve_published_engine(ml):\n    return None\n"
+        "def _ml_dir():\n    raise RuntimeError('no engine root\\nfix it')\n", encoding="utf-8")
     monkeypatch.setattr(ui, "resolve_engine_root", _REAL_RESOLVE)
     monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     # _seed() caches the doctrine-seed module from _BIN_DIR; load the real one before _BIN_DIR points at
-    # fakebin, or this test passes only when an earlier test happened to load it.
+    # the fake plugin, or this test passes only when an earlier test happened to load it.
     ui._seed()
     monkeypatch.setattr(ui, "_BIN_DIR", bin_dir)
     home, rc, out = _default_install(monkeypatch, tmp_path)

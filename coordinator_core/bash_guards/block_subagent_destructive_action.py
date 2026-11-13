@@ -166,8 +166,8 @@ narrow). Fix, mirroring this file's existing verb-level option-gating idiom
 `git stash push` (including the IMPLICIT-push flag-only form, e.g.
 `git stash -u`) is now denied UNLESS a `--`-delimited pathspec follows,
 scoping the stash to specific paths. `list`/`show` (read-only) and the
-other named subcommands (`branch`/`create`/`store`/`save`, already unaffected
-by this rule -- not the sweep-everything shape) are unchanged. `pop`/
+other named subcommands (`branch`/`store`) are unchanged. `create` and
+`save` deny (DoE floor verb set: bare, push, save, create, apply, pop). `pop`/
 `apply`/`drop`/`clear` are unaffected (already denied, unconditionally, by
 the pre-existing checks above).
 
@@ -1630,7 +1630,7 @@ _DASHDASH_SEP_RE = re.compile(r"--(?:\s|$)")
 _STASH_POP_APPLY_RE = re.compile(r"\bstash\b.*\b(?:pop|apply)\b")
 #: `stash` subcommands OTHER than the sweep-everything push/bare shape --
 #: read-only (`list`/`show`) or a different write shape entirely
-#: (`branch`/`create`/`store`/`save`) not targeted by the 2026-07-26
+#: (`branch`/`store`) not targeted by the 2026-07-26
 #: unscoped-stash-gap-close fix (module docstring "UNSCOPED-STASH GAP
 #: CLOSE"). `pop`/`apply`/`drop`/`clear` are deliberately NOT here -- they
 #: are matched (and returned on) by their own dedicated regexes above/below.
@@ -1639,8 +1639,13 @@ _STASH_POP_APPLY_RE = re.compile(r"\bstash\b.*\b(?:pop|apply)\b")
 #: working-tree effect, so listing it here as a non-sweep "other action"
 #: exempted a real unscoped sweep from the rule below.
 _STASH_OTHER_ACTION_WORD_RE = re.compile(
-    r"\bstash\b\s+(?:list|show|branch|create|store)\b"
+    r"\bstash\b\s+(?:list|show|branch|store)\b"
 )
+#: `git stash create` writes a stash commit of every uncommitted change
+#: (DoE floor verb set: bare, push, save, create, apply, pop); denied for a
+#: subagent regardless of a `--` token, which `create` does not treat as a
+#: pathspec.
+_STASH_CREATE_RE = re.compile(r"\bstash\b\s+create\b")
 _REBASE_RE = re.compile(r"\brebase\b")
 _HARD_FLAG_RE = re.compile(r"--hard")
 _RESET_WORD_RE = re.compile(r"\breset\b")
@@ -2620,16 +2625,45 @@ def _clone_dest_in_session_scratchpad(dest_name: str) -> bool:
     return _scratchpad_target(dest_name) is not None
 
 
-def _clone_into_scratch(remaining: List[str]) -> bool:
-    remaining = _with_backslashes_restored(remaining)
+_REDIRECT_TOKEN_RE = re.compile(r"^(?:\d*|&)>>?(.*)$")
+_MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(?:/(.*))?$")
+
+
+def _strip_redirections(tokens: List[str]) -> List[str]:
+    """Drop shell redirections (`2>&1`, `>/dev/null`, `> file`) from clone operands: they are not
+    positionals and would otherwise inflate the operand count."""
+    out: List[str] = []
+    skip = False
+    for tok in tokens:
+        if skip:
+            skip = False
+            continue
+        m = _REDIRECT_TOKEN_RE.match(tok)
+        if m:
+            skip = not m.group(1)
+            continue
+        out.append(tok)
+    return out
+
+
+def _msys_to_drive(dest_name: str, windows: bool) -> str:
+    """On Windows an msys `/<letter>/...` spelling is a drive path; `os.path.isabs` does not see
+    it as absolute there and joining it onto the cwd would probe the wrong directory."""
+    m = _MSYS_DRIVE_RE.match(dest_name) if windows else None
+    return f"{m.group(1).upper()}:/{m.group(2) or ''}" if m else dest_name
+
+
+def _clone_operands(remaining: List[str]) -> Optional[Tuple[str, bool]]:
+    """`(dest_name, refused_opt)` for a clone argv; None when it does not name exactly one url
+    and at most one destination."""
     positionals: List[str] = []
     skip = False
-    for tok in remaining:
+    for tok in _strip_redirections(_with_backslashes_restored(remaining)):
         if skip:
             skip = False
             continue
         if tok.startswith(_CLONE_REFUSED_OPTS):
-            return False
+            return ("", True)
         if tok in _CLONE_OPTS_WITH_ARG:
             skip = True
             continue
@@ -2637,15 +2671,49 @@ def _clone_into_scratch(remaining: List[str]) -> bool:
             continue
         positionals.append(tok)
     if len(positionals) == 1:
-        dest_name = positionals[0].replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
-    elif len(positionals) == 2:
-        dest_name = positionals[1]
-    else:
+        return (positionals[0].replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git"), False)
+    if len(positionals) == 2:
+        return (_msys_to_drive(positionals[1].replace("\\", "/"), os.name == "nt"), False)
+    return None
+
+
+def _clone_into_scratch(remaining: List[str]) -> bool:
+    operands = _clone_operands(remaining)
+    if operands is None or operands[1]:
         return False
+    dest_name = operands[0]
     return (
         _dest_in_scratch(dest_name)
         or _clone_dest_in_session_scratchpad(dest_name)
         or _clone_dest_empty_or_absent(dest_name)
+    )
+
+
+def _clone_denial_text(remaining: List[str]) -> str:
+    """Names the stage that refused: the option, an unreadable operand list, a relative
+    destination whose cwd the command re-pointed away, or the destination itself."""
+    operands = _clone_operands(remaining)
+    if operands is None:
+        return (
+            "git clone (could not read exactly one url and one destination from the command; "
+            "pass `git clone [opts] <url> <dir>` with no other operands, and keep redirections off it)"
+        )
+    dest_name, refused = operands
+    if refused:
+        return "git clone (--template/--separate-git-dir/-u/--upload-pack/-c are refused)"
+    if (
+        _SCRATCH_CTX.get() is None
+        and not os.path.isabs(dest_name)
+        and not _DRIVE_ABS_RE.match(dest_name)
+    ):
+        return (
+            "git clone (relative destination, but the working directory is unknown because the "
+            "command re-points it with cd/-C/--git-dir/--work-tree or the payload carries no cwd; "
+            "use an absolute destination, or a single leading `cd <abs dir> &&`)"
+        )
+    return (
+        "git clone (destination must be an empty or absent directory, without "
+        "--template/--separate-git-dir/-u/--upload-pack/-c; clone into a fresh path)"
     )
 
 
@@ -3237,7 +3305,7 @@ def _evaluate_git_segment_anchored(
         # explicit `git stash push` all sweep every uncommitted change on the
         # shared tree unless scoped with a `--`-delimited pathspec.
         # `pop`/`apply` already returned above; `list`/`show`/`branch`/
-        # `create`/`store` are a different subcommand entirely (not this
+        # `store` are a different subcommand entirely (not this
         # rule's concern) and fall through unchanged.
         #
         # 2026-07-28: `save` was grouped with `create`/`store` above and is
@@ -3257,6 +3325,8 @@ def _evaluate_git_segment_anchored(
         # sailed through to the safe-forward allowlist below, unscoped.
         stash_remaining = _strip_leading_redirection_tokens(remaining)
         stash_head = stash_remaining[0] if stash_remaining else None
+        if stash_head == "create":
+            return "git stash (unscoped)"
         is_push_or_bare = (
             stash_head is None
             or stash_head in ("push", "save")
@@ -3349,10 +3419,7 @@ def _evaluate_git_segment_anchored(
     if subcmd == "clone":
         if _clone_into_scratch(list(remaining or ())):
             return None
-        return (
-            "git clone (destination must be an empty or absent directory, without "
-            "--template/--separate-git-dir/-u/--upload-pack/-c; clone into a fresh path)"
-        )
+        return _clone_denial_text(list(remaining or ()))
     if subcmd == "init":
         if _init_into_scratch(list(remaining or ())) or _scratchpad_fixture_init(list(remaining or ())):
             return None
@@ -3872,9 +3939,11 @@ def _evaluate_git_segment_legacy(
     # explicit `git stash push` all sweep every uncommitted change on the
     # shared tree unless scoped with a `--`-delimited pathspec. `pop`/
     # `apply` already returned above; `drop`/`clear` return later (own
-    # check, unaffected); `list`/`show`/`branch`/`create`/`store`/`save`
+    # check, unaffected); `list`/`show`/`branch`/`store`
     # (`_STASH_OTHER_ACTION_WORD_RE`) are a different subcommand entirely
-    # and fall through unchanged.
+    # and fall through unchanged. `create` denies unconditionally.
+    if _STASH_CREATE_RE.search(seg):
+        return "git stash (unscoped)"
     if (
         _STASH_WORD_RE.search(seg)
         and not _STASH_OTHER_ACTION_WORD_RE.search(seg)

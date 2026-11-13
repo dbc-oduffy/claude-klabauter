@@ -698,10 +698,12 @@ def _withheld_clean(root: Path, record: Path) -> bool:
             dirty = _dirty_withheld(root, state)
             keys = _withheld_keys(record)
             if dirty is not None and keys <= state["memo"][("withheld-union", str(root))]:
-                return not (keys & dirty)
+                return not (keys & dirty) and not _staged_among(root, frozenset(keys))
         from coordinator_core.ops.dispatch_emit import landing_halted_view
 
-        return not landing_halted_view.dirty_withheld(root, withheld)
+        return not landing_halted_view.dirty_withheld(root, withheld) and not _staged_among(
+            root, frozenset(_withheld_keys(record)),
+        )
     except Exception:  # noqa: BLE001 -- unreadable: the hold stands
         return False
 
@@ -776,7 +778,64 @@ def _held_tail(root: Path, halted_run_id: str) -> frozenset:
     if held:
         with contextlib.suppress(Exception):  # unknown: the hold stands
             held -= _prints_at_head(root, halted_run_id, held)
+            dirty = _dirty_among(root, held)
+            if dirty is not None:
+                clean = held - dirty
+                held = frozenset(dirty | _staged_among(root, clean) if clean else dirty)
+                with contextlib.suppress(Exception):  # comparison failed: the dirty hold stands
+                    held -= _foreign_dirty(root, record, dirty)
     return held
+
+
+def _foreign_dirty(root: Path, record: Path, dirty: frozenset) -> frozenset:
+    """The `dirty` withheld paths whose current bytes differ from the print the halt recorded for them
+    (`withheld-prints.json`, raw blob id at the halt): another session's edit, not the halted run's.
+    A path with no recorded print, or absent/unreadable now, is not foreign (dirty-means-held).
+    In process, one file read per dirty path, no git spawn."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+    from coordinator_core.ops.dispatch_emit.kept_work import fingerprint
+
+    prints = {idx._norm(k): v for k, v in idx._read_prints(record).items() if isinstance(v, str) and v}
+    if not prints:
+        return frozenset()
+    foreign = set()
+    for path in dirty:
+        want = prints.get(idx._norm(path))
+        if want is None:
+            continue
+        current = fingerprint(root, path)
+        if current is not None and current != want:
+            foreign.add(path)
+    return frozenset(foreign)
+
+
+def _staged_among(root: Path, paths: frozenset) -> frozenset:
+    """The subset of `paths` whose index entry differs from HEAD (staged, uncommitted): clean in the worktree
+    yet still unlanded work. One batched `git diff --cached`; a failed read holds them all."""
+    from coordinator_core.git.run import run_git
+
+    proc = run_git(["diff", "--cached", "--name-only", "-z", "--", *sorted(paths)], cwd=str(root))
+    if proc.returncode != 0:
+        return paths
+    staged = {x for x in proc.stdout.split(chr(0)) if x}
+    return frozenset(p for p in paths if p in staged)
+
+
+def _dirty_among(root: Path, held: frozenset) -> Optional[frozenset]:
+    """The subset of `held` still dirty in the worktree (real unlanded bytes); a clean path holds nothing.
+    Inside a prefetched scope the scope's one shared index walk answers, else one walk over `held`: no
+    git spawn per path. None when the walk failed."""
+    from coordinator_core.ops.dispatch_emit import landing_halted_view
+    from coordinator_core.session.claim_index import _normalize_key
+
+    state = _SCOPE.get()
+    if state is not None and state["seen_root"] == str(root):
+        dirty = _dirty_withheld(root, state)
+        union = state["memo"].get(("withheld-union", str(root)))
+        if dirty is not None and union and {_normalize_key(p) for p in held} <= union:
+            return frozenset(p for p in held if _normalize_key(p) in dirty)
+    dirty = landing_halted_view.dirty_withheld(root, held)
+    return frozenset(p for p in held if _normalize_key(p) in dirty)
 
 
 def _prints_at_head(root: Path, halted_run_id: str, paths) -> frozenset:

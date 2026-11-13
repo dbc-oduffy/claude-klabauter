@@ -441,6 +441,27 @@ def _resolve_land_record(record: dict) -> Optional[dict]:
 
 _ack_store.set_land_resolver(_resolve_land_record)
 
+
+def _land_resume_outcome(response: Any) -> str:
+    """Classify a resumed `dispatch.land_run` reply: `landed`, `requeued` (land_run re-enqueued it),
+    `retry` (transient: transport error, no pool slot, byte-gate queue, no reply) or `final`."""
+    if not isinstance(response, dict):
+        return "retry"
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return "retry"
+    if result.get("committed") is True:
+        return "landed"
+    if result.get("queued_for_resume"):
+        return "requeued"
+    if result.get("refused") == "queued":
+        return "retry"
+    return "final"
+
+
+def _land_resume_leg(response: Any) -> str:
+    return "land-resume.no-reply" if not isinstance(response, dict) or "error" in response else "land-resume.refused-queued"
+
 # How often the idle watchdog re-checks `idle.should_demote` -- independent
 # of request arrival (module docstring's "idle demotion" ownership note).
 # Small relative to both `idle.ZERO_SERVED_DEADLINE_SECS` (90s) and
@@ -5094,6 +5115,15 @@ class _ServerContext:
             import logging
 
             logging.getLogger(__name__).warning("atlas catch-up tick failed", exc_info=True)
+        try:
+            if self._land_resume_tick():
+                idle.mark_invocation()
+        except Exception:  # noqa: BLE001 -- no land-resume failure may escape the tick
+            if not self.__dict__.get("_land_resume_tick_logged"):
+                self.__dict__["_land_resume_tick_logged"] = True
+                import logging
+
+                logging.getLogger(__name__).warning("land-resume tick failed", exc_info=True)
         from coordinator_core.session_ceremonies import retry_pending_notifications
 
         if retry_pending_notifications():
@@ -5133,6 +5163,93 @@ class _ServerContext:
             depth=self.worker_pool_depth(), pid=os.getpid(), engine_root=self.engine_root
         )
         telemetry.flush_requests(self.engine_root)
+
+    def _land_resume_tick(self) -> bool:
+        """Claim at most one due land-resume entry and land it on a background thread; True when
+        one was claimed. The landing goes through `_pool_dispatch` as a `dispatch.land_run` call
+        (pool worker, byte gate, `LAND_BUDGET_SECS` unchanged), so a stall costs what a caller's
+        land would and the tick and accept loop stay free. One attempt in flight at a time; an
+        empty queue is one failed `listdir` and no spawn."""
+        thread = self.__dict__.get("_land_resume_thread")
+        if thread is not None and thread.is_alive():
+            return False
+        import importlib
+
+        land_resume = importlib.import_module("coordinator_core.ops.dispatch_emit.land_resume")
+        claimed = land_resume.next_due(None, time.time())
+        if claimed is None:
+            return False
+        entry = land_resume.read_entry(claimed)
+        if entry is None:
+            land_resume.finish(None, claimed.stem, "failed")
+            return True
+        thread = threading.Thread(
+            target=self._land_resume_attempt, args=(land_resume, entry), name="land-resume", daemon=True
+        )
+        self.__dict__["_land_resume_thread"] = thread
+        thread.start()
+        return True
+
+    def _land_resume_repo(self, entry: dict) -> Optional[Path]:
+        """The repo a resumed landing runs in: the entry's recorded root, else the one served repo
+        holding the run's `land-legs.json` halt record."""
+        recorded = entry.get("repo_root")
+        if isinstance(recorded, str) and recorded:
+            return Path(recorded)
+        run_id = entry.get("run_id")
+        from coordinator_core.ops.dispatch_emit import land_leg_record
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+        for repo in self.served_repos():
+            try:
+                if (record_dir(Path(repo), run_id) / land_leg_record.FILE_NAME).is_file():
+                    return Path(repo)
+            except (OSError, ValueError):
+                continue
+        return None
+
+    def _land_resume_attempt(self, land_resume: Any, entry: dict) -> None:
+        """Land one claimed entry and close it: committed (a repeat of an already-landed call
+        answers `already_landed`, which is HEAD reconciliation) finishes `landed`; a reply that
+        `land_run` already re-enqueued finishes `requeued`; a transient failure re-enqueues
+        (attempts bumped, bounded by `land_resume.expired`) and finishes `requeued`; any other
+        answer is final. Never raises."""
+        run_id = entry.get("run_id")
+        params = entry.get("params")
+        outcome = "failed"
+        try:
+            idle.mark_invocation()
+            repo = self._land_resume_repo(entry) if isinstance(params, dict) else None
+            response: Any = None
+            if repo is not None:
+                response = self._pool_dispatch(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "land-resume-%s" % run_id,
+                        "method": "dispatch.land_run",
+                        "params": params,
+                        "_origin_worktree": str(repo),
+                    }
+                )
+            outcome = _land_resume_outcome(response)
+            if outcome == "retry":
+                land_resume.enqueue(None, run_id, params, _land_resume_leg(response))
+                outcome = "requeued"
+        except Exception:  # noqa: BLE001 -- a failed attempt returns the entry to the queue
+            if not self.__dict__.get("_land_resume_attempt_logged"):
+                self.__dict__["_land_resume_attempt_logged"] = True
+                import logging
+
+                logging.getLogger(__name__).warning("land-resume attempt failed", exc_info=True)
+            try:
+                land_resume.enqueue(None, run_id, params if isinstance(params, dict) else {}, "land-resume.error")
+                outcome = "requeued"
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            land_resume.finish(None, run_id, outcome)
+        except Exception:  # noqa: BLE001 -- a stale claim is reclaimed by `next_due`
+            pass
 
     def _final_sweep(self) -> None:
         """The mandatory final sweep (`warm.push_cadence` module docstring,

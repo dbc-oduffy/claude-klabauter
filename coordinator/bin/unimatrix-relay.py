@@ -514,6 +514,17 @@ def _exported_name(d):
     return {**d, **load_roster().session_identity(d)}.get("name")
 
 
+def _router_resolve(name):
+    """The peer router's `resolve` answer for the session `name`; None when no router answers on this box."""
+    try:
+        router = _load_sibling("unimatrix-peer-router.py", "unimatrix_relay_peer_router")
+        ctl = router.endpoint_path(router.ROUTER_ENDPOINT_SEED)
+        answer = router.request_line(ctl, {"op": "resolve", "name": name}, 2)
+    except Exception:  # no router, an older router without the op, or an unreadable answer: local checks stand
+        return None
+    return answer if isinstance(answer, dict) and "ok" in answer else None
+
+
 def _session_path(pid, expected_digest=None, expected_name_digest=None, expected_session_id=None):
     """The live session's messaging endpoint for `pid`; exits when it is absent or not a session endpoint.
 
@@ -523,20 +534,32 @@ def _session_path(pid, expected_digest=None, expected_name_digest=None, expected
     name must hash to it (else `target mismatch`) and no other live non-mirror session may
     export that name (else `ambiguous`).
     """
-    target = {p: d for p, d, _ in entries()}.get(pid)
+    def refuse(message):
+        record_delivery({"ok": False, "pid": pid, "session": expected_session_id, "error": message})
+        sys.exit(message)
+
+    held = [d for p, d, _ in entries() if p == pid]
+    if len(held) > 1:  # an inbox-mux process owns many names under one pid: the addressed identity picks the entry
+        if expected_digest is not None:
+            held = [d for d in held if socket_digest(str(d.get("messagingSocketPath"))) == expected_digest]
+        if expected_name_digest is not None:
+            held = [d for d in held if name_digest(str(_exported_name(d))) == expected_name_digest]
+        if len(held) != 1:
+            refuse(f"target mismatch: pid {pid} holds several sessions, none uniquely the addressed one")
+    target = held[0] if held else None
     if not target:
-        sys.exit(f"no live session with pid {pid}")
+        refuse(f"no live session with pid {pid}")
     path = target["messagingSocketPath"]
     if expected_digest is not None and socket_digest(path) != expected_digest:
-        sys.exit(f"target mismatch: pid {pid} holds {target.get('name')}")
+        refuse(f"target mismatch: pid {pid} holds {target.get('name')}")
     if expected_session_id is not None and target.get("sessionId") != expected_session_id:
         found = target.get("sessionId")
-        sys.exit(f"target mismatch: pid {pid} holds session {found} ({target.get('name')}), "
-                 f"not addressed session {expected_session_id}")
+        refuse(f"target mismatch: pid {pid} holds session {found} ({target.get('name')}), "
+               f"not addressed session {expected_session_id}")
     if expected_name_digest is not None:
         name = _exported_name(target)
         if name_digest(name if isinstance(name, str) else "") != expected_name_digest:
-            sys.exit(f"target mismatch: pid {pid} holds {name}, not the addressed session")
+            refuse(f"target mismatch: pid {pid} holds {name}, not the addressed session")
         same = []
         for p, d, _ in entries():
             n = _exported_name(d)
@@ -544,13 +567,51 @@ def _session_path(pid, expected_digest=None, expected_name_digest=None, expected
                     and isinstance(n, str) and name_digest(n) == expected_name_digest):
                 same.append(p)
         if len(same) > 1:
-            sys.exit(f"ambiguous: {len(same)} live sessions named {name} (pids {','.join(map(str, same))})")
+            refuse(f"ambiguous: {len(same)} live sessions named {name} (pids {','.join(map(str, same))})")
+    if expected_name_digest is not None:
+        answer = _router_resolve(name) if isinstance(name, str) else None
+        if answer is not None and not answer.get("ok"):
+            refuse(f"router refused target {name}: {answer.get('error')}")
+        if answer is not None and answer.get("endpoint") != path:
+            refuse(f"target mismatch: router resolves {name} to another endpoint")
     if endpoint_kind() == "pipe":
         if not path.lower().startswith(PIPE_PREFIX.lower()):
-            sys.exit(f"refusing non-session pipe {path}")
+            refuse(f"refusing non-session pipe {path}")
     elif os.path.dirname(path) != SOCKS or not stat.S_ISSOCK(os.stat(path).st_mode):
-        sys.exit(f"refusing non-session socket {path}")
+        refuse(f"refusing non-session socket {path}")
+    name = _exported_name(target)
+    _REACHED.update(pid=pid, name=name if isinstance(name, str) else None, session=target.get("sessionId"))
     return path
+
+
+#: The session the last `_session_path` resolved (pid, exported name, sessionId); send-* replies name it.
+_REACHED = {}
+
+
+def deliveries_path():
+    return settings_home() / "unimatrix" / "deliveries.jsonl"
+
+
+def record_delivery(row, now=None):
+    """Append one inbound outcome (delivered or refused; never message text) to deliveries.jsonl.
+
+    Best effort: an unwritable record never fails or reorders a delivery."""
+    import time
+    stamp = time.time() if now is None else now
+    entry = {"side": "relay-in", "at": stamp, **row}
+    try:
+        path = deliveries_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
+        try:
+            os.write(fd, (json.dumps(entry) + "\n").encode("utf-8"))
+            size = os.fstat(fd).st_size
+        finally:
+            os.close(fd)
+        if size > 256 * 1024:
+            _trim_receipts(path)
+    except OSError:
+        pass
 
 
 PIPE_FLUSH_DEADLINE_S = 0.3
@@ -628,7 +689,9 @@ def send_batch(pid, expected_digest=None, expected_name_digest=None, expected_se
     that line's error reply and the loop continues; only a target-level refusal exits, before
     any line is read.
     """
+    _REACHED.clear()
     path = _session_path(pid, expected_digest, expected_name_digest, expected_session_id)
+    reached = dict(_REACHED)
     for line in sys.stdin.buffer:
         try:
             if not line.strip():
@@ -636,9 +699,13 @@ def send_batch(pid, expected_digest=None, expected_name_digest=None, expected_se
             _write_line(path, line)
             reply = {"ok": True}
             if expected_session_id:
+                if reached:
+                    reply.update(reached=reached["name"], reached_session=reached["session"], reached_pid=pid)
                 reply["digest"] = record_receipt(expected_session_id, line)
         except Exception as e:  # pywintypes.error is not an OSError subclass
             reply = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        record_delivery({**reply, "pid": pid, "session": reached.get("session") or expected_session_id,
+                         "name": reached.get("name")})
         print(json.dumps(reply), flush=True)
 
 
@@ -1345,10 +1412,11 @@ def _pin_value():
         val = None
         if reader.is_file():
             try:
-                r = subprocess.run([_console_python(), str(reader), "get", PIN_KEY], capture_output=True, text=True,
-                                   timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                val = os.path.expanduser(r.stdout.strip()) if not r.returncode and r.stdout.strip() else None
-            except (OSError, subprocess.SubprocessError):
+                from coordinator_core import machine_local_spawn
+
+                raw, ok = machine_local_spawn.get(str(reader), PIN_KEY)
+                val = os.path.expanduser(raw.strip()) if ok and raw and raw.strip() else None
+            except Exception:  # no engine on this box: the pin reads as unset
                 val = None
         _PIN_CACHE[home] = val if val and os.path.isfile(val) else None
     return _PIN_CACHE[home]

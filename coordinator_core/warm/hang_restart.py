@@ -6,7 +6,8 @@ nothing: no timer, no watcher process; a helper thread exists only at the thresh
 respawn-on-next-op path restarts the server; this module only decides, logs one line, and exits.
 
 Every decision appends one line to `<svc>/hang-restarts.log`:
-`<UTC> pid=<server pid> action=restart|suppressed [reason=...] count=.. window_s=.. dumps=..`.
+`<UTC> pid=<server pid> action=restart|suppressed [reason=...] count=.. window_s=.. backoff_s=.. dumps=..`
+(`backoff_s` is the wait owed the previous restart at decision time, 0 for a first restart).
 """
 
 from __future__ import annotations
@@ -28,6 +29,11 @@ HANG_WINDOW_SECS = 60.0
 # hook backlog that killed its predecessor, and that import stall alone reaches HANG_DUMP_THRESHOLD.
 # 20s made every replacement self-exit before it warmed (a restart loop, observed 2026-11-11).
 RESTART_MIN_INTERVAL_SECS = 90.0
+# The wait after the Nth consecutive restart is RESTART_MIN_INTERVAL_SECS * 2**(N-1), up to this cap.
+RESTART_BACKOFF_CAP_SECS = 900.0
+# A previous restart older than this ends the chain: the next restart is a first one again. It
+# exceeds the cap so a capped wait is never mistaken for quiet.
+RESTART_QUIET_WINDOW_SECS = 1800.0
 HANG_RESTART_LOG_FILENAME = "hang-restarts.log"
 _LOG_TAIL_BYTES = 16384
 _DUMPS_NAMED = 5
@@ -133,14 +139,87 @@ def _hold_reason(svc: Path, now: float) -> Optional[str]:
     return None
 
 
-def _append(log: Path, now: float, server_pid: int, action: str, count: int, window: float, dumps: list) -> None:
+def _backoff_secs(lines: list, now: float, base: float) -> float:
+    """The wait the next restart owes the previous one, from consecutive restart lines in `lines`.
+
+    A chain is restart lines each less than the quiet window after the one before it, ending
+    within the quiet window of `now`; `n` of them owe `base * 2**(n-1)` up to the cap. 0.0 when
+    there is no chain (no restart, or the last one is older than the quiet window)."""
+    epochs = [
+        e
+        for line in lines
+        if " action=restart " in line + " " and (e := _line_epoch(line)) is not None
+    ]
+    if not epochs or now - epochs[-1] >= RESTART_QUIET_WINDOW_SECS:
+        return 0.0
+    n = 1
+    for newer, older in zip(reversed(epochs[1:]), reversed(epochs[:-1])):
+        if newer - older >= RESTART_QUIET_WINDOW_SECS:
+            break
+        n += 1
+    return min(base * 2 ** min(n - 1, 30), max(RESTART_BACKOFF_CAP_SECS, base))
+
+
+def _gate(svc: Path, lines: list, now: float, base: float) -> tuple:
+    """`(reason, backoff_s)`: why a restart is suppressed (None when allowed) and the wait owed."""
+    backoff = _backoff_secs(lines, now, base)
+    reason = _hold_reason(svc, now)
+    if reason is None and backoff > 0.0:
+        last_restart, _ = _last_line(lines, restart=True)
+        if last_restart is not None and now - last_restart < backoff:
+            reason = "backoff"
+    return reason, backoff
+
+
+def _append(
+    log: Path,
+    now: float,
+    server_pid: int,
+    action: str,
+    count: int,
+    window: float,
+    dumps: list,
+    backoff_s: float = 0.0,
+    source: Optional[str] = None,
+) -> None:
     named = ";".join(str(p) for _e, p in dumps[-_DUMPS_NAMED:])
     extra = len(dumps) - _DUMPS_NAMED
     if extra > 0:
         named += f";+{extra}-more"
     stamp = time.strftime(_LINE_STAMP_FMT, time.gmtime(now))
+    src = f" source={source}" if source else ""
     with open(log, "a", encoding="utf-8", newline="\n") as fh:
-        fh.write(f"{stamp} pid={server_pid} action={action} count={count} window_s={window:g} dumps={named}\n")
+        fh.write(
+            f"{stamp} pid={server_pid} action={action} count={count} window_s={window:g}"
+            f" backoff_s={backoff_s:g}{src} dumps={named}\n"
+        )
+
+
+def _record_decision(
+    svc: Path, pid: int, now: float, count: int, window: float, base: float, dumps: list, source: Optional[str], lines: list
+) -> str:
+    """Apply the hold / backoff gate to `lines` and append the one line it earns; caller holds the lock."""
+    log = svc / HANG_RESTART_LOG_FILENAME
+    reason, backoff = _gate(svc, lines, now, base)
+    if reason is not None:
+        last_sup, line = _last_line(lines, restart=False)
+        if last_sup is None or now - last_sup >= window or f"reason={reason}" not in line:
+            _append(log, now, pid, f"suppressed reason={reason}", count, window, dumps, backoff, source)
+        return "suppressed"
+    _append(log, now, pid, "restart", count, window, dumps, backoff, source)
+    return "restart"
+
+
+def decide(svc_dir, *, server_pid: int, source: str, now: Optional[float] = None) -> str:
+    """Hold / backoff decision for a restart a caller wants (`source` names the caller).
+
+    Logs one line to `<svc_dir>/hang-restarts.log` and returns `"restart"` or `"suppressed"`;
+    the caller ends the server (`exit_server`). Reads and appends files, so the caller bounds it."""
+    svc = Path(svc_dir)
+    current = time.time() if now is None else now
+    with _decision_lock:
+        lines = _tail_lines(svc / HANG_RESTART_LOG_FILENAME)
+        return _record_decision(svc, server_pid, current, 0, 0.0, RESTART_MIN_INTERVAL_SECS, [], source, lines)
 
 
 _DECISION_DEADLINE_SECS = 1.0
@@ -149,23 +228,12 @@ _stall_marks_lock = threading.Lock()
 
 
 def _disk_decision(stall_dir: Path, pid: int, now: float, count: int, window: float, min_interval: float) -> str:
-    """The hold / rate-limit / log leg of an in-memory trigger. Reads and appends
+    """The hold / backoff / log leg of an in-memory trigger. Reads and appends
     files, so the caller bounds it."""
     svc = stall_dir.parent
-    log = svc / HANG_RESTART_LOG_FILENAME
     with _decision_lock:
-        lines = _tail_lines(log)
-        last_restart, _ = _last_line(lines, restart=True)
-        reason = _hold_reason(svc, now)
-        if reason is None and last_restart is not None and now - last_restart < min_interval:
-            reason = "rate-limited"
-        if reason is not None:
-            last_sup, line = _last_line(lines, restart=False)
-            if last_sup is None or now - last_sup >= window or f"reason={reason}" not in line:
-                _append(log, now, pid, f"suppressed reason={reason}", count, window, [])
-            return "suppressed"
-        _append(log, now, pid, "restart", count, window, [])
-    return "restart"
+        lines = _tail_lines(svc / HANG_RESTART_LOG_FILENAME)
+        return _record_decision(svc, pid, now, count, window, min_interval, [], None, lines)
 
 
 def note_stall(
@@ -182,8 +250,8 @@ def note_stall(
 
     `maybe_restart` counts stall records on disk, so it cannot see a stall of the very
     filesystem it reads. At `threshold` marks inside `window` (per `stall_dir`), the
-    hold / rate-limit / log leg runs on a helper thread bounded by `deadline`; a hold
-    or rate limit suppresses, an unfinished leg (stalled disk) restarts anyway.
+    hold / backoff / log leg runs on a helper thread bounded by `deadline`; a hold
+    or backoff suppresses, an unfinished leg (stalled disk) restarts anyway.
     Returns `"restart"`, `"suppressed"` or None. Never raises.
     """
     try:
@@ -231,17 +299,17 @@ def maybe_restart(
     restart line); at `threshold`, log one line and call `exit_fn(server_pid)`.
 
     Returns `"restart"`, `"suppressed"` or None (below threshold). A publish marker or
-    handover-pending hold, or a restart less than `min_interval` ago, logs a suppressed
-    line (at most one per reason per window) and does not exit. Never raises.
+    handover-pending hold, or a restart inside the backoff (`min_interval * 2**(n-1)` after the
+    nth consecutive restart, capped), logs a suppressed line (at most one per reason per window)
+    and does not exit. Never raises.
     """
     try:
         stall_dir = Path(stall_dir)
         current = time.time() if now is None else now
         pid = os.getpid() if server_pid is None else server_pid
         svc = stall_dir.parent
-        log = svc / HANG_RESTART_LOG_FILENAME
         with _decision_lock:
-            lines = _tail_lines(log)
+            lines = _tail_lines(svc / HANG_RESTART_LOG_FILENAME)
             last_restart, _ = _last_line(lines, restart=True)
             since = current - window
             if last_restart is not None:
@@ -249,15 +317,9 @@ def maybe_restart(
             dumps = _recent_dumps(stall_dir, since)
             if len(dumps) < threshold:
                 return None
-            reason = _hold_reason(svc, current)
-            if reason is None and last_restart is not None and current - last_restart < min_interval:
-                reason = "rate-limited"
-            if reason is not None:
-                last_sup, line = _last_line(lines, restart=False)
-                if last_sup is None or current - last_sup >= window or f"reason={reason}" not in line:
-                    _append(log, current, pid, f"suppressed reason={reason}", len(dumps), window, dumps)
-                return "suppressed"
-            _append(log, current, pid, "restart", len(dumps), window, dumps)
+            verdict = _record_decision(svc, pid, current, len(dumps), window, min_interval, dumps, None, lines)
+        if verdict == "suppressed":
+            return "suppressed"
         (exit_fn or exit_server)(pid)
         return "restart"
     except Exception:  # noqa: BLE001 -- the dump path never raises

@@ -30,6 +30,7 @@ def _world(tmp_path, monkeypatch, baseline_edits, tree_edits):
     root = tmp_path / "root"
     (root / REC).mkdir(parents=True)
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=root, check=True)
     (root / PATH).write_bytes(_text({}))
     subprocess.run(["git", "add", PATH], cwd=root, check=True)
     subprocess.run(
@@ -75,7 +76,7 @@ def test_restore_round_trips_the_spliced_file(tmp_path, monkeypatch):
     root, tree = _world(tmp_path, monkeypatch, foreign, {**foreign, 20: "OWN twenty"})
     ev = _plan(root, {}, [])
     ev.apply()
-    result = halt_tree_evict.restore(root, root / REC)
+    result = halt_tree_evict.restore(root, root / REC, owned_paths=[PATH])
     assert result["restored"] == [PATH] and result["drift"] == {}
     assert (root / PATH).read_bytes() == tree
 

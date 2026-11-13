@@ -103,43 +103,279 @@ def _kill_tree(proc: subprocess.Popen) -> None:
             proc.kill()
 
 
-def run_bounded(argv, *, timeout: float = ML_SPAWN_TIMEOUT_S):
-    """Run argv once under a hard kill ceiling.
+_DEFAULT_MAX_INFLIGHT = 16
+_SLOT_SWEEP_PAUSE_S = 0.02
+_CONTENDED = object()
+_WIN_JOB = None
 
-    Returns the CompletedProcess, or None when the child could not start or outlived the
-    ceiling; on expiry the whole process tree is killed and the direct child reaped before
-    return. Never retries: None means the caller takes its existing fallback, never a second
-    spawn of the same read. `timeout` is clamped to ML_SPAWN_TIMEOUT_S.
-    """
-    timeout = min(float(timeout), ML_SPAWN_TIMEOUT_S)
-    kwargs: dict = {}
+
+def _slot_dir() -> Path:
+    """Box-wide in-flight slot directory, shared with the `_machine_local.py` kernel."""
+    override = os.environ.get("MACHINE_LOCAL_SLOT_DIR")
+    if override:
+        return Path(override)
     if sys.platform == "win32":
-        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    else:
+        base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "coordinator" / "machine-local-slots"
+
+
+def _slot_count() -> int:
+    try:
+        n = int(os.environ.get("MACHINE_LOCAL_MAX_INFLIGHT", ""))
+    except ValueError:
+        return _DEFAULT_MAX_INFLIGHT
+    return n if n >= 1 else _DEFAULT_MAX_INFLIGHT
+
+
+def _probe_order(n: int) -> list[int]:
+    """Slot indices to try, starting at pid % n so concurrent callers fan out."""
+    start = os.getpid() % n
+    return [(start + k) % n for k in range(n)]
+
+
+def _claim_slot():
+    """(state, fd): "held" with the locked fd, "contended" (all N held), or "unusable" (dir/open failed)."""
+    from coordinator_core import locked_write
+
+    n = _slot_count()
+    directory = _slot_dir()
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return "unusable", None
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
+    deadline = time.monotonic() + ML_WAIT_TIMEOUT_S
+    while True:
+        for i in _probe_order(n):
+            try:
+                fd = os.open(str(directory / f"slot-{i}.lock"), flags, 0o666)
+            except OSError:
+                return "unusable", None
+            try:
+                if locked_write._plat_try_lock(fd):
+                    return "held", fd
+            except OSError:
+                os.close(fd)
+                return "unusable", None
+            os.close(fd)
+        if time.monotonic() >= deadline:
+            return "contended", None
+        time.sleep(_SLOT_SWEEP_PAUSE_S)
+
+
+@contextlib.contextmanager
+def _box_slot():
+    """Hold one of the box-wide in-flight slots for the spawn's span; the OS drops it on death.
+
+    Yields "held", "contended" or "unusable". An unusable slot dir fails open: the caller
+    spawns without a slot.
+    """
+    state, fd = _claim_slot()
+    try:
+        yield state
+    finally:
+        if fd is not None:
+            from coordinator_core import locked_write
+
+            with contextlib.suppress(OSError):
+                locked_write._plat_unlock(fd)
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+def _win_job_api():
+    """ctypes bindings for a kill-on-close Job Object; cached. Windows only."""
+    global _WIN_JOB
+    if _WIN_JOB is not None:
+        return _WIN_JOB
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ntdll = ctypes.WinDLL("ntdll")
+
+    class Basic(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class Extended(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", Basic),
+            ("IoInfo", ctypes.c_ulonglong * 6),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    k32.CreateJobObjectW.restype = wintypes.HANDLE
+    k32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    k32.SetInformationJobObject.restype = wintypes.BOOL
+    k32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
+    ]
+    k32.AssignProcessToJobObject.restype = wintypes.BOOL
+    k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+
+    def create():
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            raise ctypes.WinError(ctypes.get_last_error())
+        info = Extended()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            err = ctypes.get_last_error()
+            k32.CloseHandle(job)
+            raise ctypes.WinError(err)
+        return job
+
+    def assign(job, proc) -> bool:
+        return bool(k32.AssignProcessToJobObject(job, int(proc._handle)))
+
+    def resume(proc) -> None:
+        if ntdll.NtResumeProcess(int(proc._handle)) != 0:
+            raise OSError("NtResumeProcess failed")
+
+    _WIN_JOB = (create, assign, resume, k32.CloseHandle)
+    return _WIN_JOB
+
+
+def _close_job(job) -> None:
+    if job is not None:
+        with contextlib.suppress(Exception):
+            _win_job_api()[3](job)
+
+
+def _set_pdeathsig_preexec():
+    """preexec_fn that asks the kernel to SIGKILL the child when its parent thread dies, or None.
+
+    Linux only. PDEATHSIG tracks the spawning THREAD, so the caller must reap on that thread.
+    libc is bound before fork; the child body is the prctl call and a parent-gone check only.
+    preexec_fn is not fork-safe under threads in general; here the body is bounded to those
+    two pre-bound calls, so the deadlock surface is minimal and accepted.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        import ctypes
+
+        prctl = ctypes.CDLL(None).prctl
+    except Exception:
+        return None
+    parent = os.getpid()
+    kill = int(signal.SIGKILL)
+    getppid = os.getppid
+    exit_ = os._exit
+
+    def _preexec() -> None:
+        prctl(1, kill, 0, 0, 0)  # PR_SET_PDEATHSIG
+        if getppid() != parent:
+            exit_(1)
+
+    return _preexec
+
+
+def _popen(argv, env=None):
+    """(proc, job): the child started under kill-on-close where the OS offers it, else bare.
+
+    Windows: suspended, assigned to a kill-on-close Job Object, then resumed, so the child
+    cannot run or fork outside the job. A failed job falls back to the plain path.
+    """
+    kwargs: dict = {}
+    job = None
+    if sys.platform == "win32":
+        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
             subprocess, "CREATE_NO_WINDOW", 0
         )
+        try:
+            job = _win_job_api()[0]()
+            flags |= 0x00000004  # CREATE_SUSPENDED
+        except Exception:
+            job = None
+        kwargs["creationflags"] = flags
     else:
         kwargs["start_new_session"] = True
+        preexec = _set_pdeathsig_preexec()
+        if preexec is not None:
+            kwargs["preexec_fn"] = preexec
     try:
         proc = subprocess.Popen(
             list(argv),
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=env,
             text=True,
             encoding="utf-8",
             errors="replace",
             **kwargs,
         )
-    except (OSError, ValueError):
-        return None
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _reap(proc)
-        return None
     except BaseException:
-        _reap(proc)
+        _close_job(job)
         raise
-    return subprocess.CompletedProcess(list(argv), proc.returncode, stdout, stderr)
+    if job is not None:
+        try:
+            if not _win_job_api()[1](job, proc):
+                _close_job(job)
+                job = None
+            _win_job_api()[2](proc)
+        except BaseException:
+            _reap(proc)
+            _close_job(job)
+            raise
+    return proc, job
+
+
+def _run(argv, timeout: float, env=None):
+    """CompletedProcess, None (unstartable or killed at the ceiling) or _CONTENDED (no slot)."""
+    with _box_slot() as slot:
+        if slot == "contended":
+            return _CONTENDED
+        try:
+            proc, job = _popen(argv, env)
+        except (OSError, ValueError):
+            return None
+        try:
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _reap(proc)
+                return None
+            except BaseException:
+                _reap(proc)
+                raise
+            return subprocess.CompletedProcess(list(argv), proc.returncode, stdout, stderr)
+        finally:
+            _close_job(job)
+
+
+def run_bounded(argv, *, timeout: float = ML_SPAWN_TIMEOUT_S, env=None):
+    """Run argv once under a hard kill ceiling, a box-wide in-flight cap and kill-on-close.
+
+    Returns the CompletedProcess, or None when the child could not start, outlived the
+    ceiling, or no box-wide slot freed within ML_WAIT_TIMEOUT_S (nothing is spawned then).
+    On expiry the whole process tree is killed and the direct child reaped before return;
+    the child also dies with its caller (Job Object on Windows, parent-death signal on
+    Linux; macOS has neither). Never retries: None means the caller takes its existing
+    fallback, never a second spawn of the same read. `timeout` is clamped to
+    ML_SPAWN_TIMEOUT_S. `env` is the child's full environment (None inherits); stdin is
+    always closed.
+    """
+    cp = _run(argv, min(float(timeout), ML_SPAWN_TIMEOUT_S), env)
+    return None if cp is _CONTENDED else cp
 
 
 def _reap(proc: subprocess.Popen) -> None:
@@ -331,7 +567,10 @@ def _compute_dump_in_process(impl: str, args: tuple):
 
 
 def _spawn_dump(impl: str, args: tuple):
-    cp = run_bounded(_argv(impl, "dump", *args))
+    """The spawned dump's dict, None on failure, or _CONTENDED when no box slot freed."""
+    cp = _run(_argv(impl, "dump", *args), ML_SPAWN_TIMEOUT_S)
+    if cp is _CONTENDED:
+        return _CONTENDED
     if cp is None or cp.returncode != 0:
         return None
     try:
@@ -390,7 +629,15 @@ def _shared_write(path, key: tuple, payload) -> None:
 
 
 def _box_wide_flight(impl: str, args: tuple, key: tuple):
-    """One dump per registry state across every process on the box; waiters read its result."""
+    """One dump per registry state across every process on the box; waiters read its result.
+
+    A fresh shared-cache entry is served before the box lock is touched. Returns _CONTENDED
+    when no in-flight slot freed: nothing was spawned and nothing is cached.
+    """
+    path = _shared_cache_path(impl, args)
+    shared = _shared_read(path, key)
+    if shared is not _MISS:
+        return shared
     try:
         from coordinator_core import locked_write
     except Exception:
@@ -405,12 +652,12 @@ def _box_wide_flight(impl: str, args: tuple, key: tuple):
     except Exception:
         return _spawn_dump(impl, args)
     with stack:
-        path = _shared_cache_path(impl, args)
         shared = _shared_read(path, key)
         if shared is not _MISS:
             return shared
         payload = _spawn_dump(impl, args)
-        _shared_write(path, key, payload)
+        if payload is not _CONTENDED:
+            _shared_write(path, key, payload)
         return payload
 
 
@@ -438,10 +685,49 @@ def dump(impl, args=_DEFAULT_ARGS, *, in_process: bool = True):
         if hit is not _MISS:
             return hit
         payload = _box_wide_flight(impl, args, key)
+        if payload is _CONTENDED:
+            return None
         _cache_put(key, payload)
         return payload
     finally:
         _PROCESS_FLIGHT.release()
+
+
+def cached_dump(impl, args=_DEFAULT_ARGS):
+    """The machine-local dump from caches and the in-process kernel only, else None.
+
+    Order: per-process cache, in-process `.py` kernel, shared on-disk cache. Never spawns and
+    never takes the box lock or a slot, so it is safe on an event-loop thread.
+    """
+    impl = str(impl)
+    args = tuple(args)
+    key = _cache_key(impl, args)
+    hit = _cache_get(key)
+    if hit is not _MISS:
+        return hit
+    if impl.endswith(".py"):
+        answered = _dump_in_process(impl, args)
+        if answered is not None:
+            return answered[0]
+    shared = _shared_read(_shared_cache_path(impl, args), key)
+    return None if shared is _MISS else shared
+
+
+def cached_get(impl, key: str):
+    """(value | None, ok) from caches and the in-process kernel only; (None, False) on a miss.
+
+    Same contract as `get` minus every spawn and lock: safe on an event-loop thread.
+    """
+    impl = str(impl)
+    payload = cached_dump(impl)
+    if payload is not None and key in payload:
+        value = payload[key]
+        return (value if isinstance(value, str) else None), True
+    if impl.endswith(".py"):
+        answered = _get_in_process(impl, key)
+        if answered is not None:
+            return answered
+    return None, False
 
 
 def _get_in_process(impl: str, key: str):
@@ -481,12 +767,16 @@ def get(impl, key: str, *, in_process: bool = True):
     if hit is not _MISS:
         return hit
     result = _get_spawned(impl, key)
+    if result is _CONTENDED:
+        return None, False
     _cache_put(ckey, result)
     return result
 
 
 def _get_spawned(impl: str, key: str):
-    cp = run_bounded(_argv(impl, "get", key))
+    cp = _run(_argv(impl, "get", key), ML_SPAWN_TIMEOUT_S)
+    if cp is _CONTENDED:
+        return _CONTENDED
     if cp is None:
         return None, False
     if cp.returncode == 0:

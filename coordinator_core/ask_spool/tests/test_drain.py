@@ -190,6 +190,26 @@ def test_refused_mint_keeps_the_entry_pending_with_attempts_and_a_failure_notice
     assert not os.path.exists(path)
 
 
+def test_a_run_id_with_no_run_dir_is_not_minted_and_the_entry_stays_pending(tmp_path):
+    sid = _spool(tmp_path)
+
+    def dirless(payload):
+        return {
+            "hookSpecificOutput": {
+                "permissionDecision": "allow",
+                "updatedInput": {"scriptPath": "x"},
+                "permissionDecisionReason": "Submitted to the engine as run ask-20261104T140000-dddddd.",
+            }
+        }
+
+    counts = drain.run(str(tmp_path), evaluate=dirless)
+    assert counts["minted"] == 0 and counts["failed"] == 1
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid))
+    assert header["attempts"] == 1 and "no run dir" in header["last_error"]
+    assert not os.path.exists(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
+    assert drain.run(str(tmp_path), evaluate=Engine(tmp_path))["minted"] == 1
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
 def test_failed_entry_stays_0600(tmp_path):
     sid = _spool(tmp_path)
@@ -534,6 +554,7 @@ def _token_of_ask(root, run_id, text, session="sess1", minted_at=None):
     from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
 
     subprocess.run(["git", "init", "-q", str(root)], check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    (root / "scratch" / "warp" / run_id).mkdir(parents=True, exist_ok=True)
     run_token.mint(
         root, run_id, f"scratch/warp/{run_id}.workflow.mjs", session_id=session, marker=True,
         ask_sha256=normalized_ask_hash(text),

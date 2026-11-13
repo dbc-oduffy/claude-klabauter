@@ -26,7 +26,9 @@ def _stamped(tag: str) -> str:
 def repo(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     root.mkdir()
-    (root / ".git").mkdir()
+    subprocess.run(  # a real repo: the halted-hold release parses the index and HEAD, and fails closed on a bare `.git` dir
+        ["git", "init", "-q", str(root)], check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    )
     monkeypatch.setenv("COORDINATOR_SESSION_ID", SELF)
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -227,6 +229,26 @@ def test_sibling_spines_inside_release_scope_parse_each_plan_once_across_calls(r
     assert first == second and parses == ["docs/plans/b.md"]
     peer_hunk_gate._sibling_spines(repo, [run_id])
     assert len(parses) == 2
+
+
+def test_many_siblings_share_one_sizing_read_and_one_deadline_check(repo, monkeypatch):
+    run_ids = [_stamped(f"7cc8{n:02d}") for n in range(40)]
+    for run_id in run_ids:
+        _spine_sibling(repo, run_id)
+    checks: list = []
+    monkeypatch.setattr(peer_hunk_gate.land_deadline, "check", checks.append)
+    reads: list = []
+    real_read = Path.read_text
+    monkeypatch.setattr(
+        Path, "read_text", lambda self, *a, **k: reads.append(self.name) or real_read(self, *a, **k)
+    )
+    spines = peer_hunk_gate._sibling_spines(repo, run_ids)
+    assert all(spines[r] == {PATH} for r in run_ids)
+    assert checks == ["peer_hunk_gate.sibling_spine"]
+    assert reads.count("b.yaml") == 1 and reads.count("b.md") == 1
+    checks.clear()
+    peer_hunk_gate._sibling_spines(repo, [])
+    assert checks == []
 
 
 def test_halted_sibling_declaring_but_not_withholding_holds_nothing(repo):

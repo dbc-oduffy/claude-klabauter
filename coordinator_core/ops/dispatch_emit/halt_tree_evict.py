@@ -1,8 +1,9 @@
 """Move a halt's unimportable bytes into the halted record, and put them back on refire.
 
 Bytes live at `<record_dir>/withheld-blobs/<blob sha1>`, indexed by `<record_dir>/evicted.json`:
-`{path: {"blob": sha1, "head": sha1 | null}}` (`head` is the HEAD blob sha the tree was reset to,
-null when HEAD does not track the path and the tree file was removed). Blob shas come from
+`{path: {"blob": sha1, "head": sha1 | null, "base": sha1 | null}}` (`head` is the blob sha the tree was
+reset to, null when the tree file was removed; `base`, present only when it differs from `head`
+because foreign hunks were kept, is the HEAD blob the reset was taken from). Blob shas come from
 `kept_work.blob_sha`. In process; the caller supplies HEAD bytes from one batched read.
 """
 
@@ -10,8 +11,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
+from coordinator_core.ops.dispatch_emit import tree_write_fence
 from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
 from coordinator_core.session.declared_writes import declare_write
 
@@ -125,7 +127,11 @@ def evict(
         blob_path = blobs / sha
         blob_path.write_bytes(data)
         declare_write(blob_path)
-        index[rel] = {"blob": sha, "head": None if reset is None else blob_sha(reset)}
+        reset_sha = None if reset is None else blob_sha(reset)
+        index[rel] = {"blob": sha, "head": reset_sha}
+        base_sha = None if head is None else blob_sha(head)
+        if base_sha != reset_sha:
+            index[rel]["base"] = base_sha  # spliced: the tree keeps foreign hunks, so HEAD's blob is a separate fact
         target = root / rel
         if reset is None:
             target.unlink()
@@ -139,17 +145,40 @@ def evict(
     return index
 
 
-def restore(root: Path, record_dir: Path) -> dict:
+def _current_heads(root: Path, paths: Sequence[str]) -> dict[str, str]:
+    """`{path: HEAD blob sha}` for the tracked `paths`, one batched in-process read; unreadable: empty."""
+    from coordinator_core.git import git_state
+
+    try:
+        return {p: sha for p, (_mode, sha) in git_state.head_blobs(root, list(paths)).items()}
+    except Exception:  # noqa: BLE001 - an unreadable HEAD makes every head None, which fences
+        return {}
+
+
+def restore(
+    root: Path,
+    record_dir: Path,
+    *,
+    owned_paths: Iterable[str] | None = None,
+    run_id: str | None = None,
+) -> dict:
     """Write evicted bytes back to the tree; idempotent.
 
     A path is written only while the tree still holds the recorded HEAD bytes (absent when `head`
     is null); otherwise the tree is left untouched and the path is reported as `restore-drift`.
-    Returns `{"restored": [paths], "drift": {path: "restore-drift"}}`. No `evicted.json`: empty.
+    A path outside `owned_paths` (the record run's write set; None or empty owns nothing), or whose
+    recorded `head` is no longer HEAD's blob, is not written: it is returned under `refused` and
+    recorded through `tree_write_fence.record_refusal`.
+    Returns `{"restored": [paths], "drift": {path: "restore-drift"}, "refused": {path: reason}}`.
+    No `evicted.json`: all empty.
     """
     root, record_dir = Path(root), Path(record_dir)
     restored: list[str] = []
     drift: dict[str, str] = {}
-    for rel, entry in sorted(_load(record_dir).items()):
+    refused: dict[str, str] = {}
+    index = _load(record_dir)
+    heads = _current_heads(root, list(index)) if index else {}
+    for rel, entry in sorted(index.items()):
         current = _read(root, rel)
         current_sha = None if current is None else blob_sha(current)
         if current_sha == entry["blob"]:
@@ -165,8 +194,23 @@ def restore(root: Path, record_dir: Path) -> dict:
         if blob_sha(data) != entry["blob"]:
             drift[rel] = "restore-drift"
             continue
+        reason = tree_write_fence.check_tree_write(
+            rel, owned_paths=owned_paths, base_blob=entry.get("base", entry["head"]), head_blob=heads.get(rel)
+        )
+        if reason:
+            refused[rel] = reason
+            tree_write_fence.record_refusal(record_dir, rel, reason, run_id)
+            continue
         target = root / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         restored.append(rel)
-    return {"restored": restored, "drift": drift}
+    return {"restored": restored, "drift": drift, "refused": refused}
+
+
+def restore_for_run(root: Path, record_dir: Path, run_id: str) -> dict:
+    """`restore` fenced to run `run_id`'s own write set (`run_write_set`, no own session)."""
+    from coordinator_core.ops.dispatch_emit import run_write_set
+
+    owned = run_write_set.run_write_set(Path(root), run_id, "")
+    return restore(root, record_dir, owned_paths=owned, run_id=run_id)

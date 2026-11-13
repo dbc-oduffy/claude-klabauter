@@ -29,6 +29,13 @@ def test_undeclared_dirt_foreign_red_lands(tmp_path):
     assert ltt.failed_targeted_tests(record) == ([], "pre-existing-only")
 
 
+def test_dirt_red_is_evidenced_clear_for_the_invariant_gate(tmp_path):
+    from coordinator_core.completion_receipts.verdict import evidenced_clear_ids
+
+    record = _dual(tmp_path, export_summary=True, baseline=_base(), live_red=[RATCHET, DIRT])
+    assert DIRT in evidenced_clear_ids(record["baseline"], measured=True)
+
+
 def test_carried_verdict_gets_no_dirt_credit(tmp_path):
     record = _dual(tmp_path, export_summary=True, baseline=_base(), live_red=[RATCHET, DIRT])
     findings, check = ltt.failed_targeted_tests(record, measured=False)

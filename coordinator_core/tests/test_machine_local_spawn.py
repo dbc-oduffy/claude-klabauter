@@ -45,6 +45,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv(locked_write.MACHINE_LOCK_ROOT_ENV, str(tmp_path / "locks"))
     monkeypatch.setenv("STUB_PIDFILE", str(pidfile))
     monkeypatch.setenv("STUB_SLEEP", "0")
+    monkeypatch.setenv("MACHINE_LOCAL_SLOT_DIR", str(tmp_path / "slots"))
+    monkeypatch.delenv("MACHINE_LOCAL_MAX_INFLIGHT", raising=False)
     mls._CACHE.clear()
     yield {"reg": reg, "stub": str(stub), "pidfile": pidfile, "tmp": tmp_path}
     mls._CACHE.clear()
@@ -91,7 +93,7 @@ def _wait_dead(pid: int, timeout: float = 5.0) -> bool:
 
 def test_run_bounded_timeout_returns_none_and_reaps_child(env, monkeypatch):
     monkeypatch.setenv("STUB_SLEEP", "30")
-    monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 0.6)
+    monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 1.5)  # outlasts interpreter start so the pid is written
     t0 = time.monotonic()
     result = mls.run_bounded([sys.executable, env["stub"], "dump"])
     assert result is None
@@ -340,7 +342,7 @@ def test_get_falls_back_to_one_bounded_spawn(env, monkeypatch):
 
 
 def test_concurrent_threads_start_exactly_one_child(env, monkeypatch):
-    monkeypatch.setenv("STUB_SLEEP", "0.3")
+    monkeypatch.setenv("STUB_SLEEP", "0.05")  # late arrivals hit the cache; waiters need not outwait ML_WAIT_TIMEOUT_S
     results: list = []
 
     def call():
@@ -356,7 +358,7 @@ def test_concurrent_threads_start_exactly_one_child(env, monkeypatch):
 
 
 def test_waiter_behind_slow_dump_gives_up_inside_wait_ceiling(env, monkeypatch):
-    monkeypatch.setenv("STUB_SLEEP", "1.5")
+    monkeypatch.setenv("STUB_SLEEP", str(mls.ML_WAIT_TIMEOUT_S * 3))  # must outlast the waiters' ceiling
     results: list = []
     threads = [
         threading.Thread(target=lambda: results.append(mls.dump(env["stub"], in_process=False)))
@@ -469,3 +471,183 @@ def test_windows_kill_survives_an_unreadable_process_table():
 
     mls._kill_tree_windows(FakeProc(), snapshot=lambda: None, kill=object())
     assert FakeProc.direct_kill
+
+
+CALLER = (
+    "import sys; sys.path.insert(0, sys.argv[1]);"
+    "from coordinator_core import machine_local_spawn as m;"
+    "cp = m.run_bounded([sys.executable, sys.argv[2], 'dump']);"
+    "print('ran' if cp is not None else 'none')"
+)
+
+
+# A stub must outlast a waiter's slot timeout (so contention is observed) yet finish, with its
+# interpreter start, inside the spawn ceiling (so the slot holders are not killed as timeouts).
+CONTENDED_STUB_SLEEP_S = mls.ML_WAIT_TIMEOUT_S * 2
+assert mls.ML_WAIT_TIMEOUT_S < CONTENDED_STUB_SLEEP_S < mls.ML_SPAWN_TIMEOUT_S
+
+
+def _live_stub_count(pidfile: Path) -> int:
+    return sum(1 for pid in _spawned(pidfile) if _alive(pid))
+
+
+def _sample_live_max(pidfile: Path, running) -> int:
+    peak = 0
+    while running():
+        peak = max(peak, _live_stub_count(pidfile))
+        time.sleep(0.03)
+    return max(peak, _live_stub_count(pidfile))
+
+
+def test_threads_never_exceed_the_box_wide_cap(env, monkeypatch):
+    monkeypatch.setenv("MACHINE_LOCAL_MAX_INFLIGHT", "2")
+    monkeypatch.setenv("STUB_SLEEP", str(CONTENDED_STUB_SLEEP_S))
+    results: list = []
+    threads = [
+        threading.Thread(
+            target=lambda: results.append(mls.run_bounded([sys.executable, env["stub"], "dump"]))
+        )
+        for _ in range(8)
+    ]
+    for t in threads:
+        t.start()
+    peak = _sample_live_max(env["pidfile"], lambda: any(t.is_alive() for t in threads))
+    assert peak <= 2
+    assert len(results) == 8
+    assert sum(r is None for r in results) >= 1
+    assert sum(r is not None for r in results) >= 1
+
+
+def test_processes_never_exceed_the_box_wide_cap_and_leave_no_survivors(env, monkeypatch):
+    monkeypatch.setenv("MACHINE_LOCAL_MAX_INFLIGHT", "2")
+    monkeypatch.setenv("STUB_SLEEP", str(CONTENDED_STUB_SLEEP_S))
+    procs = [
+        subprocess.Popen(
+            [sys.executable, "-c", CALLER, str(REPO_ROOT), env["stub"]],
+            stdout=subprocess.PIPE,
+            text=True,
+            env=dict(os.environ),
+        )
+        for _ in range(4)
+    ]
+    peak = _sample_live_max(env["pidfile"], lambda: any(p.poll() is None for p in procs))
+    outs = [p.communicate(timeout=60)[0].strip() for p in procs]
+    assert peak <= 2
+    assert "none" in outs
+    assert all(_wait_dead(pid) for pid in _spawned(env["pidfile"]))
+
+
+@pytest.mark.skipif(
+    sys.platform == "darwin", reason="macOS has no parent-death signal or job object"
+)
+def test_a_killed_caller_leaves_no_surviving_stub_child(env, monkeypatch):
+    monkeypatch.setenv("STUB_SLEEP", "30")
+    caller = subprocess.Popen(
+        [sys.executable, "-c", CALLER, str(REPO_ROOT), env["stub"]],
+        stdout=subprocess.PIPE,
+        text=True,
+        env=dict(os.environ),
+    )
+    pids = _wait_for(env["pidfile"])
+    assert pids
+    caller.kill()
+    caller.wait(10)
+    assert all(_wait_dead(pid, timeout=5.0) for pid in pids)
+
+
+def test_slot_timeout_returns_none_and_spawns_nothing(env, monkeypatch):
+    monkeypatch.setenv("MACHINE_LOCAL_MAX_INFLIGHT", "1")
+    state, fd = mls._claim_slot()
+    assert state == "held"
+    try:
+        t0 = time.monotonic()
+        assert mls.run_bounded([sys.executable, env["stub"], "dump"]) is None
+        assert time.monotonic() - t0 < 5
+    finally:
+        locked_write._plat_unlock(fd)
+        os.close(fd)
+    assert _spawned(env["pidfile"]) == []
+
+
+def test_contended_dump_is_not_cached_as_a_failure(env, monkeypatch):
+    monkeypatch.setenv("MACHINE_LOCAL_MAX_INFLIGHT", "1")
+    state, fd = mls._claim_slot()
+    assert state == "held"
+    try:
+        assert mls.dump(env["stub"], in_process=False) is None
+        assert mls.get(env["stub"], "repos.a", in_process=False) == (None, False)
+    finally:
+        locked_write._plat_unlock(fd)
+        os.close(fd)
+    mls._CACHE.clear()
+    assert mls.dump(env["stub"], in_process=False) == {"repos.a": "/x/a", "repos.b": None}
+
+
+def test_unusable_slot_dir_fails_open(env, monkeypatch):
+    blocker = env["tmp"] / "not-a-dir"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_SLOT_DIR", str(blocker / "slots"))
+    cp = mls.run_bounded([sys.executable, env["stub"], "dump"])
+    assert cp is not None and cp.returncode == 0
+
+
+def test_slot_paths_count_and_probe_order_follow_the_shared_contract(env, monkeypatch):
+    slots = env["tmp"] / "slots"
+    assert mls._slot_dir() == slots
+    assert mls._slot_count() == 16
+    monkeypatch.setenv("MACHINE_LOCAL_MAX_INFLIGHT", "4")
+    assert mls._slot_count() == 4
+    monkeypatch.setattr(os, "getpid", lambda: 10)
+    assert mls._probe_order(4) == [2, 3, 0, 1]
+    state, fd = mls._claim_slot()
+    try:
+        assert state == "held"
+        assert (slots / "slot-2.lock").exists()
+    finally:
+        locked_write._plat_unlock(fd)
+        os.close(fd)
+    monkeypatch.delenv("MACHINE_LOCAL_SLOT_DIR")
+    monkeypatch.setenv("LOCALAPPDATA", str(env["tmp"] / "lad"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(env["tmp"] / "xdg"))
+    root = env["tmp"] / ("lad" if sys.platform == "win32" else "xdg")
+    assert mls._slot_dir() == root / "coordinator" / "machine-local-slots"
+
+
+def test_shared_cache_hit_takes_no_box_lock(env):
+    assert mls.dump(env["stub"], in_process=False) is not None
+    mls._CACHE.clear()
+    target = Path(os.path.abspath(str(env["reg"])))
+    with locked_write.held_lock(target, timeout=2.0):
+        assert mls.dump(env["stub"], in_process=False) == {"repos.a": "/x/a", "repos.b": None}
+    assert len(_spawned(env["pidfile"])) == 1
+
+
+def _no_popen(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("cached read spawned")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+
+
+def test_cached_reads_answer_from_the_shared_cache_without_spawning(env, monkeypatch):
+    assert mls.dump(env["stub"], in_process=False) is not None
+    mls._CACHE.clear()
+    _no_popen(monkeypatch)
+    assert mls.cached_dump(env["stub"]) == {"repos.a": "/x/a", "repos.b": None}
+    mls._CACHE.clear()
+    assert mls.cached_get(env["stub"], "repos.a") == ("/x/a", True)
+    assert mls.cached_get(env["stub"], "repos.b") == (None, True)
+
+
+def test_cached_reads_return_the_miss_on_an_empty_cache_without_spawning(env, monkeypatch):
+    _no_popen(monkeypatch)
+    assert mls.cached_dump(env["stub"]) is None
+    assert mls.cached_get(env["stub"], "repos.a") == (None, False)
+    assert _spawned(env["pidfile"]) == []
+
+
+def test_cached_get_reads_the_real_kernel_in_process(tmp_path, monkeypatch):
+    _kernel_env(tmp_path, monkeypatch, 'alpha = "one"\n')
+    _no_popen(monkeypatch)
+    assert mls.cached_get(str(KERNEL), "alpha") == ("one", True)
+    assert mls.cached_get(str(KERNEL), "gamma.none") == (None, True)

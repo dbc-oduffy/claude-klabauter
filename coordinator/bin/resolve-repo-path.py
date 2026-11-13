@@ -47,7 +47,6 @@ Negative-spec: does NOT spawn a shell (subprocess.run with an argv list, never a
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 
 
@@ -100,33 +99,18 @@ def _resolve_registry_value(key: str) -> str:
     instead of a silent empty-string skip.
     """
     _bootstrap_engine()
-    from coordinator_core.win_portability import is_executable, no_console_creationflags
+    from coordinator_core import machine_local_spawn
 
-    ml = ""
-    for cand in _machine_local_path_candidates():
-        if os.path.isfile(cand) and is_executable(cand):
-            ml = cand
-            break
-    if not ml:
+    impl = machine_local_spawn.kernel_path()
+    if not os.path.isfile(impl):
         print(
-            "resolve-repo-path.py: machine-local CLI not found "
-            f"(tried: {', '.join(_machine_local_path_candidates())}) — "
+            f"resolve-repo-path.py: machine-local CLI not found (tried: {impl}) — "
             "wiki-layout override skipped",
             file=sys.stderr,
         )
         return ""
-    try:
-        result = subprocess.run(
-            [ml, "get", key],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout.strip()
+    value, ok = machine_local_spawn.get(impl, key)
+    return value.strip() if ok and value else ""
 
 
 def _parse_args(argv: list[str]) -> tuple[bool, str, str]:

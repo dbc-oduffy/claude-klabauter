@@ -1976,7 +1976,7 @@ def test_install_machine_identity_writes_resolved_values(setup_mod, tmp_path, mo
         calls.append(argv)
         return setup_mod.subprocess.CompletedProcess(argv, 0)
 
-    monkeypatch.setattr(setup_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(setup_mod.machine_local_spawn, "run_bounded", _fake_run)
 
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -2109,7 +2109,7 @@ def test_install_machine_identity_idempotent_across_two_runs(setup_mod, tmp_path
 
     calls = []
     monkeypatch.setattr(
-        setup_mod.subprocess, "run",
+        setup_mod.machine_local_spawn, "run_bounded",
         lambda argv, **k: calls.append(argv) or setup_mod.subprocess.CompletedProcess(argv, 0),
     )
 
@@ -2149,7 +2149,7 @@ def test_install_machine_identity_continues_past_nonzero_returncode(setup_mod, t
         returncode = 1 if argv[-1] == "testmachine" else 0
         return setup_mod.subprocess.CompletedProcess(argv, returncode)
 
-    monkeypatch.setattr(setup_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(setup_mod.machine_local_spawn, "run_bounded", _fake_run)
 
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -2184,10 +2184,10 @@ def test_install_machine_identity_continues_past_launch_failure(setup_mod, tmp_p
     def _fake_run(argv, **kwargs):
         calls.append(argv)
         if argv[-1] == "testmachine":
-            raise OSError("no such file or directory: machine-local")
+            return None
         return setup_mod.subprocess.CompletedProcess(argv, 0)
 
-    monkeypatch.setattr(setup_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(setup_mod.machine_local_spawn, "run_bounded", _fake_run)
 
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -2739,7 +2739,7 @@ def _mirror_registration_run(setup_mod, tmp_path, monkeypatch, registry):
         sets.append(list(argv))
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(setup_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(setup_mod.machine_local_spawn, "run_bounded", _fake_run)
     monkeypatch.setattr(machine_resolver, "registry_get", lambda key, *a, **k: registry.get(key, ""))
     repo_root = tmp_path / "repo"
     repo_root.mkdir()

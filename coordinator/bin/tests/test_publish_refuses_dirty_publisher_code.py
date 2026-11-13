@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -113,3 +115,37 @@ def test_main_passes_the_gate_on_clean_tree(pub, repo, monkeypatch):
     monkeypatch.setattr(pub, "_bootstrap_engine", _stop)
     with pytest.raises(_Reached):
         pub._main([])
+
+
+def _chain_export(tmp_path, repo):
+    """The shape `_export_chain_at_sha` leaves: both engine paths are links to a per-sha export."""
+    export = tmp_path / "engine_export"
+    for rel in pub_linked_paths():
+        shutil.copytree(repo / rel, export / rel)
+        shutil.rmtree(repo / rel)
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.symlink(export / rel, repo / rel, target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks unavailable on this box")
+
+
+def pub_linked_paths():
+    return ("coordinator_core", "coordinator/lib")
+
+
+def test_chain_export_engine_links_are_not_dirty(pub, repo, tmp_path):
+    assert tuple(pub._SOURCE_REF_IMPORTED_PATHS) == pub_linked_paths()
+    _chain_export(tmp_path, repo)
+    assert pub._dirty_publisher_paths(repo, _git(repo, "rev-parse", "HEAD")) == []
+
+
+def test_chain_export_still_refuses_dirty_files_outside_the_links(pub, repo, tmp_path):
+    _chain_export(tmp_path, repo)
+    sha = _git(repo, "rev-parse", "HEAD")
+    (repo / "coordinator/bin/lib/helper.py").write_text("x = 2\n")
+    (repo / "coordinator/bin/lib/fresh.py").write_text("z = 1\n")
+    assert pub._dirty_publisher_paths(repo, sha) == [
+        "coordinator/bin/lib/fresh.py",
+        "coordinator/bin/lib/helper.py",
+    ]

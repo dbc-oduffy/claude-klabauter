@@ -838,6 +838,10 @@ def _arm_verdict(
         landed_sink.extend(resume.landed_open)
     if kept_sink is not None and resume_rows and resume.kept:
         kept_sink.append((list(resume.kept), resume.kept_run))
+    elif kept_sink is not None and resume_ledger is not None:
+        ledger_kept = _ledger_kept_rows(repo_root, resume_ledger)
+        if ledger_kept[0]:
+            kept_sink.append(ledger_kept)
     if held_sink is not None and resume:
         held_sink.extend(resume.held)
     if reasons_sink is not None and resume:
@@ -1064,6 +1068,44 @@ def _discharged_em_items(blocking: Sequence[str], discharged: Mapping, plan_path
         ):
             out.add(item)
     return out
+
+
+def _ledger_kept_rows(repo_root: Path, resume_ledger: Mapping) -> tuple[list[str], Optional[str]]:
+    """`(kept row ids, kept run)` of a ledger resume: the unlanded rows the ledger's halted run finished and
+    whose recorded bytes still hold against its live notes, less any row a blocking item's remaining work
+    still names by id or by a path the run kept for it. Those rows run again; every unlanded row not kept
+    runs too, so the stage dispatches the open rows only. The run is the halt's own `run_id` (an `ask-` or a
+    `warp-` run), never a lookup by sizing. Reads the run record dir; no git spawn."""
+    from coordinator_core.ops.dispatch_emit import kept_work, run_notes
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused, NOTES_FILE, run_dir
+
+    kept_run = resume_ledger.get("run_id")
+    unlanded = list(resume_ledger.get(RESUME_LEDGER_UNLANDED_FIELD) or [])
+    if not unlanded or not kept_run or kept_run == ALL_LANDED_NO_RUN:
+        return [], None
+    try:
+        record = run_dir(Path(repo_root), kept_run)
+    except LedgerRefused:
+        return [], None
+    chunks = kept_work.read(record)["chunks"]
+    candidates = [i for i in unlanded if i in chunks]
+    if not candidates:
+        return [], kept_run
+    notes = [e["note"] for e in run_notes.live(run_notes.entries(record / NOTES_FILE, kept_run))]
+    kept = [i for i in candidates if kept_work.still_kept(Path(repo_root), chunks[i], notes, i, record_dir=record)]
+    texts = [
+        str(line)
+        for item in (resume_ledger.get(RESUME_LEDGER_REMAINING_FIELD) or {}).values()
+        if isinstance(item, dict)
+        for line in (item.get("remaining") or ())
+    ]
+
+    def named(row_id: str) -> bool:
+        token = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(row_id) + r"(?![A-Za-z0-9_])")
+        paths = (chunks.get(row_id) or {}).get("paths") or {}
+        return any(token.search(t) or any(p in t for p in paths) for t in texts)
+
+    return [r for r in kept if not named(r)], kept_run
 
 
 def _credited_landed(blocking: Sequence[str], halt, repo_root: Path) -> list[str]:

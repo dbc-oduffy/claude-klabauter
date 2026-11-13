@@ -45,12 +45,11 @@ Negative-spec (deliberate divergence from the bash oracle):
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from typing import List, Optional, Tuple
 
+from coordinator_core import machine_local_spawn
 from coordinator_core.machine_resolver import merged_flat_registry as _merged_flat_registry
-from coordinator_core.win_portability import no_console_creationflags
 
 _KEY = "fan_out.large_wave_threshold"
 
@@ -81,13 +80,10 @@ def capture(check_only: bool = False) -> Tuple[str, int]:
     if check_only:
         return (f"fan_out_threshold: would write ({value})\n", 0)
 
-    proc = subprocess.run(
-        [*_ml_argv(), "set", _KEY, str(value)],
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        **no_console_creationflags(),
-    )
+    proc = machine_local_spawn.run_bounded([*_ml_argv(), "set", _KEY, str(value)])
+    if proc is None:
+        sys.stderr.write("fan_out_threshold: machine-local set failed to launch or outlived its ceiling\n")
+        return ("", 1)
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr or "")
         return ("", proc.returncode)

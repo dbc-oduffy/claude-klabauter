@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -81,15 +82,58 @@ def test_push_leg_first_push_to_empty_remote(tmp_path, remote):
     assert _git(tmp_path, "--git-dir", str(remote), "log", "-1", "--format=%s", "main") == "first"
 
 
-def test_pull_on_entry_brings_peer_work_and_keeps_dirty_edits(tmp_path, remote, seeded):
+def test_pull_on_entry_brings_peer_work_on_a_clean_home(tmp_path, remote, seeded):
+    b = _clone(remote, tmp_path / "b")
+    (b / "peer.txt").write_text("p")
+    gem_home_sync.push_leg(b, "peer")
+    rep = gem_home_sync.pull_on_entry(seeded)
+    assert rep["sync"] == "ok"
+    assert (seeded / "peer.txt").read_text() == "p"
+
+
+def test_pull_on_entry_on_a_dirty_home_refuses_and_touches_nothing(tmp_path, remote, seeded):
     b = _clone(remote, tmp_path / "b")
     (b / "peer.txt").write_text("p")
     gem_home_sync.push_leg(b, "peer")
     (seeded / "g.txt").write_text("dirty\n")
+    (seeded / "f.txt").write_text("dirty-f\n")
+    for name in ("g.txt", "f.txt"):
+        os.utime(seeded / name, ns=(10**18, 10**18))
+    before = {n: ((seeded / n).read_bytes(), (seeded / n).stat().st_mtime_ns) for n in ("g.txt", "f.txt")}
+    head = _git(seeded, "rev-parse", "HEAD")
+
     rep = gem_home_sync.pull_on_entry(seeded)
-    assert rep["sync"] == "ok"
-    assert (seeded / "peer.txt").read_text() == "p"
-    assert (seeded / "g.txt").read_text() == "dirty\n"
+
+    assert rep["sync"] == "refused"
+    assert sorted(rep["paths"]) == ["f.txt", "g.txt"]
+    assert not (seeded / "peer.txt").exists()
+    assert {n: ((seeded / n).read_bytes(), (seeded / n).stat().st_mtime_ns) for n in before} == before
+    assert _git(seeded, "rev-parse", "HEAD") == head
+    assert _git(seeded, "stash", "list") == ""
+
+
+def test_push_leg_refuses_when_the_commit_leaves_residue(tmp_path, remote, seeded, monkeypatch):
+    b = _clone(remote, tmp_path / "b")
+    (b / "peer.txt").write_text("p")
+    gem_home_sync.push_leg(b, "peer")
+    (seeded / "g.txt").write_text("dirty\n")
+    os.utime(seeded / "g.txt", ns=(10**18, 10**18))
+    before = ((seeded / "g.txt").read_bytes(), (seeded / "g.txt").stat().st_mtime_ns)
+    monkeypatch.setattr(gem_home_sync, "_has_origin", lambda cwd: True)
+    real = gem_home_sync.run_git
+
+    def no_commit(args, **kw):
+        if args[:1] in (["add"], ["commit"]):
+            return real(["--version"], **kw)
+        return real(args, **kw)
+
+    monkeypatch.setattr(gem_home_sync, "run_git", no_commit)
+    rep = gem_home_sync.push_leg(seeded, "m")
+
+    assert rep["sync"] == "refused"
+    assert rep["paths"] == ["g.txt"]
+    assert ((seeded / "g.txt").read_bytes(), (seeded / "g.txt").stat().st_mtime_ns) == before
+    assert not (seeded / "peer.txt").exists()
 
 
 def test_push_leg_conflict_aborts_and_leaves_head(tmp_path, remote, seeded):

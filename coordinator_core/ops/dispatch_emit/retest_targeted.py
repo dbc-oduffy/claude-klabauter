@@ -34,6 +34,7 @@ from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 from coordinator_core.ops.dispatch_emit import landing_retest
 from coordinator_core.ops.dispatch_emit import landing_targeted_tests
+from coordinator_core.ops.dispatch_emit import red_attribution
 from coordinator_core.telemetry import host_sampler
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -1162,6 +1163,15 @@ def _landing_checks(
     return out
 
 
+def _names_own_path(log: Path, nodes: Sequence[str], write_set: Sequence[str]) -> set[str]:
+    """``red_attribution.names_own_path`` over the captured ``log``, read once; no spawn."""
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return set()
+    return red_attribution.names_own_path(text, nodes, write_set)
+
+
 _SECTION_HEAD = re.compile(r"^_{2,} (.+?) _{2,}$", re.MULTILINE)
 _SUMMARY_HEAD = re.compile(r"^=+ short test summary info =+$", re.MULTILINE)
 _PATH_TOKEN = re.compile(r"(?<![\w./\\-])((?:[\w.-]+/)+[\w.-]+\.\w+)")
@@ -1248,12 +1258,18 @@ def _write_dual(
                 **measured_baseline.get("foreign_reason", {}), **{n: landing_targeted_tests.PEER_HELD_PATH for n in peer},
             }
     if isinstance(measured_baseline, dict) and export_log_used and _ran_total(export_log) is not None:
-        dirt = [n for n in live_failed if n not in export_failed and n not in measured_baseline.get("foreign", [])]
+        live_only = [n for n in live_failed if n not in export_failed and n not in measured_baseline.get("foreign", [])]
+        own = _names_own_path(log_path, live_only, meta["write_set"])
+        dirt = [n for n in live_only if n not in own]
+        if own:
+            measured_baseline["caused"] = [*measured_baseline.get("caused", []), *own]
         if dirt:
             measured_baseline["foreign"] = [*measured_baseline.get("foreign", []), *dirt]
             measured_baseline["foreign_reason"] = {
                 **measured_baseline.get("foreign_reason", {}), **{n: landing_targeted_tests.UNDECLARED_DIRT for n in dirt},
             }
+            # Trap: the landing's invariant gate credits a foreign id only through ``baseline.evidence``.
+            measured_baseline["evidence"] = sorted({*measured_baseline.get("evidence", []), *dirt})
     if live_reason:
         record["live"]["reason"] = live_reason
     if reason:

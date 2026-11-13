@@ -277,7 +277,37 @@ def _dispatch_admitted(mode: str, root: Path, repo_root: Path, params: dict, bud
             if not retried and _script_read_stall_retryable(mode, exc):
                 retried = True
                 continue
-            return _deadline_halt(root, params, exc)
+            reply = _deadline_halt(root, params, exc)
+            if _queue_for_resume(mode, root, params, exc):
+                reply["queued_for_resume"] = True
+            return reply
+
+
+def _commit_started() -> bool:
+    """True once this process's land record reads `committing` or later: a commit may exist."""
+    from coordinator_core.ops.dispatch_emit import land_intent
+
+    held = land_intent._held
+    return held is not None and held[2].get("phase") in (land_intent.PHASE_COMMITTING, land_intent.PHASE_COMMITTED)
+
+
+def _queue_for_resume(mode: str, root: Path, params: dict, exc: land_deadline.LandDeadlineExceeded) -> bool:
+    """Enqueue a product landing whose deadline fired before any commit, for a later land_run; True
+    when a live, unexpired entry now exists. Never after the commit phase began; never raises."""
+    run_id = params.get("run_id")
+    if mode != "product" or not isinstance(run_id, str) or not run_id or _commit_started():
+        return False
+    try:
+        import time
+
+        from coordinator_core.ops.dispatch_emit import land_resume
+
+        if not land_resume.enqueue(None, run_id, params, exc.leg):
+            return False
+        entry = land_resume.load(None, run_id)
+        return entry is not None and not land_resume.expired(entry, time.time())
+    except Exception:  # noqa: BLE001 -- queueing never changes the halt reply
+        return False
 
 
 def _script_read_stall_retryable(mode: str, exc: land_deadline.LandDeadlineExceeded) -> bool:
@@ -1396,6 +1426,12 @@ def foreign_halted_withheld(
                 for rid in unlanded
                 if warp_run_deliverable._halted(root, rid)
             }
+        if run_id and live:
+            # A holder in the landing run's own lineage (resumed_from chain, same sizing) is its own earlier attempt, not a peer.
+            from coordinator_core.ops.dispatch_emit import run_hunk_claims
+
+            kin = run_hunk_claims._own_lineage(root, run_id, {rid: True for rid in live})
+            live = {rid: r for rid, r in live.items() if rid not in kin}
         if not any(r.withheld for r in live.values()):
             return {}
         every = run_ownership.foreign_withheld_holders(run_id or "", wanted, live)
@@ -2513,17 +2549,12 @@ def _peer_held(
         pass
     try:
         from coordinator_core.ops import warp_run_deliverable
-        from coordinator_core.ops.dispatch_emit import own_checkpoint_paths, sibling_claims
+        from coordinator_core.ops.dispatch_emit import own_checkpoint_paths
 
-        submitter = _submitter_session(root, run_id)
-        own_run = run_id if isinstance(run_id, str) else None
-        claims = sibling_claims.live_unreleased(
-            root,
-            warp_run_deliverable.live_run_write_claims(
-                root, list(paths), exclude_session=submitter, cwd=str(root), minted_before=minted_before,
-                exclude_run=own_run,
-            ),
-            own_run, minted_before, submitter,
+        claims = warp_run_deliverable.live_run_write_claims(
+            root, list(paths), exclude_session=_submitter_session(root, run_id), cwd=str(root),
+            minted_before=minted_before,
+            exclude_run=run_id if isinstance(run_id, str) else None,
         )
         own = (
             own_checkpoint_paths.checkpoint_landed_paths(root, plan_rel, run_base, list(claims or ()))
@@ -4719,8 +4750,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             if not (isinstance(verified.get(p), str) and _worktree_blob(root, p) == verified[p])
         }
 
-    # A "pre_existing" overlay (measured) or a "missing" one (the engine never produced a verdict) lands with
-    # an advisory; red, inconclusive and mismatch refuse.
+    # Only a measured "pre_existing" overlay lands with an advisory; red, inconclusive, missing and
+    # mismatch refuse.
     reach_dirt_foreign: dict = {}
     reach_dirt_overlay: dict = {}
     if measured is not None and merge_plan is None and not (anchor_only or request.review_only):
@@ -4786,7 +4817,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             if overlay.verdict == "mismatch":
                 overlay = clean_overlay_verify.reverify_on_mismatch(root, measured_run, measured, overlay)
             reach_dirt_overlay = {"verdict": overlay.verdict, "seeds": list(overlay.seeds)}
-            if overlay.verdict in ("pre_existing", "missing"):
+            if overlay.verdict == "pre_existing":
                 reach_dirt_overlay["advisory"] = f"clean-overlay verdict {overlay.verdict}: {overlay.detail}"
                 # The landing is recoverable so it proceeds, but unverified: the trailer is what a release
                 # gate reads to list the commits the full-tree regate alone covers.

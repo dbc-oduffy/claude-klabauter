@@ -245,18 +245,23 @@ def test_threshold_resolution_order(root):
 
     reg_h2 = os.path.join(root, "reg_h2")
     os.makedirs(reg_h2, exist_ok=True)
-    ml_exe = shutil.which("machine-local")
-    assert ml_exe, "machine-local not on PATH"
+    sh_home = os.path.join(root, "sh_home")
+    sh_bin = os.path.join(sh_home, "bin")
+    os.makedirs(sh_bin, exist_ok=True)
+    tmpl = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "templates", "bin")
+    for name in ("_machine_local.py", "claude_machine_local.py"):
+        shutil.copy(os.path.join(tmpl, name), os.path.join(sh_bin, name))
+    ml_env = {**os.environ, "MACHINE_LOCAL_REGISTRY_DIR": reg_h2, "COORDINATOR_SETTINGS_HOME": sh_home}
     ml = subprocess.run(
-        [ml_exe, "set", "fan_out.large_wave_threshold", "5"],
-        env={**os.environ, "MACHINE_LOCAL_REGISTRY_DIR": reg_h2},
+        [PYTHON, os.path.join(sh_bin, "_machine_local.py"), "set", "fan_out.large_wave_threshold", "5"],
+        env=ml_env,
         capture_output=True,
         text=True,
         **no_console_creationflags(),
     )
     assert ml.returncode == 0, ml.stderr
-    _, out5, _ = run_helper(repo_h, spec_file=specs[5], extra_env=clean_env({"MACHINE_LOCAL_REGISTRY_DIR": reg_h2}))
-    _, out4, _ = run_helper(repo_h, spec_file=specs[4], extra_env=clean_env({"MACHINE_LOCAL_REGISTRY_DIR": reg_h2}))
+    _, out5, _ = run_helper(repo_h, spec_file=specs[5], extra_env=clean_env({"MACHINE_LOCAL_REGISTRY_DIR": reg_h2, "COORDINATOR_SETTINGS_HOME": sh_home}))
+    _, out4, _ = run_helper(repo_h, spec_file=specs[4], extra_env=clean_env({"MACHINE_LOCAL_REGISTRY_DIR": reg_h2, "COORDINATOR_SETTINGS_HOME": sh_home}))
     assert NOTE in out5, "machine-local=5 -> NOTE at 5 chunks"
     assert NOTE not in out4, "machine-local=5 -> no NOTE at 4 chunks"
 
@@ -264,11 +269,13 @@ def test_threshold_resolution_order(root):
         "MACHINE_LOCAL_FAN_OUT_LARGE_WAVE_THRESHOLD": "",
         "LARGE_WAVE_THRESHOLD": "3",
         "MACHINE_LOCAL_REGISTRY_DIR": reg_h2,
+        "COORDINATOR_SETTINGS_HOME": sh_home,
     })
     _, out2, _ = run_helper(repo_h, spec_file=specs[2], extra_env={
         "MACHINE_LOCAL_FAN_OUT_LARGE_WAVE_THRESHOLD": "",
         "LARGE_WAVE_THRESHOLD": "3",
         "MACHINE_LOCAL_REGISTRY_DIR": reg_h2,
+        "COORDINATOR_SETTINGS_HOME": sh_home,
     })
     assert NOTE in out3, "env=3 beats registry=5 -> NOTE at 3 chunks"
     assert NOTE not in out2, "env=3 -> no NOTE at 2 chunks"

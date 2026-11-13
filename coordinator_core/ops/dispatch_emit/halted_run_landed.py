@@ -803,15 +803,22 @@ def _withheld_import_problem(root: Path, run_id: str, shas: list, covers: dict) 
     return None
 
 
-def _halt_commit(root: Path, record_dir: Path) -> Optional[str]:
-    """The commit that first added the run's ``halted.json`` (the halt commit), else None; one git spawn."""
+def _halt_commit(root: Path, record_dir: Path) -> tuple[Optional[str], Optional[str]]:
+    """``(halt_commit, None)`` for the newest commit that added the run's ``halted.json``; ``(None, None)`` when git answered and none added it; ``(None, reason)`` when the git read failed.
+
+    One git spawn. Trap: ``-1`` is load-bearing; without it the path-limited log walks all history,
+    which outruns the local git budget on a large repo and reads as a failure.
+    """
     from coordinator_core import git_ancestry
     from coordinator_core.ops.dispatch_emit import halted_run
 
     rel = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
-    result = git_ancestry.run_git(["log", "--diff-filter=A", "--format=%H", "--", rel], cwd=str(root))
-    lines = result.stdout.split() if result.returncode == 0 else []
-    return lines[-1] if lines and _FULL_SHA.fullmatch(lines[-1]) else None
+    result = git_ancestry.run_git(["log", "-1", "--diff-filter=A", "--format=%H", "--", rel], cwd=str(root))
+    if result.returncode != 0:
+        why = "timed out" if result.timed_out else f"exit {result.returncode}"
+        return None, f"git log of {rel} failed ({why})"
+    lines = result.stdout.split()
+    return (lines[0], None) if lines and _FULL_SHA.fullmatch(lines[0]) else (None, None)
 
 
 def _met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -> Optional[str]:
@@ -836,7 +843,9 @@ def _met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -
             return f"met_by row {row} is not a blocking row of {run_id}"
         if sha not in reached:
             return f"met_by row {row}: {sha} is not an ancestor of HEAD; pass the commit that met the row"
-    halt = _halt_commit(root, record_dir)
+    halt, read_failure = _halt_commit(root, record_dir)
+    if read_failure:
+        return f"{run_id} halt commit could not be read: {read_failure}; retry"
     if halt is None:
         return f"{run_id} halt commit could not be found; met_by cannot be placed after it"
     read_ok, before = git_ancestry.ancestors_of(list(met_by.values()), halt, cwd=str(root))

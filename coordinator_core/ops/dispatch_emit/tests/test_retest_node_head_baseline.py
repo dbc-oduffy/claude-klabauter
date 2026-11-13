@@ -41,7 +41,10 @@ def test_node_measure_unmeasurable_keeps_baseline_skipped(tmp_path, monkeypatch)
     assert landing_targeted_tests.failed_targeted_tests(record)[1] == "failed"
 
 
-def _dual(tmp_path: Path, *, export_summary: bool, baseline, live_red: list[str]) -> dict:
+def _dual(
+    tmp_path: Path, *, export_summary: bool, baseline, live_red: list[str],
+    write_set: tuple = (), live_detail: str = "",
+) -> dict:
     root = tmp_path / "repo"
     root.mkdir()
     export_root = tmp_path / "export"
@@ -50,9 +53,9 @@ def _dual(tmp_path: Path, *, export_summary: bool, baseline, live_red: list[str]
     export_log.write_text(
         "FAILED test_a.py::t0 - boom\n" + ("1 passed, 1 failed in 0.1s\n" if export_summary else ""), encoding="utf-8",
     )
-    live_log.write_text("".join(f"FAILED {n} - boom\n" for n in live_red), encoding="utf-8")
+    live_log.write_text(live_detail + "".join(f"FAILED {n} - boom\n" for n in live_red), encoding="utf-8")
     path.parent.mkdir()
-    meta = {"root": str(export_root), "write_set": []}
+    meta = {"root": str(export_root), "write_set": list(write_set)}
     retest_targeted._write_dual(
         root, path, live_log, export_log, "run-x", ["test_a.py"], [], "", meta, lambda r: [], lambda r: "h" * 40,
         ("fail", None, [1], True), ("fail", None, [1], True), None, baseline,
@@ -70,6 +73,33 @@ def test_live_only_red_is_foreign_undeclared_dirt(tmp_path):
     assert record["baseline"]["foreign"] == ["test_a.py::t0", "test_b.py::dirt"]
     assert record["baseline"]["foreign_reason"] == {"test_b.py::dirt": "undeclared-dirt"}
     assert record["baseline"]["caused"] == []
+
+
+_SECTION = (
+    "=== FAILURES ===\n___ dirt ___\n\nAssertionError: gate RED\n  {named}\n\n"
+    "___ other ___\n\nboom\n=== short test summary info ===\n"
+)
+
+
+def test_live_only_red_naming_a_peer_path_is_dirt_with_evidence(tmp_path):
+    record = _dual(
+        tmp_path, export_summary=True, baseline=_base(), live_red=["test_b.py::dirt"],
+        write_set=("pkg/mine.py",), live_detail=_SECTION.format(named="pkg/peer_untracked.py"),
+    )
+    baseline = record["baseline"]
+    assert baseline["foreign_reason"] == {"test_b.py::dirt": "undeclared-dirt"} and baseline["caused"] == []
+    assert "test_b.py::dirt" in baseline["evidence"]
+    assert landing_targeted_tests.failed_targeted_tests(record) == ([], "pre-existing-only")
+
+
+def test_live_only_red_naming_an_own_path_stays_caused_and_refuses(tmp_path):
+    record = _dual(
+        tmp_path, export_summary=True, baseline=_base(), live_red=["test_b.py::dirt"],
+        write_set=("pkg/mine.py",), live_detail=_SECTION.format(named="pkg\\mine.py"),
+    )
+    baseline = record["baseline"]
+    assert baseline["caused"] == ["test_b.py::dirt"] and "foreign_reason" not in baseline
+    assert landing_targeted_tests.failed_targeted_tests(record)[1] == "failed"
 
 
 def test_baseline_skipped_gains_no_baseline_from_dirt(tmp_path):

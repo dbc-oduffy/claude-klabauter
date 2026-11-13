@@ -78,8 +78,9 @@ import subprocess
 import sys
 from typing import List, Optional, Tuple
 
+from coordinator_core import machine_local_spawn
 from coordinator_core._settings_home import resolve_machine_local_cli, settings_home
-from coordinator_core.win_portability import is_executable, no_console_creationflags, no_console_passthrough_kwargs
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 try:
     import psutil
@@ -354,14 +355,9 @@ def _detect_gpu(platform: str) -> Tuple[Optional[str], Optional[int]]:
 
 
 def _ml_set(ml_bin: str, key: str, value: str) -> int:
-    try:
-        result = subprocess.run(
-            [ml_bin, "set", "--concern", "hardware", key, value],
-            check=False,
-            **no_console_passthrough_kwargs(),
-        )
-    except OSError:
-        print(f"skip: _ml_set: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
+    result = machine_local_spawn.run_bounded([ml_bin, "set", "--concern", "hardware", key, value])
+    if result is None:
+        print(f"skip: _ml_set: machine-local set {key} failed to launch or outlived its ceiling", file=sys.stderr)
         return 1
     return result.returncode
 

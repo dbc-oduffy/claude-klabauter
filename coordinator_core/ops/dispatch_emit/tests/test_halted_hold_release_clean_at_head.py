@@ -73,7 +73,7 @@ def test_one_dirty_withheld_path_keeps_the_hold(tmp_path):
     halted = _fixture(tmp_path, [A, B])
     _write(tmp_path / B, "head\nwip\n")
     assert _reason(tmp_path, halted) is None
-    assert hr.held_paths(tmp_path, halted, _rid(5, "ffffff"), None) == {A, B}
+    assert hr.held_paths(tmp_path, halted, _rid(5, "ffffff"), None) == {B}
 
 
 def test_untracked_withheld_file_keeps_the_hold(tmp_path):

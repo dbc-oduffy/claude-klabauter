@@ -175,6 +175,26 @@ def test_foreign_doc_without_baseline_is_withheld_not_own(world):
     assert "unreadable" in found[0].detail
 
 
+def test_reminted_run_lands_predecessor_plan_without_baseline_and_foreign_path_still_refuses(world):
+    stem = "2026-11-13-engine-self-heal-under-io-load-69218f"
+    sizing = f"state/sizings/2026-11/{stem}.yaml"
+    plan = "docs/plans/2026-11/2026-11-13-hnd-engine-self-heal-under-io-load-036a40.md"
+    foreign = "docs/plans/2026-11/2026-11-13-peer-plan.md"
+    parked = f"warp-{stem}-20261113T171550-fab132"
+    reminted = f"warp-{stem}-20261113T173919-b01649"
+    for rel, body in ((sizing, f'plan: "{plan}"\n'), (plan, f'---\nsizing_object: "{sizing}"\n---\n'), (foreign, "x\n")):
+        (world.root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (world.root / rel).write_text(body, encoding="utf-8")
+    for rid in (parked, reminted):
+        (world.root / f"state/warp/{rid}").mkdir(parents=True, exist_ok=True)
+        (world.root / f"state/warp/{rid}/run.json").write_text(json.dumps({"sizing_rel": sizing}), encoding="utf-8")
+    world.head(b"")
+    assert hp.unproduced_hunks(world.root, reminted, [plan], own_plan="plan-a") == []
+    found = hp.unproduced_hunks(world.root, reminted, [foreign], own_plan="plan-a")
+    assert [f.reason for f in found] == [hp.FOREIGN_HUNK_UNPRODUCED]
+    assert "NoWriteBaseline" in found[0].detail
+
+
 def _settle(world, monkeypatch, *, non_live: bool, owners=(PEER,)):
     from coordinator_core.ops.dispatch_emit import co_declared_settle
 

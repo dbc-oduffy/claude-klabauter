@@ -91,10 +91,14 @@ _TOP_LEVEL_KEYS = frozenset(
         "schema",
         "source",
         "hand_back_types",
+        "prevet",
     }
 )
 
-_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {"absent_sentinels", "source", "hand_back_types"}
+_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {"absent_sentinels", "source", "hand_back_types", "prevet"}
+
+PREVET_DEFAULT_BATCH_SIZE = 25
+_PREVET_KEYS = frozenset({"model", "batch_size"})
 
 _HANDBACK_TYPE_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
@@ -122,6 +126,15 @@ class Closure:
 
 
 @dataclass(frozen=True)
+class Prevet:
+    """The optional cheap classification pass ahead of triage: ``model`` runs one call per
+    ``batch_size`` rows. A profile without it composes the script it always did."""
+
+    model: str
+    batch_size: int = PREVET_DEFAULT_BATCH_SIZE
+
+
+@dataclass(frozen=True)
 class Profile:
     name: str
     row_id_key: str
@@ -139,6 +152,7 @@ class Profile:
     source: Optional[dict]
     source_path: Path
     hand_back_types: tuple[str, ...] = ()
+    prevet: Optional[Prevet] = None
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +173,8 @@ class ProfileError(ValueError):
     ``verify_floor``, ``closing_floor``, ``closure_block``,
     ``closure_branch_missing``, ``unknown_appetite_preset``,
     ``unoverridable_knob``, ``hand_back_type_collision``,
-    ``refuted_not_revived``, ``not_reproduced_not_handed_back``).
+    ``refuted_not_revived``, ``not_reproduced_not_handed_back``,
+    ``prevet_needs_refute_close``).
     ``node`` is the offending node/knob id when the rule is node-shaped,
     ``None`` for a profile-wide or path-shaped rule
     (the path itself is folded into ``detail``). ``detail`` is the
@@ -256,6 +271,7 @@ def load_profile(name: str, profile_dir: str | Path) -> Profile:
             raise ProfileError("profile_field_type", detail="source, when present, must be {op: str, args?: dict}")
 
     hand_back_types = _build_hand_back_types(doc.get("hand_back_types", []), graph)
+    prevet = _build_prevet(doc.get("prevet"), graph)
 
     return Profile(
         name=name,
@@ -274,7 +290,23 @@ def load_profile(name: str, profile_dir: str | Path) -> Profile:
         source=dict(source_block) if source_block is not None else None,
         source_path=path,
         hand_back_types=hand_back_types,
+        prevet=prevet,
     )
+
+
+def _build_prevet(raw: object, graph: dict[str, "GraphNode"]) -> Optional[Prevet]:
+    """``prevet: {model, batch_size?}`` or absent. Candidates close through a ``refute-close``
+    node, so a graph without one cannot carry the key."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) - _PREVET_KEYS or not isinstance(raw.get("model"), str) or not raw["model"]:
+        raise ProfileError("profile_field_type", detail="prevet must be {model: str, batch_size?: int}")
+    size = raw.get("batch_size", PREVET_DEFAULT_BATCH_SIZE)
+    if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+        raise ProfileError("profile_field_type", detail="prevet.batch_size must be a positive integer")
+    if not any(node.kind == "refute-close" for node in graph.values()):
+        raise ProfileError("prevet_needs_refute_close", detail="prevet closes candidates through a refute-close node; the graph has none")
+    return Prevet(model=raw["model"], batch_size=size)
 
 
 def _build_hand_back_types(raw: object, graph: dict[str, "GraphNode"]) -> tuple[str, ...]:

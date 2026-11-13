@@ -729,7 +729,7 @@ def _run_prep_block(prep_result: dict, landed: dict | None = None, review_paths:
         "\n} catch (e) { console.log(JSON.stringify({error: e.message})); } })();"
     )
     out = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=True,
+        [node, "-"], input=script, capture_output=True, text=True, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     return json.loads(out.stdout)
@@ -960,7 +960,7 @@ def _wave_prompts(product_files, *, whole=True) -> list:
         f"(async () => {{ {body}\n console.log(JSON.stringify(_out)); }})();"
     )
     out = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=True,
+        [node, "-"], input=script, capture_output=True, text=True, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     return json.loads(out.stdout)
@@ -1164,7 +1164,7 @@ def _grouped_prompts(rows, slice_count):
         f"(async () => {{ {body}\n console.log(JSON.stringify(_out)); }})();"
     )
     out = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=True,
+        [node, "-"], input=script, capture_output=True, text=True, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     return [p for p in json.loads(out.stdout) if "Slice" in p]
@@ -1346,7 +1346,7 @@ def _run_in_wave(prep_full: dict, rows: int, *, landed=None, fail_all=False, rat
         "} catch (e) { console.log(JSON.stringify({error: e.message})); } })();"
     )
     out = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=True,
+        [node, "-"], input=script, capture_output=True, text=True, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     return json.loads(out.stdout)
@@ -1450,9 +1450,8 @@ def test_a_busy_prep_in_the_wave_halts_rather_than_merging_a_prep_without_its_sl
 @pytest.mark.parametrize("bad_id", [
     "s0..s4",
     pytest.param("prep-1..5", marks=pytest.mark.cadence),
-    pytest.param("s0+nope", marks=pytest.mark.cadence),
 ])
-def test_a_wave_review_with_a_slice_id_naming_no_real_slice_halts(bad_id):
+def test_a_wave_review_with_a_range_slice_id_halts(bad_id):
     spawned = len(_run_in_wave(_FULL, 9)["spawned"])
     patch = (
         f"(r, n) => (n === 0 || n === {spawned}) ? {{ prep: {{ ...r.prep, slices: [] }}, "
@@ -1462,6 +1461,14 @@ def test_a_wave_review_with_a_slice_id_naming_no_real_slice_halts(bad_id):
     assert result["halted"].startswith(SLICE_ID_UNKNOWN_HALT)
     assert json.dumps(bad_id) in result["halted"]
     assert result["wave"] is None and result["integration"] is None
+
+
+def test_a_wave_review_with_a_slice_id_naming_no_real_slice_is_remapped_to_its_group():
+    patch = "(r, n) => n === 0 ? { prep: { ...r.prep, slices: [] }, review: { ...r.review, slice_id: 's0+nope' } } : r"
+    result = _run_in_wave(_FULL, 9, patch=patch)
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][0]["slice_id"] == "s0+s1"
+    assert any("nope" in a for a in result["prep"]["advisories"])
 
 
 def _bad_group_zero(slices_js, *, also_retry_at=None):
@@ -1544,19 +1551,28 @@ def test_a_grouped_wave_review_naming_every_prepped_slice_id_reaches_a_valid_wav
 @pytest.mark.parametrize(
     "returned",
     [
-        pytest.param("prep-1+…+prep-3", marks=pytest.mark.cadence),
         pytest.param("...e964d43cd66e-prep-1+...e964d43cd66e-prep-2", marks=pytest.mark.cadence),
-        "prep",
         pytest.param("...", marks=pytest.mark.cadence),
-        "prep-9",
-        pytest.param(f"{_RUN_PREP_ID}-1+nope", marks=pytest.mark.cadence),
     ],
 )
-def test_a_wave_review_slice_id_that_is_not_an_exact_prepped_id_halts(returned):
+def test_a_wave_review_slice_id_holding_a_range_halts(returned):
     spawned = len(_run_in_wave(_LONG_PREP, 9)["spawned"])
     result = _run_in_wave(_LONG_PREP, 9, patch=_with_slice_id(returned, redo_at=spawned))
     assert result["halted"].startswith(SLICE_ID_UNKNOWN_HALT)
     assert result["wave"] is None
+
+
+@pytest.mark.parametrize(
+    "returned",
+    [
+        pytest.param("prep-1+…+prep-3", marks=pytest.mark.cadence),
+        "prep",
+        "prep-9",
+        pytest.param(f"{_RUN_PREP_ID}-1+nope", marks=pytest.mark.cadence),
+    ],
+)
+def test_a_wave_review_slice_id_that_is_not_an_exact_prepped_id_is_remapped_to_its_group(returned):
+    _remapped_to_group_zero(_LONG_PREP, returned)
 
 
 _WIDE_SLICES = [_slice_row(f"{_RUN_PREP_ID}-prep-{i + 1}", i) for i in range(3)]
@@ -1585,15 +1601,30 @@ def test_a_joined_reply_with_a_prefix_truncated_tail_binds_the_unclaimed_real_id
     assert result["wave"][0]["slice_id"] == f"{_RUN_PREP_ID}-prep-1+{_RUN_PREP_ID}-prep-2"
 
 
-def test_a_prefix_truncated_token_with_two_unclaimed_candidates_still_halts():
-    result = _run_in_wave(_WIDE_PREP, 9, patch=_with_slice_id(f"{_RUN_PREP_ID}-p"))
-    assert result["halted"].startswith(SLICE_ID_UNKNOWN_HALT)
+def _remapped_to_group_zero(prep, returned):
+    expected = _run_in_wave(prep, 9)["wave"][0]["slice_id"]
+    result = _run_in_wave(prep, 9, patch=_with_slice_id(returned))
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][0]["slice_id"] == expected
+    [advisory] = result["prep"]["advisories"]
+    assert "wave agent 0" in advisory and "not real slice ids" in advisory
+
+
+def test_a_prefix_truncated_token_with_two_unclaimed_candidates_is_remapped_to_its_group():
+    _remapped_to_group_zero(_WIDE_PREP, f"{_RUN_PREP_ID}-p")
 
 
 @pytest.mark.parametrize("returned", ["prep-", "prep-9", f"{_RUN_PREP_ID[:-8]}"])
-def test_an_ambiguous_or_unmatched_slice_id_still_halts(returned):
-    result = _run_in_wave(_WIDE_PREP, 9, patch=_with_slice_id(returned))
-    assert result["halted"].startswith(SLICE_ID_UNKNOWN_HALT)
+def test_an_ambiguous_or_unmatched_slice_id_is_remapped_to_its_group(returned):
+    _remapped_to_group_zero(_WIDE_PREP, returned)
+
+
+def test_a_phantom_prep_2_beside_only_prep_1_is_remapped_not_halted():
+    only_prep_1 = {**_WIDE_PREP, "slices": _WIDE_SLICES[:1]}
+    result = _run_in_wave(only_prep_1, 1, patch=_with_slice_id(f"{_RUN_PREP_ID}-prep-2"))
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][0]["slice_id"] == f"{_RUN_PREP_ID}-prep-1"
+    assert "advisories" in result["prep"]
 
 
 def test_a_wave_brief_tells_agents_to_return_the_exact_listed_ids():
@@ -1895,7 +1926,7 @@ def _run_reverify_block(reply, *, verify_only=False, applied=1, deferred=False, 
         f"(async () => {{ {body}\n console.log(JSON.stringify([await {var}, _n])); }})();"
     )
     out = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=True,
+        [node, "-"], input=script, capture_output=True, text=True, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     result, count = json.loads(out.stdout)

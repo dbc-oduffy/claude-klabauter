@@ -181,3 +181,93 @@ def test_source_ref_lacking_the_mirror_stamp_refuses(monkeypatch, tmp_path, caps
     assert rc == _mod._EXIT_FAIL
     assert reached == []
     assert "deadbeefcafe" in capsys.readouterr().err
+
+
+def _stub_withholding(monkeypatch, verdict):
+    from coordinator_core.percolate import source_preflight
+
+    monkeypatch.setattr(source_preflight, "source_withholding", lambda *a, **k: verdict)
+
+
+def test_withholding_refusal_refuses_before_the_round(monkeypatch, tmp_path, capsys):
+    from coordinator_core.percolate.source_preflight import Withholding
+
+    source = _source_with_origin(tmp_path)
+    _stub_withholding(monkeypatch, Withholding(refusal="overlap on y.py"))
+
+    rc, reached = _run(monkeypatch, tmp_path, source)
+
+    assert rc == _mod._EXIT_FAIL
+    assert reached == []
+    assert "percolate-round: refused: overlap on y.py" in capsys.readouterr().err
+
+
+def test_non_empty_withholding_prints_advisory_and_reaches_the_round_with_the_verdict(monkeypatch, tmp_path, capsys):
+    from coordinator_core.percolate.source_preflight import Withholding
+
+    source = _source_with_origin(tmp_path)
+    verdict = Withholding(paths={"tests/x.py": None, "y.py": "a" * 40}, walk_base="a" * 40)
+    _stub_withholding(monkeypatch, verdict)
+    seen = {}
+    monkeypatch.setattr(_mod, "_cmd_round_default", lambda *a, **k: seen.update(k) or 0)
+    (tmp_path / "root").mkdir(exist_ok=True)
+    monkeypatch.setattr(_mod, "_resolve_percolate_root", lambda override: str(tmp_path / "root"))
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(tmp_path / "dest"))
+    args = _mod._build_parser().parse_args(["alpha", "--percolate-root", str(tmp_path / "root")])
+
+    assert _mod._cmd_round(args) == 0
+
+    assert seen["withholding"] is verdict
+    assert "tests/x.py, y.py" in capsys.readouterr().out
+
+
+def test_round_hands_the_withheld_json_to_publish(monkeypatch, tmp_path):
+    import json
+
+    from coordinator_core.percolate.source_preflight import Withholding
+
+    origin, live = tmp_path / "o.git", tmp_path / "live"
+    _git(["init", "-q", "--bare", str(origin)], tmp_path)
+    _git(["clone", "-q", str(origin), str(live)], tmp_path)
+    _git(["config", "user.email", "t@t.example"], live)
+    _git(["config", "user.name", "t"], live)
+    (live / "a.txt").write_text("a\n", encoding="utf-8")
+    _git(["add", "--", "a.txt"], live)
+    _git(["commit", "-q", "-m", "seed"], live)
+    verdict = Withholding(paths={"y.py": "b" * 40, "tests/x.py": None}, walk_base="b" * 40, toplevel="/src/repo")
+    captured = {}
+
+    class _Stop(Exception):
+        pass
+
+    def run(cmd, **_kwargs):
+        flag = cmd.index("--withheld-paths-json")
+        captured["doc"] = json.loads(Path(cmd[flag + 1]).read_text(encoding="utf-8"))
+        raise _Stop
+
+    monkeypatch.setattr(_mod, "_run", run)
+    args = _mod._build_parser().parse_args(["alpha", "--no-publish"])
+    work = tmp_path / "work"
+    work.mkdir()
+    with pytest.raises(_Stop):
+        _mod._cmd_round_default(args, "alpha", str(tmp_path), str(live), str(live), work, withholding=verdict)
+
+    assert captured["doc"] == {"walk_base": "b" * 40, "toplevel": "/src/repo", "paths": {"y.py": "b" * 40, "tests/x.py": None}}
+
+
+def test_empty_withholding_reaches_the_round_with_no_paths(monkeypatch, tmp_path):
+    from coordinator_core.percolate.source_preflight import Withholding
+
+    source = _source_with_origin(tmp_path)
+    _stub_withholding(monkeypatch, Withholding())
+    seen = {}
+    monkeypatch.setattr(_mod, "_cmd_round_default", lambda *a, **k: seen.update(k) or 0)
+    (tmp_path / "root").mkdir(exist_ok=True)
+    monkeypatch.setattr(_mod, "_resolve_percolate_root", lambda override: str(tmp_path / "root"))
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(tmp_path / "dest"))
+    args = _mod._build_parser().parse_args(["alpha", "--percolate-root", str(tmp_path / "root")])
+
+    assert _mod._cmd_round(args) == 0
+    assert not seen["withholding"].paths

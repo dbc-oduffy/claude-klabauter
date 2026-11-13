@@ -551,8 +551,15 @@ def _machine_local_set(key: str, value: str) -> StepResult:
         current = None
     if current == value:
         return StepResult(INHERITED, f"{key} already {value}")
-    rc, out = run([fwd, "set", key, value], timeout=30)
-    return StepResult(RAN, f"{key}={value}") if rc == 0 else _fail_run("load", rc, out)
+    try:
+        from coordinator_core import machine_local_spawn
+    except ImportError as exc:
+        return _fail("load", f"coordinator_core not importable, cannot set {key}: {exc}", retryable=True)
+    cp = machine_local_spawn.run_bounded([fwd, "set", key, value])
+    if cp is None:
+        return _fail_run("load", SpawnFailure(127), f"machine-local set {key} could not launch or outlived its ceiling")
+    out = (cp.stdout + cp.stderr).strip()
+    return StepResult(RAN, f"{key}={value}") if cp.returncode == 0 else _fail_run("load", cp.returncode, out)
 
 
 def step_orientation(ctx: Ctx) -> StepResult:

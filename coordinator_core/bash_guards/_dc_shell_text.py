@@ -775,6 +775,63 @@ def _heredoc_shell_payloads(cmd: str, depth: int = 0) -> List[str]:
     return payloads + nested
 
 
+def _command_substitutions(text: str) -> List[str]:
+    """Inner text of each `$(...)` (paren-balanced) and `` `...` `` in `text`."""
+    found: List[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text.startswith("$(", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                depth += (text[j] == "(") - (text[j] == ")")
+                j += 1
+            found.append(text[i + 2 : j - 1 if depth == 0 else j])
+            i = j
+        elif text[i] == "`":
+            j = text.find("`", i + 1)
+            if j < 0:
+                break
+            found.append(text[i + 1 : j])
+            i = j + 1
+        else:
+            i += 1
+    return found
+
+
+def _heredoc_expanded_substitutions(cmd: str) -> List[str]:
+    """Command substitutions inside UNQUOTED-delimiter heredoc bodies: the
+    shell expands `<<EOF` bodies, so `$(...)` / backticks there execute even
+    when the body is otherwise data. Quoted delimiters (`<<'EOF'`) yield none."""
+    out: List[str] = []
+    in_hd = False
+    hd_word = ""
+    hd_strip = False
+    expands = False
+    body: List[str] = []
+    for line in cmd.split("\n"):
+        if not in_hd:
+            m = _HEREDOC_INTRO_RE.search(line)
+            if m:
+                seg = m.group(0)
+                hd_strip = len(seg) > 2 and seg[2] == "-"
+                w = seg[3:] if hd_strip else seg[2:]
+                expands = not (w and (w[0] in ("'", '"') or "\\" in w))
+                if w and w[0] in ("'", '"'):
+                    w = w[1:-1]
+                hd_word = w
+                in_hd = True
+                body = []
+        else:
+            check = re.sub(r"^\t+", "", line) if hd_strip else line
+            if check == hd_word:
+                in_hd = False
+                if expands:
+                    out.extend(_command_substitutions("\n".join(body)))
+            else:
+                body.append(line)
+    return [] if in_hd else out
+
+
 _RM_WRAPPER_WORDS = {
     "sudo", "command", "time", "exec", "nice", "nohup", "env",
     "ionice", "timeout", "stdbuf", "which", "type",

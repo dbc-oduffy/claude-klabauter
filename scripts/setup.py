@@ -291,6 +291,7 @@ def _print_child_detail(proc) -> None:
 _require_python_311()  # before the coordinator_core imports below, which need 3.11
 if str(Path(__file__).resolve().parent.parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from coordinator_core import machine_local_spawn  # noqa: E402
 from coordinator_core.install.timeouts import (  # noqa: E402
     PACKAGE_INSTALL_SECS,
     PLATFORM_UNINSTALL_SECS,
@@ -2850,21 +2851,10 @@ def register_claude_klabauter_root(
     # to write any one of them is a registration failure under this contract.
     for key in keys:
         value = key_values[key]
-        try:
-            proc = subprocess.run(
-                machine_local_argv + ["set", key, value],
-                timeout=15,
-                # capture_output: without a std-stream kwarg CPython omits
-                # STARTF_USESTDHANDLES, so the child binds its handles to the
-                # window-less console _NO_CONSOLE allocates and everything it
-                # prints is lost -- including the reason a failure below reports.
-                capture_output=True,
-                text=True,
-                **_NO_CONSOLE,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        proc = machine_local_spawn.run_bounded(machine_local_argv + ["set", key, value])
+        if proc is None:
             print(file=sys.stderr)
-            print(f"ERROR: 'machine-local set {key}' failed to launch: {exc}", file=sys.stderr)
+            print(f"ERROR: 'machine-local set {key}' failed to launch or outlived its ceiling.", file=sys.stderr)
             print(f"  Tried to register: {value}", file=sys.stderr)
             print(f"  Remediation: run manually: machine-local set {key} {value}", file=sys.stderr)
             _exit_flushed(1)
@@ -3097,17 +3087,9 @@ def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
         return
 
     value = "true" if want_warm else "false"
-    try:
-        proc = subprocess.run(
-            machine_local_argv + ["set", "engine.warm.enabled", value],
-            timeout=15,
-            # See register_claude_klabauter_root for why a std-stream kwarg is mandatory here.
-            capture_output=True,
-            text=True,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"[ADVISORY] 'machine-local set engine.warm.enabled' failed to launch: {exc}", file=sys.stderr)
+    proc = machine_local_spawn.run_bounded(machine_local_argv + ["set", "engine.warm.enabled", value])
+    if proc is None:
+        print("[ADVISORY] 'machine-local set engine.warm.enabled' failed to launch or outlived its ceiling.", file=sys.stderr)
         print(f"  Remediation: run manually: machine-local set engine.warm.enabled {value}", file=sys.stderr)
         return
     if proc.returncode != 0:
@@ -4606,20 +4588,9 @@ def install_machine_identity(repo_root: Path, claude_klabauter_root_resolved: Pa
                 "hostname available) — leaving unset; runtime live-fallback will handle it."
             )
             continue
-        try:
-            proc = subprocess.run(
-                machine_local_argv + ["set", key, value],
-                timeout=15,
-                # capture_output: without a std-stream kwarg CPython omits
-                # STARTF_USESTDHANDLES, so the child binds its handles to the
-                # window-less console _NO_CONSOLE allocates and everything it
-                # prints is lost -- including the reason a failure below reports.
-                capture_output=True,
-                text=True,
-                **_NO_CONSOLE,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            print(f"[ADVISORY] '{key}' registry write failed to launch: {exc}", file=sys.stderr)
+        proc = machine_local_spawn.run_bounded(machine_local_argv + ["set", key, value])
+        if proc is None:
+            print(f"[ADVISORY] '{key}' registry write failed to launch or outlived its ceiling.", file=sys.stderr)
             print("  Runtime will fall back to live resolution instead.", file=sys.stderr)
             continue
         if proc.returncode != 0:

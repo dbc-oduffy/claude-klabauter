@@ -53,14 +53,22 @@ def test_evict_stores_bytes_resets_tree_and_leaves_peer(tmp_path):
     assert json.loads((rec / "evicted.json").read_text()) == idx
 
 
-def test_restore_round_trip_byte_identical_and_idempotent(tmp_path):
+def _heads(monkeypatch, heads):
+    """Pin the HEAD blob shas `restore` reads ({path: bytes | None}); the fixture roots are not git repos."""
+    shas = {p: blob_sha(b) for p, b in heads.items() if b is not None}
+    monkeypatch.setattr(hte, "_current_heads", lambda root, paths: shas)
+
+
+def test_restore_round_trip_byte_identical_and_idempotent(tmp_path, monkeypatch):
     root, rec = _setup(tmp_path)
+    _heads(monkeypatch, {"tracked.py": HEAD, "new.py": None})
     hte.evict(root, rec, ["tracked.py", "new.py"], {"tracked.py": HEAD, "new.py": None}, run_id=RUN)
-    first = hte.restore(root, rec)
-    assert first == {"restored": ["new.py", "tracked.py"], "drift": {}}
+    own = ["tracked.py", "new.py"]
+    first = hte.restore(root, rec, owned_paths=own)
+    assert first == {"restored": ["new.py", "tracked.py"], "drift": {}, "refused": {}}
     assert (root / "tracked.py").read_bytes() == BAD
     assert (root / "new.py").read_bytes() == BAD
-    assert hte.restore(root, rec) == {"restored": [], "drift": {}}
+    assert hte.restore(root, rec, owned_paths=own) == {"restored": [], "drift": {}, "refused": {}}
 
 
 def test_restore_refuses_on_drift_and_leaves_tree(tmp_path):
@@ -68,17 +76,80 @@ def test_restore_refuses_on_drift_and_leaves_tree(tmp_path):
     hte.evict(root, rec, ["tracked.py", "new.py"], {"tracked.py": HEAD, "new.py": None}, run_id=RUN)
     (root / "tracked.py").write_bytes(b"someone else\n")
     (root / "new.py").write_bytes(b"peer made this\n")
-    out = hte.restore(root, rec)
+    out = hte.restore(root, rec, owned_paths=["tracked.py", "new.py"])
     assert out == {
         "restored": [],
         "drift": {"tracked.py": "restore-drift", "new.py": "restore-drift"},
+        "refused": {},
     }
     assert (root / "tracked.py").read_bytes() == b"someone else\n"
     assert (root / "new.py").read_bytes() == b"peer made this\n"
 
 
 def test_restore_without_index_is_empty(tmp_path):
-    assert hte.restore(tmp_path, tmp_path / "none") == {"restored": [], "drift": {}}
+    assert hte.restore(tmp_path, tmp_path / "none") == {"restored": [], "drift": {}, "refused": {}}
+
+
+def _git(repo, *args):
+    import os
+    import subprocess
+
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    subprocess.run(["git", *args], cwd=repo, env=env, check=True,
+                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def _evicted_world(tmp_path):
+    """A git repo whose HEAD holds A, an evicted record (bytes WITHHELD, tree reset to A), and the
+    record dir; the working file holds A's bytes, exactly what `restore` requires before it writes."""
+    repo, rec = tmp_path / "repo", tmp_path / "rec"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "t.py").write_bytes(b"a = 1\n")
+    (repo / "u.py").write_bytes(b"u = 1\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "A")
+    withheld = b"a = 1\nfrom x import undefined_name\n"
+    (rec / "withheld-blobs").mkdir(parents=True)
+    (rec / "withheld-blobs" / blob_sha(withheld)).write_bytes(withheld)
+    (rec / "evicted.json").write_text(json.dumps({
+        "t.py": {"blob": blob_sha(withheld), "head": blob_sha(b"a = 1\n")},
+        "u.py": {"blob": blob_sha(withheld), "head": blob_sha(b"u = 1\n")},
+    }))
+    return repo, rec, withheld
+
+
+def _refusals(rec):
+    return {e["path"]: e["reason"] for e in json.loads((rec / "tree-write-refusals.json").read_text())}
+
+
+def test_restore_after_head_moved_past_recorded_head_leaves_tree_and_records(tmp_path):
+    repo, rec, _ = _evicted_world(tmp_path)
+    (repo / "t.py").write_bytes(b"a = 2\n")  # commit B changes the path at HEAD ...
+    _git(repo, "add", "t.py")
+    _git(repo, "commit", "-q", "-m", "B")
+    (repo / "t.py").write_bytes(b"a = 1\n")  # ... while the working file still holds A's bytes
+    out = hte.restore(repo, rec, owned_paths=["t.py", "u.py"], run_id=RUN)
+    assert out["refused"] == {"t.py": "older-than-head"}
+    assert (repo / "t.py").read_bytes() == b"a = 1\n"
+    assert _refusals(rec)["t.py"] == "older-than-head"
+
+
+def test_restore_outside_own_paths_leaves_tree_and_records(tmp_path):
+    repo, rec, withheld = _evicted_world(tmp_path)
+    out = hte.restore(repo, rec, owned_paths=["t.py"], run_id=RUN)
+    assert out["restored"] == ["t.py"] and out["refused"] == {"u.py": "outside-own-paths"}
+    assert (repo / "t.py").read_bytes() == withheld
+    assert (repo / "u.py").read_bytes() == b"u = 1\n"
+    assert _refusals(rec) == {"u.py": "outside-own-paths"}
+
+
+def test_restore_without_owned_paths_writes_nothing(tmp_path):
+    repo, rec, _ = _evicted_world(tmp_path)
+    out = hte.restore(repo, rec)
+    assert out["restored"] == [] and set(out["refused"].values()) == {"outside-own-paths"}
+    assert (repo / "t.py").read_bytes() == b"a = 1\n"
 
 
 def test_evict_skips_absent_path_and_unlisted_paths(tmp_path):
@@ -129,13 +200,14 @@ def test_broken_paths_clean_and_syntax(tmp_path):
     assert "syntax error" in halt_tree_check.broken_paths(repo, ["pkg/a.py"], ["pkg/a.py"])["pkg/a.py"]
 
 
-def test_second_evict_after_reset_keeps_original_entry(tmp_path):
+def test_second_evict_after_reset_keeps_original_entry(tmp_path, monkeypatch):
     root, rec = _setup(tmp_path)
+    _heads(monkeypatch, {"tracked.py": HEAD})
     hte.evict(root, rec, ["tracked.py"], {"tracked.py": HEAD}, run_id=RUN)
     again = hte.evict(root, rec, ["tracked.py"], {"tracked.py": HEAD}, run_id=RUN)
     assert again["tracked.py"]["blob"] == blob_sha(BAD)
     assert (root / "tracked.py").read_bytes() == HEAD
-    assert hte.restore(root, rec)["restored"] == ["tracked.py"]
+    assert hte.restore(root, rec, owned_paths=["tracked.py"])["restored"] == ["tracked.py"]
 
 
 def _lines(edits=None):
@@ -162,16 +234,17 @@ def _shared(tmp_path, baseline_edits, tree_edits, prints_edits=None):
     return root, tmp_path / "rec"
 
 
-def test_unattributed_foreign_hunk_survives_byte_identical_and_own_hunk_reverts(tmp_path):
+def test_unattributed_foreign_hunk_survives_byte_identical_and_own_hunk_reverts(tmp_path, monkeypatch):
     root, rec = _shared(tmp_path, FOREIGN, {**FOREIGN, **OWN})
     before = (root / "p.py").read_bytes()
     refused: dict = {}
     idx = hte.evict(root, rec, ["p.py"], {"p.py": _lines()}, run_id=RUN, refused=refused)
     assert refused == {}
     assert (root / "p.py").read_bytes() == _lines(FOREIGN)
-    assert idx["p.py"] == {"blob": blob_sha(before), "head": blob_sha(_lines(FOREIGN))}
+    assert idx["p.py"] == {"blob": blob_sha(before), "head": blob_sha(_lines(FOREIGN)), "base": blob_sha(_lines())}
     assert (rec / "withheld-blobs" / blob_sha(before)).read_bytes() == before
-    assert hte.restore(root, rec) == {"restored": ["p.py"], "drift": {}}
+    _heads(monkeypatch, {"p.py": _lines()})
+    assert hte.restore(root, rec, owned_paths=["p.py"]) == {"restored": ["p.py"], "drift": {}, "refused": {}}
     assert (root / "p.py").read_bytes() == before
 
 
@@ -226,3 +299,37 @@ def test_coarse_diff_not_wholly_own_refuses(tmp_path, monkeypatch):
     root, rec = _shared(tmp_path, FOREIGN, {**FOREIGN, **OWN})
     monkeypatch.setattr(rhc, "exceeds_match_bound", lambda *a, **k: True)
     _refused_untouched(root, rec)
+
+
+def _declare(repo, run_id, paths):
+    """Give `run_id` a record whose manifest declares `paths` (the run's write set)."""
+    rdir = repo / "state" / "warp" / run_id
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / "manifest.json").write_text(
+        json.dumps({"rows": [], "doc_writes": [], "review_declared_paths": paths}), encoding="utf-8"
+    )
+
+
+def test_restore_for_run_writes_only_the_record_runs_write_set(tmp_path):
+    repo, rec, withheld = _evicted_world(tmp_path)
+    _declare(repo, RUN, ["t.py"])
+    out = hte.restore_for_run(repo, rec, RUN)
+    assert out["restored"] == ["t.py"] and out["refused"] == {"u.py": "outside-own-paths"}
+    assert (repo / "t.py").read_bytes() == withheld
+    assert (repo / "u.py").read_bytes() == b"u = 1\n"
+    assert _refusals(rec) == {"u.py": "outside-own-paths"}
+
+
+def test_restore_for_run_with_an_unreadable_record_writes_nothing(tmp_path):
+    repo, rec, _ = _evicted_world(tmp_path)
+    out = hte.restore_for_run(repo, rec, RUN)
+    assert out["restored"] == [] and set(out["refused"].values()) == {"outside-own-paths"}
+    assert (repo / "t.py").read_bytes() == b"a = 1\n"
+    assert (repo / "u.py").read_bytes() == b"u = 1\n"
+
+
+def test_repeated_restore_records_each_refusal_once(tmp_path):
+    repo, rec, _ = _evicted_world(tmp_path)
+    hte.restore(repo, rec, owned_paths=["t.py"], run_id=RUN)
+    hte.restore(repo, rec, owned_paths=["t.py"], run_id=RUN)
+    assert len(json.loads((rec / "tree-write-refusals.json").read_text())) == 1
