@@ -140,3 +140,69 @@ def test_unparseable_head_sha_records_unknown_not_empty(tmp_path, monkeypatch):
     assert result.ok, result.stderr
     rows = [json.loads(l) for l in (repo / ACTED_LEDGER_RELPATH).read_text(encoding="utf-8").splitlines()]
     assert rows and all(r["sha"] == "unknown" for r in rows)
+
+
+def _seed_pending(repo: Path, pending: dict) -> Path:
+    path = repo / ".coordinator-local/freshness/atlas-pending.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(pending), encoding="utf-8")
+    return path
+
+
+def _head(repo: Path) -> str:
+    return _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+
+def test_pending_delta_lands_in_next_commit_and_is_cleared(tmp_path):
+    repo = _repo_with_atlas(tmp_path)
+    pending = _seed_pending(repo, {_PAGE: 1})
+    _write(repo, _NEW, "x = 1\n")
+    result = git_native.commit_scoped([_NEW], _msg(tmp_path), repo)
+    assert result.ok, result.stderr
+    assert "files: 9" in _git(["show", f"HEAD:{_PAGE}"], repo).stdout
+    assert json.loads(pending.read_text(encoding="utf-8")) == {}
+
+
+def test_pending_page_untouched_by_paths_is_repaired_by_the_fold(tmp_path):
+    repo = _repo_with_atlas(tmp_path)
+    _seed_pending(repo, {_PAGE: 2})
+    _write(repo, "notes.txt", "n\n")
+    result = git_native.commit_scoped(["notes.txt"], _msg(tmp_path), repo)
+    assert result.ok, result.stderr
+    assert "files: 9" in _git(["show", f"HEAD:{_PAGE}"], repo).stdout
+
+
+def test_new_sha_is_recorded_as_folded_and_watermark_advances(tmp_path):
+    repo = _repo_with_atlas(tmp_path)
+    parent = _head(repo)
+    wm = repo / ".coordinator-local/freshness/atlas-watermark.json"
+    wm.parent.mkdir(parents=True, exist_ok=True)
+    wm.write_text(json.dumps({"sha": parent, "folded": []}), encoding="utf-8")
+    _write(repo, _NEW, "x = 1\n")
+    result = git_native.commit_scoped([_NEW], _msg(tmp_path), repo)
+    assert result.ok, result.stderr
+    data = json.loads(wm.read_text(encoding="utf-8"))
+    assert data["folded"] == [_head(repo)]
+    assert data["sha"] == _head(repo)
+
+
+def test_failed_commit_keeps_the_pending_entry(tmp_path, monkeypatch):
+    repo = _repo_with_atlas(tmp_path)
+    pending = _seed_pending(repo, {_PAGE: 1})
+    _write(repo, _NEW, "x = 1\n")
+    failed = git_native.GitResult(returncode=-1, stdout="", stderr="boom")
+    monkeypatch.setattr(git_native, "_commit_scoped_unfolded", lambda *a, **k: failed)
+    result = git_native.commit_scoped([_NEW], _msg(tmp_path), repo)
+    assert not result.ok
+    assert json.loads(pending.read_text(encoding="utf-8")) == {_PAGE: 1}
+    assert (repo / _PAGE).read_text(encoding="utf-8") == _PAGE_TEXT
+
+
+def test_dirty_page_keeps_its_pending_entry(tmp_path):
+    repo = _repo_with_atlas(tmp_path)
+    pending = _seed_pending(repo, {_PAGE: 1})
+    _write(repo, _PAGE, _PAGE_TEXT + "peer edit\n")
+    _write(repo, "notes.txt", "n\n")
+    result = git_native.commit_scoped(["notes.txt"], _msg(tmp_path), repo)
+    assert result.ok, result.stderr
+    assert json.loads(pending.read_text(encoding="utf-8")) == {_PAGE: 1}

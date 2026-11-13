@@ -11,6 +11,8 @@ never raises:
     list_sessions(box, run=None) -> {ok, box_id, sessions}
     send(box, to_session, text, from_session=None) -> {ok, reply}
     deliver_grant(box, envelope) -> {ok, reply}   # far box's suite_grant.receive_relayed_grant
+    deliver_revoke(box, envelope) -> {ok, reply}  # far box's relayed_grant_peer.receive_relayed_revoke
+    deliver_key_pin(box, {box_id, key_b64}) -> {ok, reply}  # far box's relayed_grant_peer.receive_key_pin
 
 Negative-spec:
     - ``from_session`` rides both send paths; over ssh it travels signed with the near box id, and
@@ -88,6 +90,32 @@ class FsTransport:
         except Exception as exc:  # noqa: BLE001 -- the seam contract is never-raise
             return _fail(f"fs_deliver_failed:{type(exc).__name__}:{exc}")
 
+    def deliver_revoke(self, box: dict, envelope: dict) -> dict:
+        try:
+            from coordinator_core.group_em import relayed_grant_peer
+
+            root = box.get("root")
+            if not isinstance(root, str) or not root:
+                return _fail("no_root")
+            res = relayed_grant_peer.receive_relayed_revoke(envelope, Path(root))
+            return {"ok": True, "reply": res} if res.get("ok") else _fail(str(res.get("reason")))
+        except Exception as exc:  # noqa: BLE001 -- the seam contract is never-raise
+            return _fail(f"fs_revoke_failed:{type(exc).__name__}:{exc}")
+
+    def deliver_key_pin(self, box: dict, payload: dict) -> dict:
+        try:
+            from coordinator_core.group_em import relayed_grant_peer
+
+            root = box.get("root")
+            if not isinstance(root, str) or not root:
+                return _fail("no_root")
+            res = relayed_grant_peer.receive_key_pin(
+                payload["box_id"], payload["key_b64"], payload["box_id"], Path(root)
+            )
+            return {"ok": True, "reply": res} if res.get("ok") else _fail(str(res.get("reason")))
+        except Exception as exc:  # noqa: BLE001 -- the seam contract is never-raise
+            return _fail(f"fs_keypin_failed:{type(exc).__name__}:{exc}")
+
 
 class SshTransport:
     """ssh box: delegates to ``box_transport``; ``runner`` is injectable so tests spawn nothing."""
@@ -155,6 +183,24 @@ class SshTransport:
         except Exception as exc:  # noqa: BLE001 -- the seam contract is never-raise
             return _fail(f"ssh_deliver_failed:{type(exc).__name__}:{exc}")
 
+    def deliver_revoke(self, box: dict, envelope: dict) -> dict:
+        try:
+            from coordinator_core.group_em import box_transport
+
+            res = box_transport.deliver_revoke(box, envelope, runner=self.runner)
+            return res if res.get("ok") else _fail(str(res.get("reason", "ssh_failed")))
+        except Exception as exc:  # noqa: BLE001 -- the seam contract is never-raise
+            return _fail(f"ssh_revoke_failed:{type(exc).__name__}:{exc}")
+
+    def deliver_key_pin(self, box: dict, payload: dict) -> dict:
+        try:
+            from coordinator_core.group_em import box_transport
+
+            res = box_transport.deliver_key_pin(box, payload, runner=self.runner)
+            return res if res.get("ok") else _fail(str(res.get("reason", "ssh_failed")))
+        except Exception as exc:  # noqa: BLE001 -- the seam contract is never-raise
+            return _fail(f"ssh_keypin_failed:{type(exc).__name__}:{exc}")
+
 
 class UnknownTransport:
     """A box whose ``transport.kind`` is unrecognised: every call replies ``ok=False``."""
@@ -173,6 +219,12 @@ class UnknownTransport:
         return _fail(f"unknown_transport:{self.detail}")
 
     def deliver_grant(self, box: dict, envelope: dict) -> dict:
+        return _fail(f"unknown_transport:{self.detail}")
+
+    def deliver_revoke(self, box: dict, envelope: dict) -> dict:
+        return _fail(f"unknown_transport:{self.detail}")
+
+    def deliver_key_pin(self, box: dict, payload: dict) -> dict:
         return _fail(f"unknown_transport:{self.detail}")
 
 

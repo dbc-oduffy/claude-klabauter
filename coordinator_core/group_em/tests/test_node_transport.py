@@ -183,6 +183,49 @@ def test_ssh_deliver_grant_invokes_far_op_and_maps_the_reply():
     assert down.deliver_grant(box, {})["ok"] is False
 
 
+def test_unknown_transport_revoke_and_key_pin_reply_ok_false():
+    t = node_transport.select({"box_id": "b", "transport": {"kind": "pigeon"}})
+    assert "pigeon" in t.deliver_revoke({"box_id": "b"}, {})["reason"]
+    assert "pigeon" in t.deliver_key_pin({"box_id": "b"}, {})["reason"]
+
+
+def test_ssh_deliver_revoke_and_key_pin_invoke_the_far_ops():
+    box = _ssh_box("h")
+    calls = []
+
+    def run(argv, timeout):
+        calls.append(argv)
+        return _cp(stdout=json.dumps({"ok": True}))
+
+    t = node_transport.select(box, runner=run)
+    assert t.deliver_revoke(box, {"sig": "x"})["ok"] is True
+    assert t.deliver_key_pin(box, {"box_id": "me", "key_b64": "a2V5"})["ok"] is True
+    assert "groupem.suite_grant_revoke_receive" in calls[0][-1]
+    assert "groupem.box_key_pin_from_peer" in calls[1][-1]
+    down = node_transport.select(box, runner=lambda argv, timeout: _cp(returncode=255))
+    assert down.deliver_revoke(box, {})["ok"] is False and down.deliver_key_pin(box, {})["ok"] is False
+
+
+def test_fs_revoke_and_key_pin_call_the_peer_receivers_against_the_box_root(tmp_path, monkeypatch):
+    from coordinator_core.group_em import relayed_grant_peer
+
+    seen = {}
+    monkeypatch.setattr(
+        relayed_grant_peer, "receive_relayed_revoke", lambda env, home: seen.update(revoke=(env, home)) or {"ok": True}
+    )
+    monkeypatch.setattr(
+        relayed_grant_peer,
+        "receive_key_pin",
+        lambda box_id, key, peer, home: seen.update(pin=(box_id, key, peer, home)) or {"ok": False, "reason": "pin_exists"},
+    )
+    box = {"box_id": "b", "root": str(tmp_path)}
+    t = node_transport.select(box)
+    assert t.deliver_revoke(box, {"sig": "x"})["ok"] is True and seen["revoke"] == ({"sig": "x"}, tmp_path)
+    assert t.deliver_key_pin(box, {"box_id": "me", "key_b64": "k"}) == {"ok": False, "reason": "pin_exists"}
+    assert seen["pin"] == ("me", "k", "me", tmp_path)
+    assert t.deliver_revoke({"box_id": "b"}, {})["reason"] == "no_root"
+
+
 def test_fs_deliver_grant_calls_receive_against_the_box_root(tmp_path, monkeypatch):
     from coordinator_core.group_em import suite_grant
 

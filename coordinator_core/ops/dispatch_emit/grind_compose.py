@@ -204,6 +204,38 @@ def dedupe_flip_route(routing: Mapping[str, dict], triage_node_id: str) -> Optio
     return action[1] if action[0] == "node" else None
 
 
+def _reaches_fix(routing: Mapping[str, dict], start: str) -> bool:
+    """Whether ``start`` is a fix node or reaches one through ``edges`` or ``on_fail``. Twin: ``_reachesFix``."""
+    seen: set[str] = set()
+    stack = [start]
+    while stack:
+        node_id = stack.pop()
+        node = routing.get(node_id)
+        if node is None or node_id in seen:
+            continue
+        seen.add(node_id)
+        if node["kind"] == "fix":
+            return True
+        stack.extend((*node["edges"].values(), *([node["on_fail"]] if node.get("on_fail") else [])))
+    return False
+
+
+def covered_retire_route(routing: Mapping[str, dict], triage_node_id: str, current_node: Optional[str]) -> Optional[str]:
+    """The node an already-covered row closes at: the ``dedupe`` route, else the ``discard`` route, whichever
+    is a node other than ``current_node`` that reaches no fix node; None when neither qualifies.
+    Twin: ``routeCoveredRetire`` in the emitted script."""
+    for verdict in ("dedupe", "discard"):
+        action = route_after_triage(routing, triage_node_id, verdict, None, "")
+        if action[0] == "node" and action[1] != current_node and not _reaches_fix(routing, action[1]):
+            return action[1]
+    return None
+
+
+def _covered_path(covered_by: Any) -> str:
+    """The file a ``path:line`` covered_by cites. Twin: ``_coveredPath``."""
+    return re.sub(r":\d+(?:[-:]\d+)*$", "", _norm_rel(str(covered_by).strip()))
+
+
 def pre_fix_verify_nodes(routing: Mapping[str, dict]) -> frozenset[str]:
     """Verify nodes no fix node can reach through ``edges`` or ``on_fail``: they run before any fix,
     so they judge routing (pass leads to fix, refute-close, a hand-back), not the fix.
@@ -379,6 +411,7 @@ _UNDO_FAILED_TAIL = " -- the row stays open; restore the touched files by hand"
 _NOT_UNDONE_PEER = "not undone (a peer's edits sit on these paths)"
 _NOT_UNDONE_OUT_OF_ROOT = "not undone (outside repo_root, left dirty)"
 _HISTORICAL_UNDO_FAILED_HEAD = "undo-failed: the fix wrote historical records and its edits may remain in the tree"
+_COVERED_UNDO_FAILED_HEAD = "undo-failed: the row was found already covered and its fix edits may remain in the tree"
 
 
 def _norm_rel(path: Any) -> str:
@@ -787,11 +820,17 @@ def run_admission(
                     entry["sha"] = row.sha
 
     def _pending_row(batch: _Batch) -> Optional[Row]:
+        """First live row, rows waiting at a refute-close node last so one close call covers every arrival."""
+        waiting: Optional[Row] = None
         for rid in batch.row_ids:
             row = rows[rid]
-            if not row.done and row.node is not None:
+            if row.done or row.node is None:
+                continue
+            if routing[row.node]["kind"] != "refute-close":
                 return row
-        return None
+            if waiting is None:
+                waiting = row
+        return waiting
 
     def _batch_done(batch: _Batch) -> bool:
         return all(rows[rid].done for rid in batch.row_ids)
@@ -952,6 +991,41 @@ def run_admission(
             if not row.done and row.node in close_node_ids:
                 _handback(row, "stage-dead", "refute-close left this proposal unresolved (absent from confirmed/refuted/stale)")
 
+    def _undo_written(row: Row, head: str = _COVERED_UNDO_FAILED_HEAD) -> bool:
+        """Put back this row's writes through the undo-only verify call; False once handed back stage-dead."""
+        if undo_paths_sink is not None:
+            undo_paths_sink.append({"row": row.row_id, "paths": _undo_paths(row)})
+        undo_result = (_record_call("verify", row.row_id) or {}).get("undo") or {}
+        if undo_result.get("outcome") != "undone":
+            _handback(row, "stage-dead", _undo_failed_reason(undo_result, head))
+            return False
+        return True
+
+    def _covered_is_own_edit(row: Row, covered: str) -> bool:
+        """A covered_by naming a file this row's fix wrote is not prior coverage. Twin: ``_coveredIsOwnEdit``."""
+        written = {_norm_rel(p) for p in _union(row.touched_files if row.fix_reported else [], row.created_files)}
+        return _covered_path(covered) in written
+
+    def _flip_covered(row: Row, covered: str, route: str) -> None:
+        row.dedupe_flipped = True
+        row.verify_retried = True
+        row.origin = "triage:dedupe"
+        row.evidence = f"already covered at {covered}"
+        row.node = route
+
+    def _close_covered(row: Row, covered: str) -> None:
+        """Close an already-covered row after the fix stage at a retire node that never re-enters fix, undoing
+        the fix's edits first; no retire route hands it back needs-judgment. Twin: ``_closeCovered``."""
+        route = covered_retire_route(routing, triage_node_id, row.node)
+        if route is None:
+            _handback_row(row, "needs-judgment", f"already covered at {covered}; no retire route in this profile avoids fix")
+            return
+        if _has_writes(row) and _undo_paths(row):
+            if not _undo_written(row):
+                return
+        row.touched_files, row.created_files, row.removed_files, row.fix_reported = [], [], [], False
+        _flip_covered(row, covered, route)
+
     def _fix_row(row: Row) -> None:
         overlap = [p for p in row.declared_files if p in run_dirty]
         if overlap:
@@ -1012,16 +1086,19 @@ def run_admission(
         written = [*(result.get("touched_files") or []), *(result.get("created_files") or [])]
         historical = _historical_paths(written)
         if historical:
-            if undo_paths_sink is not None:
-                undo_paths_sink.append({"row": row.row_id, "paths": _undo_paths(row)})
-            undo_result = (_record_call("verify", row.row_id) or {}).get("undo") or {}
-            if undo_result.get("outcome") != "undone":
-                _handback(row, "stage-dead", _undo_failed_reason(undo_result, _HISTORICAL_UNDO_FAILED_HEAD))
+            if not _undo_written(row, _HISTORICAL_UNDO_FAILED_HEAD):
                 return
             _handback(
                 row, "needs-judgment",
                 "fix wrote historical records, undone: " + ", ".join(historical),
             )
+            return
+        covered = result.get("covered_by")
+        if (
+            outcome == "done" and covered and not row.dedupe_flipped and row.origin != "triage:dedupe"
+            and not _covered_is_own_edit(row, covered)
+        ):
+            _close_covered(row, covered)
             return
         if _entangle(row, written):
             return
@@ -1034,17 +1111,19 @@ def run_admission(
         result = _record_call("verify", row.row_id) or {}
         outcome = result.get("outcome")
         if outcome == "fail":
-            flip_to = dedupe_flip_route(routing, triage_node_id)
-            if (
-                result.get("covered_by") and row.node in pre_fix_verify and not row.dedupe_flipped
-                and row.origin != "triage:dedupe" and flip_to is not None
-            ):
-                row.dedupe_flipped = True
-                row.verify_retried = True
-                row.origin = "triage:dedupe"
-                row.evidence = f"already covered at {result['covered_by']}"
-                row.node = flip_to
-                return
+            covered = result.get("covered_by")
+            if covered and not row.dedupe_flipped and row.origin != "triage:dedupe":
+                if row.node in pre_fix_verify:
+                    flip_to = covered_retire_route(routing, triage_node_id, row.node)
+                    if flip_to is not None:
+                        _flip_covered(row, covered, flip_to)
+                        return
+                    if dedupe_flip_route(routing, triage_node_id) is not None:
+                        _handback(row, "needs-judgment", f"already covered at {covered}; no retire route in this profile avoids fix")
+                        return
+                elif not row.verify_retried and not _covered_is_own_edit(row, covered):
+                    _close_covered(row, covered)
+                    return
             if not row.verify_retried:
                 row.verify_retried = True
                 row.verify_feedback = result.get("reason", "")
@@ -1416,6 +1495,19 @@ _ROUTING_HELPERS = (
     "  const target = ROUTING[TRIAGE_NODE_ID].edges[verdict];\n"
     "  if (!target || !ROUTING[target]) return { kind: 'handback', value: target || 'stage-dead' };\n"
     "  return { kind: 'node', value: target };\n"
+    "}\n"
+    "function _reachesFix(id, seen) {\n"
+    "  const n = ROUTING[id];\n"
+    "  if (!n || seen.has(id)) return false;\n"
+    "  seen.add(id);\n"
+    "  return n.kind === 'fix' || Object.values(n.edges).concat(n.on_fail || []).some((t) => _reachesFix(t, seen));\n"
+    "}\n"
+    "function routeCoveredRetire(cur) {\n"
+    "  for (const v of ['dedupe', 'discard']) {\n"
+    "    const r = routeAfterTriage(v, null, '');\n"
+    "    if (r.kind === 'node' && r.value !== cur && !_reachesFix(r.value, new Set())) return r.value;\n"
+    "  }\n"
+    "  return null;\n"
     "}\n"
     "function followEdge(nodeId, outcome, row) {\n"
     "  const node = ROUTING[nodeId];\n"
@@ -2223,6 +2315,21 @@ def compose_grind_script(
         "  if (route.kind === 'handback') { await _handBackRow(rowId, route.value, reason); }\n"
         "  else { row.node = route.value; }\n"
         "}\n"
+        "function _coveredIsOwnEdit(row, cb) {\n"
+        "  const _p = _normRel(String(cb).trim()).replace(/:\\d+(?:[-:]\\d+)*$/, '');\n"
+        "  return (row.fixReported ? row.touchedFiles : []).concat(row.createdFiles || []).some((w) => _normRel(w) === _p);\n"
+        "}\n"
+        "async function _closeCovered(row, rowId, cb) {\n"
+        "  const _route = routeCoveredRetire(row.node);\n"
+        "  if (_route === null) { await _handBackRow(rowId, 'needs-judgment', 'already covered at ' + cb + '; no retire route in this profile avoids fix'); return; }\n"
+        "  if (_hasWrites(row) && _undoPaths(row).length > 0) {\n"
+        "    row.undoReason = 'the row is already covered at ' + cb;\n"
+        "    const _undone = ((await _issue(row.batchId, rowId, () => withLock(_lockKeysFor(row, rowId), async () => _rejectUndoCall(row)))) || {}).undo || {};\n"
+        "    if (_undone.outcome !== 'undone') { row.done = true; _handBack(rowId, 'stage-dead', '" + _COVERED_UNDO_FAILED_HEAD + "' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + '" + _UNDO_FAILED_TAIL + "'); return; }\n"
+        "  }\n"
+        "  row.touchedFiles = []; row.createdFiles = []; row.removedFiles = []; row.fixReported = false;\n"
+        "  row.dedupeFlipped = true; row.verifyRetried = true; row.origin = 'triage:dedupe'; row.evidence = 'already covered at ' + cb; row.node = _route;\n"
+        "}\n"
         "async function _undoUnfinished() {\n"
         "  if (!_grindErr) return;\n"
         "  const _msg = _grindErr && _grindErr.message ? _grindErr.message : String(_grindErr);\n"
@@ -2365,8 +2472,14 @@ def compose_grind_script(
 
     lines.append(
         "function _pendingRow(batch) {\n"
-        "  for (const r of batch.rows) { const row = _rows[r]; if (!row.done && row.node) return r; }\n"
-        "  return null;\n"
+        "  let waiting = null;\n"
+        "  for (const r of batch.rows) {\n"
+        "    const row = _rows[r];\n"
+        "    if (row.done || !row.node) continue;\n"
+        "    if (ROUTING[row.node].kind !== 'refute-close') return r;\n"
+        "    if (waiting === null) waiting = r;\n"
+        "  }\n"
+        "  return waiting;\n"
         "}\n"
         "function _batchDone(batch) { return batch.rows.every((r) => _rows[r].done); }"
     )
@@ -2543,6 +2656,7 @@ def compose_grind_script(
         "    if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', '" + _HISTORICAL_UNDO_FAILED_HEAD + "' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + '" + _UNDO_FAILED_TAIL + "'); return; }\n"
         "    _handBack(rowId, 'needs-judgment', 'fix wrote historical records, undone: ' + _historical.join(', ')); return;\n"
         "  }\n"
+        "  if (outcome === 'done' && result.covered_by && !row.dedupeFlipped && row.origin !== 'triage:dedupe' && !_coveredIsOwnEdit(row, result.covered_by)) { await _closeCovered(row, rowId, result.covered_by); return; }\n"
         "  if (await _entangle(rowId, _written)) return;\n"
         "  if (outcome === 'NOT_REPRODUCED') { _byTriageCheck.fix_not_reproduced += 1; }\n"
         "  row.fixNode = _priorNode;\n"
@@ -2557,15 +2671,18 @@ def compose_grind_script(
         "  const result = await _issue(row.batchId, rowId, () => withLock(lockKeys, async () => _verifyCall(row)));\n"
         "  if (result.outcome === 'fail') {\n"
         "    if (result.covered_by && VERIFY_PRE_FIX.includes(row.node) && !row.dedupeFlipped && row.origin !== 'triage:dedupe') {\n"
-        "      const _flip = routeAfterTriage('dedupe', null, '');\n"
-        "      if (_flip.kind === 'node') {\n"
+        "      const _flip = routeCoveredRetire(row.node);\n"
+        "      if (_flip !== null) {\n"
         "        row.dedupeFlipped = true;\n"
         "        row.verifyRetried = true;\n"
         "        row.origin = 'triage:dedupe';\n"
         "        row.evidence = 'already covered at ' + result.covered_by;\n"
-        "        row.node = _flip.value;\n"
+        "        row.node = _flip;\n"
         "        return;\n"
         "      }\n"
+        "      if (routeAfterTriage('dedupe', null, '').kind === 'node') { row.done = true; _handBack(rowId, 'needs-judgment', 'already covered at ' + result.covered_by + '; no retire route in this profile avoids fix'); return; }\n"
+        "    } else if (result.covered_by && !VERIFY_PRE_FIX.includes(row.node) && !row.dedupeFlipped && row.origin !== 'triage:dedupe' && !row.verifyRetried && !_coveredIsOwnEdit(row, result.covered_by)) {\n"
+        "      await _closeCovered(row, rowId, result.covered_by); return;\n"
         "    }\n"
         "    if (!row.verifyRetried) {\n"
         "      row.verifyRetried = true;\n"

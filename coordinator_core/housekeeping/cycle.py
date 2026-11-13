@@ -299,7 +299,8 @@ def run(
     changes `exit_code`), `scratch_swept` (`sweep_repo_scratch` result dict, or
     None) and `scratch_sweep_error` (str or None; non-fatal like the prune leg;
     schedule: every housekeeping cycle, one bounded batch of DEFAULT_BATCH
-    removals), `cascade_redrive` (`redrive_terminal_divergences`
+    removals), `atlas_catchup` (`CatchUpResult` as a dict, or None) and
+    `atlas_catchup_error` (str or None; non-fatal, never changes `exit_code`), `cascade_redrive` (`redrive_terminal_divergences`
     result; a raising redrive lands in its `errors`, never fails the cycle),
     `landed_parked` (plans parked at landed past the day threshold), and
     `invariant` (every run, close or not): `archive_nonterminal`
@@ -553,6 +554,17 @@ def run(
     except Exception as exc:  # noqa: BLE001 -- the scratch sweep never fails the cycle
         scratch_sweep_error = f"{type(exc).__name__}: {exc}"
 
+    atlas_catchup: Optional[dict] = None
+    atlas_catchup_error: Optional[str] = None
+    try:
+        import dataclasses
+        import importlib
+
+        catchup_mod = importlib.import_module("coordinator_core.cartography.atlas_catchup")
+        atlas_catchup = dataclasses.asdict(catchup_mod.catch_up(worktree_root))
+    except Exception as exc:  # noqa: BLE001 -- the atlas catch-up never fails the cycle
+        atlas_catchup_error = f"{type(exc).__name__}: {exc}"
+
     # Persist for the next cycle, ONLY when the on-disk cache would differ.
     # Best-effort by construction: a cache that cannot be written costs the
     # next cycle a rebuild, nothing else.
@@ -591,6 +603,8 @@ def run(
         "emitted_prune_error": emitted_prune_error,
         "scratch_swept": scratch_swept,
         "scratch_sweep_error": scratch_sweep_error,
+        "atlas_catchup": atlas_catchup,
+        "atlas_catchup_error": atlas_catchup_error,
         "live_read_count": live_result.read_count,
         "scan_gaps": live_result.scan_gaps,
         "index_rebuilt": index_rebuilt,

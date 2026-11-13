@@ -4513,7 +4513,7 @@ def _fold_atlas_freshness(
     off HEAD's tree spine in-process. Any failure records a best-effort `fold_error` and returns
     the original paths with nothing written.
     """
-    from coordinator_core.cartography import atlas_freshness as af
+    from coordinator_core.cartography import atlas_catchup, atlas_freshness as af
 
     written: List[str] = []
     prior: Dict[str, bytes] = {}
@@ -4522,6 +4522,12 @@ def _fold_atlas_freshness(
         head = _head_blobs(root, path_list)
         added = [p for p in path_list if head.get(p) is None and p not in deleted]
         plans, facts = af.plan_repair(root, path_list, deleted, added)
+        pending = atlas_catchup.read_pending(root)
+        if pending:
+            merged = {pl.page_relpath: pl.files_delta for pl in plans}
+            for page, delta in pending.items():
+                merged[page] = merged.get(page, 0) + delta
+            plans = [af.RepairPlan(pg, d) for pg, d in merged.items()]
         for plan in plans:
             try:
                 prior[plan.page_relpath] = (root / plan.page_relpath).read_bytes()
@@ -4570,6 +4576,7 @@ def commit_scoped(
     root = Path(cwd)
     prior: Dict[str, bytes] = {}
     facts: list = []
+    parent_sha = _git_state_head_sha(root) or ""
     if path_list:
         path_list, prior, facts = _fold_atlas_freshness(root, path_list)
     try:
@@ -4580,13 +4587,20 @@ def commit_scoped(
     if not result.ok:
         _restore_pages(root, prior, list(prior))
         return result
+    head = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
     if facts:
         try:
             from coordinator_core.cartography import atlas_freshness as af
 
-            head = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
             af.record_acted(root, facts, head if len(head) == 40 else "unknown")
         except Exception:  # noqa: BLE001 -- the ledger is advisory; the commit already landed
+            pass
+    if len(head) == 40:
+        try:
+            from coordinator_core.cartography import atlas_catchup
+
+            atlas_catchup.settle_commit(root, list(prior), head, parent_sha)
+        except Exception:  # noqa: BLE001 -- the commit already landed; catch-up re-derives from the range
             pass
     return result
 

@@ -11,6 +11,8 @@ engine's own stack frame, so the fixture is identical whatever routing the engin
 A verifier at a discard node passes (discarding a covered row is correct); at any other pre-fix node it
 reports the row covered. ``agent_calls_per_covered_row`` counts only calls whose unit is a covered row
 (fix, verify), never the batch-shared triage, refute-close, commit, adjudicate or sweep calls.
+The post-fix covered close issues one undo-only verify call, so ``covered_row_verify_calls`` is not zero after
+the closing verify; rows at a refute-close node wait for the batch, so one close call settles every covered row.
 """
 from __future__ import annotations
 
@@ -47,7 +49,8 @@ class _Budget:
 
 
 def _engine_local(name: str) -> Any:
-    """``name`` from the nearest engine frame above the stub: ``row`` in a row stage, ``proposal_ids`` in the close."""
+    """``name`` from the nearest engine frame above the stub: ``row`` in a row stage, ``proposal_ids`` in the close.
+    Trap: couples to those local names in ``run_admission``; a rename there silently yields None."""
     frame = sys._getframe(2)
     while frame is not None:
         if name in frame.f_locals:

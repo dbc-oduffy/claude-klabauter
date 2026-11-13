@@ -134,3 +134,78 @@ def test_relay_without_engine_replies_through_the_door(tmp_path, door, ok, reaso
     assert reply["ok"] is ok
     if reason:
         assert reply["reason"] == reason
+
+
+def revoke_env(**over):
+    env = {"kind": "suite-grant-revoke", "issuer_box_id": "box-a", "issuer_session_id": "iss",
+           "grantee_session_id": "sess1", "grantee_box_id": "box-b", "revoked_at": "2026-11-05T10:30:00Z"}
+    env.update(over)
+    return env
+
+
+def test_parse_accepts_revoke_and_keypin_and_refuses_malformed():
+    relay = load()
+    assert relay.parse_mode("revoke box-b:sess1") == ("revoke", {"grantee": "box-b:sess1"})
+    assert relay.parse_mode("keypin box-a") == ("keypin", {"box_id": "box-a"})
+    for bad in ("revoke", "revoke a b", "revoke a;b", "keypin", "keypin a b", "keypin ../x"):
+        assert relay.parse_mode(bad) is None
+
+
+def test_peer_arg_reads_only_a_leading_peer_pair():
+    relay = load()
+    assert relay.peer_arg(["--peer", "box-a"]) == "box-a"
+    assert relay.peer_arg([]) is None and relay.peer_arg(["--peer"]) is None
+    assert relay.peer_arg(["--other", "box-a"]) is None and relay.peer_arg(["--peer", "../x"]) is None
+
+
+def test_grant_revoke_refuse_an_issuer_that_is_not_the_pinned_peer_and_never_reach_receive():
+    relay, seen = load(), []
+    receive = lambda env: seen.append(env) or {"ok": True}
+    grant_args = relay.parse_mode(CMD)[1]
+    forged = envelope(issuer_box_id="box-evil")
+    assert relay.grant(grant_args, json.dumps(forged), receive=receive, peer="box-a")["reason"] == "issuer_not_peer"
+    forged_revoke = revoke_env(issuer_box_id="box-evil")
+    out = relay.revoke({"grantee": "box-b:sess1"}, json.dumps(forged_revoke), receive=receive, peer="box-a")
+    assert out["reason"] == "issuer_not_peer" and seen == []
+
+
+def test_grant_and_revoke_from_the_pinned_peer_or_with_no_peer_reach_receive():
+    relay, seen = load(), []
+    receive = lambda env: seen.append(env) or {"ok": True}
+    assert relay.grant(relay.parse_mode(CMD)[1], json.dumps(envelope(issuer_box_id="box-a")), receive=receive, peer="box-a")["ok"]
+    assert relay.grant(relay.parse_mode(CMD)[1], json.dumps(envelope()), receive=receive)["ok"]
+    assert relay.revoke({"grantee": "box-b:sess1"}, json.dumps(revoke_env()), receive=receive, peer="box-a")["ok"]
+    assert relay.revoke({"grantee": "box-b:sess1"}, json.dumps(revoke_env()), receive=receive)["ok"]
+    assert len(seen) == 4
+
+
+def test_revoke_refuses_an_argv_grantee_that_disagrees_and_a_non_envelope():
+    relay = load()
+    assert relay.revoke({"grantee": "box-b:other"}, json.dumps(revoke_env()), receive=lambda e: {"ok": True})[
+        "reason"] == "argv_mismatch:grantee"
+    assert relay.revoke({"grantee": "x"}, "not json", receive=lambda e: {"ok": True})["reason"] == "bad_envelope"
+
+
+def test_keypin_fails_closed_without_a_peer_and_refuses_a_claim_for_another_box():
+    relay, seen = load(), []
+    receive = lambda box_id, key, peer: seen.append((box_id, key, peer)) or {"ok": True, "reason": "pinned"}
+    line = json.dumps({"box_id": "box-a", "key_b64": "a2V5"})
+    arg = {"box_id": "box-a"}
+    assert relay.keypin(arg, line, peer=None, receive=receive)["reason"] == "no_peer"
+    assert relay.keypin(arg, line, peer="box-evil", receive=receive)["reason"] == "issuer_not_peer"
+    assert relay.keypin({"box_id": "box-evil"}, line, peer="box-a", receive=receive)["reason"] == "argv_mismatch:box_id"
+    assert relay.keypin(arg, "nope", peer="box-a", receive=receive)["reason"] == "bad_envelope"
+    assert seen == []
+    assert relay.keypin(arg, line, peer="box-a", receive=receive)["ok"] is True
+    assert seen == [("box-a", "a2V5", "box-a")]
+
+
+def test_main_runs_keypin_under_the_forced_command_peer(tmp_path):
+    env = {k: v for k, v in os.environ.items() if k != "SSH_ORIGINAL_COMMAND"}
+    env.update(SSH_ORIGINAL_COMMAND="keypin box-a", COORDINATOR_SETTINGS_HOME=str(tmp_path))
+    line = json.dumps({"box_id": "box-a", "key_b64": "a2V5"}) + "\n"
+    no_peer = subprocess.run([sys.executable, str(RELAY)], env=env, input=line, capture_output=True, text=True, timeout=60)
+    assert json.loads(no_peer.stdout)["reason"] == "no_peer" and no_peer.returncode == 1
+    wrong = subprocess.run([sys.executable, str(RELAY), "--peer", "box-b"], env=env, input=line,
+                           capture_output=True, text=True, timeout=60)
+    assert json.loads(wrong.stdout)["reason"] == "issuer_not_peer" and wrong.returncode == 1

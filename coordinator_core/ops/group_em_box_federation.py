@@ -1,6 +1,7 @@
 """
 coordinator_core.ops.group_em_box_federation -- JSON-RPC "groupem.box_register", "groupem.box_place",
-"groupem.box_send", "groupem.box_roster", "groupem.suite_grant_receive", "groupem.box_key_pin".
+"groupem.box_send", "groupem.box_roster", "groupem.suite_grant_receive", "groupem.box_key_pin",
+"groupem.suite_grant_revoke_receive", "groupem.box_key_pin_from_peer".
 
 Purpose: the engine surface of multi-box group-em. Register a box (settings-home root + capability)
 in this box's registry, place a whole run on a registered box, append one line to a box's inbox, read
@@ -230,6 +231,54 @@ def _groupem_box_key_pin(params: dict, repo_root: Optional[Path] = None) -> dict
                 return {"pinned": False, "box_id": box_id, "reason": "pin_mismatch"}
         box_key.pin_peer_key(box_id, key_b64)
         return {"pinned": True, "box_id": box_id}
+    except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+@register_op("groupem.suite_grant_revoke_receive")
+def _groupem_suite_grant_revoke_receive(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "groupem.suite_grant_revoke_receive" handler: the far end of a relayed grant revoke.
+
+    Params:
+        envelope (dict) -- the signed ``suite-grant-revoke`` the issuing box built; verified against
+            the key pinned for its ``issuer_box_id``.
+
+    Returns:
+        {"ok": True, "reason": "revoked"} | {"ok": False, "reason"} -- a refusal changes nothing.
+    """
+    p = params if isinstance(params, dict) else {}
+    envelope = p.get("envelope")
+    if not isinstance(envelope, dict):
+        return {"error": "envelope (object) is required"}
+    try:
+        from coordinator_core.group_em import relayed_grant_peer
+
+        return relayed_grant_peer.receive_relayed_revoke(envelope)
+    except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+@register_op("groupem.box_key_pin_from_peer")
+def _groupem_box_key_pin_from_peer(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "groupem.box_key_pin_from_peer" handler: pin a member box's own key, first contact only.
+
+    Unlike ``groupem.box_key_pin`` the box must be in this box's verified Unimatrix membership, must
+    equal ``peer`` (the forced command's pinned peer), and must have no pin yet.
+
+    Params:
+        box_id (str), key_b64 (str), peer (str) -- see ``relayed_grant_peer.receive_key_pin``.
+
+    Returns:
+        {"ok": True, "reason": "pinned"} | {"ok": False, "reason"} -- a refusal writes nothing.
+    """
+    p = params if isinstance(params, dict) else {}
+    box_id, key_b64 = _str(p, "box_id"), _str(p, "key_b64")
+    if box_id is None or key_b64 is None:
+        return {"error": "box_id and key_b64 (non-empty str) are required"}
+    try:
+        from coordinator_core.group_em import relayed_grant_peer
+
+        return relayed_grant_peer.receive_key_pin(box_id, key_b64, p.get("peer"))
     except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
         return {"error": f"{type(exc).__name__}: {exc}"}
 

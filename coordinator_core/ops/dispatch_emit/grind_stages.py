@@ -203,6 +203,21 @@ _COVERED_BY_CLAUSE = (
 
 _COVERED_BY_LEDGER_CLAUSE = " When you set `covered_by`, pass `--verdict dedupe` in that command."
 
+_TRIAGE_COVERED_CLAUSE = (
+    "A row whose rule is already stated at HEAD gets a retire verdict (`discard`), never a fix verdict: "
+    "cite the covering `path:line` in `evidence`. "
+)
+
+_FIX_COVERED_CLAUSE = (
+    "Before editing anything, if the row's rule is already stated at HEAD, edit nothing and run no close "
+    "command: report outcome `done`, an empty `touched_files`, and `covered_by` as that artifact's `path:line`. "
+)
+
+_COVERED_BY_HEAD_CLAUSE = (
+    " `covered_by` must cite an artifact committed at HEAD, never a file this row's fix touched or created: "
+    "the fix's own edit is not prior coverage."
+)
+
 _ROUTING_VERIFY_RUNNER_CLAUSE = (
     " Run no tests: return `tests_record` as an empty string and `tests_outcome` as `nothing-to-run`."
 )
@@ -480,6 +495,7 @@ def compose_triage_call(
             "read it before the row body, cite it in `evidence`, and never issue "
             "a fresh park or no-action verdict against it. If the ruled step "
             "cannot be done here, say so against the ruling. "
+            + _TRIAGE_COVERED_CLAUSE +
             "Name every file your triage declares the row touches. Fill `items` "
             "({title, evidence, declared_files} each) only when the row lists "
             "several independent failures; leave it out otherwise. Failures that "
@@ -936,6 +952,7 @@ def compose_fix_call(
             "Never write a historical record -- any path under "
             + ", ".join(f"`{p}`" for p in HISTORICAL_RECORD_PREFIXES)
             + ": a fix that needs one is NEEDS_WIDER_SCOPE. "
+            + _FIX_COVERED_CLAUSE +
             "Otherwise, fix the row, "
             + ("" if targeted_runner else "run its tests, ")
             + "report every file you touched and every file you created -- "
@@ -1029,6 +1046,7 @@ def compose_fix_call(
             "has_tradeoff": {"type": "boolean"},
             "tradeoff": {"type": "string"},
             "ruling_on_tradeoff": {"type": "string", "enum": list(RULING_ON_TRADEOFF)},
+            "covered_by": {"type": "string"},
         },
     }
     return _agent_call(
@@ -1179,7 +1197,9 @@ def compose_verify_agent_call(
         ]
         if targeted_runner:
             parts.append(("lit", _ROUTING_VERIFY_RUNNER_CLAUSE))
-        schema["properties"]["covered_by"] = {"type": "string"}
+    else:
+        parts.append(("lit", _COVERED_BY_CLAUSE + _COVERED_BY_HEAD_CLAUSE))
+    schema["properties"]["covered_by"] = {"type": "string"}
     parts = [*head, *parts, *fail_record]
     return _agent_call(
         _join_prompt_parts(parts),

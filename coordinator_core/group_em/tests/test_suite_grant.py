@@ -289,15 +289,6 @@ def test_absolute_here_follows_the_os_flavour(monkeypatch, flavour, path, expect
     assert suite_grant._absolute_here(path) is expected
 
 
-@pytest.mark.parametrize("grantee", ["box-b:sess1", "box-b:"])
-def test_revoke_of_a_remote_grantee_is_refused_loudly(env, grantee):
-    result = suite_grant.revoke_suite_grant(grantee, directory=env["dir"])
-    assert (result.ok, result.reason) == (False, suite_grant.REVOKE_REMOTE_UNSUPPORTED)
-    from coordinator_core.session import grant_directive
-
-    assert "expires_at" in grant_directive._refusal(result.reason)
-
-
 def test_check_spawns_nothing(env, monkeypatch):
     _issue(env)
 
@@ -393,7 +384,7 @@ def test_relay_far_refusal_is_surfaced_and_writes_nothing(boxes):
 
 
 def test_relay_unknown_box_and_non_holder_are_refused(boxes):
-    assert _relay(boxes, grantee=f"box-nope:{PEER}").reason == suite_grant.BOX_UNKNOWN
+    assert _relay(boxes, grantee=f"box-nope:{PEER}").reason.startswith(suite_grant.BOX_UNKNOWN)
     boxes["mp"].setenv("COORDINATOR_SESSION_ID", PEER)
     assert _relay(boxes).reason == suite_grant.NOT_GROUP_EM
 
@@ -425,7 +416,7 @@ def test_receive_refuses_unsigned_forged_tampered_and_unpinned(boxes):
     good = _envelope(boxes)
     unsigned = {k: v for k, v in good.items() if k != "sig"}
     tampered = {**good, "expires_at": suite_grant._iso(NOW + 7200)}
-    assert _receive(boxes, unsigned)["reason"] == "bad_signature"
+    assert _receive(boxes, unsigned)["reason"].startswith("bad_signature")
     assert _receive(boxes, tampered)["reason"].startswith("bad_signature")
     forged = {**good, "sig": "0" * 64}
     assert _receive(boxes, forged)["reason"].startswith("bad_signature")

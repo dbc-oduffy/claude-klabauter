@@ -331,6 +331,14 @@ def relay_route(two_boxes):
 
     def runner(argv, timeout, stdin_text):
         calls.append(argv)
+        verb = argv[-1].split(" ", 1)[0]
+        if verb == "keypin":
+            payload = json.loads(stdin_text)
+            box_key.pin_peer_key(payload["box_id"], payload["key_b64"], two_boxes["home_b"])
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True, "reason": "pinned"}) + "\n", "")
+        if verb == "revoke":
+            _relayed_file(two_boxes).unlink(missing_ok=True)
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True, "reason": "revoked"}) + "\n", "")
         parsed = relay.parse_mode(argv[-1])
         assert parsed is not None and parsed[0] == "grant"
         reply = relay.grant(
@@ -370,14 +378,112 @@ def test_non_holder_never_reaches_the_relay(relay_route):
     assert not _relayed_file(relay_route).exists()
 
 
-def test_unpinned_issuer_is_refused_on_b_through_the_relay_and_audited(relay_route):
+def _verbs(boxes):
+    return [c[-1].split(" ", 1)[0] for c in boxes["calls"]]
+
+
+def test_unpinned_issuer_is_pinned_over_keypin_then_delivered_once(relay_route):
     _as_box(relay_route, "a", HOLDER)
     target = f"{relay_route['idb']}:{PEER}"
     result = suite_grant.issue_suite_grant(target, "ruling", directory=relay_route["dir_a"])
-    assert result.ok is False
-    assert result.reason.startswith(f"{suite_grant.RELAY_FAILED}:bad_signature:no_pin:expected=none:got=")
+    assert (result.ok, result.reason) == (True, "issued")
+    assert _verbs(relay_route) == ["grant", "keypin", "grant"]
+    assert box_key.pinned_fingerprint(relay_route["ida"], relay_route["home_b"]) == box_key.own_fingerprint(
+        relay_route["home_a"]
+    )
+    assert _relayed_file(relay_route).is_file()
+    assert [line["outcome"] for line in _audit_lines(relay_route)] == ["refused", "accepted"]
+
+
+def test_a_refused_keypin_ends_the_issue_without_a_second_delivery(relay_route):
+    inner = relay_route["runner"]
+
+    def refusing(argv, timeout, stdin_text):
+        if argv[-1].startswith("keypin"):
+            relay_route["calls"].append(argv)
+            return subprocess.CompletedProcess(argv, 1, json.dumps({"ok": False, "reason": "not_member"}) + "\n", "")
+        return inner(argv, timeout, stdin_text)
+
+    relay_route["mp"].setattr(
+        node_transport.SshTransport, "__init__", lambda self, r=None, directory=None: setattr(self, "runner", refusing)
+    )
+    _as_box(relay_route, "a", HOLDER)
+    result = suite_grant.issue_suite_grant(f"{relay_route['idb']}:{PEER}", "ruling", directory=relay_route["dir_a"])
+    assert result.ok is False and result.reason.endswith("keypin_refused:not_member")
+    assert _verbs(relay_route) == ["grant", "keypin"]
     assert not _relayed_file(relay_route).exists()
-    assert _audit_lines(relay_route)[-1]["outcome"] == "refused"
+
+
+def test_a_pin_mismatch_is_never_auto_repinned(relay_route):
+    _as_box(relay_route, "b", PEER)
+    op._groupem_box_key_pin({"box_id": relay_route["ida"], "key_b64": base64.b64encode(b"s" * 32).decode()})
+    _as_box(relay_route, "a", HOLDER)
+    result = suite_grant.issue_suite_grant(f"{relay_route['idb']}:{PEER}", "ruling", directory=relay_route["dir_a"])
+    assert result.ok is False and ":bad_signature:pin_mismatch:" in result.reason
+    assert _verbs(relay_route) == ["grant"]
+
+
+def test_member_box_fallback_resolves_a_box_absent_from_box_json(relay_route, monkeypatch):
+    row = {"box_id": relay_route["idb"], "transport": {"kind": "ssh", "host": "far-box", "relay_key": "/keys/unimatrix"}}
+    seen = []
+    monkeypatch.setattr(
+        suite_grant.member_box,
+        "resolve_member_box",
+        lambda token, home=None, run=None: seen.append(token) or {"ok": True, "box": row},
+    )
+    monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: [row] if seen else [])
+    assert _pin_a_on_b(relay_route)["pinned"] is True
+    _as_box(relay_route, "a", HOLDER)
+    result = suite_grant.issue_suite_grant(f"{relay_route['idb']}:{PEER}", "ruling", directory=relay_route["dir_a"])
+    assert seen == [relay_route["idb"]] and result.ok is True
+
+
+@pytest.mark.parametrize(
+    ("resolved", "expected"),
+    [
+        ({"ok": False, "reason": "BOX_UNKNOWN"}, "BOX_UNKNOWN"),
+        ({"ok": False, "reason": "membership_unverified:no_snapshot"}, "BOX_UNKNOWN:membership_unverified:no_snapshot"),
+    ],
+)
+def test_box_unknown_only_when_membership_also_fails(two_boxes, monkeypatch, resolved, expected):
+    monkeypatch.setattr(suite_grant.member_box, "resolve_member_box", lambda token, home=None, run=None: resolved)
+    result = suite_grant.issue_suite_grant(
+        f"ghost-box:{PEER}", "ruling", directory=two_boxes["home_a"] / "state" / "group-em"
+    )
+    assert (result.ok, result.reason) == (False, expected)
+
+
+def test_remote_revoke_sends_a_signed_envelope_and_the_far_grant_is_removed(relay_route):
+    assert _pin_a_on_b(relay_route)["pinned"] is True
+    _as_box(relay_route, "a", HOLDER)
+    target = f"{relay_route['idb']}:{PEER}"
+    assert suite_grant.issue_suite_grant(target, "ruling", directory=relay_route["dir_a"]).ok is True
+    assert _relayed_file(relay_route).is_file()
+    result = suite_grant.revoke_suite_grant(target, directory=relay_route["dir_a"])
+    assert (result.ok, result.reason) == (True, "revoked")
+    assert relay_route["calls"][-1][-1] == f"revoke {target}"
+    env = result.record
+    assert env["kind"] == suite_grant.REVOKE_KIND and env["grantee_session_id"] == PEER
+    assert {"issuer_box_id", "issuer_session_id", "grantee_box_id", "revoked_at", "sig"} <= set(env)
+    assert box_key.verify(env, relay_route["ida"], relay_route["home_b"]) is True
+    assert not _relayed_file(relay_route).exists()
+
+
+def test_remote_revoke_far_refusal_is_a_named_relay_failure(relay_route):
+    relay_route["mp"].setattr(
+        node_transport.SshTransport,
+        "__init__",
+        lambda self, r=None, directory=None: setattr(
+            self,
+            "runner",
+            lambda argv, timeout, stdin: subprocess.CompletedProcess(
+                argv, 1, json.dumps({"ok": False, "reason": "issuer_mismatch"}) + "\n", ""
+            ),
+        ),
+    )
+    _as_box(relay_route, "a", HOLDER)
+    result = suite_grant.revoke_suite_grant(f"{relay_route['idb']}:{PEER}", directory=relay_route["dir_a"])
+    assert (result.ok, result.reason) == (False, f"{suite_grant.RELAY_FAILED}:issuer_mismatch")
 
 
 def test_machine_a_to_mini_repin_drift_names_both_fingerprints_and_the_remedy(relay_route):
@@ -471,3 +577,69 @@ def test_harness_issuer_sid_is_empty_with_no_harness_ancestor(tmp_path, monkeypa
 
     monkeypatch.setattr(core, "_is_harness_process", lambda name: False)
     assert suite_grant.harness_issuer_sid(start_pid=1, config_dir=tmp_path) == ""
+
+
+def _plant(boxes, envelope):
+    target = _relayed_file(boxes)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"envelope": envelope, "scope_root": str(boxes["repo"])}), encoding="utf-8")
+
+
+def _denied_reason_on_b(boxes, capsys):
+    _as_box(boxes, "b", PEER)
+    assert _load_cli().main(["check"]) != 0
+    captured = capsys.readouterr()
+    assert "basis:" not in captured.out
+    return captured.err
+
+
+def test_check_names_unsigned_for_a_planted_envelope_without_a_sig(two_boxes, capsys):
+    assert _pin_a_on_b(two_boxes)["pinned"] is True
+    _plant(two_boxes, {k: v for k, v in _valid_envelope(two_boxes).items() if k != "sig"})
+    assert "unsigned:" in _denied_reason_on_b(two_boxes, capsys)
+
+
+def test_check_names_forged_for_a_bad_tag_and_for_a_foreign_signing_key(two_boxes, capsys):
+    assert _pin_a_on_b(two_boxes)["pinned"] is True
+    envelope = _valid_envelope(two_boxes)
+    _plant(two_boxes, {**envelope, "sig": "0" * 64})
+    assert "forged:" in _denied_reason_on_b(two_boxes, capsys)
+    body = {k: v for k, v in envelope.items() if k != "sig"}
+    _plant(two_boxes, box_key.sign(body, two_boxes["home_b"]))
+    assert "forged:" in _denied_reason_on_b(two_boxes, capsys)
+
+
+def test_check_names_no_pin_when_the_issuer_key_is_not_pinned(two_boxes, capsys):
+    _plant(two_boxes, _valid_envelope(two_boxes))
+    assert "no_pin:" in _denied_reason_on_b(two_boxes, capsys)
+
+
+def test_check_names_expired_for_a_lapsed_signed_grant(two_boxes, capsys):
+    assert _pin_a_on_b(two_boxes)["pinned"] is True
+    issued = suite_grant.time.time() - 1200
+    body = {k: v for k, v in _valid_envelope(two_boxes).items() if k != "sig"}
+    body.update(issued_at=suite_grant._iso(issued), expires_at=suite_grant._iso(issued + 600))
+    _plant(two_boxes, box_key.sign(body, two_boxes["home_a"]))
+    assert "expired:" in _denied_reason_on_b(two_boxes, capsys)
+
+
+def test_check_names_revoked_when_only_the_tombstone_remains(two_boxes, capsys):
+    assert _pin_a_on_b(two_boxes)["pinned"] is True
+    _plant(two_boxes, _valid_envelope(two_boxes))
+    _relayed_file(two_boxes).unlink()
+    _relayed_file(two_boxes).with_name(f"{PEER}.revoked.json").write_text("{}", encoding="utf-8")
+    assert "revoked:" in _denied_reason_on_b(two_boxes, capsys)
+
+
+def test_check_still_grants_a_valid_relayed_grant_and_stays_spawn_free(two_boxes, capsys):
+    assert _pin_a_on_b(two_boxes)["pinned"] is True
+    _plant(two_boxes, _valid_envelope(two_boxes))
+    _as_box(two_boxes, "b", PEER)
+
+    def _no_spawn(*a, **k):
+        raise AssertionError("check path spawned a process")
+
+    two_boxes["mp"].setattr(subprocess, "run", _no_spawn)
+    two_boxes["mp"].setattr(subprocess, "Popen", _no_spawn)
+    assert _load_cli().main(["check"]) == 0
+    assert "basis: group-em-grant" in capsys.readouterr().out

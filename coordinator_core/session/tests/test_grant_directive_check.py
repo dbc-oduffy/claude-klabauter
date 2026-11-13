@@ -100,6 +100,30 @@ def test_check_spawns_no_subprocess(monkeypatch):
     assert calls == []
 
 
+def test_check_denial_prints_the_relayed_reason(monkeypatch):
+    from coordinator_core.group_em import suite_grant
+
+    monkeypatch.setattr(grant_directive, "check_tier_u_grant", lambda: (False, None))
+    monkeypatch.setattr(suite_grant, "relayed_denial_reason", lambda *a, **k: "forged: do not trust it")
+    code, message = grant_directive.run_grant_directive(["check"])
+    assert code == grant_directive.EXIT_FALSE
+    assert "forged: do not trust it" in message
+
+
+def test_check_without_any_relayed_grant_keeps_the_no_grant_message(monkeypatch):
+    from coordinator_core.group_em import suite_grant
+
+    monkeypatch.setattr(grant_directive, "check_tier_u_grant", lambda: (False, None))
+    monkeypatch.setattr(suite_grant, "relayed_denial_reason", lambda *a, **k: None)
+    code, message = grant_directive.run_grant_directive(["check"])
+    assert (code, message) == (grant_directive.EXIT_FALSE, "check: no Tier-U grant found for this session")
+
+
+def test_box_unknown_remedy_names_unimatrix_membership_and_dead_remedy_is_gone():
+    assert "Unimatrix" in grant_directive._refusal("BOX_UNKNOWN")
+    assert "REVOKE_REMOTE_UNSUPPORTED" not in grant_directive._GROUP_EM_REMEDY
+
+
 def test_unknown_verb_still_usage():
     code, message = grant_directive.run_grant_directive(["bogus"])
     assert code == grant_directive.EXIT_USAGE

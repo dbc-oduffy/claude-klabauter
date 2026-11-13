@@ -10,8 +10,9 @@ dir (grant.py's "a writer writes only its own session" invariant holds). Claude-
 A grant relayed from another box lands at ``suite-grants/relayed/<grantee_sid>.json`` only through
 ``receive_relayed_grant`` (HMAC tag verified under the issuer box's key pinned here) and is
 re-verified on every read; the relayed leg is independent of the local holder.
-A relayed grant cannot be revoked (``group-em-revoke`` touches issuer records only); it lapses at
-``expires_at``. ``receive_relayed_grant`` checks grantee liveness against this box's session registry
+A relayed grant is revoked by a signed ``suite-grant-revoke`` envelope delivered to the grantee box
+(``revoke_suite_grant`` with ``box:session``); it also lapses at ``expires_at``.
+``receive_relayed_grant`` checks grantee liveness against this box's session registry
 even when ``home`` names another box's root.
 
 NEGATIVE SPEC:
@@ -34,6 +35,7 @@ this raises the cost of error, not of intent.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -47,6 +49,7 @@ from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.group_em import (
     box_key,
     box_registry,
+    member_box,
     node_transport,
     nomination,
     remote_identity,
@@ -74,7 +77,8 @@ NOTE_EMPTY = "NOTE_EMPTY"
 BOX_UNKNOWN = "BOX_UNKNOWN"
 RELAY_FAILED = "RELAY_FAILED"
 SCOPE_ROOT_MSYS_MANGLED = "SCOPE_ROOT_MSYS_MANGLED"
-REVOKE_REMOTE_UNSUPPORTED = "REVOKE_REMOTE_UNSUPPORTED"
+REVOKE_KIND = "suite-grant-revoke"
+NO_PIN_REASON = "bad_signature:no_pin"
 SCOPE_ROOT_NOT_ABSOLUTE = "scope_root_not_absolute"
 
 _MSYS_ROOT = re.compile(
@@ -178,6 +182,21 @@ def _home_of(directory: Optional[Path]) -> Optional[Path]:
     return Path(directory).parent.parent if directory is not None else None
 
 
+def _far_box(
+    box_id: str, directory: Optional[Path], home: Optional[Path]
+) -> tuple[Optional[dict], str]:
+    """The box.json row for ``box_id``, else the row ``member_box`` materialises from verified membership;
+    ``(None, reason)`` with ``BOX_UNKNOWN`` (plus the membership failure detail, when not a plain miss)."""
+    box = next((b for b in box_registry.read_boxes(directory) if b.get("box_id") == box_id), None)
+    if box is not None:
+        return box, ""
+    resolved = member_box.resolve_member_box(box_id, home=home)
+    if resolved.get("ok") is True:
+        return resolved["box"], ""
+    why = str(resolved.get("reason") or BOX_UNKNOWN)
+    return None, BOX_UNKNOWN if why == BOX_UNKNOWN else f"{BOX_UNKNOWN}:{why}"
+
+
 def _relay_grant(
     sid: str,
     holder: dict,
@@ -195,9 +214,9 @@ def _relay_grant(
         return IssueResult(False, GRANTEE_UNRESOLVED, None)
     if repo and _msys_mangled(repo):
         return IssueResult(False, SCOPE_ROOT_MSYS_MANGLED, None)
-    box = next((b for b in box_registry.read_boxes(directory) if b.get("box_id") == box_id), None)
+    box, unknown = _far_box(box_id, directory, home)
     if box is None:
-        return IssueResult(False, BOX_UNKNOWN, None)
+        return IssueResult(False, unknown, None)
     issued = time.time() if now is None else now
     record = {
         "schema_version": SCHEMA_VERSION,
@@ -216,7 +235,21 @@ def _relay_grant(
     if repo:
         record["scope_root"] = repo
     envelope = box_key.sign(record, home)
-    reply = node_transport.select(box, directory).deliver_grant(box, envelope)
+    transport = node_transport.select(box, directory)
+    reply = transport.deliver_grant(box, envelope)
+    if isinstance(reply, dict) and str(reply.get("reason", "")).startswith(NO_PIN_REASON):
+        pinned = transport.deliver_key_pin(
+            box,
+            {
+                "box_id": box_registry.local_box_id(home),
+                "key_b64": base64.b64encode(box_key.ensure_key(home)).decode("ascii"),
+            },
+        )
+        if isinstance(pinned, dict) and pinned.get("ok") is True:
+            reply = transport.deliver_grant(box, envelope)
+        else:
+            far = pinned.get("reason") if isinstance(pinned, dict) else None
+            return IssueResult(False, f"{RELAY_FAILED}:{NO_PIN_REASON}:keypin_refused:{far or 'no_reply'}", None)
     if not isinstance(reply, dict) or reply.get("ok") is not True:
         far = reply.get("reason") if isinstance(reply, dict) else None
         return IssueResult(False, f"{RELAY_FAILED}:{far or 'no_reply'}", None)
@@ -289,6 +322,7 @@ def receive_relayed_grant(
 
 _FP_MAX = 16
 _SIG_REMEDY = {
+    "unsigned": "the envelope carries no signature: the issuer must re-issue",
     "no_pin": "pin the issuer key here (groupem.box_key_pin)",
     "pin_mismatch": "re-pin the issuer key here (groupem.box_key_pin)",
     "tag_mismatch": "same key, tag differs: tampering or engine version skew",
@@ -466,6 +500,35 @@ def issue_suite_grant(
     return IssueResult(True, "issued", record)
 
 
+def _revoke_remote(
+    sid: str, grantee: str, directory: Optional[Path], home: Optional[Path], now: Optional[float]
+) -> IssueResult:
+    """Sign a revoke for ``box:session`` under this box's key and deliver it; the far box decides."""
+    local = box_registry.local_box_id(home)
+    box_id, grantee_sid = remote_identity.parse_key(grantee, local)
+    if not _safe_sid(grantee_sid):
+        return IssueResult(False, GRANTEE_UNRESOLVED, None)
+    box, unknown = _far_box(box_id, directory, home)
+    if box is None:
+        return IssueResult(False, unknown, None)
+    envelope = box_key.sign(
+        {
+            "kind": REVOKE_KIND,
+            "issuer_box_id": local,
+            "issuer_session_id": sid,
+            "grantee_session_id": grantee_sid,
+            "grantee_box_id": box_id,
+            "revoked_at": _iso(time.time() if now is None else now),
+        },
+        home,
+    )
+    reply = node_transport.select(box, directory).deliver_revoke(box, envelope)
+    if not isinstance(reply, dict) or reply.get("ok") is not True:
+        far = reply.get("reason") if isinstance(reply, dict) else None
+        return IssueResult(False, f"{RELAY_FAILED}:{far or 'no_reply'}", None)
+    return IssueResult(True, "revoked", envelope)
+
+
 def revoke_suite_grant(
     grantee: str, *, directory: Optional[Path] = None, now: Optional[float] = None
 ) -> IssueResult:
@@ -474,8 +537,12 @@ def revoke_suite_grant(
     sid = core.resolve_session_id()
     if not _safe_sid(sid):
         return IssueResult(False, ISSUER_UNRESOLVED, None)
+    home = _home_of(directory)
     if isinstance(grantee, str) and ":" in grantee:
-        return IssueResult(False, REVOKE_REMOTE_UNSUPPORTED, None)
+        box_id, bare = remote_identity.parse_key(grantee, box_registry.local_box_id(home))
+        if box_id != box_registry.local_box_id(home):
+            return _revoke_remote(sid, grantee, directory, home, now)
+        grantee = bare
     grantee_sid, _row = _resolve_grantee(grantee)
     if grantee_sid is None and _safe_sid(grantee):
         grantee_sid = grantee
@@ -522,20 +589,43 @@ def _check_local(sid, cwd, repo_root, directory, now) -> tuple[bool, Optional[di
     return bool(ok), record
 
 
-def _check_relayed(sid, cwd, repo_root, directory, now) -> tuple[bool, Optional[dict]]:
+_DENIAL_KIND = {
+    "unsigned": "unsigned",
+    "no_pin": "no_pin",
+    "pin_mismatch": "forged",
+    "tag_mismatch": "forged",
+    "unverified_issuer_key": "forged",
+}
+
+RELAYED_DENIAL_REMEDY = {
+    "revoked": "the issuing Group EM withdrew this grant; ask for a new one",
+    "expired": "the grant lapsed; ask the Group EM to re-issue",
+    "unsigned": "the relayed grant carries no signature; ask the Group EM to re-issue",
+    "forged": "the relayed grant fails verification under the pinned issuer key; do not trust it",
+    "no_pin": "no issuer key is pinned for the issuing box; pin it (groupem.box_key_pin)",
+}
+
+
+def _check_relayed(sid, cwd, repo_root, directory, now) -> tuple[bool, Optional[dict], Optional[str]]:
     """The relayed leg: one path, re-verified against the pinned issuer key; a record that fails
-    the tag is never returned, so a denial cannot quote forged content."""
+    the tag is never returned, so a denial cannot quote forged content. The third element names why a
+    present relayed grant is refused (a ``RELAYED_DENIAL_REMEDY`` key, or ``refused``); ``None`` when no
+    relayed grant exists for ``sid`` or it is granted. Reads files only."""
+    from coordinator_core.group_em.relayed_grant_peer import TOMBSTONE_SUFFIX
+
     home = _home_of(directory)
+    path = _relayed_path(sid, directory, home)
     try:
-        body = json.loads(_relayed_path(sid, directory, home).read_text(encoding="utf-8"))
+        body = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return False, None
+        return False, None, "revoked" if path.with_name(f"{sid}{TOMBSTONE_SUFFIX}").exists() else None
     envelope = body.get("envelope") if isinstance(body, dict) else None
     local_scope = body.get("scope_root") if isinstance(body, dict) else None
-    if not isinstance(envelope, dict) or not box_key.verify(
-        envelope, str(envelope.get("issuer_box_id")), home
-    ):
-        return False, None
+    if not isinstance(envelope, dict):
+        return False, None, "forged"
+    why = box_key.diagnose(envelope, str(envelope.get("issuer_box_id")), home)
+    if why is not None:
+        return False, None, _DENIAL_KIND.get(why.get("kind"), "forged")
     record = {**envelope, "scope_root": local_scope}
     current = time.time() if now is None else now
     issued, expires = _parse_iso(envelope.get("issued_at")), _parse_iso(envelope.get("expires_at"))
@@ -557,7 +647,32 @@ def _check_relayed(sid, cwd, repo_root, directory, now) -> tuple[bool, Optional[
         and (env_scope is None or (isinstance(env_scope, str) and _at_or_under(root, env_scope)))
         and session_live(sid, cwd)
     )
-    return bool(ok), record
+    if ok:
+        return True, record, None
+    lapsed = issued is not None and expires is not None and not current < expires
+    return False, record, "expired" if lapsed else "refused"
+
+
+def relayed_denial_reason(
+    cwd: Optional[str] = None,
+    *,
+    session_id: Optional[str] = None,
+    repo_root: Optional[str] = None,
+    directory: Optional[Path] = None,
+    now: Optional[float] = None,
+) -> Optional[str]:
+    """``reason: remedy`` for a relayed grant naming this session that is present but refused (or
+    revoked), else ``None``. Spawn-free; never raises."""
+    try:
+        sid = session_id or core.resolve_session_id(cwd)
+        if not _safe_sid(sid):
+            return None
+        ok, _record, reason = _check_relayed(sid, cwd, repo_root, directory, now)
+        if ok or reason is None:
+            return None
+        return f"{reason}: {RELAYED_DENIAL_REMEDY.get(reason, 'refused')}"
+    except Exception:
+        return None
 
 
 def check_group_em_suite_grant(
@@ -583,7 +698,7 @@ def check_group_em_suite_grant(
             granted, record = False, None
         if granted:
             return True, record
-        relayed_ok, relayed = _check_relayed(sid, cwd, repo_root, directory, now)
+        relayed_ok, relayed, _reason = _check_relayed(sid, cwd, repo_root, directory, now)
         if relayed_ok:
             return True, relayed
         return False, record if record is not None else relayed

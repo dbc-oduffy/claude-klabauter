@@ -54,7 +54,14 @@ DEFAULT_TIMEOUT_S = 30.0
 
 #: Ops this module itself issues; the fallback's ops are admitted by ``policy.remote_safe``.
 ALLOWED_OPS: frozenset = frozenset(
-    {"session.peer_roster", "groupem.box_send", "groupem.suite_grant_receive", "groupem.box_key_pin"}
+    {
+        "session.peer_roster",
+        "groupem.box_send",
+        "groupem.suite_grant_receive",
+        "groupem.box_key_pin",
+        "groupem.suite_grant_revoke_receive",
+        "groupem.box_key_pin_from_peer",
+    }
 )
 RATE_MAX_CALLS = 12
 RATE_WINDOW_S = 60.0
@@ -507,8 +514,40 @@ def _relay_registered(box: dict, host: str, key: str) -> bool:
     return False
 
 
+def _relay_revoke_command(envelope: dict) -> Optional[str]:
+    """The relay's ``revoke <box>:<sid>`` command naming the grantee of the signed revoke ``envelope``."""
+    try:
+        sid, box_id = envelope["grantee_session_id"], envelope["grantee_box_id"]
+    except (KeyError, TypeError):
+        return None
+    if not isinstance(sid, str) or not isinstance(box_id, str) or not sid or not box_id:
+        return None
+    return shlex.join(["revoke", f"{box_id}:{sid}"])
+
+
+def _relay_keypin_command(payload: dict) -> Optional[str]:
+    """The relay's ``keypin <box_id>`` command for ``payload`` (``{box_id, key_b64}``)."""
+    try:
+        box_id, key = payload["box_id"], payload["key_b64"]
+    except (KeyError, TypeError):
+        return None
+    if not isinstance(box_id, str) or not box_id or box_id.startswith("-") or not isinstance(key, str) or not key:
+        return None
+    return shlex.join(["keypin", box_id])
+
+
 def _deliver_grant_relay(box: dict, envelope: dict, runner: Optional[Callable], timeout: float) -> dict:
-    """Hand ``envelope`` to the far box's ``unimatrix-relay`` ``grant`` mode over the box row's ``relay_key``.
+    """Hand ``envelope`` to the far box's ``unimatrix-relay`` ``grant`` mode over the box row's ``relay_key``."""
+    command = _relay_grant_command(envelope)
+    if command is None:
+        return _unknown("grant_args_unrestatable")
+    return _relay_deliver(box, command, json.dumps(envelope, separators=(",", ":")) + "\n", runner, timeout)
+
+
+def _relay_deliver(
+    box: dict, command: str, payload_line: str, runner: Optional[Callable], timeout: float
+) -> dict:
+    """Run one relay-mode ``command`` on the far box over the box row's ``relay_key``, ``payload_line`` on stdin.
 
     The far relay prints the arrival check's JSON reply and exits 0 only when accepted, 1 when it
     refused; any other exit or a non-JSON reply is an unknown, never an acceptance.
@@ -524,9 +563,6 @@ def _deliver_grant_relay(box: dict, envelope: dict, runner: Optional[Callable], 
         return _unknown("ssh_absent")
     if not _relay_registered(box, host, key):
         return _unknown("box_not_registered")
-    command = _relay_grant_command(envelope)
-    if command is None:
-        return _unknown("grant_args_unrestatable")
     connect_s = max(1, math.ceil(min(timeout, CONNECT_TIMEOUT_S)))
     argv = [ssh_bin, "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
             "-o", f"ConnectTimeout={connect_s}", host, command]
@@ -534,9 +570,8 @@ def _deliver_grant_relay(box: dict, envelope: dict, runner: Optional[Callable], 
     nonce, refused = _admit(box_id, timeout)
     if refused:
         return _unknown(refused)
-    line = json.dumps(envelope, separators=(",", ":")) + "\n"
     try:
-        proc = (runner or _run_relay)(argv, timeout, line)
+        proc = (runner or _run_relay)(argv, timeout, payload_line)
     except subprocess.TimeoutExpired:
         return _unknown("ssh_timeout")
     except OSError as exc:
@@ -581,6 +616,61 @@ def deliver_grant(
     if reply.get("ok") is True:
         return res
     return {"ok": False, "reason": str(reply.get("reason", "far_refused"))}
+
+
+def _deliver_via(
+    box: dict,
+    relay_command: Optional[str],
+    payload: dict,
+    op: str,
+    params: dict,
+    runner: Optional[Runner],
+    timeout: float,
+) -> dict:
+    """One far call: the relay mode when the row carries ``relay_key``, else the allowlisted op ``op``."""
+    transport = box.get("transport") if isinstance(box, dict) else None
+    if isinstance(transport, dict) and transport.get("relay_key") is not None:
+        if relay_command is None:
+            return _unknown("relay_args_unrestatable")
+        return _relay_deliver(box, relay_command, json.dumps(payload, separators=(",", ":")) + "\n", runner, timeout)
+    res = _remote_invoke(box, op, params, runner, timeout)
+    if not res["ok"]:
+        return res
+    reply = res["reply"]
+    if reply.get("ok") is True:
+        return res
+    return {"ok": False, "reason": str(reply.get("reason", "far_refused"))}
+
+
+def deliver_revoke(
+    box: dict,
+    envelope: dict,
+    runner: Optional[Runner] = None,
+    timeout: float = DEFAULT_TIMEOUT_S,
+) -> dict:
+    """Hand a signed revoke envelope to the far box (relay ``revoke`` mode, else its
+    ``groupem.suite_grant_revoke_receive`` op); same reply shape as ``deliver_grant``."""
+    return _deliver_via(
+        box, _relay_revoke_command(envelope), envelope,
+        "groupem.suite_grant_revoke_receive", {"envelope": envelope}, runner, timeout,
+    )
+
+
+def deliver_key_pin(
+    box: dict,
+    payload: dict,
+    runner: Optional[Runner] = None,
+    timeout: float = DEFAULT_TIMEOUT_S,
+) -> dict:
+    """Ask the far box to pin ``payload`` (``{box_id, key_b64}``: this box's own key) through its relay
+    ``keypin`` mode, else its ``groupem.box_key_pin_from_peer`` op; same reply shape as ``deliver_grant``.
+
+    The op fallback sends no ``peer``, so the far op refuses ``no_peer``: only the relay mode (whose
+    forced command supplies ``--peer``) can pin."""
+    return _deliver_via(
+        box, _relay_keypin_command(payload), payload,
+        "groupem.box_key_pin_from_peer", dict(payload) if isinstance(payload, dict) else {}, runner, timeout,
+    )
 
 
 def list_remote_sessions(

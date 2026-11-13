@@ -4818,6 +4818,16 @@ class _ServerContext:
             import logging
 
             logging.getLogger(__name__).warning("distill autofire tick failed", exc_info=True)
+        try:
+            import importlib
+
+            catchup = importlib.import_module("coordinator_core.cartography.atlas_catchup")
+            if catchup.on_idle_tick(self.served_repos()):
+                idle.mark_invocation()
+        except Exception:  # noqa: BLE001 -- no atlas catch-up failure may escape the tick
+            import logging
+
+            logging.getLogger(__name__).warning("atlas catch-up tick failed", exc_info=True)
         from coordinator_core.session_ceremonies import retry_pending_notifications
 
         if retry_pending_notifications():

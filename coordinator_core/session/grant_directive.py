@@ -101,12 +101,9 @@ _GROUP_EM_REMEDY = {
     "GRANTEE_NOT_LIVE": "grantee session is not live; name a live session",
     "TTL_OUT_OF_RANGE": "--ttl-minutes must be 1..720",
     "NOTE_EMPTY": "the note is the ruling, verbatim; pass it non-empty",
-    "BOX_UNKNOWN": "no registered box has that id; register the peer box first",
+    "BOX_UNKNOWN": "that box is not in the signed Unimatrix membership roster (nor registered); join it to the Unimatrix first",
     "RELAY_FAILED": "the grantee box did not accept the grant",
     "SCOPE_ROOT_MSYS_MANGLED": "Git Bash rewrote --repo; re-run with MSYS_NO_PATHCONV=1",
-    "REVOKE_REMOTE_UNSUPPORTED": (
-        "a relayed grant cannot be withdrawn from here; it lapses at its expires_at on the far box"
-    ),
 }
 
 
@@ -230,6 +227,11 @@ def run_grant_directive(args: list[str], *, repo_root: Optional[str] = None) -> 
         granted, record = check_tier_u_grant(repo_root) if repo_root is not None else check_tier_u_grant()
         if granted:
             return EXIT_OK, "basis: grant"
+        from coordinator_core.group_em import suite_grant
+
+        relayed = suite_grant.relayed_denial_reason(repo_root)
+        if relayed is not None:
+            return EXIT_FALSE, f"check: relayed group-em grant refused -- {relayed}"
         if record is None:
             return EXIT_FALSE, "check: no Tier-U grant found for this session"
         resolved_sid = _session_core.resolve_session_id(repo_root)

@@ -387,7 +387,7 @@ def test_each_stage_composed_once_per_row_no_pipeline_over_batches():
     assert "async function _terminalCommitCall(params) {" in script
     assert "async function _commitCall" not in script
     assert script.count("async function _rejectUndoCall(row) {") == 1
-    assert script.count("_rejectUndoCall(row)") == 3
+    assert script.count("_rejectUndoCall(row)") == 4
     assert "_undoCall" not in script
     assert "async function _triageCall(batchId, batchKey, rowIds) {" in script
 
@@ -422,7 +422,7 @@ def test_agent_call_site_count_independent_of_row_count():
     small_count, _small_bytes = _agent_count(7)
     large_count, large_bytes = _agent_count(300)
     assert small_count == large_count
-    assert large_bytes < 176 * 1024
+    assert large_bytes < 184 * 1024
 
 
 def test_triage_declared_files_never_overwrites_touched_files():
@@ -2864,8 +2864,8 @@ def test_the_twin_terminal_commit_hands_an_unlanded_row_back_with_the_engines_re
     assert [s["sha"] for s in result["settled"] if s["row"] == "r0"] == ["abc123"]
 
 
-def test_refute_close_guard_is_once_per_row_not_once_per_batch():
-    """A row reaching a refute-close node after the batch's first close call gets its own call."""
+def test_refute_close_waits_for_the_batch_and_closes_every_arrival_in_one_call():
+    """Rows at a refute-close node wait behind rows still in fix, so one close call settles all of them."""
     routing = {
         "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "close"}, "on_fail": None},
         "fix": {"kind": "fix", "edges": {"done": "close"}, "on_fail": None},
@@ -2875,8 +2875,7 @@ def test_refute_close_guard_is_once_per_row_not_once_per_batch():
 
     def close_stub(bid):
         close_calls.append(bid)
-        pending = "r0" if len(close_calls) == 1 else "r1"
-        return {"confirmed": [{"row": pending, "new_path": f"archive/{pending}.yaml"}], "refuted": []}
+        return {"confirmed": [{"row": r, "new_path": f"archive/{r}.yaml"} for r in ("r0", "r1")], "refuted": []}
 
     script_by_kind = {
         "triage": lambda bid: [
@@ -2892,7 +2891,7 @@ def test_refute_close_guard_is_once_per_row_not_once_per_batch():
         [("b0", ["r0", "r1"])], routing, "triage",
         reserve=gc.batch_reserve(2), budget=budget, agent=_agent_stub(script_by_kind, budget),
     )
-    assert close_calls == ["b0", "b0"]
+    assert close_calls == ["b0"]
     assert not [h for h in result["handed_back"] if "already called" in h.get("reason", "")]
     assert {h["row"] for h in result["handed_back"] if h["type"] == "settled-direct"} == {"r0", "r1"}
 

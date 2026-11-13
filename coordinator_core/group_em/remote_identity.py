@@ -22,12 +22,29 @@ def peer_key(box_id: str, session_id: str) -> str:
     return box_id + SEP + session_id
 
 
-def parse_key(key: str, local_id: Optional[str] = None) -> tuple[str, str]:
-    """``(box_id, session_id)``; a bare session id (no valid box prefix) parses as the local box."""
+def parse_key_user(key: str, local_id: Optional[str] = None) -> tuple[Optional[str], str, str]:
+    """``(user, box_id, session_id)`` for ``[<user>@]<box_id>:<session_id>``; ``user`` is None when absent.
+
+    A bare session id (no valid box prefix) parses as the local box with no user. No production
+    caller reads ``user`` yet: speculative, kept for a user-addressed peer key.
+    """
     head, sep, tail = key.partition(SEP)
-    if sep and tail and box_registry._valid_id(head):
-        return head, tail
-    return (local_id if local_id is not None else box_registry.local_box_id()), key
+    if sep and tail:
+        user, at, box = head.rpartition("@")
+        if not at:
+            user, box = None, head
+        if box_registry._valid_id(box) and (user is None or (user and user.strip() == user)):
+            return user, box, tail
+    return None, (local_id if local_id is not None else box_registry.local_box_id()), key
+
+
+def parse_key(key: str, local_id: Optional[str] = None) -> tuple[str, str]:
+    """``(box_id, session_id)``; a bare session id (no valid box prefix) parses as the local box.
+
+    A ``<user>@`` prefix on the box part is accepted and dropped (``parse_key_user`` keeps it).
+    """
+    _, box, session = parse_key_user(key, local_id)
+    return box, session
 
 
 def rewrite_from(line: dict, local_id: Optional[str] = None) -> dict:

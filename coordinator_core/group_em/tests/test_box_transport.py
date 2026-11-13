@@ -230,6 +230,59 @@ def test_deliver_grant_far_refusal_and_transport_failure():
     assert box_transport.deliver_grant({"box_id": "b"}, {})["reason"] == "not_ssh_transport"
 
 
+RELAY_BOX = {
+    "box_id": "box-mac",
+    "transport": {"kind": "ssh", "host": "box.example", "relay_key": "/keys/unimatrix"},
+}
+
+
+def _relay_runner(calls, reply, returncode=0):
+    def run(argv, timeout, stdin_text):
+        calls.append((argv, stdin_text))
+        return subprocess.CompletedProcess(argv, returncode, json.dumps(reply) + "\n", "")
+
+    return run
+
+
+def test_deliver_revoke_and_key_pin_use_the_non_relay_ops_on_a_plain_ssh_row():
+    calls = []
+    assert box_transport.deliver_revoke(BOX, {"sig": "s"}, runner=_runner('{"ok": true}', calls=calls))["ok"] is True
+    assert "groupem.suite_grant_revoke_receive" in calls[0][-1]
+    payload = {"box_id": "me", "key_b64": "a2V5"}
+    assert box_transport.deliver_key_pin(BOX, payload, runner=_runner('{"ok": true}', calls=calls))["ok"] is True
+    assert "groupem.box_key_pin_from_peer" in calls[1][-1] and '"key_b64": "a2V5"' in calls[1][-1]
+    refused = box_transport.deliver_key_pin(BOX, payload, runner=_runner('{"ok": false, "reason": "not_member"}'))
+    assert refused == {"ok": False, "reason": "not_member"}
+
+
+def test_relay_revoke_and_keypin_ride_the_relay_key_with_the_payload_on_stdin(monkeypatch):
+    monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: [dict(RELAY_BOX)])
+    calls = []
+    env = {"grantee_box_id": "box-mac", "grantee_session_id": "s1", "sig": "x"}
+    out = box_transport.deliver_revoke(RELAY_BOX, env, runner=_relay_runner(calls, {"ok": True}))
+    assert out["ok"] is True
+    argv, stdin = calls[0]
+    assert argv[:3] == ["ssh", "-i", "/keys/unimatrix"] and argv[-2:] == ["box.example", "revoke box-mac:s1"]
+    assert json.loads(stdin) == env
+    payload = {"box_id": "me", "key_b64": "a2V5"}
+    out = box_transport.deliver_key_pin(RELAY_BOX, payload, runner=_relay_runner(calls, {"ok": False, "reason": "not_member"}, 1))
+    assert out == {"ok": False, "reason": "not_member"}
+    argv, stdin = calls[1]
+    assert argv[-1] == "keypin me" and json.loads(stdin) == payload
+
+
+def test_relay_revoke_and_keypin_refuse_unrestatable_payloads(monkeypatch):
+    monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: [dict(RELAY_BOX)])
+    assert box_transport.deliver_revoke(RELAY_BOX, {}, runner=_relay_runner([], {}))["reason"] == "relay_args_unrestatable"
+    assert box_transport.deliver_key_pin(RELAY_BOX, {"box_id": "-x", "key_b64": "k"}, runner=_relay_runner([], {}))[
+        "reason"
+    ] == "relay_args_unrestatable"
+
+
+def test_new_ops_are_on_the_allowlist():
+    assert {"groupem.suite_grant_revoke_receive", "groupem.box_key_pin_from_peer"} <= box_transport.ALLOWED_OPS
+
+
 def test_invoke_remote_error_envelope_is_unknown_not_a_reply():
     err = json.dumps({"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "x"}})
 

@@ -21,6 +21,18 @@ def test_invalid_box_prefix_is_bare():
     assert ri.parse_key("a b:sid", local_id="L") == ("L", "a b:sid")
 
 
+def test_user_prefix_is_stripped_from_the_box():
+    assert ri.parse_key("example-operator@machine-b:sid-1") == ("machine-b", "sid-1")
+    assert ri.parse_key_user("example-operator@machine-b:sid-1") == ("example-operator", "machine-b", "sid-1")
+    assert ri.parse_key_user("machine-b:sid-1") == (None, "machine-b", "sid-1")
+
+
+def test_malformed_user_prefix_is_bare():
+    assert ri.parse_key("@machine-b:sid", local_id="L") == ("L", "@machine-b:sid")
+    assert ri.parse_key(" u@machine-b:sid", local_id="L") == ("L", " u@machine-b:sid")
+    assert ri.parse_key("u@bad box:sid", local_id="L") == ("L", "u@bad box:sid")
+
+
 def test_rewrite_from_remote_sender_is_peer_key():
     line = {"from_box": "box-a", "from_session": "s1", "text": "x"}
     out = ri.rewrite_from(line, "box-me")

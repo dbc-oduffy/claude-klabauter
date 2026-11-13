@@ -47,6 +47,13 @@ Modes, read from SSH_ORIGINAL_COMMAND:
                     read the issuer's signed grant envelope (one JSON line on stdin) and hand
                     it to suite_grant.receive_relayed_grant; prints its JSON reply, exit 0 only
                     when accepted. Argv must restate the envelope or the grant is refused.
+  revoke <box>:<session>
+                    read the issuer's signed suite-grant-revoke envelope (one JSON line on stdin) and
+                    hand it to relayed_grant_peer.receive_relayed_revoke; exit 0 only when revoked.
+  keypin <box_id>   read {"box_id", "key_b64"} (one JSON line on stdin) and pin that key through
+                    relayed_grant_peer.receive_key_pin; refused `no_peer` without the forced command's
+                    `--peer`, `issuer_not_peer` unless box_id is that peer.
+  grant, revoke and keypin refuse `issuer_not_peer` when `--peer` is set and the envelope's issuer box differs.
   membership get    print the held signed membership snapshot (canonical JSON line, then its
                     base64 signature line); exit 1 when none is held.
   membership put    read the snapshot line and base64 signature line (and an optional signer
@@ -89,6 +96,7 @@ INBOX_NAME_RE = re.compile(r"[A-Za-z0-9_-](?:[A-Za-z0-9_.-]{0,62}[A-Za-z0-9_-])?
 
 
 DIGEST_RE = re.compile(r"[0-9a-f]{16}")
+GRANTEE_TOKEN_RE = re.compile(r"[A-Za-z0-9._:@-]{1,260}")
 SESSION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
 
 
@@ -171,6 +179,10 @@ def parse_mode(original_command):
         return "membership", cmd[1]
     if cmd and cmd[0] == "grant":
         return grant_args(original_command)
+    if len(cmd) == 2 and cmd[0] == "revoke" and GRANTEE_TOKEN_RE.fullmatch(cmd[1]):
+        return "revoke", {"grantee": cmd[1]}
+    if len(cmd) == 2 and cmd[0] == "keypin" and valid_inbox_name(cmd[1]):
+        return "keypin", {"box_id": cmd[1]}
     return None
 
 
@@ -946,7 +958,26 @@ def receive_grant():
     return suite_grant.receive_relayed_grant
 
 
-def _receive_via_door(env):
+def receive_revoke():
+    """The engine's arrival check for a relayed revoke; the engine is resolved lazily."""
+    try:
+        from coordinator_core.group_em import relayed_grant_peer
+    except ImportError:
+        return lambda env: _receive_via_door(env, "groupem.suite_grant_revoke_receive")
+    return lambda env: relayed_grant_peer.receive_relayed_revoke(env)
+
+
+def receive_keypin():
+    """The engine's first-contact pin check, ``(box_id, key_b64, peer)``; resolved lazily."""
+    try:
+        from coordinator_core.group_em import relayed_grant_peer
+    except ImportError:
+        return lambda box_id, key_b64, peer: _receive_via_door(
+            {"box_id": box_id, "key_b64": key_b64, "peer": peer}, "groupem.box_key_pin_from_peer", wrap=False)
+    return relayed_grant_peer.receive_key_pin
+
+
+def _receive_via_door(env, op="groupem.suite_grant_receive", wrap=True):
     """Arrival check through the settings-home door; never raises.
 
     The forced command can run under a system python with no engine and no lib/ beside this copy.
@@ -954,7 +985,7 @@ def _receive_via_door(env):
     try:
         home = Path(os.environ.get("COORDINATOR_SETTINGS_HOME") or Path.home() / ".coordinator-claude-settings")
         exe = home / "bin" / ("coordinator-invoke.exe" if os.name == "nt" else "coordinator-invoke")
-        proc = subprocess.run([str(exe), "groupem.suite_grant_receive", json.dumps({"envelope": env})],
+        proc = subprocess.run([str(exe), op, json.dumps({"envelope": env} if wrap else env)],
                               capture_output=True, text=True, timeout=30)
     except Exception as exc:
         return {"ok": False, "reason": f"door_unavailable:{type(exc).__name__}"}
@@ -966,11 +997,57 @@ def _receive_via_door(env):
     return result if isinstance(result, dict) else {"ok": False, "reason": "door_bad_reply"}
 
 
-def grant(args, line, receive=None):
+def peer_arg(argv):
+    """The box named by a leading `--peer <box>` argv pair of the forced command, or None."""
+    return argv[1] if len(argv) >= 2 and argv[0] == "--peer" and valid_inbox_name(argv[1]) else None
+
+
+def _read_envelope(line):
+    try:
+        env = json.loads(line)
+    except ValueError:
+        return None
+    return env if isinstance(env, dict) else None
+
+
+def revoke(args, line, receive=None, peer=None):
+    """Hand the signed revoke envelope on `line` to the arrival check; return its reply dict.
+
+    Refused before the engine sees it when the argv grantee or, with a pinned `peer`, the issuer
+    box disagrees with the envelope."""
+    env = _read_envelope(line)
+    if env is None:
+        return {"ok": False, "reason": "bad_envelope"}
+    if peer is not None and env.get("issuer_box_id") != peer:
+        return {"ok": False, "reason": "issuer_not_peer"}
+    sid = str(env.get("grantee_session_id", ""))
+    if args["grantee"] not in (sid, f'{env.get("grantee_box_id")}:{sid}'):
+        return {"ok": False, "reason": "argv_mismatch:grantee"}
+    return (receive or receive_revoke())(env)
+
+
+def keypin(args, line, peer=None, receive=None):
+    """Pin the key on `line` (``{"box_id", "key_b64"}``) for the forced command's `peer`.
+
+    Fails closed: no `peer` is `no_peer`; a claimed box other than the peer is `issuer_not_peer`."""
+    if peer is None:
+        return {"ok": False, "reason": "no_peer"}
+    body = _read_envelope(line)
+    if body is None:
+        return {"ok": False, "reason": "bad_envelope"}
+    if body.get("box_id") != peer:
+        return {"ok": False, "reason": "issuer_not_peer"}
+    if args["box_id"] != peer:
+        return {"ok": False, "reason": "argv_mismatch:box_id"}
+    return (receive or receive_keypin())(peer, body.get("key_b64"), peer)
+
+
+def grant(args, line, receive=None, peer=None):
     """Hand the signed envelope on `line` to the arrival check; return its reply dict.
 
     The argv fields only restate the envelope: any disagreement is refused before the
-    engine sees it, so argv can never widen what the issuer signed.
+    engine sees it, so argv can never widen what the issuer signed. With a pinned `peer`
+    the envelope's issuer box must be that peer.
     """
     try:
         env = json.loads(line)
@@ -978,6 +1055,8 @@ def grant(args, line, receive=None):
         env = None
     if not isinstance(env, dict):
         return {"ok": False, "reason": "bad_envelope"}
+    if peer is not None and env.get("issuer_box_id") != peer:
+        return {"ok": False, "reason": "issuer_not_peer"}
     sid = str(env.get("grantee_session_id", ""))
     if args["grantee"] not in (sid, f'{env.get("grantee_box_id")}:{sid}'):
         return {"ok": False, "reason": "argv_mismatch:grantee"}
@@ -1464,7 +1543,7 @@ def main():
     parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
         sys.exit("usage: roster | specs | send <pid> | send-batch <pid> | send-to <pid> <digest> | send-named <pid> <digest> <name-digest> | send-session <pid> <digest> <name-digest> <session-id> | receipts <session-id> <since> | inbox <name> | inbox-mux | reply-inbox <name> | source | "
-                 "grant <grantee> <note> <ttl> <repo> | membership get | membership put")
+                 "grant <grantee> <note> <ttl> <repo> | revoke <grantee> | keypin <box_id> | membership get | membership put")
     mode, arg = parsed
     if mode == "membership":
         membership = load_membership()
@@ -1482,8 +1561,15 @@ def main():
                                Path.home() / ".ssh" / "authorized_keys", pin_line=sys.stdin.readline())
         print(json.dumps(reply))
         sys.exit(0 if reply.get("ok") is True else 1)
-    if mode == "grant":
-        reply = grant(arg, sys.stdin.readline())
+    if mode in ("grant", "revoke", "keypin"):
+        peer = peer_arg(sys.argv[1:])
+        line = sys.stdin.readline()
+        if mode == "grant":
+            reply = grant(arg, line, peer=peer)
+        elif mode == "revoke":
+            reply = revoke(arg, line, peer=peer)
+        else:
+            reply = keypin(arg, line, peer=peer)
         print(json.dumps(reply))
         sys.exit(0 if reply.get("ok") is True else 1)
     if mode == "mirror-stale":
