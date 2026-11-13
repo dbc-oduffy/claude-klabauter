@@ -76,6 +76,9 @@ class OpClass(enum.Enum):
 # rather than silently corrupting the classification surface (test-pollution and runtime-
 # privilege-escalation risk). Any caller doing OP_CLASSIFICATION["x"] = ... now fails loud.
 OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType({
+    "box_memory.admit": OpClass.MUTATING,  # Writes the admission-file reservation.
+    "box_memory.register": OpClass.MUTATING,  # Writes the admission-file reservation.
+    "box_memory.release": OpClass.MUTATING,  # Removes the admission-file reservation.
     "codex_status.snapshot": OpClass.MUTATING,  # Derived status cache only; no routing/UI writes.
     "ping": OpClass.COMPUTE_ONLY,
     # invoke.from_argv — MUTATING (fail-closed default, DR-208 § Classification
@@ -3962,26 +3965,22 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Spec: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C15
     "crossrepo.closure_status": OpClass.COMPUTE_ONLY,
     # ---------------------------------------------------------------------------
-    # ceremony.update_docs_scan — COMPUTE_ONLY (C17; AC8).
+    # ceremony.update_docs_worklist — COMPUTE_ONLY.
     # ---------------------------------------------------------------------------
-    # Emits the update-docs mechanical work-manifest (Phase 1 state-detection, Phase 8
-    # lineage-backstop, Phase 8b prune classification) as a computed return value only.
-    # Archival/pruning EXECUTION stays with the existing fleet.* archival-writer ops and
-    # the LLM/EM judgment tier (Negative spec, AC12) — this op never performs either.
-    # DR-208 five-question affirmation (citing ops/ceremony/update_docs_scan.py):
+    # Emits the /update-docs worklist (source drift, lineage backstop, prune classification)
+    # as a computed return value. Archival/pruning EXECUTION stays with the fleet.* ops.
+    # DR-208 five-question affirmation (citing ops/ceremony/update_docs_worklist.py):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
-    #      Every filesystem touch is a read (DIRECTORY.md/.py mtimes, docs/plans/*.md,
-    #      cross-repo/archive/*.md, tasks/*.md frontmatter) or a read-only `git log`
-    #      invocation (no `git commit`/`git rm`/ref mutation of any kind).
+    #      Reads docs/plans, the memo archive and tasks frontmatter, plus one read-only
+    #      `git diff`/`git rev-parse`. Its only write is its own derived (mtime, size)
+    #      cache file, rebuildable from the tree and read by no other op.
     #   2. Writes into rag's relational store?                                No.
-    #   3. Opens any file for write (including sentinel creation)?            No.
+    #   3. Opens any file for write (including sentinel creation)?            Only that cache.
     #   4. Mutates shared mutable state outside its own module?               No.
-    #      No locked_rmw, no artifact.emit-style write path is invoked.
-    #   5. Persistent state changes observable across process boundaries?     No.
-    #      Returns a computed schema_version-pinned dict only; emits no artifact to disk.
+    #   5. Persistent state changes observable across process boundaries?     No: the cache
+    #      changes no op's result, only how much it re-reads.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Spec: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C17
-    "ceremony.update_docs_scan": OpClass.COMPUTE_ONLY,
+    "ceremony.update_docs_worklist": OpClass.COMPUTE_ONLY,
     "deliverable.cascade_terminal": OpClass.MUTATING,
     "deliverable.cascade_retract": OpClass.MUTATING,
     "deliverable.cascade_backstop_sweep": OpClass.COMPUTE_ONLY,

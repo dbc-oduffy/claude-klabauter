@@ -1,4 +1,4 @@
-"""Per-host hook shim: `python -m coordinator_core.host_hooks.shim --host codex|agy`.
+"""Per-host hook shim: `python -m coordinator_core.host_hooks.shim --host codex|agy|grok`.
 
 Reads one hook payload on stdin, adapts it, asks the warm engine under a hard budget, and prints
 the host-shaped answer. No engine verdict (down, slow, error) falls to the engine-free backstop; a
@@ -14,7 +14,7 @@ import sys
 import threading
 from typing import Any, Dict, Mapping, Optional
 
-from coordinator_core.host_hooks.contract import HOST_CODEX, HOSTS, HostEvent, neutral_fallback
+from coordinator_core.host_hooks.contract import HOST_AGY, HOST_CODEX, HOST_GROK, HOSTS, HostEvent, neutral_fallback
 
 #: Hard wall for the engine dial, inside the 200ms process budget.
 DIAL_BUDGET_SECS = 0.15
@@ -29,9 +29,15 @@ def _adapter(host: str):
         from coordinator_core.host_hooks.codex_adapter import CodexAdapter
 
         return CodexAdapter()
-    from coordinator_core.host_hooks.agy_adapter import AgyAdapter
+    if host == HOST_GROK:
+        from coordinator_core.host_hooks.grok_adapter import GrokAdapter
 
-    return AgyAdapter()
+        return GrokAdapter()
+    if host == HOST_AGY:
+        from coordinator_core.host_hooks.agy_adapter import AgyAdapter
+
+        return AgyAdapter()
+    raise ValueError("unknown host: %r" % (host,))
 
 
 def _request(engine_event: Mapping[str, Any]) -> Dict[str, Any]:

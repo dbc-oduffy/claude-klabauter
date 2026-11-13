@@ -158,6 +158,45 @@ def test_main_prints_json_and_returns_zero(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out) == {"decision": "allow"}
 
 
+GROK_EDIT = {"cwd": "/nonexistent-shim-cwd", "hook_event_name": "PreToolUse", "tool_name": "edit_file",
+             "tool_input": {"path": "/a/b.py", "old_string": "x", "new_string": "y"}}
+GROK_SHELL = {**GROK_EDIT, "tool_name": "shell", "tool_input": {"command": "ls"}}
+GROK_PUSH = {**GROK_SHELL, "tool_input": {"command": "git push https://github.com/stranger/r.git main"}}
+
+
+def test_grok_edit_payload_reaches_engine_as_edit_with_file_path(monkeypatch, rows):
+    seen = []
+    _engine(monkeypatch, {"result": {}}, seen)
+    assert shim.run("grok", json.dumps(GROK_EDIT)) == {}
+    payload = seen[0]["params"]["payload"]
+    assert (payload["tool_name"], payload["tool_input"]["file_path"]) == ("Edit", "/a/b.py")
+    assert rows == []
+
+
+def test_grok_shell_payload_reaches_engine_as_bash_with_command(monkeypatch, rows):
+    seen = []
+    _engine(monkeypatch, {"result": {"permissionDecision": "deny", "permissionDecisionReason": "no"}}, seen)
+    out = shim.run("grok", json.dumps(GROK_SHELL))
+    payload = seen[0]["params"]["payload"]
+    assert (payload["tool_name"], payload["tool_input"]["command"]) == ("Bash", "ls")
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_grok_dispatches_to_grok_adapter_not_agy():
+    from coordinator_core.host_hooks.grok_adapter import GrokAdapter
+
+    assert isinstance(shim._adapter("grok"), GrokAdapter)
+    with pytest.raises(ValueError):
+        shim._adapter("nope")
+
+
+def test_grok_engine_down_is_neutral_and_irreversible_command_denied(monkeypatch, rows):
+    _engine(monkeypatch, None)
+    assert shim.run("grok", json.dumps(GROK_SHELL)) == {}
+    assert len(rows) == 1
+    assert shim.run("grok", json.dumps(GROK_PUSH))["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 def test_main_without_host_exits_zero_with_empty_answer(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
     assert shim.main([]) == 0

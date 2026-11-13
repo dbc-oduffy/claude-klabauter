@@ -242,6 +242,74 @@ def test_proc_cmdline_nonexistent_pid_is_empty():
     assert host.proc_cmdline(2**22 + 1) == ""
 
 
+def _denied_process(monkeypatch, attr_error):
+    psutil = pytest.importorskip("psutil")
+
+    def _process(pid):
+        raise attr_error
+
+    monkeypatch.setattr(psutil, "Process", _process)
+
+
+@pytest.mark.parametrize("exc", [PermissionError(5, "denied"), OSError(13, "denied")])
+def test_proc_cmdline_os_error_is_empty(monkeypatch, exc):
+    _denied_process(monkeypatch, exc)
+    assert host.proc_cmdline(1234) == ""
+
+
+def test_proc_cmdline_access_denied_is_empty(monkeypatch):
+    psutil = pytest.importorskip("psutil")
+    _denied_process(monkeypatch, psutil.AccessDenied(1234))
+    assert host.proc_cmdline(1234) == ""
+
+
+def test_pid_create_time_and_image_permission_denied_are_none(monkeypatch):
+    _denied_process(monkeypatch, PermissionError(5, "denied"))
+    assert host.pid_create_time(1234) is None
+    assert host.pid_image(1234) is None
+
+
+@pytest.mark.parametrize("handle, trim_result", [(0, 1), (77, 0)])
+def test_empty_working_set_denied_is_a_noop(monkeypatch, handle, trim_result):
+    import ctypes
+
+    closed = []
+
+    class _Fn:
+        def __init__(self, fn):
+            self._fn = fn
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *a):
+            return self._fn(*a)
+
+    class _Kernel32:
+        OpenProcess = _Fn(lambda *a: handle)
+        CloseHandle = _Fn(lambda h: closed.append(h))
+        K32EmptyWorkingSet = _Fn(lambda h: trim_result)
+
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **k: _Kernel32(), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+    assert host.empty_working_set(1234) is None
+    assert closed == ([77] if handle else [])
+
+
+def test_reserved_bytes_permission_denied_peer_checks_reserve_nothing(tmp_path):
+    adm = tmp_path / "admission.jsonl"
+    host.register_command(adm, "k", 5, 4.0)
+
+    def _deny(pid):
+        raise PermissionError(5, "denied")
+
+    assert host.reserved_bytes(
+        adm, rss_fn=_deny, alive_fn=lambda p: True, create_time_fn=_deny, image_fn=_deny,
+    ) == 0
+    assert host.reserved_bytes(
+        adm, rss_fn=lambda p: 0.0, alive_fn=_deny, create_time_fn=_deny, image_fn=_deny,
+    ) == 0
+
+
 @pytest.mark.parametrize(
     "peak_gib, need_gib",
     [(2, 2.5), (12.3, 15.375), (32, 40), (40, 48), (100, 108)],

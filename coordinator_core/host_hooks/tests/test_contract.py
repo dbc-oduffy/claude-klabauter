@@ -29,6 +29,8 @@ import pytest
 
 from coordinator_core.host_hooks.contract import (
     Adapter,
+    HOST_GROK,
+    HOSTS,
     HostEvent,
     neutral_fallback,
 )
@@ -49,6 +51,14 @@ def test_neutral_fallback_agy_asks_and_is_never_empty():
     fb = neutral_fallback("agy")
     assert fb["decision"] == "ask"
     assert fb != {}
+
+
+def test_grok_is_a_host_and_its_neutral_fallback_is_empty_object():
+    assert "grok" in HOSTS
+    assert HOST_GROK == "grok"
+    assert neutral_fallback("grok") == {}
+    neutral_fallback("grok")["x"] = 1
+    assert neutral_fallback("grok") == {}
 
 
 def test_neutral_fallback_returns_fresh_dict():

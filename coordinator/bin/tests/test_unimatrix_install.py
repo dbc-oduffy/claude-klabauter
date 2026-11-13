@@ -877,10 +877,17 @@ def test_no_claude_on_path_hosts_skip_gate_but_bare_install_refuses(monkeypatch,
     assert ui.main(["--install", "--hosts", "claude,codex"], dest_dir=tmp_path / "d", out=buf) == 2
 
 
-def test_hosts_grok_ships_the_adapter_and_installs_no_hooks(monkeypatch, tmp_path):
+def _grok_guard_commands(hooks_file):
+    groups = json.loads(hooks_file.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+    return [(g.get("matcher"), h["command"]) for g in groups for h in g["hooks"]]
+
+
+def test_hosts_grok_ships_the_adapter_and_registers_only_the_grok_pretooluse_hook(monkeypatch, tmp_path):
     _stub_src(monkeypatch, tmp_path)
     home = _home(monkeypatch, tmp_path)
+    monkeypatch.delenv("GROK_HOME", raising=False)
     monkeypatch.setattr(ui.shutil, "which", lambda name: None)
+    (home / ".grok").mkdir()
     dest = tmp_path / "d"
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok"], dest_dir=dest, out=buf) == 0
@@ -889,8 +896,61 @@ def test_hosts_grok_ships_the_adapter_and_installs_no_hooks(monkeypatch, tmp_pat
     assert not (home / ".gemini" / "config" / "hooks.json").exists()
     assert not (home / ".gemini").exists()
     assert tomllib.loads((home / ".grok" / "config.toml").read_text())["ui"]["status_line"]["type"] == "command"
+    ((matcher, command),) = _grok_guard_commands(home / ".grok" / "hooks.json")
+    assert "unimatrix-host-guard.py" in command and "--host grok" in command
+    for tool in ("Bash", "run_command", "Edit", "Write", "MultiEdit", "NotebookEdit", "edit_file", "write_file"):
+        assert tool in matcher.split("|")
+    assert "grok hook created" in buf.getvalue()
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok,bogus"], dest_dir=dest, out=buf) == 2
+
+
+def test_default_hosts_register_grok_hook_under_hooks_path_and_leave_grok_home_alone(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    grok_home = tmp_path / "grok-home"
+    grok_home.mkdir()
+    monkeypatch.setenv("GROK_HOME", str(grok_home))
+    monkeypatch.setattr(ui.shutil, "which", lambda name: None)
+    hp = tmp_path / "cfg" / "h.json"
+    hp.parent.mkdir()
+    chp = tmp_path / "cfg" / "c.json"
+    dest = tmp_path / "d"
+    buf = io.StringIO()
+    rc = ui.main(["--install"], version_text="2.1.316", dest_dir=dest, out=buf, hooks_path=hp,
+                 codex_hooks=chp, codex_trust=lambda p: (True, "x"))
+    assert rc in (0, 7), buf.getvalue()
+    assert list(grok_home.iterdir()) == []
+    ((_, command),) = _grok_guard_commands(hp.with_name("grok-hooks.json"))
+    assert "unimatrix-host-guard.py" in command and "--host grok" in command
+    # codex's own guard entry is a different host's and is not the grok one
+    assert "--host codex" in chp.read_text(encoding="utf-8")
+
+
+def test_uninstall_removes_only_the_grok_hook_entry(tmp_path):
+    ghp = tmp_path / "grok-hooks.json"
+    foreign = {"theme": "x", "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": "theirs"}]}], "SessionStart": [{"hooks": [
+            {"type": "command", "command": "theirs-too"}]}]}}
+    ghp.write_text(json.dumps(foreign, indent=2) + "\n", encoding="utf-8")
+    assert ui.seed_grok_hook(ghp, tmp_path) == "added"
+    assert ui.seed_grok_hook(ghp, tmp_path) == "present"
+    assert len(_grok_guard_commands(ghp)) == 2
+    buf = io.StringIO()
+    rc = ui.main(["--uninstall", "--hosts", "grok"], out=buf, hooks_path=tmp_path / "h.json")
+    assert rc == 0 and "grok hook removed" in buf.getvalue()
+    assert json.loads(ghp.read_text(encoding="utf-8")) == foreign
+
+
+def test_seed_grok_hook_heals_a_stale_engine_root_and_uninstall_empties_it(tmp_path):
+    ghp = tmp_path / "hooks.json"
+    assert ui.seed_grok_hook(ghp, tmp_path, "/old") == "created"
+    assert ui.seed_grok_hook(ghp, tmp_path, "/new") == "updated"
+    ((_, command),) = _grok_guard_commands(ghp)
+    assert "/new" in command and "/old" not in command
+    assert ui.unseed_grok_hook(ghp) == "removed"
+    assert json.loads(ghp.read_text(encoding="utf-8")) == {}
+    assert ui.unseed_grok_hook(ghp) == "absent"
 
 
 class _FakeCodex:
@@ -3270,3 +3330,31 @@ def test_custom_agent_dir_without_injected_launchctl_never_touches_launchd(tmp_p
     (tmp_path / f"{ui.LOGIN_AGENT_LABEL}.plist").write_bytes(b"stale")
     monkeypatch.setattr(ui, "run_launchctl", lambda *a: pytest.fail(f"real launchctl called: {a}"))
     assert ui.register_login_agent(tmp_path, tmp_path)[0] == "updated"
+
+
+def test_grok_hook_skipped_cleanly_when_grok_absent_and_seeded_once_grok_home_exists(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    home = _home(monkeypatch, tmp_path)
+    monkeypatch.delenv("GROK_HOME", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+    buf = io.StringIO()
+    assert ui.main(["--install", "--hosts", "grok"], dest_dir=tmp_path / "d", out=buf) == 0
+    assert "grok hook skipped" in buf.getvalue() and "grok hook created" not in buf.getvalue()
+    assert not (home / ".grok" / "hooks.json").exists()
+    (home / ".grok").mkdir(exist_ok=True)
+    buf = io.StringIO()
+    assert ui.main(["--install", "--hosts", "grok"], dest_dir=tmp_path / "d", out=buf) == 0
+    assert "grok hook created" in buf.getvalue() and (home / ".grok" / "hooks.json").is_file()
+
+
+def test_grok_hook_seeded_when_grok_binary_on_path(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    home = _home(monkeypatch, tmp_path)
+    monkeypatch.delenv("GROK_HOME", raising=False)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "grok").write_text("#!/bin/sh\n")
+    monkeypatch.setenv("PATH", str(bindir))
+    buf = io.StringIO()
+    assert ui.main(["--install", "--hosts", "grok"], dest_dir=tmp_path / "d", out=buf) == 0
+    assert "grok hook created" in buf.getvalue()

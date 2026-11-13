@@ -33,6 +33,9 @@ from typing import Dict
 # whichever import order happens to pull its module in — see coordinator_core/hooks/
 # __init__.py for the order-dependent drift-guard failure that shape produces.
 OP_MODULE_MAP: Dict[str, str] = {
+    "box_memory.admit": "coordinator_core.ops.box_memory_admit",
+    "box_memory.register": "coordinator_core.ops.box_memory_admit",
+    "box_memory.release": "coordinator_core.ops.box_memory_admit",
     "codex_status.snapshot": "coordinator_core.ops.codex_status",
     "ping":                                   "coordinator_core.ops.ping",
     "invoke.from_argv":                       "coordinator_core.ops.invoke_from_argv",

@@ -524,6 +524,123 @@ def test_admit_before_spawn_refuses_on_an_unreadable_reading():
     assert not v.admitted and "unreadable" in v.reason
 
 
+def _denied(*args):
+    raise PermissionError("Access is denied")
+
+
+def _serve_engine(monkeypatch, engine_host, calls):
+    """Stub the warm pipe so box_memory.* requests run `_admit_local` over a readable host."""
+    def dispatch(msg, **kw):
+        calls.append((msg["method"], kw))
+        p = msg["params"]
+        if msg["method"] == "box_memory.admit":
+            v = _hcc._admit_local(p["key"], p["default_peak_gib"], engine_host, p.get("register_pid"))
+            return {"jsonrpc": "2.0", "id": 1, "result": {
+                "admitted": v.admitted, "reason": v.reason, "key": v.key, "peak_gib": v.peak_gib,
+                "measured": True}}
+        if msg["method"] == "box_memory.register":
+            ok = _hcc.register_spawn(p["key"], p["peak_gib"], p["pid"], engine_host)
+            return {"jsonrpc": "2.0", "id": 1, "result": {"ok": ok}}
+        engine_host.release_command("adm", p["key"], p["pid"])
+        return {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}
+
+    monkeypatch.setattr("coordinator_core.warm.client.try_warm_dispatch", dispatch)
+
+
+@pytest.mark.parametrize("raiser", ["read_memory_status", "reserved_bytes", "admission_lock"])
+def test_engine_path_admits_with_a_measured_verdict_and_a_reservation(raiser, monkeypatch):
+    local, _ = _fake_host(avail_gib=99)
+    setattr(local, raiser, _denied)
+    engine, log = _fake_host(avail_gib=99)
+    calls = []
+    _serve_engine(monkeypatch, engine, calls)
+    v = _hcc.admit_before_spawn("k", 1.0, host=local, register_pid=9)
+    assert v.admitted and "advisory" not in v.reason and v.reason.startswith("ADMIT k")
+    assert log == [("k", 9, 1.0)]
+    assert calls == [("box_memory.admit", {"hook_path": True})]
+
+
+def test_engine_path_refuses_with_a_hold_when_the_engine_measures_too_little(monkeypatch):
+    local, _ = _fake_host(avail_gib=99)
+    local.read_memory_status = _denied
+    engine, log = _fake_host(avail_gib=2)
+    _serve_engine(monkeypatch, engine, [])
+    v = _hcc.admit_before_spawn("k", 4.0, host=local, register_pid=9)
+    assert not v.admitted and v.reason.startswith("HOLD k") and log == []
+
+
+def test_engine_path_error_envelope_refuses_not_advisory(monkeypatch):
+    local, _ = _fake_host(avail_gib=99)
+    local.read_memory_status = _denied
+    monkeypatch.setattr(
+        "coordinator_core.warm.client.try_warm_dispatch",
+        lambda msg, **kw: {"jsonrpc": "2.0", "id": 1, "error": {"code": -32603, "message": "x"}})
+    v = _hcc.admit_before_spawn("k", 1.0, host=local, register_pid=9)
+    assert not v.admitted and v.reason == "memory unreadable via engine (-32603)"
+
+
+def test_engine_path_register_and_release_route_to_the_engine(monkeypatch):
+    local, _ = _fake_host(avail_gib=99)
+    local.register_command = _denied
+    local.release_command = _denied
+    engine, log = _fake_host(avail_gib=99)
+    released = []
+    engine.release_command = lambda path, key, pid: released.append((key, pid))
+    calls = []
+    _serve_engine(monkeypatch, engine, calls)
+    assert _hcc.register_spawn("k", 2.0, 9, local) is True
+    _hcc.release_spawn("k", 9, local)
+    assert log == [("k", 9, 2.0)] and released == [("k", 9)]
+    assert [c[0] for c in calls] == ["box_memory.register", "box_memory.release"]
+
+
+def test_default_path_makes_no_warm_dispatch_call(monkeypatch):
+    def fail(*a, **k):
+        raise AssertionError("warm dispatch on the default path")
+
+    monkeypatch.setattr("coordinator_core.warm.client.try_warm_dispatch", fail)
+    host, log = _fake_host(avail_gib=99)
+    assert _hcc.admit_before_spawn("k", 1.0, host=host, register_pid=9).admitted
+    assert _hcc.register_spawn("k", 1.0, 9, host) and log[-1] == ("k", 9, 1.0)
+    host.release_command = lambda *a: None
+    _hcc.release_spawn("k", 9, host)
+    host2, _ = _fake_host(avail_gib=99, boom=True)
+    assert not _hcc.admit_before_spawn("k", 1.0, host=host2).admitted
+
+
+@pytest.mark.parametrize("raiser", ["read_memory_status", "reserved_bytes", "admission_lock"])
+def test_a_sandbox_permission_error_with_the_engine_unreachable_admits_with_an_advisory(raiser, monkeypatch):
+    host, log = _fake_host(avail_gib=99)
+    setattr(host, raiser, _denied)
+    monkeypatch.setattr("coordinator_core.warm.client.try_warm_dispatch", lambda msg, **kw: None)
+    rows = []
+    monkeypatch.setattr(
+        "coordinator_core.warm.telemetry.record_sandbox_advisory_admit", lambda **kw: rows.append(kw))
+    v = _hcc.admit_before_spawn("k", 1.0, host=host, register_pid=9)
+    assert v.admitted and "advisory" in v.reason and "memory unreadable (" not in v.reason.split("advisory")[0]
+    assert rows == [{"key": "k", "pid": 9}] and log == []
+
+
+def test_a_non_permission_error_still_refuses_where_permission_error_admits(monkeypatch):
+    monkeypatch.setattr("coordinator_core.warm.client.try_warm_dispatch", lambda msg, **kw: None)
+    host, _ = _fake_host(avail_gib=99)
+    host.reserved_bytes = lambda path: 1 / 0
+    v = _hcc.admit_before_spawn("k", 1.0, host=host, register_pid=9)
+    assert not v.admitted and v.reason == "memory unreadable (ZeroDivisionError)"
+
+
+def test_record_sandbox_advisory_admit_appends_one_row_and_never_raises(tmp_path):
+    from coordinator_core.warm import telemetry
+
+    telemetry.record_sandbox_advisory_admit(engine_root=tmp_path, key="k", pid=9)
+    path = telemetry.sandbox_advisory_admit_path(tmp_path)
+    import json
+
+    row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["key"] == "k" and row["pid"] == 9 and "ts" in row
+    telemetry.record_sandbox_advisory_admit(engine_root=tmp_path / "x" / ("y" * 5000))
+
+
 def test_host_without_admission_lock_reaches_a_memory_verdict():
     host, log = _fake_host(avail_gib=10)
     del host.admission_lock
@@ -686,6 +803,7 @@ _NOT_HEAVY = {
     "coordinator_core/ops/emit/enrich.py": "git log subprocess",
     "coordinator_core/ops/dispatch_emit/terminal_commit.py": "detached launcher whose child is the memory-admitted structural_index_refresh_admitted",
     "coordinator_core/ops/dispatch_emit/tranche_chain.py": "detached launcher whose child only emits the next tranche and fires its workflow runner, admitted by the fire op",
+    "coordinator_core/ops/rag_freshness.py": "detached launch of example-retrieval-repo's own remedy command, queued once per TTL marker, admitted by example-retrieval-repo itself",
     "coordinator_core/ops/session/safe_commit_offer.py": "light detached offer",
     "coordinator_core/ops/workflow_fire/fire.py": "workflow runner launch, admitted by the fire op",
     "coordinator/bin/lib/claude_author_control/relay_posix.py": "relay shim",

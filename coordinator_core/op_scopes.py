@@ -25,6 +25,9 @@ if TYPE_CHECKING:
 _MappingProxyType = type(type.__dict__)
 
 _OP_KEY_SCOPE: Dict[str, str] = {
+    "box_memory.admit": "none",
+    "box_memory.register": "none",
+    "box_memory.release": "none",
     "codex_status.snapshot": "none",
     "goal.append":                           "common_dir",
     "session.landing_hold":                  "common_dir",
@@ -443,15 +446,10 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "distill.write_curated_clusters":         "common_dir",
     "distill.apply_disposal":                  "common_dir",
     "crossrepo.closure_status":               "common_dir",
-    # ceremony.update_docs_scan (C17) — keyed on git_common_dir: handler resolves the
-    # caller's worktree via main_worktree_root(repo_root) and reads main-worktree-rooted
-    # coordinator_core/DIRECTORY.md, docs/plans/*.md, cross-repo/archive/*.md, tasks/*.md,
-    # plus a bounded `git log` window scoped to that worktree — same read-only scope
-    # class as handoff.has_live_children. Without this entry dispatch resolves
-    # repo_root=None and the handler raises rather than silently deriving against the
-    # wrong worktree. Never writes.
-    # Spec: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C17
-    "ceremony.update_docs_scan":               "common_dir",
+    # ceremony.update_docs_worklist — keyed on git_common_dir: the handler scans the
+    # main worktree's docs/plans, memo archive and tasks, plus one scoped git diff.
+    # Without this entry dispatch resolves repo_root=None and the handler raises.
+    "ceremony.update_docs_worklist":           "common_dir",
     "deliverable.cascade_terminal":             "common_dir",
     "deliverable.cascade_retract":              "common_dir",
     "deliverable.cascade_backstop_sweep":       "common_dir",

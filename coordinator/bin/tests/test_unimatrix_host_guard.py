@@ -27,7 +27,11 @@ def load():
 
 
 hg = load()
-NEUTRAL = {"agy": {"decision": "ask"}, "codex": {}}
+NEUTRAL = {"agy": {"decision": "ask"}, "codex": {}, "grok": {}}
+GROK_PAYLOAD = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "edit_file",
+                           "tool_input": {"path": "a.py"}, "cwd": "/x"})
+GROK_DENY = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                    "permissionDecisionReason": "no"}}
 
 
 @pytest.fixture(autouse=True)
@@ -282,3 +286,50 @@ def test_cli_timeout_at_default_budget_records_and_stays_exit_zero(tmp_path, set
     assert r.returncode == 0 and json.loads(r.stdout) == {} and r.stderr.strip() == "degraded"
     (rec,) = degrade_records(settings_home)
     assert rec["cause"] == "timeout" and rec["budget_secs"] == 0.5
+
+
+def test_grok_neutral_is_the_no_change_answer_and_agrees_with_contract():
+    assert hg._neutral("grok") == {}
+    sys.path.insert(0, str(BIN.parents[1]))
+    try:
+        from coordinator_core.host_hooks import contract
+    finally:
+        sys.path.pop(0)
+    assert "grok" in contract.HOSTS
+    expected = {k: v for k, v in contract.neutral_fallback("grok").items() if k != "reason"}
+    assert hg.NEUTRAL["grok"] == expected
+
+
+@pytest.mark.parametrize("answer", [
+    {}, {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}},
+    {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
+                            "permissionDecisionReason": "r"}}, GROK_DENY])
+def test_grok_valid_answer_shapes(answer):
+    assert hg._valid_answer("grok", answer) is True
+
+
+@pytest.mark.parametrize("answer", [
+    {"decision": "deny"}, {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "block"}},
+    {"hookSpecificOutput": {"hookEventName": "Stop", "permissionDecision": "deny"}},
+    {"hookSpecificOutput": {"permissionDecision": "deny"}}, {"x": 1}, []])
+def test_grok_invalid_answer_shapes(answer):
+    assert hg._valid_answer("grok", answer) is False
+
+
+@pytest.mark.parametrize("body", [
+    "print('{}')",
+    "print('{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"allow\"}}')"])
+def test_grok_neutral_or_allow_is_neutral_unknown_never_engine(tmp_path, body):
+    root = make_engine(tmp_path, shim(body))
+    answer, state = hg.guard("grok", GROK_PAYLOAD, root)
+    assert state == hg.NEUTRAL_UNKNOWN and state != "engine"
+
+
+def test_grok_deny_passes_through_as_engine(tmp_path):
+    root = make_engine(tmp_path, shim(f"print({json.dumps(json.dumps(GROK_DENY))})"))
+    assert hg.guard("grok", GROK_PAYLOAD, root) == (GROK_DENY, "engine")
+
+
+def test_grok_invalid_engine_answer_degrades_to_neutral(tmp_path):
+    root = make_engine(tmp_path, shim("print('{\"decision\": \"deny\"}')"))
+    assert hg.guard("grok", GROK_PAYLOAD, root) == ({}, "degraded")

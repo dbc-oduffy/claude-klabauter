@@ -320,6 +320,96 @@
       "timeout_s": 30.0
     },
     {
+      "description": "Measure box memory and decide whether `key` may spawn at `default_peak_gib`, reserving `register_pid` on admit.\n\nRuns `_admit_local` in the unsandboxed engine: same arithmetic, lock and reservation as an in-process\nadmit. Never waits for a slot (a held engine thread is the load the brightline forbids); a HOLD\nis returned as `admitted: false`. A host error propagates as a JSON-RPC error envelope.",
+      "module": "coordinator_core.ops.box_memory_admit",
+      "name": "box_memory.admit",
+      "op_class": "mutating",
+      "params_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "default_peak_gib": {
+            "exclusiveMinimum": 0,
+            "type": "number"
+          },
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "register_pid": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "default_peak_gib"
+        ],
+        "type": "object"
+      },
+      "summary": "Measure box memory and decide whether `key` may spawn at `default_peak_gib`, reserving `register_pid` on admit.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "Write the headroom reservation for (key, pid) into the admission file; `ok` is false on a write failure.",
+      "module": "coordinator_core.ops.box_memory_admit",
+      "name": "box_memory.register",
+      "op_class": "mutating",
+      "params_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "peak_gib": {
+            "exclusiveMinimum": 0,
+            "type": "number"
+          },
+          "pid": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "peak_gib",
+          "pid"
+        ],
+        "type": "object"
+      },
+      "summary": "Write the headroom reservation for (key, pid) into the admission file; `ok` is false on a write failure.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "Free the reservation for (key, pid); a missing row or unwritable file still reports ok.",
+      "module": "coordinator_core.ops.box_memory_admit",
+      "name": "box_memory.release",
+      "op_class": "mutating",
+      "params_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "pid": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "pid"
+        ],
+        "type": "object"
+      },
+      "summary": "Free the reservation for (key, pid); a missing row or unwritable file still reports ok.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "JSON-RPC `branch.merge_into_workstream` handler.\n\nparams: {branch: str, reason: str, stage?: bool, abort?: bool, run_id?: str}\n-> {merged: bool, already_ancestor: bool, conflict: bool}\n   stage -> {merged: false, staged, already_ancestor, conflict,\n             conflicted: [paths], merge_head: sha|null, owner_run_id?}\n   abort -> {aborted: true}\n\nshow_top scope: the target is the IPC-injected `repo_root` (the caller's\nchecked-out worktree) — the merge mutates per-worktree HEAD/index state.",
       "module": "coordinator_core.ops.merge_branch_into_workstream",
       "name": "branch.merge_into_workstream",

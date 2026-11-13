@@ -9,7 +9,8 @@ from typing import Any, Dict, Mapping, Protocol, runtime_checkable
 
 HOST_CODEX = "codex"
 HOST_AGY = "agy"
-HOSTS = (HOST_CODEX, HOST_AGY)
+HOST_GROK = "grok"
+HOSTS = (HOST_CODEX, HOST_AGY, HOST_GROK)
 
 # A verdict is the engine's decision for one event: {"decision": "allow"|"deny"|"ask", "reason": str}.
 Verdict = Mapping[str, Any]
@@ -32,9 +33,9 @@ def neutral_fallback(host: str) -> Dict[str, Any]:
     """The answer that changes nothing on `host` when no verdict exists.
 
     Codex: `{}` lets the operation continue. agy: `{}` is fail-closed (the call is denied),
-    so the no-verdict answer is an explicit `ask`.
+    so the no-verdict answer is an explicit `ask`. grok: `{}` (Claude-shaped, fail-open).
     """
-    if host == HOST_CODEX:
+    if host in (HOST_CODEX, HOST_GROK):
         return {}
     if host == HOST_AGY:
         return {"decision": "ask", "reason": "coordinator: guard did not run"}

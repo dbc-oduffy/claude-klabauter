@@ -14,7 +14,7 @@ Every degrade appends one record {ts, host, cause, budget_secs, child_cpu_secs} 
 "timeout" carries the child's CPU seconds (None without psutil), so a timed-out guard is distinguishable from an
 absent nag. A write failure never alters the answer. The log is append-only and unrotated; the A7 reader owns truncation.
 
-CLI: unimatrix-host-guard.py --host codex|agy [--engine-root PATH]
+CLI: unimatrix-host-guard.py --host codex|agy|grok [--engine-root PATH]
   stdin: one hook payload. stdout: exactly one JSON line. stderr: `state`. Exit 0 always.
 """
 import json
@@ -24,7 +24,7 @@ import sys
 import time
 from pathlib import Path
 
-NEUTRAL = {"agy": {"decision": "ask"}, "codex": {}}
+NEUTRAL = {"agy": {"decision": "ask"}, "codex": {}, "grok": {}}
 NEUTRAL_UNKNOWN = "neutral-unknown"
 DEFAULT_BUDGET_SECS = 0.5
 DEGRADE_LOG_NAME = "host-guard-degrades.jsonl"
@@ -52,11 +52,29 @@ def _is_codex_deny(obj):
             and isinstance(inner["permissionDecisionReason"], str))
 
 
+GROK_PERMISSION_DECISIONS = ("allow", "deny", "ask")
+
+
+def _is_grok_decision(obj):
+    """True for {} or the nested PreToolUse answer {"hookSpecificOutput": {event, decision[, reason]}}."""
+    if obj == {}:
+        return True
+    if not isinstance(obj, dict) or set(obj) != {"hookSpecificOutput"}:
+        return False
+    inner = obj["hookSpecificOutput"]
+    return (isinstance(inner, dict) and {"hookEventName", "permissionDecision"} <= set(inner)
+            and set(inner) <= CODEX_DENY_KEYS and inner["hookEventName"] == "PreToolUse"
+            and inner["permissionDecision"] in GROK_PERMISSION_DECISIONS
+            and isinstance(inner.get("permissionDecisionReason", ""), str))
+
+
 def _valid_answer(host, obj):
     if not isinstance(obj, dict):
         return False
     if host == "agy":
         return obj.get("decision") in ("deny", "ask", "allow")
+    if host == "grok":
+        return _is_grok_decision(obj)
     return obj == {} or _is_codex_deny(obj)
 
 
@@ -136,6 +154,8 @@ def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS):
         if not _valid_answer(host, answer):
             return _degrade(host, "invalid_answer", budget_secs)
         if host == "codex" and answer == {}:
+            return answer, NEUTRAL_UNKNOWN
+        if host == "grok" and answer.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
             return answer, NEUTRAL_UNKNOWN
         # Trap: the warm engine answers a neutral agy command with "allow"; the guard's contract is
         # never-allow, so anything but a deny becomes the ask fallback and never counts as governance.

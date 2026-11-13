@@ -80,6 +80,8 @@ DOCTRINE_SEED_SCRIPT = "unimatrix-doctrine-seed.py"
 PLUGIN_GEN_SCRIPT = "unimatrix-plugin-gen.py"
 AGY_PLUGIN_TREE_DIR = "agy-plugin"
 CODEX_SHELL_MATCHER = ".*"
+GROK_TOOL_MATCHER = ("Bash|bash|shell|run_command|run_shell_command|"
+                     "Edit|Write|MultiEdit|NotebookEdit|edit_file|write_file")
 HOST_NAMES = ("claude", "codex", "agy", "grok")
 
 _BIN_DIR = Path(__file__).resolve().parent
@@ -1299,6 +1301,93 @@ def grok_rules_path():
     return grok_config_path().parent / "rules" / "unimatrix-peer-doctrine.md"
 
 
+def grok_present():
+    """True when grok is on PATH or its home directory ($GROK_HOME, default ~/.grok) exists."""
+    on_path = any((Path(d) / n).is_file() for d in os.environ.get("PATH", "").split(os.pathsep) if d
+                  for n in ("grok", "grok.exe", "grok.cmd"))
+    return on_path or grok_config_path().parent.is_dir()
+
+
+def grok_hooks_path():
+    """Grok's hook registration file: $GROK_HOME/hooks.json, kept apart from config.toml so that stays untouched."""
+    return grok_config_path().with_name("hooks.json")
+
+
+def grok_hook_entry(dest_dir, engine_root=None):
+    """Our grok PreToolUse group: the host guard with `--host grok` over the shell and edit tools."""
+    return _hook_group(dest_dir, GUARD_SCRIPT, GROK_TOOL_MATCHER, ("--host", "grok", *_engine_args(engine_root)))
+
+
+def _grok_owned_handler(handler):
+    command = str(handler.get("command", "")) if isinstance(handler, dict) else ""
+    return GUARD_SCRIPT in command and "--host grok" in command.replace("'", "").replace('"', "")
+
+
+def _grok_group_ours(group):
+    return isinstance(group, dict) and any(_grok_owned_handler(h) for h in group.get("hooks") or [])
+
+
+def _grok_pretool(data, path):
+    hooks = data.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError(f"{path} has a non-object `hooks` value")
+    events = hooks.setdefault("PreToolUse", [])
+    if not isinstance(events, list):
+        raise ValueError(f"{path} has a non-list `hooks.PreToolUse` value")
+    return events
+
+
+def _without_grok_handlers(group):
+    if not _grok_group_ours(group):
+        return group
+    foreign = [h for h in group.get("hooks") or [] if not _grok_owned_handler(h)]
+    return {**group, "hooks": foreign} if foreign else None
+
+
+def seed_grok_hook(hooks_path, dest_dir, engine_root=None):
+    """Install our PreToolUse group idempotently; return "created", "added", "updated" or "present".
+
+    Foreign groups and every other key stay byte-identical."""
+    path = Path(hooks_path)
+    existed = path.exists()
+    data = _load_hooks(path)
+    events = _grok_pretool(data, path)
+    want = grok_hook_entry(dest_dir, engine_root)
+    had_owned = any(_grok_group_ours(g) for g in events)
+    updated, found = [], False
+    for group in events:
+        if group == want and not found:
+            updated.append(group)
+            found = True
+        elif (cleaned := _without_grok_handlers(group)) is not None:
+            updated.append(cleaned)
+    if not found:
+        updated.append(want)
+    if events == updated:
+        return "present"
+    events[:] = updated
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return "created" if not existed else "updated" if had_owned else "added"
+
+
+def unseed_grok_hook(hooks_path):
+    """Remove only our handler from PreToolUse; return "removed" or "absent"."""
+    path = Path(hooks_path)
+    data = _load_hooks(path)
+    hooks = data.get("hooks")
+    events = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
+    if not isinstance(events, list) or not any(_grok_group_ours(g) for g in events):
+        return "absent"
+    events[:] = [c for g in events if (c := _without_grok_handlers(g)) is not None]
+    if not events:
+        del hooks["PreToolUse"]
+    if not hooks:
+        del data["hooks"]
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return "removed"
+
+
 def _tui_status_command(host):
     argv = [sys.executable, "-m", "coordinator_core.tui_status", host]
     return subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(shlex.quote(a) for a in argv)
@@ -2148,6 +2237,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     agy_status = agy_settings_path() if hooks_path is None else Path(hooks_path).with_name("agy-settings.json")
     grok_status = grok_config_path() if hooks_path is None else Path(hooks_path).with_name("grok-config.toml")
     grok_rp = grok_rules_path() if hooks_path is None else Path(hooks_path).with_name("grok-peer-doctrine.md")
+    grok_hp = grok_hooks_path() if hooks_path is None else Path(hooks_path).with_name("grok-hooks.json")
     if codex_trust is None and codex_default:
         codex_trust = trust_codex_hook
     agy_sj = Path(agy_skills_json) if agy_skills_json else (
@@ -2161,7 +2251,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     ap.add_argument("--install", action="store_true", help="copy the vendored scripts into the settings home")
     ap.add_argument("--uninstall", action="store_true", help="remove everything --install seeded for Codex and agy")
     ap.add_argument("--force", action="store_true", help="warn instead of refusing outside the verified range")
-    ap.add_argument("--hosts", help="comma list of claude,codex,agy,grok (grok installs a status line and the peer doctrine rules file, no hooks); default codex,agy,grok with the Claude range gate. "
+    ap.add_argument("--hosts", help="comma list of claude,codex,agy,grok (grok installs a status line, the peer doctrine rules file and a PreToolUse host-guard hook); default codex,agy,grok with the Claude range gate. "
                     "Naming no claude skips the gate when `claude` is not on PATH")
     ap.add_argument("--pair", metavar="ALIAS", help="mint or read the pair key for a far box and print its "
                     "authorized_keys line and ssh config block")
@@ -2270,6 +2360,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         if want_grok:
             steps.append(("grok status line", grok_status, lambda: seed_host_status_line(grok_status, "grok", uninstall=True)))
             steps.append(("grok peer doctrine", grok_rp, lambda: unseed_peer_doctrine(grok_rp)))
+            steps.append(("grok hook", grok_hp, lambda: unseed_grok_hook(grok_hp)))
         if want_agy:
             steps.append(("agy allow rule", agy_status, lambda: seed_agy_allow_rule(agy_status, uninstall=True)))
             steps.append(("agy status line", agy_status, lambda: seed_host_status_line(agy_status, "agy", uninstall=True)))
@@ -2377,6 +2468,15 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             print(f"REFUSE: {exc}; agy hook not installed", file=out)
             return 4
         print(f"agy hook {res} in {hp}", file=out)
+    if want_grok and not grok_present():
+        print("grok hook skipped: grok not on PATH and no grok home", file=out)
+    elif want_grok:
+        try:
+            res = seed_grok_hook(grok_hp, dest, engine_root)
+        except ValueError as exc:
+            print(f"REFUSE: {exc}; grok hook not installed", file=out)
+            return 4
+        print(f"grok hook {res} in {grok_hp}", file=out)
     if want_codex:
         try:
             res = seed_codex_hook(codex_hp, dest, engine_root)

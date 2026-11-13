@@ -99,6 +99,7 @@ from typing import Dict, List, Tuple
 _logger = _logging.getLogger(__name__)
 
 _EAGER_OP_MODULES: List[Tuple[str, str]] = [
+    ("coordinator_core.ops.box_memory_admit", 'registers "box_memory.admit", "box_memory.register", "box_memory.release"'),
     ("coordinator_core.ops.codex_status", 'registers "codex_status.snapshot"'),
     ("coordinator_core.ops.ping", 'registers "ping"'),
     ("coordinator_core.ops.remote_engine_handle", 'registers "remote_engine.handle"'),
@@ -705,7 +706,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.distill_write_curated_clusters", 'registers "distill.write_curated_clusters"'),
     ("coordinator_core.ops.distill_apply_disposal", 'registers "distill.apply_disposal"'),
     ("coordinator_core.ops.crossrepo_closure_status", 'registers "crossrepo.closure_status"'),
-    ("coordinator_core.ops.ceremony.update_docs_scan", 'registers "ceremony.update_docs_scan"'),
     (
         "coordinator_core.ops.tracker.advance_status",
         'registers "tracker.advance_status" (provisional — see module docstring\'s '

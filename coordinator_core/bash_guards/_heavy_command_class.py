@@ -672,6 +672,50 @@ def _holders_suffix(host: Any, adm_path: Any) -> str:
         return ""
 
 
+def _engine_call(method: str, params: dict) -> Optional[dict]:
+    """One warm-engine JSON-RPC call from inside a sandbox; None when the engine is unreachable.
+    `hook_path=True`: a miss goes cold at once and never boots an engine that would inherit the
+    sandbox token. Imported lazily to keep the default path's import budget."""
+    try:
+        from coordinator_core.warm.client import try_warm_dispatch
+
+        return try_warm_dispatch(
+            {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, hook_path=True)
+    except Exception:
+        return None
+
+
+def _admit_via_engine(
+    key: str, peak_gib: float, register_pid: Optional[int], session_id: str,
+) -> SpawnAdmission:
+    """The sandbox PermissionError arm of `admit_before_spawn`: the engine, which runs outside the
+    sandbox, measures and reserves. A served error refuses; an unreachable engine admits with an
+    advisory and records telemetry."""
+    params: dict = {"key": key, "default_peak_gib": peak_gib}
+    if register_pid is not None:
+        params["register_pid"] = register_pid
+    if session_id:
+        params["session_id"] = session_id
+    reply = _engine_call("box_memory.admit", params)
+    if reply is None:
+        try:
+            from coordinator_core.warm import telemetry
+
+            telemetry.record_sandbox_advisory_admit(key=key, pid=register_pid)
+        except Exception:
+            pass
+        return SpawnAdmission(
+            True, "ADMIT %s: advisory, memory unreadable under sandbox and engine unreachable" % key,
+            key, peak_gib)
+    result = reply.get("result")
+    if not isinstance(result, dict):
+        code = (reply.get("error") or {}).get("code") if isinstance(reply.get("error"), dict) else None
+        return SpawnAdmission(False, "memory unreadable via engine (%s)" % code, key, peak_gib)
+    return SpawnAdmission(
+        bool(result.get("admitted")), str(result.get("reason") or ""), key,
+        float(result.get("peak_gib", peak_gib)))
+
+
 def admit_before_spawn(
     key: str,
     default_peak_gib: float,
@@ -684,12 +728,31 @@ def admit_before_spawn(
 
     Peak is the larger of `default_peak_gib` and the recorded peak for `key`; the verdict is
     `box_memory_host.admit` over measured memory net of peers' reserved headroom, the same
-    arithmetic as `box-memory-snapshot --admit-peak`. An unreadable reading refuses (fail-closed).
+    arithmetic as `box-memory-snapshot --admit-peak`. An unreadable reading refuses (fail-closed),
+    except a PermissionError from the host (a restricted sandbox token): the warm engine then
+    measures and reserves (`box_memory.admit`, no slot wait), and only an unreachable engine admits
+    with an advisory reason plus a telemetry row.
     Call before the spawn; `register_spawn` after it reserves the child's headroom.
     `register_pid` registers that pid on admit. `host` is a test seam for the host module.
     `wait_kw` (None = refuse at once) is the `slot_wait.request_and_wait` deadline kwargs: on a
     HOLD for a peak over the slot threshold with a resolvable `session_id`, the Group EM's slot
     grant is awaited and admits; a missing grant keeps the refusal."""
+    try:
+        return _admit_local(key, default_peak_gib, host, register_pid, wait_kw, session_id)
+    except PermissionError:
+        return _admit_via_engine(key, float(default_peak_gib), register_pid, session_id)
+
+
+def _admit_local(
+    key: str,
+    default_peak_gib: float,
+    host: Any = None,
+    register_pid: Optional[int] = None,
+    wait_kw: Optional[dict] = None,
+    session_id: str = "",
+) -> SpawnAdmission:
+    """`admit_before_spawn`'s local body, also the body of the engine op `box_memory.admit`.
+    A PermissionError propagates: the caller owns the engine fallback, so there is no recursion."""
     peak_gib = float(default_peak_gib)
     try:
         host = host or _load_box_memory_host()
@@ -712,6 +775,8 @@ def admit_before_spawn(
             if verdict.admit and register_pid is not None:
                 if not register_spawn(key, peak_gib, register_pid, host):
                     return SpawnAdmission(False, "memory reservation write failed", key, peak_gib)
+    except PermissionError:
+        raise
     except Exception as exc:
         return SpawnAdmission(False, "memory unreadable (%s)" % type(exc).__name__, key, peak_gib)
     gib = lambda n: round(n / host.GIB, 1)
@@ -735,6 +800,11 @@ def register_spawn(key: str, peak_gib: float, pid: int, host: Any = None) -> boo
         host = host or _load_box_memory_host()
         host.register_command(host.admission_file(), key, pid, peak_gib)
         return True
+    except PermissionError:
+        # Trap: inside the engine (`box_memory.admit` -> `_admit_local`) this arm would dial the engine itself.
+        reply = _engine_call("box_memory.register", {"key": key, "peak_gib": peak_gib, "pid": pid})
+        result = reply.get("result") if reply else None
+        return bool(isinstance(result, dict) and result.get("ok"))
     except Exception:
         return False
 
@@ -744,5 +814,7 @@ def release_spawn(key: str, pid: int, host: Any = None) -> None:
     try:
         host = host or _load_box_memory_host()
         host.release_command(host.admission_file(), key, pid)
+    except PermissionError:
+        _engine_call("box_memory.release", {"key": key, "pid": pid})
     except Exception:
         pass

@@ -118,6 +118,9 @@ __all__ = [
     "CLIENT_COLD_FILENAME",
     "client_cold_path",
     "record_client_cold_fallback",
+    "SANDBOX_ADVISORY_ADMIT_FILENAME",
+    "sandbox_advisory_admit_path",
+    "record_sandbox_advisory_admit",
     "client_cold_count",
     "warm_rate",
     "BOOT_WAIT_FILENAME",
@@ -257,6 +260,39 @@ def record_client_cold_fallback(
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with locked_write.held_lock(path, holder_label="warm.telemetry.client_cold", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+SANDBOX_ADVISORY_ADMIT_FILENAME = "sandbox-advisory-admit.jsonl"
+
+
+def sandbox_advisory_admit_path(engine_root: Optional[Path] = None) -> Path:
+    return svc_dir(engine_root) / SANDBOX_ADVISORY_ADMIT_FILENAME
+
+
+def record_sandbox_advisory_admit(
+    *,
+    engine_root: Optional[Path] = None,
+    key: Optional[str] = None,
+    pid: Optional[int] = None,
+) -> None:
+    """Append one row for an `admit_before_spawn` that admitted unmeasured and unreserved
+    because a sandbox denied the memory read and the warm engine was unreachable. The row
+    count is how often a sandboxed run spawned invisible to peers' reservations.
+
+    Best-effort, never raises: the sandbox may deny this write too."""
+    record: dict = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    if key is not None:
+        record["key"] = key
+    if pid is not None:
+        record["pid"] = pid
+    path = sandbox_advisory_admit_path(engine_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked_write.held_lock(path, holder_label="warm.telemetry.sandbox_advisory_admit", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:

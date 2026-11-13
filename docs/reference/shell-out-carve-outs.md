@@ -606,7 +606,9 @@ This is naked Python, outside shell classes (a)-(h), not a shell exemption.
 The PM's all-Codex-fleet-integration assignment requires the six ceremony doors.
 
 Admission uses `admit_before_spawn` and transfers a measured-headroom reservation
-from the admitting process to the child before its native composition starts.
+from the admitting process to the child before its native composition starts. Under a sandbox that denies the memory read, the warm
+engine measures and writes the reservation (`box_memory.admit`/`register`/`release`); only an
+unreachable engine admits with an advisory, recorded in `sandbox-advisory-admit.jsonl`.
 The worker releases the reservation on completion. Its native driver retains
 per-step admission, timeout, and suite-grant checks; the bounded launch is held
 to the 500ms op bar. No arbitrary executable or caller environment is accepted.

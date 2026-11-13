@@ -165,7 +165,7 @@ def proc_cmdline(pid: int) -> str:
 
     try:
         return " ".join(psutil.Process(pid).cmdline())
-    except psutil.Error:
+    except (psutil.Error, OSError):
         return ""
 
 
@@ -296,7 +296,7 @@ def nonpaged_pool_bytes() -> int:
 
 
 def empty_working_set(pid: int) -> None:
-    """Trim one process's working set. Raises OSError(winerror). Windows only."""
+    """Trim one process's working set; a no-op when the handle is denied or the trim fails. Windows only."""
     import ctypes
     from ctypes import wintypes
 
@@ -308,11 +308,10 @@ def empty_working_set(pid: int) -> None:
         _PROCESS_QUERY_LIMITED_INFORMATION | _PROCESS_SET_QUOTA, False, pid
     )
     if not handle:
-        raise ctypes.WinError(ctypes.get_last_error())
+        return
     try:
         kernel32.K32EmptyWorkingSet.argtypes = [wintypes.HANDLE]
-        if not kernel32.K32EmptyWorkingSet(handle):
-            raise ctypes.WinError(ctypes.get_last_error())
+        kernel32.K32EmptyWorkingSet(handle)
     finally:
         kernel32.CloseHandle(handle)
 
