@@ -21,6 +21,7 @@ Coverage:
   (n) version_match_silent   — check_schema_version is a silent no-op on a matching version
   (o) version_missing_fail   — check_schema_version raises when schema_version is absent
   (p) missing_field_errors   — each validate_* catches a missing top-level required field
+  (q) admission_contract     — admission constants, not_admitted/deferred validation, fate-list disjointness
 
 Spec backlink:
   coordinator_core/distill/manifest_schema.py
@@ -126,6 +127,58 @@ def test_scope_manifest_roundtrip():
     manifest = _sample_scope_manifest()
     reloaded = json.loads(json.dumps(manifest))
     assert validate_scope_manifest(reloaded) == []
+
+
+def test_scope_manifest_mechanical_key_only_when_supplied():
+    assert "mechanical" not in _sample_scope_manifest()
+    row = {"path": "cross-repo/archive/x.md", "cohort": "memos", "mechanical_fate": "ephemeral"}
+    manifest = make_scope_manifest("r", [], [], [], mechanical=[row])
+    assert manifest["mechanical"] == [row]
+    assert validate_scope_manifest(json.loads(json.dumps(manifest))) == []
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "not-a-list",
+        ["not-a-dict"],
+        [{"path": "", "mechanical_fate": "ephemeral"}],
+        [{"path": "a.md", "mechanical_fate": "delete-it"}],
+        [{"path": "a.md"}],
+    ],
+)
+def test_scope_manifest_rejects_malformed_mechanical(bad):
+    manifest = _sample_scope_manifest()
+    manifest["mechanical"] = bad
+    assert any("mechanical" in e for e in validate_scope_manifest(manifest))
+
+
+_PROGRESS = {"remaining": 4, "unscanned": 0, "scan_complete": True, "decided_by_op": {"logged": 2, "sidecars": 1}}
+
+
+def test_scope_manifest_progress_key_only_when_supplied():
+    assert "progress" not in _sample_scope_manifest()
+    manifest = make_scope_manifest("r", [], [], [], progress=_PROGRESS)
+    assert manifest["progress"] == _PROGRESS
+    assert validate_scope_manifest(json.loads(json.dumps(manifest))) == []
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "not-a-dict",
+        {**_PROGRESS, "remaining": -1},
+        {**_PROGRESS, "remaining": True},
+        {**_PROGRESS, "unscanned": "3"},
+        {**_PROGRESS, "scan_complete": "yes"},
+        {**_PROGRESS, "decided_by_op": {"logged": "2"}},
+        {"remaining": 0, "unscanned": 0, "scan_complete": True},
+    ],
+)
+def test_scope_manifest_rejects_malformed_progress(bad):
+    manifest = _sample_scope_manifest()
+    manifest["progress"] = bad
+    assert any("progress" in e for e in validate_scope_manifest(manifest))
 
 
 def test_disposal_manifest_roundtrip():
@@ -243,3 +296,66 @@ def test_missing_required_field_is_caught(builder, validator, field_to_drop):
     del manifest[field_to_drop]
     errors = validator(manifest)
     assert any(field_to_drop in e for e in errors)
+
+
+def test_admission_constants_price_a_batch_inside_the_run_budget():
+    from coordinator_core.contract import run_budget
+    from coordinator_core.distill import manifest_schema as s
+    from coordinator_core.ops.distill_scope import SCAN_BATCH_BYTE_BUDGET
+
+    assert s.PLAN_ADMISSION_MIN_BYTES == 12_000 and s.GUIDE_BYTE_BUDGET == 48_000
+    assert s.VALID_ADMISSION_REASONS == {"below_admission", "not_log_cited", "already_captured"}
+    assert not hasattr(s, "DISTILL_MAX_DISPATCHES") and not hasattr(s, "DISTILL_MAX_TOKENS")
+    assert not hasattr(s, "ADMISSION_MAX_SCAN_BATCHES")
+    # a scan batch: byte budget + guide budget + the 12_000-byte relay, bytes/4
+    assert s.SCAN_BATCH_TOKENS == (SCAN_BATCH_BYTE_BUDGET + s.GUIDE_BYTE_BUDGET + 12_000) // 4
+    cap = run_budget.load("distill")
+    one = run_budget.UnitCost(s.SCAN_BATCH_AGENTS, s.SCAN_BATCH_TOKENS, s.SCAN_BATCH_MINUTES)
+    fixed = run_budget.UnitCost(s.LOAD_RELAY_AGENTS + 2, s.LOAD_RELAY_TOKENS, s.LOAD_RELAY_MINUTES)
+    assert run_budget.fit_units(cap, fixed, one, 100) >= 1
+
+
+def test_scope_manifest_admission_keys_only_when_supplied_and_valid():
+    assert "not_admitted" not in _sample_scope_manifest() and "deferred" not in _sample_scope_manifest()
+    manifest = make_scope_manifest(
+        "r", [["a.md"]], [], [],
+        not_admitted=[{"path": "b.md", "cohort": "plans", "reason": "below_admission"}],
+        deferred=[{"path": "c.md", "cohort": "plans"}],
+    )
+    assert manifest["not_admitted"][0]["reason"] == "below_admission"
+    assert manifest["deferred"] == [{"path": "c.md", "cohort": "plans"}]
+    assert validate_scope_manifest(manifest) == []
+
+
+@pytest.mark.parametrize(
+    "key,bad",
+    [
+        ("not_admitted", [{"path": "b.md", "cohort": "plans", "reason": "because"}]),
+        ("not_admitted", [{"path": "b.md", "cohort": "plans"}]),
+        ("not_admitted", [{"path": "", "cohort": "plans", "reason": "below_admission"}]),
+        ("deferred", [{"path": "", "cohort": "plans"}]),
+        ("deferred", "c.md"),
+    ],
+)
+def test_scope_manifest_rejects_malformed_admission_rows(key, bad):
+    manifest = _sample_scope_manifest()
+    manifest[key] = bad
+    assert any(key in e for e in validate_scope_manifest(manifest))
+
+
+@pytest.mark.parametrize("other", ["mechanical", "not_admitted", "deferred"])
+def test_scope_manifest_refuses_a_path_in_two_fate_lists(other):
+    row = {"path": "docs/plans/a.md", "cohort": "plans", "reason": "not_log_cited", "mechanical_fate": "ephemeral"}
+    manifest = _sample_scope_manifest()
+    manifest[other] = [row]
+    assert any("docs/plans/a.md" in e and "both" in e for e in validate_scope_manifest(manifest))
+
+
+def test_scope_manifest_disjoint_lists_validate_clean():
+    manifest = make_scope_manifest(
+        "r", [["a.md"]], [], [],
+        mechanical=[{"path": "m.md", "mechanical_fate": "ephemeral"}],
+        not_admitted=[{"path": "n.md", "cohort": "p", "reason": "already_captured"}],
+        deferred=[{"path": "d.md", "cohort": "p"}],
+    )
+    assert validate_scope_manifest(manifest) == []

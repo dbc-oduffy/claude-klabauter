@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Cost probe for the codex/agy host guard against an unreachable engine.
 
 Prints one JSON line per measurement: `shim_import` (process seconds for a first import of

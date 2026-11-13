@@ -201,6 +201,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.liveness import resolve_live_session_ids
 from coordinator_core.ops import requirement_register
+from coordinator_core.session.output_tree_layout import is_month_dir
 from coordinator_core.ops.cascade_baton_rows import resolve_baton_rows
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
@@ -548,8 +549,12 @@ def _collect_live_candidates_for_kind(
     if not base_dir.is_dir():
         return matches, True, unreadable
 
+    # The corpus is month-sharded (`<subdir>/YYYY-MM/`) beside legacy flat
+    # records; a flat-only scan misses every record the scaffolder buckets.
     try:
         entries = list(base_dir.iterdir())
+        for shard in [e for e in entries if is_month_dir(e.name) and e.is_dir()]:
+            entries.extend(shard.iterdir())
     except OSError:
         return matches, True, unreadable
 

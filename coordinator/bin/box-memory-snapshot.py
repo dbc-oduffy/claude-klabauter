@@ -43,6 +43,14 @@ _FAILED_READ_NOTE = (
 )
 
 
+def _place_engine_on_path() -> None:
+    """Put the engine root on `sys.path` ahead of a lazy `coordinator_core` import; fail-open."""
+    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
+    cc_invoke.ensure_engine_on_path(__file__)
+
+
 def _load(name: str):
     spec = importlib.util.spec_from_file_location(name, _LIB / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
@@ -249,6 +257,7 @@ def main(
     adm_path = args.admission_file or host.admission_file()
     if args.command_key and args.release_pid is not None:
         if args.run:
+            _place_engine_on_path()
             from coordinator_core.group_em import box_registry
             try:
                 sid = box_registry.admission_session_id(args.session_id)
@@ -327,6 +336,7 @@ def main(
         peak = int(args.admit_peak * host.GIB)
         limit = int(args.commit_limit_gib * host.GIB) if args.commit_limit_gib is not None else status.commit_limit
         if args.run:
+            _place_engine_on_path()
             from coordinator_core.group_em import box_registry, slot_grant
             try:
                 sid = box_registry.admission_session_id(args.session_id)

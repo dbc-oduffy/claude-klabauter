@@ -572,6 +572,7 @@ def apply(
     decisions: Optional[dict[str, Any]] = None,
     catch_up: bool = False,
     conclude: bool = False,
+    no_push: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     """`apply()` — recomputes the brief in-process (never trusts a
     caller-supplied decision object) and executes every execution-ready
@@ -580,7 +581,9 @@ def apply(
     entries leave their gated directives blocked, not auto-fired.
 
     `catch_up`/`conclude` are threaded into the recompute so the executed list is the brief's:
-    under catch-up no concluding directive exists to run.
+    under catch-up no concluding directive exists to run. `no_push` is threaded the same way, so
+    every pushing directive of the recomputed brief carries `--no-push`; the commit tail never
+    pushes.
 
     Constructs a fresh composition budget (never module-level — see
     `telemetry.composition_record`'s own PER-CALL FACTORY note) and flushes
@@ -592,7 +595,11 @@ def apply(
     exit_label = None
     try:
         period_kwargs = {"catch_up": catch_up, "conclude": conclude} if catch_up or conclude else {}
-        brief_exit_code, envelope = brief(decisions=decisions, **period_kwargs)
+        brief_exit_code, envelope = brief(
+            decisions=decisions,
+            **({"no_push": True} if no_push else {}),
+            **period_kwargs,
+        )
         if brief_exit_code != 0:
             transport_fail_report = {
                 "error": envelope.get("error", "brief() did not resolve an actionable plan"),
@@ -658,6 +665,7 @@ def main(argv: list[str]) -> int:
     decisions: Optional[dict[str, Any]] = None
     catch_up = False
     conclude = False
+    no_push = False
     conflict = detect_conflicting_payload_channels(argv)
     if conflict is not None:
         print(f"workweek-complete-apply: {conflict}", file=sys.stderr)
@@ -677,6 +685,9 @@ def main(argv: list[str]) -> int:
         elif tok == CONCLUDE_FLAG:
             conclude = True
             i += 1
+        elif tok == "--no-push":
+            no_push = True
+            i += 1
         else:
             print(f"workweek-complete-apply: unrecognized argument {tok!r}", file=sys.stderr)
             return int(WorkweekApplyExitCode.TRANSPORT_FAIL)
@@ -686,7 +697,12 @@ def main(argv: list[str]) -> int:
         print(f"workweek-complete-apply: {refusal}", file=sys.stderr)
         return int(WorkweekApplyExitCode.TRANSPORT_FAIL)
 
-    exit_code, report = apply(decisions=decisions, catch_up=catch_up, conclude=conclude)
+    exit_code, report = apply(
+        decisions=decisions,
+        catch_up=catch_up,
+        conclude=conclude,
+        **({"no_push": True} if no_push else {}),
+    )
     print(json.dumps(report, indent=2, sort_keys=True))
     return exit_code
 

@@ -33,7 +33,7 @@ premise:
   evidence: PLACEHOLDER - cite the evidence
 deliverable_id: null
 """
-_RESEARCH_FLAGS = ("--research-class", "deep", "--research-source", "repo", "--research-question", "How does X work?")
+_RESEARCH_FLAGS = ("--research-class", "unblock", "--research-source", "repo", "--research-question", "How does X work?")
 
 
 def _stub_wrap(text):
@@ -135,3 +135,14 @@ def test_no_plan_or_execute_agent_runs_outside_a_not_halted_guard(script):
         for i in idxs:
             guard = [ln for ln in lines[gate_at:i] if "if (" in ln and "!_halted" in ln]
             assert guard, label
+
+
+def test_classifier_enums_carry_depth_deep_and_unblock_not_class_deep():
+    from coordinator_core.ops import _research_contract as rc
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    research = ask_contract.ASK_SCOUT_SCHEMA["properties"]["research"]["properties"]
+    assert research["depth"]["enum"] == ["standard", "deep", "deeper", "deepest"]
+    assert "deep" not in research["class"]["enum"] and "unblock" in research["class"]["enum"]
+    assert "unblock" in ask_contract.RESEARCH_CLASSIFY_CLAUSE and "depth: deep" in ask_contract.RESEARCH_CLASSIFY_CLAUSE
+    assert tuple(research["depth"]["enum"]) == rc.DEPTHS

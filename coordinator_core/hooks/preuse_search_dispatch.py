@@ -61,6 +61,7 @@ from coordinator_core.session_hub_path import session_dir_for
 _KILL_SWITCH = "COORDINATOR_HOOK_PREUSE_SEARCH_DISPATCH_DISABLED"
 _SEARCH_TOOLS = frozenset({"Read", "Grep", "Glob"})
 _GENERAL_SENTINEL = "example-retrieval-repo-search-nudged"
+_GREP_AFTER_NUDGE_COUNT = "example-retrieval-repo-grep-after-nudge-count"
 _AGENT_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
 
 _GENERAL_ADVICE = (
@@ -235,6 +236,19 @@ def _claim_once(session_dir: Path, session_id: str, name: str) -> bool:
     return True
 
 
+def _count_grep_after_nudge(session_dir: Path, suffix: str) -> None:
+    """Best-effort meter (concurrent Greps may undercount): bump the per-agent count of Greps made after the nudge fired. Never denies; any failure is silence. No in-repo reader of the count file yet (speculative: the DoE-side consumer is unnamed)."""
+    try:
+        counter = session_dir / (_GREP_AFTER_NUDGE_COUNT + suffix)
+        try:
+            current = int(counter.read_text().strip() or 0)
+        except (OSError, ValueError):
+            current = 0
+        counter.write_text(str(current + 1))
+    except OSError:
+        pass
+
+
 def _turn_budget_text(params: dict) -> str:
     """Turn-budget advisory; any failure is silence. A non-empty return is already recorded as delivered."""
     try:
@@ -310,6 +324,8 @@ def _chain(params: dict) -> dict:
         general_claimed = _claim_once(session_dir, session_id, _GENERAL_SENTINEL + suffix)
     if general_claimed:
         parts.append(_GENERAL_ADVICE)
+    elif params.get("tool_name") == "Grep" and (session_dir / (_GENERAL_SENTINEL + suffix)).is_file():
+        _count_grep_after_nudge(session_dir, suffix)
 
     pattern = tool_input.get("pattern")
     if params.get("tool_name") == "Grep" and isinstance(pattern, str):

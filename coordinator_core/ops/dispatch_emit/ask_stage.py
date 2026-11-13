@@ -1033,6 +1033,31 @@ def release_remedy(run_ids: Sequence[str]) -> str:
     return "; ".join(f'dispatch.release_run_token {{"run_id": "{rid}"}}' for rid in sorted(run_ids))
 
 
+def _blockers_last_activity(root: Path, run_ids: Iterable[str]) -> dict[str, float]:
+    """Epoch of each blocking run's last activity: the later of its stage stamp and its newest run
+    artifact (`warp_run_deliverable._own_activity_epoch`), so a run whose stamp sits at `staged` while
+    its agents complete reads live. A run with no readable signal is omitted."""
+    from coordinator_core.ops.warp_run_deliverable import _own_activity_epoch
+
+    out: dict[str, float] = {}
+    for rid in run_ids:
+        try:
+            epoch = _own_activity_epoch(root, rid)
+        except (OSError, ValueError):
+            continue
+        if epoch is not None:
+            out[rid] = epoch
+    return out
+
+
+def _park_activity_note(wait: Mapping[str, object]) -> str:
+    """` (last activity: <run>: <ISO UTC>; ...)` from a park record, empty when it carries none."""
+    seen = wait.get("last_activity")
+    if not isinstance(seen, dict) or not seen:
+        return ""
+    return " (last activity: " + "; ".join(f"{rid}: {stamp}" for rid, stamp in sorted(seen.items())) + ")"
+
+
 def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -> Optional[dict]:
     """Return None when no other live run's staged footprint intersects `writes`. When every
     intersecting run is a live run of this engine (`run_token.is_live`) and this run has no expired
@@ -1089,7 +1114,11 @@ def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -
     if not hits:
         stage_wait.clear(root, run_id)
         return None
-    named = "; ".join(f"{rid}: {', '.join(paths)}" for rid, paths in sorted(hits.items()))
+    activity = _blockers_last_activity(root, hits)
+    named = "; ".join(
+        f"{rid}: {', '.join(paths)} (last activity {stage_wait.iso_utc(activity[rid]) if rid in activity else 'unknown'})"
+        for rid, paths in sorted(hits.items())
+    )
     release = release_remedy(list(hits))
     if all(run_token.is_live(root, rid) for rid in hits) and not stage_wait.expired(root, run_id):
         prior = stage_wait.read(root, run_id)
@@ -1097,14 +1126,16 @@ def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -
             # A started record's marker would make the next wake's O_EXCL claim lose.
             stage_wait.clear(root, run_id)
         owner = run_token._read_rec(root, run_id) or {}
-        parked = stage_wait.park(root, run_id, sorted(hits), writes, session_id=owner.get("session_id") or "")
+        parked = stage_wait.park(
+            root, run_id, sorted(hits), writes, session_id=owner.get("session_id") or "", last_activity=activity
+        )
         if parked is not None:
             return parked
     stage_wait.clear(root, run_id)
     run_token.consume(root, run_id)
     raise AskStageError(
         f"{LIVE_RUN_WRITE_OVERLAP}: writes overlap live run {named}. Resubmit when it lands, "
-        f"or release a run that has ended: {release}."
+        f"or release a run only if its last activity is old and it has ended: {release}."
     )
 
 
@@ -1688,8 +1719,9 @@ def stage(
         )
     if waiting is not None:
         raise StageWaiting(
-            f"{STAGE_WAIT_PARKED}: writes overlap live run {', '.join(waiting['blockers'])}; parked until it lands "
-            f"or is released; a blocker known dead: {release_remedy(waiting['blockers'])}.",
+            f"{STAGE_WAIT_PARKED}: writes overlap live run {', '.join(waiting['blockers'])}"
+            f"{_park_activity_note(waiting)}; parked until it lands or is released; "
+            f"a blocker with old last activity known dead: {release_remedy(waiting['blockers'])}.",
             waiting,
         )
     # The docs stage writes only these; terminal_commit holds them to the chunk test code rows get.
@@ -2602,8 +2634,12 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
         return {
             PARKED_REPLY_KEY: STAGE_WAIT_PARKED,
             "plan_path": params.get("plan_path") or None,
-            "waiting": {"blockers": wait["blockers"], "deadline": wait["deadline"]},
-            "remedy": f"A blocker known dead: {release_remedy(wait['blockers'])}.",
+            "waiting": {
+                "blockers": wait["blockers"],
+                "deadline": wait["deadline"],
+                "last_activity": wait.get("last_activity") or {},
+            },
+            "remedy": f"A blocker with old last activity known dead: {release_remedy(wait['blockers'])}.",
         }
     except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
         reply = {"error": str(exc)}

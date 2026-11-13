@@ -90,7 +90,7 @@ def test_a_raised_exception_leaves_no_handover_hold(tmp_path, monkeypatch, where
     env = _q._setup(tmp_path, monkeypatch, True)
     import percolate.dest_refresh as dr  # importable only after `_setup` bootstraps the engine path
 
-    env.moving = True if where == "refresh" else False
+    env.moving = where == "refresh"
 
     def boom(*_a, **_k):
         raise RuntimeError("induced")

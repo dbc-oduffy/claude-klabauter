@@ -50,6 +50,15 @@ __all__ = [
     "STAMP_FIELDS",
     "VALID_VERDICTS",
     "VALID_MECHANICAL_FATES",
+    "VALID_ADMISSION_REASONS",
+    "LOAD_RELAY_AGENTS",
+    "LOAD_RELAY_MINUTES",
+    "LOAD_RELAY_TOKENS",
+    "SCAN_BATCH_AGENTS",
+    "SCAN_BATCH_TOKENS",
+    "SCAN_BATCH_MINUTES",
+    "PLAN_ADMISSION_MIN_BYTES",
+    "GUIDE_BYTE_BUDGET",
     "ManifestSchemaError",
     "make_scope_manifest",
     "validate_scope_manifest",
@@ -87,6 +96,29 @@ VALID_VERDICTS: frozenset[str] = frozenset({"pass", "block"})
 #: Fates distill.scope may decide from frontmatter alone, taking the row out of the scan
 #: batches. "ephemeral" = the artifact's own distill_fate declares nothing is owed.
 VALID_MECHANICAL_FATES: frozenset[str] = frozenset({"ephemeral"})
+
+#: Per-run cost model the distill.scope fit prices against `run_budget.load("distill")`. A batch
+#: is two dispatches (its relay agent, its scan agent); the load phase is one manifest relay
+#: agent plus one per slug shard, and the caller adds the shard agents. Tokens: a scan batch is
+#: (SCAN_BATCH_BYTE_BUDGET 400_000 + GUIDE_BYTE_BUDGET + the 12_000-byte relay) / 4 (bytes/4
+#: proxy, an upper bound); the load relay carries the manifest at 1_000 tokens. Minutes are
+#: wall-clock estimates pending the baseline measurement, not telemetry.
+LOAD_RELAY_AGENTS: int = 1
+LOAD_RELAY_TOKENS: int = 1_000
+LOAD_RELAY_MINUTES: int = 2
+SCAN_BATCH_AGENTS: int = 2
+SCAN_BATCH_TOKENS: int = 115_000
+SCAN_BATCH_MINUTES: int = 3
+
+#: A plan/spec smaller than this is not admitted as a distill target.
+PLAN_ADMISSION_MIN_BYTES: int = 12_000
+#: Total guide bytes one scan agent may be told to open.
+GUIDE_BYTE_BUDGET: int = 48_000
+
+#: Why a candidate file was retained without a scan agent reading it. Never disposal-eligible.
+VALID_ADMISSION_REASONS: frozenset[str] = frozenset(
+    {"below_admission", "not_log_cited", "already_captured"}
+)
 
 _SCOPE_REQUIRED: tuple[str, ...] = (
     "schema_version",
@@ -157,8 +189,14 @@ def make_scope_manifest(
     cohorts: dict[str, list[str]] | None = None,
     mechanical: list[dict[str, str]] | None = None,
     progress: dict[str, Any] | None = None,
+    not_admitted: list[dict[str, str]] | None = None,
+    deferred: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """``mechanical`` ({path, cohort, mechanical_fate} rows) names artifacts triaged out of
+    """``not_admitted`` ({path, cohort, reason in VALID_ADMISSION_REASONS}) and ``deferred``
+    ({path, cohort}: admitted, past the scan-batch budget) name retained files no scan agent
+    reads this run; each key is emitted only when supplied and neither is disposal-eligible.
+
+    ``mechanical`` ({path, cohort, mechanical_fate} rows) names artifacts triaged out of
     ``batches`` by frontmatter alone; the key is emitted only when supplied. Triage only:
     delete guards still run at apply_disposal. No in-repo consumer reads ``mechanical`` yet
     (speculative: the disposal step that will take these rows is unnamed).
@@ -178,6 +216,10 @@ def make_scope_manifest(
     }
     if mechanical is not None:
         manifest["mechanical"] = [dict(row) for row in mechanical]
+    if not_admitted is not None:
+        manifest["not_admitted"] = [dict(row) for row in not_admitted]
+    if deferred is not None:
+        manifest["deferred"] = [dict(row) for row in deferred]
     if progress is not None:
         manifest["progress"] = dict(progress)
     return manifest
@@ -210,8 +252,55 @@ def validate_scope_manifest(manifest: dict[str, Any]) -> list[str]:
         errors.append("cohorts must be a dict")
     if "mechanical" in manifest:
         errors.extend(_validate_mechanical(manifest["mechanical"]))
+    if "not_admitted" in manifest:
+        errors.extend(_validate_path_rows(manifest["not_admitted"], "not_admitted", reason=True))
+    if "deferred" in manifest:
+        errors.extend(_validate_path_rows(manifest["deferred"], "deferred", reason=False))
     if "progress" in manifest:
         errors.extend(_validate_progress(manifest["progress"]))
+    errors.extend(_validate_disjoint(manifest))
+    return errors
+
+
+def _validate_path_rows(rows: Any, key: str, *, reason: bool) -> list[str]:
+    if not isinstance(rows, list):
+        return [f"{key} must be a list"]
+    errors: list[str] = []
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            errors.append(f"{key}[{idx}] must be a dict")
+            continue
+        if not isinstance(row.get("path"), str) or not row["path"]:
+            errors.append(f"{key}[{idx}].path must be a non-empty string")
+        if reason and row.get("reason") not in VALID_ADMISSION_REASONS:
+            errors.append(
+                f"{key}[{idx}].reason must be one of "
+                f"{sorted(VALID_ADMISSION_REASONS)}; got {row.get('reason')!r}"
+            )
+    return errors
+
+
+def _validate_disjoint(manifest: dict[str, Any]) -> list[str]:
+    """A path may sit in only one of scannable (batches), mechanical, not_admitted, deferred."""
+    seen: dict[str, str] = {}
+    errors: list[str] = []
+    sources: list[tuple[str, list[str]]] = []
+    batches = manifest.get("batches")
+    if isinstance(batches, list):
+        sources.append(
+            ("batches", [p for b in batches if isinstance(b, list) for p in b if isinstance(p, str)])
+        )
+    for key in ("mechanical", "not_admitted", "deferred"):
+        rows = manifest.get(key)
+        if isinstance(rows, list):
+            sources.append(
+                (key, [r["path"] for r in rows if isinstance(r, dict) and isinstance(r.get("path"), str)])
+            )
+    for key, paths in sources:
+        for path in paths:
+            prior = seen.setdefault(path, key)
+            if prior != key:
+                errors.append(f"path {path!r} appears in both {prior} and {key}")
     return errors
 
 

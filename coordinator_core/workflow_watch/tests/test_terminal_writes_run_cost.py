@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from coordinator_core import workflow_watch as ww
 from coordinator_core.workflow_watch import run_report
+
+
+@pytest.fixture(autouse=True)
+def _no_repo_root(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
 
 
 class _Rec:
@@ -34,7 +41,7 @@ def _run(monkeypatch, tmp_path, capsys, write_record):
 def _writer(tmp_path, verdicts):
     calls = []
 
-    def write_record(journal_path):
+    def write_record(journal_path, **_kw):
         calls.append(journal_path)
         out = tmp_path / "run-cost.json"
         out.write_text(json.dumps({"ratchet": {m: {"verdict": v} for m, v in verdicts.items()}}))
@@ -59,7 +66,7 @@ def test_no_breach_prints_only_terminal(monkeypatch, tmp_path, capsys):
 
 
 def test_write_failure_keeps_exit_zero_and_silent(monkeypatch, tmp_path, capsys):
-    def boom(_p):
+    def boom(_p, **_kw):
         raise OSError("disk")
 
     rc, out = _run(monkeypatch, tmp_path, capsys, boom)

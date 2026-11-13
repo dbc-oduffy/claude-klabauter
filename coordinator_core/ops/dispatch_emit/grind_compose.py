@@ -108,6 +108,7 @@ from coordinator_core.backlog_grind_assemble.grind_split import MAX_SPLIT_ITEMS
 from coordinator_core.contract import grind_vocab as vocab
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
 from coordinator_core.ops.dispatch_emit import grind_stages as stages
+from coordinator_core.distill.prompt_tier import estimate_tokens, over_tier, split_to_tier
 from coordinator_core.ops.dispatch_emit import pm_adjudication
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.landing_integrity import REVERIFY_INDETERMINATE
@@ -1420,12 +1421,48 @@ def _packing_signature(profile: Profile, knobs: Mapping[str, Any], key: str) -> 
     return (depth, verify)
 
 
+def _entry_bytes(entry: ManifestEntry, repo_root: Path) -> int:
+    """Row file size in bytes; an unreadable row counts 0 (it adds nothing to a prompt)."""
+    p = Path(entry.path)
+    try:
+        return (p if p.is_absolute() else Path(repo_root) / p).stat().st_size
+    except OSError:
+        return 0
+
+
+def _split_over_tier(
+    batches: list[tuple[str, list[ManifestEntry]]], repo_root: Path
+) -> list[tuple[str, list[ManifestEntry]]]:
+    """Split any batch whose row files project over LONG_PROMPT_TIER_TOKENS into `<id>-s<n>` sub-batches.
+
+    A batch under the tier is untouched; a single row over the tier stays alone (never dropped).
+    """
+    out: list[tuple[str, list[ManifestEntry]]] = []
+    for batch_id, entries in batches:
+        sizes = {e.row_id: _entry_bytes(e, repo_root) for e in entries}
+        if not over_tier(sum(estimate_tokens(n) for n in sizes.values())):
+            out.append((batch_id, entries))
+            continue
+        groups = split_to_tier(entries, lambda e: sizes[e.row_id])
+        if len(groups) == 1:
+            out.append((batch_id, entries))
+            continue
+        out.extend((f"{batch_id}-s{n}", group) for n, group in enumerate(groups))
+    return out
+
+
 def _group_into_batches(
-    manifest: Manifest, knobs: Mapping[str, Any], profile: Optional[Profile] = None
+    manifest: Manifest,
+    knobs: Mapping[str, Any],
+    profile: Optional[Profile] = None,
+    *,
+    repo_root: Optional[Path] = None,
 ) -> list[tuple[str, list[ManifestEntry]]]:
     """Chunk rows per batch_key; with a `profile`, pack under-filled remainder chunks of compatible keys into `@packed-b<n>` batches
     (compatible: equal triage depth and equal verify spec on every verify node).
 
+    With `repo_root`, a batch (packed or not) whose row files project over the long-prompt tier is split
+    after packing; the count knob alone governs below it.
     A packed batch mixes batch_keys, so consumers must read a row's own key from its manifest entry.
     """
     batch_size_knob = knobs.get("batch_size", 4)
@@ -1482,7 +1519,176 @@ def _group_into_batches(
         else:
             batches.append((f"{PACKED_BATCH_PREFIX}{next_packed}", [e for _, _, c in pack for e in c]))
             next_packed += 1
-    return batches
+    return _split_over_tier(batches, repo_root) if repo_root is not None else batches
+
+
+PREVET_CLASSES = ("keep", "discard-candidate", "dedupe-candidate")
+
+#: The decision contract the pre-vet prompt carries. Every escape is toward `keep`: a candidate is
+#: only ever PROPOSED to the refute-close stage, which closes nothing it cannot independently confirm.
+PREVET_DECISION_RULES = (
+    "The class is keep unless a rule below says otherwise.",
+    "discard-candidate needs has_rule=false: the row states no rule, mechanism, instruction or named "
+    "artifact to change, and its whole content is historical detail (what happened, when, who) that a "
+    "daily log or the plan it cites already carries. Witness: one line quoting what shows it.",
+    "dedupe-candidate: the row's rule is already stated in an existing artifact. Witness: that "
+    "artifact's repo-relative path. Search at most once per row; no hit means keep.",
+    "keep: a concrete rule, mechanism, command, test, guard or file to change; an applied, resolved or "
+    "closed status; a pm_ruling; any doubt. Never judge whether a claim is true: the refute stage does that.",
+)
+
+_PREVET_ROW_SCHEMA = {
+    "type": "object",
+    "required": ["row", "class", "has_rule", "witness"],
+    "properties": {
+        "row": {"type": "string", "description": "the row_id exactly as given, never the row's path"},
+        "class": {"type": "string", "enum": list(PREVET_CLASSES)},
+        "has_rule": {"type": "boolean"},
+        "witness": {"type": "string"},
+    },
+}
+
+
+def compose_prevet_call(
+    *,
+    model: str,
+    models: Optional[Mapping[str, str]] = None,
+    agent_type_host: Optional[str] = None,
+    run_key: str,
+    preamble_expr: Optional[str] = None,
+) -> str:
+    """One pre-vet call: ``rowsData`` (a JS array of ``{row_id, path}``) is in scope at run time.
+    The call rides the triage stage on ``model``, never a run override of the triage model."""
+    parts: list[tuple[str, str]] = [
+        *stages._preamble_parts(preamble_expr),
+        ("lit", "You are the pre-vet stage: classify, never fix or close. Your rows (row_id/path) are: "),
+        ("expr", "JSON.stringify(rowsData)"),
+        (
+            "lit",
+            ". Decision rules: "
+            + " ".join(f"({i}) {rule}" for i, rule in enumerate(PREVET_DECISION_RULES, 1))
+            + f" Return one record per row, `class` exactly one of {list(PREVET_CLASSES)} and `row` as the "
+            "row_id. Edit no file and run no ledger command. " + stages._NO_STAGING_CLAUSE,
+        ),
+    ]
+    return stages._agent_call(
+        stages._join_prompt_parts(parts),
+        stage="triage",
+        models={**(models or {}), "triage": model},
+        label="prevet",
+        phase_title="Grind",
+        agent_type=stages.GENERAL_PURPOSE_AGENT_TYPE,
+        agent_type_host=agent_type_host,
+        run_key=run_key,
+        effort="low",
+        schema={
+            "type": "object",
+            "required": ["rows"],
+            "properties": {"rows": {"type": "array", "items": _PREVET_ROW_SCHEMA}},
+        },
+        is_expr=True,
+    )
+
+
+#: `_prevetClass` is the fallback path: anything but a well-formed candidate (an unknown class, a
+#: missing witness, a discard whose has_rule is not exactly false) is keep and goes to triage.
+_PREVET_JS = (
+    "function _prevetClass(rec) {\n"
+    "  const w = String((rec && rec.witness) || '').trim();\n"
+    "  if (rec && rec.class === 'discard-candidate' && rec.has_rule === false && w) return 'discard-candidate';\n"
+    "  if (rec && rec.class === 'dedupe-candidate' && w.includes('/')) return 'dedupe-candidate';\n"
+    "  return 'keep';\n"
+    "}\n"
+    "function _prevetRevive(row) { row.node = null; row.origin = ''; row.evidence = ''; }\n"
+    "async function _prevetClose(ids) {\n"
+    "  const proposals = ids.map((r) => ({ row_id: r, path: _rows[r].path, digest: _rows[r].digest, evidence: _rows[r].evidence, origin: _rows[r].origin }));\n"
+    "  let result = {};\n"
+    "  try { result = (await _issue('@prevet', '', () => _closeCall(proposals))) || {}; } catch (err) { result = {}; }\n"
+    "  for (const item of (result.confirmed || [])) {\n"
+    "    const itemRow = _normalizeRowRef(proposals, item.row);\n"
+    "    const row = _rows[itemRow];\n"
+    "    if (!row || row.done || row.node !== PREVET_CLOSE_NODE || !ids.includes(itemRow)) continue;\n"
+    "    _bumpRefuteOrigin(row.origin, 'confirmed');\n"
+    "    row.removedFiles = row.removedFiles.concat([row.path]);\n"
+    "    const _archived = _archiveDestination(row.path);\n"
+    "    row.touchedFiles = row.touchedFiles.concat([_archived]);\n"
+    "    row.closeResult = { old: row.path, new: _archived };\n"
+    "    row.lastOutcome = 'confirmed';\n"
+    "    const route = followEdge(row.node, 'confirmed', row);\n"
+    "    if (route.kind === 'node' && ROUTING[route.value].kind === 'commit') { row.node = route.value; row.done = true; _queueCommit(itemRow); continue; }\n"
+    "    applyRoute(row, itemRow, route, 'refute-close confirmed');\n"
+    "    if (route.kind === 'handback') { _queueCommit(itemRow); }\n"
+    "  }\n"
+    "  for (const entry of (result.refuted || [])) {\n"
+    "    const entryRow = _normalizeRowRef(proposals, entry.row);\n"
+    "    const row = _rows[entryRow];\n"
+    "    if (!row || row.done || row.node !== PREVET_CLOSE_NODE || !ids.includes(entryRow)) continue;\n"
+    "    _bumpRefuteOrigin(row.origin, 'refuted');\n"
+    "    _prevetRevive(row);\n"
+    "  }\n"
+    "  for (const staleRef of (result.stale || [])) {\n"
+    "    const staleId = _normalizeRowRef(proposals, staleRef);\n"
+    "    const row = _rows[staleId];\n"
+    "    if (!row || row.done || row.node !== PREVET_CLOSE_NODE || !ids.includes(staleId)) continue;\n"
+    "    row.done = true; _handBack(staleId, 'manifest-stale', 'refute-close close exited 3 (digest mismatch)');\n"
+    "  }\n"
+    "  for (const r of ids) { if (!_rows[r].done && _rows[r].node === PREVET_CLOSE_NODE) { _prevetRevive(_rows[r]); } }\n"
+    "}\n"
+    "async function _prevetBatch(rowIds) {\n"
+    "  const rowsMeta = rowIds.map((r) => ({ row_id: r, path: QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r).path }));\n"
+    "  let out = {};\n"
+    "  try { out = (await _issue('@prevet', '', () => _prevetCall(rowIds))) || {}; } catch (err) { return; }\n"
+    "  const cands = [];\n"
+    "  for (const rec of (out.rows || [])) {\n"
+    "    const rid = _normalizeRowRef(rowsMeta, rec.row);\n"
+    "    const row = _rows[rid];\n"
+    "    const cls = _prevetClass(rec);\n"
+    "    if (!row || row.done || row.node || !rowIds.includes(rid) || cls === 'keep') continue;\n"
+    "    row.origin = cls === 'discard-candidate' ? 'prevet:discard' : 'prevet:dedupe';\n"
+    "    row.evidence = String(rec.witness).trim();\n"
+    "    row.node = PREVET_CLOSE_NODE;\n"
+    "    cands.push(rid);\n"
+    "  }\n"
+    "  if (cands.length > 0) { await _prevetClose(cands); }\n"
+    "}\n"
+    "async function _prevetAll() {\n"
+    "  const ids = [];\n"
+    "  for (const b of BATCHES) { for (const r of b.rows) { if (!_rows[r].pmRuling) ids.push(r); } }\n"
+    "  for (let i = 0; i < ids.length; i += PREVET_BATCH_SIZE) {\n"
+    "    if (MAX_AGENT_CALLS !== null && _callCount + 2 > MAX_AGENT_CALLS) break;\n"
+    "    if (BUDGET_TOKENS !== null && budget.spent() - _startSpent + RESERVE > BUDGET_TOKENS) break;\n"
+    "    try { await _prevetBatch(ids.slice(i, i + PREVET_BATCH_SIZE)); } catch (err) { continue; }\n"
+    "  }\n"
+    "}"
+)
+
+
+def _prevet_js(
+    profile: Profile,
+    close_node: str,
+    *,
+    models: Optional[Mapping[str, str]],
+    agent_type_host: Optional[str],
+    run_key: str,
+    preamble_expr: Optional[str],
+) -> str:
+    """The pre-vet leg: `_prevetAll()` runs once before the grind, one cheap call per ``batch_size`` rows,
+    then ONE refute-close call over that batch's candidates. A candidate the refuter does not confirm (or
+    leaves unresolved, or a failed call) returns to triage untouched."""
+    prevet = profile.prevet
+    raw = compose_prevet_call(
+        model=prevet.model, models=models, agent_type_host=agent_type_host, run_key=run_key,
+        preamble_expr=preamble_expr,
+    )
+    return (
+        f"const PREVET_BATCH_SIZE = {prevet.batch_size};\n"
+        f"const PREVET_CLOSE_NODE = {json.dumps(close_node)};\n"
+        + _PREVET_JS
+        + "\nasync function _prevetCall(rowIds) {\n"
+        "  const rowsData = rowIds.map((r) => ({ row_id: r, path: QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r).path }));\n"
+        + _indent_block(_capture(raw, "triage", return_expr="{ rows: _result.rows || [] }"), "  ")
+        + "\n}"
+    )
 
 
 _NODE_CHECK_COMMENT = (
@@ -2018,6 +2224,7 @@ def compose_grind_script(
     stage_models: Optional[Mapping[str, str]] = None,
     targeted_runner: bool = False,
     not_admitted: Sequence[Mapping[str, str]] = (),
+    repo_root: Optional[Path] = None,
 ) -> str:
     """Compose one top-level `.mjs` Workflow script implementing § Design §
     Composer over ``manifest``/``profile``/``knobs``. Pure function of its
@@ -2089,7 +2296,7 @@ def compose_grind_script(
     review_phase_titles = [title for title, _ in review_blocks]
     run_dir_s = Path(run_dir).as_posix()
     run_key = Path(run_dir).name
-    grouped = _group_into_batches(manifest, knobs, profile)
+    grouped = _group_into_batches(manifest, knobs, profile, repo_root=repo_root)
     window = int(knobs.get("window", 6))
     batch_size_knob = knobs.get("batch_size", 4)
     reserve_batch_size = max(batch_size_knob.values()) if isinstance(batch_size_knob, Mapping) else batch_size_knob
@@ -2125,6 +2332,19 @@ def compose_grind_script(
         for node_id in verify_node_ids
     }
     has_close_node = any(kind == "refute-close" for kind in node_kind.values())
+    prevet_close_node = next((n for n, kind in node_kind.items() if kind == "refute-close"), None)
+    if profile.prevet is not None and prevet_close_node is None:
+        raise ValueError("profile.prevet needs a refute-close node; the graph has none")
+    triage_rows = "batch.rows"
+    triage_rows_decl = ""
+    prevet_call = ""
+    if profile.prevet is not None:
+        triage_rows = "_tRows"
+        triage_rows_decl = (
+            "  const _tRows = batch.rows.filter((r) => !_rows[r].done && !_rows[r].node);\n"
+            "  if (_tRows.length === 0) { batchState.triaged = true; return; }\n"
+        )
+        prevet_call = "await _prevetAll();\n"
 
     lines: list[str] = []
     lines.append(_NODE_CHECK_COMMENT)
@@ -2579,7 +2799,8 @@ def compose_grind_script(
         "  const batch = BATCHES.find((b) => b.id === batchState.id);\n"
         "  const rowsMeta = batch.rows.map((r) => "
         "({ row_id: r, path: (QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r) || {}).path }));\n"
-        "  batchState.triaged = true;\n"
+        + triage_rows_decl
+        + "  batchState.triaged = true;\n"
         "  const _seen = new Set();\n"
         "  const _toSize = [];\n"
         "  const _ingest = async (_out, _scope) => {\n"
@@ -2622,7 +2843,8 @@ def compose_grind_script(
         "    }\n"
         "  };\n"
         "  const _unreturned = () => batch.rows.filter((r) => !_seen.has(r) && !_rows[r].done && !_rows[r].node);\n"
-        "  await _ingest(await _issue(batchState.id, '', () => _triageCall(batchState.id, batchState.batchKey, batch.rows)), batch.rows);\n"
+        "  await _ingest(await _issue(batchState.id, '', () => _triageCall(batchState.id, batchState.batchKey, "
+        + triage_rows + ")), " + triage_rows + ");\n"
         "  const _missing = _unreturned();\n"
         "  if (_missing.length) { await _ingest(await _issue(batchState.id, '', () => _triageCall(batchState.id, batchState.batchKey, _missing)), _missing); }\n"
         "  for (const r of _unreturned()) {\n"
@@ -2840,6 +3062,13 @@ def compose_grind_script(
     run_close_text = _run_close_block(profile_name=profile.name, queue_dirs=queue_dirs, agent_type_host=agent_type_host, run_key=run_key, models=stage_models)
     once_per_run_legs.append(run_close_text)
     lines.append(run_close_text)
+    if profile.prevet is not None:
+        lines.append(
+            _prevet_js(
+                profile, prevet_close_node, models=stage_models, agent_type_host=agent_type_host,
+                run_key=run_key, preamble_expr=preamble_expr,
+            )
+        )
     lines.append(
         "const _admitted = {};\n"
         "const _queue = BATCHES.map((b) => b.id);\n"
@@ -2897,7 +3126,8 @@ def compose_grind_script(
         "  try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); await _undoUnfinished(); }\n"
         "}\n"
         "try {\n"
-        "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); await _undoUnfinished(); }\n"
+        + prevet_call
+        + "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); await _undoUnfinished(); }\n"
         "await _adjudicatePmBound();\n"
         "await _continueRuled();"
     )
@@ -2978,11 +3208,15 @@ def compose_grind_script(
         for _, entries in grouped
         for entry in entries
     )
+    prevet_legs = (
+        -(-len(manifest.entries) // profile.prevet.batch_size) * 2 if profile.prevet is not None else 0
+    )
     lines[meta_index] = with_fanout(
         meta_text,
         FanoutCost(
             units=len(manifest.entries),
-            agents=len(grouped) * per_batch_legs
+            agents=prevet_legs
+            + len(grouped) * per_batch_legs
             + per_row_agent_legs
             + sum(len(AGENT_CALL_RE.findall(scrub(leg))) for leg in once_per_run_legs),
             basis="expected",

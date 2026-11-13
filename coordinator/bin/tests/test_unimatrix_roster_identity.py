@@ -186,3 +186,46 @@ def test_router_and_cli_list_vendor_box_and_cwd_without_changing_names(tmp_path,
     assert response["details"]["remote-codex"]["cwd"] == "/work/repo"
     local = next(line for line in lines if line.startswith("local-peer\t")).split("\t")
     assert local[2:] == ["codex", "ready"]
+
+
+def test_box_key_folds_case_user_and_domain_but_keeps_an_address_whole():
+    assert roster.box_key("me@Machine-b.local") == roster.box_key("machine-b") == "machine-b"
+    assert roster.box_key("me@192.168.0.175") == "192.168.0.175"
+    assert roster.labelled("example-game-repo-em", "me@Machine-b") == "example-game-repo-em.Machine-b"
+
+
+def test_only_the_lowest_alias_of_one_box_keeps_a_mirror_of_a_far_socket():
+    sock = "/tmp/cc-socks/a.sock"
+    held_by = lambda alias: [("example-game-repo-em", roster.mirror_scan_key(alias, sock))]
+    assert roster.alias_duplicate("machine-b", sock, held_by("Machine-b.local")) is True
+    assert roster.alias_duplicate("Machine-b.local", sock, held_by("machine-b")) is False
+    assert roster.alias_duplicate("machine-b", sock, held_by("other")) is False
+    assert roster.alias_duplicate("machine-b", "/tmp/cc-socks/b.sock", held_by("Machine-b.local")) is False
+
+
+def test_every_mirror_row_the_roster_writes_carries_host_box_and_a_labelled_name(tmp_path, monkeypatch):
+    entry = {"pid": 9, "name": "group-em-c1", "sessionId": UUID, "version": "2.1.319",
+             "messagingSocketPath": r"\\.\pipe\LOCAL\cc-msg-90f66"}
+    monkeypatch.setattr(roster, "spawn", lambda command: SimpleNamespace(pid=9570))
+    monkeypatch.setattr(roster.time, "sleep", lambda _: None)
+    monkeypatch.setattr(roster, "proc_start", lambda pid: "local-start")
+    monkeypatch.setattr(roster, "pid_domain", lambda: "darwin")
+    monkeypatch.setattr(roster, "local_endpoint", lambda far: str(tmp_path / "local.sock"))
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(roster, "write_peer_key", lambda *args: None)
+    monkeypatch.setattr(roster, "local_peer_key", lambda *args: {})
+    cfg = SimpleNamespace(remote="me@machine-b", key="unused", tunnel_remote=None, log=str(tmp_path / "log"))
+    row = {"entry": entry, "key": "test-token"}
+    roster.mirror(row, cfg, lambda _: None, scan=[])
+    path = tmp_path / "9570.json"
+    fresh = json.loads(path.read_text())
+    assert fresh["unimatrixRemote"] == "me@machine-b" and fresh["unimatrixBox"] == "machine-b"
+    assert fresh["name"] == roster.labelled(fresh["name"], cfg.remote) == "group-em-c1.machine-b"
+    # A pre-fix row with a bare name and no host is healed by the reconcile pass.
+    stale = {k: v for k, v in fresh.items() if k not in ("unimatrixRemote", "unimatrixBox")}
+    stale["name"] = "group-em-c1"
+    path.write_text(json.dumps(stale))
+    roster.rename_live_mirror(9570, entry["messagingSocketPath"], row, cfg, lambda _: None, scan=[])
+    healed = json.loads(path.read_text())
+    assert healed["unimatrixRemote"] == "me@machine-b" and healed["unimatrixBox"] == "machine-b"
+    assert healed["name"] == roster.labelled(healed["name"], cfg.remote) == "group-em-c1.machine-b"

@@ -297,3 +297,39 @@ def test_hook_deadline_stops_before_the_first_leg(indexed_repo, monkeypatch):
     fields = op_row_fields.drain(token)
     assert fields["deadline_stop"] == "prefire_survey"
     assert not called
+
+
+def _count(repo, sid, suffix=""):
+    from pathlib import Path
+
+    from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
+    from coordinator_core.session_hub_path import session_dir_for
+
+    d = session_dir_for(Path(resolve_git_common_dir(str(repo))), sid)
+    f = d / (m._GREP_AFTER_NUDGE_COUNT + suffix)
+    return int(f.read_text()) if f.exists() else 0
+
+
+def test_grep_after_nudge_is_counted_never_denied(indexed_repo):
+    sid = str(uuid.uuid4())
+    other = str(uuid.uuid4())
+    assert _count(indexed_repo, sid) == 0
+    first = m._handler(_payload(indexed_repo, pattern="some text", session_id=sid))
+    assert "this repo has a code index" in _ctx(first)
+    assert _count(indexed_repo, sid) == 0
+    for _ in range(2):
+        env = m._handler(_payload(indexed_repo, pattern="more text", session_id=sid))
+        assert _ctx(env) == ""
+        assert "deny" not in str(env).lower()
+    assert _count(indexed_repo, sid) == 2
+    m._handler(_payload(indexed_repo, pattern="x", session_id=other))
+    assert _count(indexed_repo, other) == 0
+    m._handler(_payload(indexed_repo, tool="Glob", pattern="*.py", session_id=sid))
+    assert _count(indexed_repo, sid) == 2
+
+
+def test_grep_count_write_failure_fails_open(indexed_repo, monkeypatch):
+    sid = str(uuid.uuid4())
+    m._handler(_payload(indexed_repo, pattern="a", session_id=sid))
+    monkeypatch.setattr(m.Path, "write_text", lambda *a, **k: (_ for _ in ()).throw(OSError("x")))
+    assert _ctx(m._handler(_payload(indexed_repo, pattern="b", session_id=sid))) == ""

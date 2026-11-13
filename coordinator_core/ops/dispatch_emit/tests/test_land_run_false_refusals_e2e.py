@@ -1,7 +1,7 @@
 """Exit test: a finished run lands through `dispatch.land_run` at default params when (a) peer dirt sits in
 the verified reach under a green clean-overlay verdict, or (b) a sibling commit since base added lines to a
-shared file the run only adds to. A red, inconclusive or missing verdict, and a landing that drops a sibling's line,
-still refuse."""
+shared file the run only adds to. A missing verdict lands with an advisory; a red or inconclusive one, and a landing
+that drops a sibling's line, still refuse."""
 
 from __future__ import annotations
 
@@ -166,11 +166,21 @@ def test_peer_dirt_in_the_verified_reach_refuses_on_a_red_verdict(halted):  # no
     _refused(halted, head, out, land_run.VERIFY_OVERLAY_RED)
 
 
-def test_peer_dirt_in_the_verified_reach_refuses_as_unverified_when_no_verdict_was_written(halted):  # noqa: F811
-    """A missing verdict is unverified: the landing refuses and commits nothing."""
+def test_peer_dirt_in_the_verified_reach_lands_with_an_advisory_when_no_verdict_was_written(halted):  # noqa: F811
+    """A verdict the engine never produced lands with an `Overlay: missing` trailer."""
     resume, token = _dirty_reach(halted, None)
+
+    out = _terminal_with(halted, token, resume, reach._VERDICT)
+
+    _landed_over_dirt(halted, out, "missing")
+    assert _rgit(halted, "log", "-1", "--format=%(trailers:key=Overlay,valueonly)").strip().startswith("missing")
+
+
+def test_peer_dirt_in_the_verified_reach_refuses_as_unverified_on_an_inconclusive_verdict(halted):  # noqa: F811
+    resume, token = _dirty_reach(halted, "inconclusive")
     head = _rgit(halted, "rev-parse", "HEAD")
 
     out = _terminal_with(halted, token, resume, reach._VERDICT)
 
     _refused(halted, head, out, land_run.VERIFY_OVERLAY_UNVERIFIED)
+    assert "inconclusive" in out["error"], out

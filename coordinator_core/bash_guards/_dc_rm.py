@@ -217,9 +217,8 @@ def _resolves_under_repo_scratch(resolved: str) -> bool:
     """True when `resolved` (already symlink/junction/`..`-resolved) lies strictly
     below a `<repo>/scratch` directory, `<repo>` being a directory holding a `.git`
     entry. Filesystem stats only, no spawn. A scratch dir that is itself a link
-    resolves elsewhere and never matches. A nested repo (a `.git` entry on the way
-    up, e.g. a clone inside scratch) holds its own uncommitted work and is not
-    exempt."""
+    resolves elsewhere and never matches. A nested repo root or clone below scratch
+    is exempt like any other path there."""
     cur = os.path.dirname(resolved.replace("/", os.sep))
     while True:
         parent = os.path.dirname(cur)
@@ -229,8 +228,6 @@ def _resolves_under_repo_scratch(resolved: str) -> bool:
             os.path.join(parent, ".git")
         ):
             return True
-        if os.path.exists(os.path.join(cur, ".git")):
-            return False
         cur = parent
 
 
@@ -1063,6 +1060,12 @@ def check_destructive_rm(
                     ),
                 )
 
+            # `<repo>/scratch` is the sanctioned disposal area: nothing resolving
+            # under it is guarded, repo roots and git stores included. Evaluated
+            # before every git-store and repo-root deny below.
+            if _resolves_under_repo_scratch(tgt_abs):
+                continue
+
             # A `*.lock` file under the git store holds no committed data: git
             # renames `index.lock` onto `index`, so unlinking it mid-flight only
             # fails that git command, and the index is regenerable. Hard blocks
@@ -1214,7 +1217,8 @@ def check_destructive_rm(
                         "clean worktree does NOT make deleting the store "
                         "safe. Beware case-insensitive filesystems: a path that "
                         "LOOKS like a case-variant probe directory can be the "
-                        "real one."
+                        "real one. To delete it anyway: move it under "
+                        "<repo>/scratch, then delete it there."
                         % (tgt, store_desc, loss_desc, failed_note),
                         (
                             _offer(
@@ -1249,15 +1253,12 @@ def check_destructive_rm(
                             "Beware case-insensitive filesystems: a path that "
                             "LOOKS like a case-variant probe directory can be the "
                             "real one. Verify with:\n"
-                            '  python3 -c "import os;print(os.stat(%r).st_ino)"'
+                            '  python3 -c "import os;print(os.stat(%r).st_ino)"\n\n'
+                            "To delete it anyway: move it under <repo>/scratch, "
+                            "then delete it there."
                             % (tgt, store_desc, loss_desc, failed_note, tgt_abs, tgt_abs, tgt_abs, tgt_abs)
                         ),
                     )
-
-            # `<repo>/scratch` is the sanctioned disposal area: nothing resolving
-            # under it is guarded. After the git-store and repo-root denies above.
-            if _resolves_under_repo_scratch(tgt_abs):
-                continue
 
             # Scratch allowlist.
             scratch_bn = os.path.basename(tgt_abs)

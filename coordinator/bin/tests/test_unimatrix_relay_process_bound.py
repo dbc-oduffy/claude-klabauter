@@ -183,12 +183,12 @@ def test_the_mux_names_file_follows_live_sessions_and_keeps_an_absent_one_for_tw
     cfg, clients = _cfg(mod, tmp_path, "farbox"), {}
     names = mod.mux_names_path(str(tmp_path), "farbox")
     mod.sync(clients, mod.live_sessions(set()), cfg, lambda m: None)
-    assert sorted(json.loads(open(names).read())) == ["sess-0", "sess-1"]
+    assert sorted(json.loads(open(names, encoding="utf-8").read())) == ["sess-0", "sess-1"]
     (sessions / "101.json").unlink()
     mod.sync(clients, mod.live_sessions(set()), cfg, lambda m: None)
-    assert sorted(json.loads(open(names).read())) == ["sess-0", "sess-1"]
+    assert sorted(json.loads(open(names, encoding="utf-8").read())) == ["sess-0", "sess-1"]
     mod.sync(clients, mod.live_sessions(set()), cfg, lambda m: None)
-    assert sorted(json.loads(open(names).read())) == ["sess-0"] and len(spawned) == 1
+    assert sorted(json.loads(open(names,encoding="utf-8").read())) == ["sess-0"] and len(spawned) == 1
 
 
 def _inbox(tmp_path, monkeypatch):

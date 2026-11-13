@@ -736,7 +736,6 @@ class TestBareShowToplevelInventory(unittest.TestCase):
         "check-schema-version-bump.py",
         "check-sh-suffix-polyglot.py",
         "debash-scorecard.py",
-        "handoff-has-live-children.py",
         "cutover-cli.py",
         "sweep-boot.py",
     }

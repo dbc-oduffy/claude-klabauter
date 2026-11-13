@@ -240,10 +240,12 @@ def _closed_status_decline_reason(parsed: Mapping[str, Any], gate: RowSchemaGate
     return None
 
 
-def _row_schema_decline_reason(parsed: Mapping[str, Any], gate: RowSchemaGate) -> Optional[str]:
+def _row_schema_decline_reason(
+    parsed: Mapping[str, Any], gate: RowSchemaGate, default_from_repo: str = ""
+) -> Optional[str]:
     from coordinator_core.backlog_grind_assemble.legacy_row_normalize import normalize_legacy_row
 
-    normalized = normalize_legacy_row(parsed, gate.schema)
+    normalized = normalize_legacy_row(parsed, gate.schema, default_from_repo)
     result = schema_validate.validate_frontmatter_obj(normalized.row, dict(gate.schema))
     if isinstance(result, dict) and result.get("ok"):
         return None
@@ -895,6 +897,9 @@ def select_rows(
 
     entries: list[ManifestEntry] = []
     declined: list[DeclinedEntry] = []
+    from coordinator_core.backlog_grind_assemble.legacy_row_normalize import owning_repo_default
+
+    resolved_root = repo_root.resolve()
     resolved_dirs: dict = {}
     reap_gate: Optional[_ReapGate] = None
     for row_id, row_path, digest, normalised, pm_ruling, raw_row in filtered:
@@ -938,7 +943,7 @@ def select_rows(
         if row_schema_gate is not None:
             # The raw row: sentinel normalisation must not make a present field look missing.
             malformed = _closed_status_decline_reason(raw_row, row_schema_gate) or _row_schema_decline_reason(
-                raw_row, row_schema_gate
+                raw_row, row_schema_gate, owning_repo_default(resolved_root, rel_path)
             )
             if malformed is not None:
                 declined.append(DeclinedEntry(row_id=row_id, path=rel_path, reason=malformed))

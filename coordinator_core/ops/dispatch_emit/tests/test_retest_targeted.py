@@ -1359,3 +1359,41 @@ def test_isolated_body_exports_the_overlay_sha_when_the_record_names_one(tmp_pat
     monkeypatch.setattr(retest_targeted, "_overlay_sha", lambda root, rid: None)
     retest_targeted._isolated_body(tmp_path, tmp_path / "r.json", tmp_path / "l.log", "r1", {}, ["a.py"], [], "", None, None, None)
     assert calls[1] == (["a.py"], None)
+
+
+def _foreign_cwd(repo, tmp_path, monkeypatch, **extra):
+    other = tmp_path / "dispatcher"
+    other.mkdir()
+    _git(other, "init", "-q")
+    monkeypatch.chdir(other)
+    path = _params_file(repo, script_path=(repo / "scratch" / "warp" / "r.workflow.mjs").as_posix(), **extra)
+    return other, path
+
+
+def test_default_root_is_the_runs_repo_not_the_dispatchers_cwd(repo, tmp_path, monkeypatch, capsys):
+    _other, params_path = _foreign_cwd(repo, tmp_path, monkeypatch)
+    seen = []
+    rc = retest_targeted.main(
+        ["--params-file", str(params_path), "--tests", "test_a.py", "--detached-child"],
+        run=lambda argv, cwd, **_kw: seen.append((argv, Path(cwd))) or 0,
+        dirty=lambda root: [],
+    )
+    assert rc == 0 and seen[0][0][-1] == "test_a.py" and seen[0][1].resolve() == repo.resolve()
+    assert "dropped nonexistent" not in capsys.readouterr().err
+    record = li.fresh_targeted_verdict(repo, RUN_ID)
+    assert record["status"] == "pass" and record["tests"] == ["test_a.py"] and "dropped" not in record
+
+
+def test_explicit_repo_root_outranks_the_runs_repo(repo, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _git(elsewhere, "init", "-q")
+    params = {"script_path": (repo / "scratch" / "r.workflow.mjs").as_posix()}
+    assert retest_targeted._repo_root(str(elsewhere), params) == elsewhere.resolve()
+    assert retest_targeted._repo_root(None, params) == Path(retest_targeted._run_repo(params))
+
+
+def test_run_naming_no_repo_falls_back_to_the_cwd_repo(repo, tmp_path, monkeypatch):
+    monkeypatch.chdir(repo)
+    assert retest_targeted._run_repo({"script_path": "s.mjs"}) is None
+    assert retest_targeted._repo_root(None, {"script_path": "s.mjs"}) == Path(retest_targeted.show_toplevel())

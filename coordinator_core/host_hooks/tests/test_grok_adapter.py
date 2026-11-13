@@ -74,6 +74,12 @@ def test_engine_event_is_claude_shaped_for_edit_and_shell():
     assert shell["hook_event_name"] == "PreToolUse"
 
 
+def test_engine_event_stamps_the_grok_host_for_edit_and_shell():
+    a = GrokAdapter()
+    for name, args in (("edit_file", {"path": "/a/b.py"}), ("shell", {"command": "ls"})):
+        assert a.engine_event(a.adapt_event(_payload(name, args)))["host"] == "grok"
+
+
 def test_unserved_event_has_no_engine_event_and_renders_neutral():
     a = GrokAdapter()
     ev = a.adapt_event({**_payload("Bash", {"command": "ls"}), "hook_event_name": "PostToolUse"})

@@ -576,3 +576,90 @@ def test_self_falsifying_premise_without_a_ref_is_refused_at_authoring():
     assert [a["id"] for a in anchors] == ["AP1"] and f == []
     anchors, f = parse_anchors({FIELD: [entry]}, None)
     assert [a["id"] for a in anchors] == ["AP1"] and f == []
+    anchors, f = parse_anchors({FIELD: [entry]}, None, rows, base_ref="origin/main")
+    assert [a["id"] for a in anchors] == ["AP1"] and f == []
+
+
+def _base_anchor(aid="AP1", claim="mod.py holds refuse once", cmd="grep -c refuse mod.py", expect="1"):
+    return {"id": aid, "claim": claim, "check": {"command": cmd, "expect": expect}}
+
+
+def _count_spawns(monkeypatch):
+    from coordinator_core.git import run as git_run
+
+    calls = []
+    real = git_run.run_git
+
+    def counting(args, *a, **kw):
+        calls.append(list(args))
+        return real(args, *a, **kw)
+
+    monkeypatch.setattr(git_run, "run_git", counting)
+    return calls
+
+
+@pytest.mark.spawns_process
+def test_base_ref_reads_a_premise_true_at_the_ref_but_absent_from_the_tree(monkeypatch, tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    sha = _repo_with_baseline(tmp_path)
+    (tmp_path / "mod.py").write_text("changed\n")
+    anchors = [_base_anchor("AP1"), _base_anchor("AP2", cmd="grep -c here mod.py")]
+    calls = _count_spawns(monkeypatch)
+    verdicts = ap.anchor_verdicts(anchors, [], [], "p", tmp_path, base_ref=sha)
+    assert [(v["verdict"], v["source"]) for v in verdicts] == [("RESOLVES", "engine-check")] * 2
+    assert [c for c in calls if "cat-file" in c].__len__() == 1 and len(calls) == 1
+    assert ap.anchor_findings(anchors, [], [], "p", tmp_path, base_ref=sha) == []
+
+
+@pytest.mark.spawns_process
+def test_no_base_ref_reads_the_tree_with_zero_spawns(monkeypatch, tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    _repo_with_baseline(tmp_path)
+    (tmp_path / "mod.py").write_text("changed\n")
+    calls = _count_spawns(monkeypatch)
+    (v,) = ap.anchor_verdicts([_base_anchor()], [], [], "p", tmp_path)
+    assert v["verdict"] == "CONTRADICTED" and calls == []
+
+
+@pytest.mark.spawns_process
+def test_claim_baseline_ref_wins_over_base_ref(tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    sha = _repo_with_baseline(tmp_path)
+    claimed = _base_anchor(claim=f"at baseline_ref {sha} mod.py holds refuse once")
+    (v,) = ap.anchor_verdicts([claimed], [], [], "p", tmp_path, base_ref="no-such-ref")
+    assert (v["verdict"], v["source"]) == ("RESOLVES", "engine-check")
+
+
+@pytest.mark.spawns_process
+def test_unreadable_base_ref_leaves_source_none_naming_the_ref(tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    _repo_with_baseline(tmp_path)
+    (v,) = ap.anchor_verdicts([_base_anchor()], [], [], "p", tmp_path, base_ref="no-such-ref")
+    assert v["verdict"] is None and v["source"] == "none" and "no-such-ref" in v["observed"]
+    assert ap.anchor_findings([_base_anchor()], [], [], "p", tmp_path, base_ref="no-such-ref") == []
+
+
+@pytest.mark.spawns_process
+def test_a_stage_ref_wins_over_base_ref(tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    sha = _repo_with_baseline(tmp_path)
+    (tmp_path / "mod.py").write_text("changed\n")
+    anchor = _base_anchor(cmd=f"git grep -c refuse {sha} -- mod.py")
+    (v,) = ap.anchor_verdicts([anchor], [], [], "p", tmp_path, base_ref="no-such-ref")
+    assert (v["verdict"], v["source"]) == ("RESOLVES", "engine-check")
+
+
+@pytest.mark.spawns_process
+def test_base_ref_skips_reanchor(monkeypatch, tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    sha = _repo_with_baseline(tmp_path)
+    monkeypatch.setattr(ap, "_own_context", lambda text, root: (sha, {"mod.py": "ask-1"}))
+    broken = _base_anchor(expect="2")
+    (v,) = ap.anchor_verdicts([broken], [], [], "p", tmp_path, base_ref=sha)
+    assert v["verdict"] == "CONTRADICTED" and not v["observed"].startswith(ap.REANCHORED)

@@ -553,6 +553,47 @@ def _session_path(pid, expected_digest=None, expected_name_digest=None, expected
     return path
 
 
+PIPE_FLUSH_DEADLINE_S = 0.3
+
+
+def _flush_bounded(flush, deadline=None):
+    """Run `flush` (FlushFileBuffers blocks until the pipe reader drains it, forever on a
+    reader that never reads) on a worker thread; raise TimeoutError past the deadline.
+
+    On expiry the blocked synchronous I/O is cancelled (Windows CancelSynchronousIo) so the
+    worker does not outlive the handle the caller closes next."""
+    import threading
+    box = {}
+
+    def work():
+        try:
+            flush()
+        except BaseException as e:  # re-raised on the caller's thread
+            box["err"] = e
+
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    t.join(PIPE_FLUSH_DEADLINE_S if deadline is None else deadline)
+    if t.is_alive():
+        _cancel_thread_io(t)
+        t.join(0.05)
+        raise TimeoutError("pipe flush: no live reader drained the write")
+    if "err" in box:
+        raise box["err"]
+
+
+def _cancel_thread_io(thread):
+    if os.name != "nt":
+        return
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    k32.OpenThread.restype = ctypes.c_void_p
+    h = k32.OpenThread(0x0001, False, thread.native_id)  # THREAD_TERMINATE, required by CancelSynchronousIo
+    if h:
+        k32.CancelSynchronousIo(ctypes.c_void_p(h))
+        k32.CloseHandle(ctypes.c_void_p(h))
+
+
 def _write_line(path, line):
     """Deliver one message line to the session endpoint `path` (pipe on Windows, unix socket elsewhere)."""
     line = local_reply_address(line)
@@ -563,6 +604,7 @@ def _write_line(path, line):
                                  0, None, win32file.OPEN_EXISTING, 0, None)
         try:
             win32file.WriteFile(h, line)
+            _flush_bounded(lambda: win32file.FlushFileBuffers(h))
         finally:
             win32file.CloseHandle(h)
         return
@@ -593,10 +635,10 @@ def send_batch(pid, expected_digest=None, expected_name_digest=None, expected_se
                 raise ValueError("empty message line")
             _write_line(path, line)
             reply = {"ok": True}
+            if expected_session_id:
+                reply["digest"] = record_receipt(expected_session_id, line)
         except Exception as e:  # pywintypes.error is not an OSError subclass
             reply = {"ok": False, "error": f"{type(e).__name__}: {e}"}
-        if reply["ok"] and expected_session_id:
-            record_receipt(expected_session_id, line)
         print(json.dumps(reply), flush=True)
 
 
@@ -609,24 +651,49 @@ def receipts_path():
 
 
 def record_receipt(session_id, line, now=None):
-    """Append one receipt (session id, sha256 of the line sans newline; never the text), trimmed to RECEIPT_KEEP.
+    """Append one receipt (session id, sha256 of the line sans newline; never the text) and return the digest.
 
-    Advisory: a failed write never fails the delivery it records, and relays racing the
-    read-trim-write can drop a row."""
+    The row is one O_APPEND write, so racing relays lose no row except across a trim (a row appended
+    between the trim's read and its replace is dropped); the file is trimmed to
+    RECEIPT_KEEP only once it passes 2*RECEIPT_KEEP rows. Any failure raises: the caller
+    must not reply ok for a line it could not receipt."""
     import time
     stamp = time.time() if now is None else now
-    row = {"session": session_id, "digest": hashlib.sha256(line.rstrip(b"\n")).hexdigest(), "at": stamp,
+    digest = hashlib.sha256(line.rstrip(b"\n")).hexdigest()
+    row = {"session": session_id, "digest": digest, "at": stamp,
            "ts": datetime.fromtimestamp(stamp).astimezone().isoformat(timespec="seconds")}
+    data = (json.dumps(row) + "\n").encode("utf-8")
     path = receipts_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        rows = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-        rows = (rows + [json.dumps(row)])[-RECEIPT_KEEP:]
-        tmp = path.with_name(f"{path.name}.tmp{os.getpid()}")
-        tmp.write_text("\n".join(rows) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
-    except OSError:
-        pass
+        os.write(fd, data)
+        size = os.fstat(fd).st_size
+    finally:
+        os.close(fd)
+    if size > 2 * RECEIPT_KEEP * len(data):
+        _trim_receipts(path)
+    return digest
+
+
+def _trim_receipts(path):
+    """Rewrite `path` to its last RECEIPT_KEEP rows; a Windows replace racing a reader's open
+    raises PermissionError, retried within a ~30ms total bound, then raised."""
+    import time
+    rows = path.read_text(encoding="utf-8").splitlines()
+    if len(rows) <= 2 * RECEIPT_KEEP:
+        return
+    tmp = path.with_name(f"{path.name}.tmp{os.getpid()}")
+    tmp.write_text("\n".join(rows[-RECEIPT_KEEP:]) + "\n", encoding="utf-8")
+    for attempt in range(4):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 3:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(0.01)
 
 
 def receipts(session_id, since):

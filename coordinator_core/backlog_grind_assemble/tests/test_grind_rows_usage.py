@@ -56,6 +56,31 @@ def test_located_run_dir_merges_usage_and_leaves_spend(tmp_path, monkeypatch):
     assert seen["descriptions"] == grind_rows.GRIND_CLOSE_AGENT_DESCRIPTIONS
 
 
+def test_located_run_dir_writes_a_spend_row_from_the_same_scan(tmp_path, monkeypatch):
+    wf = tmp_path / "wf_1"
+    wf.mkdir()
+    (wf / "journal.jsonl").write_text(
+        json.dumps({"type": "started", "agentId": "a1", "label": "ledger-sweep"}) + "\n", encoding="utf-8")
+    _patch_session(monkeypatch, SID)
+    monkeypatch.setattr(run_locate, "session_dir_for", lambda sid, root=None: tmp_path)
+    monkeypatch.setattr(run_locate, "locate_run_dir", lambda *a, **k: wf)
+    out = _run(tmp_path, monkeypatch, _record())
+    rows = list((tmp_path / "state" / "spend").rglob(f"{RUN_ID}.json"))
+    assert len(rows) == 1
+    row = json.loads(rows[0].read_text(encoding="utf-8"))
+    assert row["ceremony"] == "backlog-grind"
+    assert row["agents"] == len(out["usage"]["agents"]) == 1
+    assert {"tokens", "usd", "by_role"} <= set(row)
+
+
+def test_absent_run_dir_writes_no_spend_row(tmp_path, monkeypatch):
+    _patch_session(monkeypatch, SID)
+    monkeypatch.setattr(run_locate, "session_dir_for", lambda sid, root=None: tmp_path)
+    monkeypatch.setattr(run_locate, "locate_run_dir", lambda *a, **k: None)
+    _run(tmp_path, monkeypatch, _record())
+    assert not (tmp_path / "state" / "spend").exists()
+
+
 def test_absent_run_dir_records_null_with_reason(tmp_path, monkeypatch):
     _patch_session(monkeypatch, SID)
     monkeypatch.setattr(run_locate, "session_dir_for", lambda sid, root=None: tmp_path)

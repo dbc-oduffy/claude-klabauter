@@ -47,8 +47,8 @@ def test_vendored_versions():
     # 3.23 -> 3.24: claude-klabauter-first bump adding optional `expect_partial`; pinned at 3.24.0.
     # test_register_rows_shape tracks 3.24.0 too (minItems dropped).
     # DoE re-sync is out of scope here.
-    assert _version(_SIZING) == "1.52.0"
-    assert _version(_HANDOFF) == "11.5.0"
+    assert _version(_SIZING) == "1.53.0"
+    assert _version(_HANDOFF) == "11.6.0"
     assert _version(_PLAN_TASKS) == "3.24.0"
 
 
@@ -83,7 +83,7 @@ def test_sizing_unrelated_turns_and_visual_surface():
 
 
 def test_research_block_accepts_repo_deep_target():
-    research = {"value_class": "deep", "sources": ["repo"], "targets": [{"source": "repo", "ref": "claude-klabauter"}]}
+    research = {"value_class": "unblock", "sources": ["repo"], "targets": [{"source": "repo", "ref": "claude-klabauter"}]}
     assert _research_errors(research) == []
 
 

@@ -99,6 +99,29 @@ def test_uncommitted_reply_halts_only_when_the_task_did_not_complete(tmp_path):
     assert _land(record_dir, journal, status="killed") is not None
 
 
+@pytest.mark.parametrize("as_text", [False, True])
+def test_uncommitted_reply_carries_refused_and_error_in_the_reason(tmp_path, as_text):
+    record_dir = _record_dir(tmp_path)
+    result = {"committed": False, "refused": "verify-overlay-unverified", "error": "overlay verdict none"}
+    journal = _journal(tmp_path, [
+        _started("commit"),
+        {"type": "result", "agentId": "a1", "key": "k1", "result": json.dumps(result) if as_text else result},
+    ])
+    assert _land(record_dir, journal, status="completed") is None
+    assert _land(record_dir, journal, status="killed") is not None
+    reason = halted_run.read_strict(record_dir)["reason"]
+    assert "verify-overlay-unverified: overlay verdict none" in reason
+
+
+def test_uncommitted_reply_without_refusal_keeps_the_bare_reason(tmp_path):
+    record_dir = _record_dir(tmp_path)
+    journal = _journal(tmp_path, [
+        _started("commit"), {"type": "result", "agentId": "a1", "key": "k1", "result": {"committed": False}},
+    ])
+    assert _land(record_dir, journal, status="killed") is not None
+    assert halted_run.read_strict(record_dir)["reason"] == "commit stage: commit leg uncommitted, task killed"
+
+
 def test_run_with_no_commit_stage_leg_writes_no_marker(tmp_path):
     record_dir = _record_dir(tmp_path)
     journal = _journal(tmp_path, [_started("commit:wave-1"), _started("review", agent="a2", key="k2")])

@@ -101,12 +101,16 @@ def _batched_door(costs: dict[str, Any]) -> str | None:
     return None
 
 
+def _norm(path: str | Path) -> str:
+    return os.path.normcase(os.path.realpath(path))
+
+
 def _same_root(a: str | Path, b: str | Path) -> bool:
-    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    return _norm(a) == _norm(b)
 
 
 def _inside(cwd: str | Path, root: str | Path) -> bool:
-    c, r = os.path.normcase(os.path.realpath(cwd)), os.path.normcase(os.path.realpath(root))
+    c, r = _norm(cwd), _norm(root)
     return c == r or c.startswith(r.rstrip(os.sep) + os.sep)
 
 

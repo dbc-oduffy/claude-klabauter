@@ -736,3 +736,87 @@ def test_main_writes_older_gaps_stderr_line_and_keeps_tsv_four_columns(repo, mon
     assert cap.out.splitlines(), "recent gap row expected on stdout"
     for line in cap.out.splitlines():
         assert len(line.split("\t")) == len(TSV_COLUMNS)
+
+
+def _three_commit_day(repo: Path, day: str) -> List[str]:
+    return [
+        _commit_on(repo, day, f"c{i}", fname=f"{day}-{i}.txt", time_=f"{8 + i:02d}:00:00Z")
+        for i in range(3)
+    ]
+
+
+def _thin_vs_full_repo(repo: Path):
+    thin_day, full_day = "2026-03-10", "2026-03-11"
+    thin = _three_commit_day(repo, thin_day)
+    full = _three_commit_day(repo, full_day)
+    _cover_day(repo, thin_day, f"covered_tip_sha: {thin[-1]}")
+    _cover_day(repo, full_day, "covered_tip_sha: {}\ncites {} {}".format(full[-1], full[0], full[1]))
+    return thin_day, full_day
+
+
+def test_thin_covered_day_is_emitted_and_full_standard_day_is_not(repo, monkeypatch, capsys):
+    from coordinator_core.ops.workday_complete_backfill_scan import THIN_SUMMARY_PREFIX
+
+    thin_day, full_day = _thin_vs_full_repo(repo)
+    monkeypatch.setenv("COORDINATOR_ROOT", str(repo))
+    monkeypatch.setenv("COORDINATOR_ROOT_WARN_SUPPRESS", "1")
+    assert main(["--today", "2026-03-15"]) == 0
+    cap = capsys.readouterr()
+    assert [ln.split("\t")[0] for ln in cap.out.splitlines()] == [thin_day]
+    assert f"{THIN_SUMMARY_PREFIX} {thin_day}: summary cites 1 in-range commit SHAs vs 3" in cap.err
+    assert full_day not in cap.out
+
+
+def test_scan_library_entry_reports_thin_reason_only_for_the_emitted_day(repo, monkeypatch):
+    thin_day, _full = _thin_vs_full_repo(repo)
+    result = scan(str(repo), 14, "2026-03-15")
+    assert [r.date for r in result.rows] == [thin_day]
+    assert list(result.thin) == [thin_day]
+
+
+def _completion_records(repo: Path, day: str, n: int) -> None:
+    base = repo / "archive" / "completed" / day[:7]
+    base.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        (base / f"{day}-entry-{i}.md").write_text(
+            f"---\ntitle: entry {i}\ncreated: {day}\n---\nbody\n", encoding="utf-8"
+        )
+
+
+def test_completion_entries_at_least_twice_the_bullets_make_a_day_thin(repo, monkeypatch, capsys):
+    day = "2026-03-10"
+    shas = _three_commit_day(repo, day)
+    _cover_day(repo, day, f"covered_tip_sha: {shas[-1]}\n## Work Completed\n- one\n")
+    _completion_records(repo, day, 3)
+    monkeypatch.setenv("COORDINATOR_ROOT", str(repo))
+    monkeypatch.setenv("COORDINATOR_ROOT_WARN_SUPPRESS", "1")
+    assert main(["--today", "2026-03-15"]) == 0
+    cap = capsys.readouterr()
+    assert [ln.split("\t")[0] for ln in cap.out.splitlines()] == [day]
+    assert "3 completion entries vs 1 Work Completed bullets" in cap.err
+
+
+def test_completion_entries_below_twice_the_bullets_leave_the_day_covered(repo, monkeypatch, capsys):
+    day = "2026-03-10"
+    shas = _three_commit_day(repo, day)
+    _cover_day(
+        repo,
+        day,
+        f"covered_tip_sha: {shas[-1]}\n## Work Completed\n- {shas[0]}\n- {shas[1]}\n- three\n",
+    )
+    _completion_records(repo, day, 3)
+    monkeypatch.setenv("COORDINATOR_ROOT", str(repo))
+    monkeypatch.setenv("COORDINATOR_ROOT_WARN_SUPPRESS", "1")
+    assert main(["--today", "2026-03-15"]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_explicit_repo_root_other_than_cwd_scans_that_repo(repo, tmp_path, monkeypatch, capsys):
+    thin_day, full_day = _thin_vs_full_repo(repo)
+    elsewhere = tmp_path / "not-the-repo"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
+    assert main(["--repo-root", str(repo), "--today", "2026-03-15"]) == 0
+    assert [ln.split("\t")[0] for ln in capsys.readouterr().out.splitlines()] == [thin_day]
+    assert [r.date for r in scan(str(repo), 14, "2026-03-15").rows] == [thin_day]

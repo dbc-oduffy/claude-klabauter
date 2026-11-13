@@ -64,6 +64,30 @@ def test_unlocated_run_opens_only_unsettled_heads_and_writes_nothing(tmp_path, m
     assert not list(root.rglob("usage.json"))
 
 
+def test_write_usage_leaves_one_emit_spend_row_without_a_second_scan(tmp_path, monkeypatch):
+    from coordinator_core.usage import agent_usage
+
+    root = _stage(tmp_path, monkeypatch)
+    calls: list = []
+    real_scan = agent_usage.scan_run
+    monkeypatch.setattr(agent_usage, "scan_run", lambda *a, **k: calls.append(a) or real_scan(*a, **k))
+
+    reply = tc._write_usage(root, SID, RUN)
+
+    rows = list((root / "state" / "spend").rglob(f"{RUN}.json"))
+    assert len(calls) == 1 and len(rows) == 1
+    row = json.loads(rows[0].read_text(encoding="utf-8"))
+    assert row["ceremony"] == "emit" and row["tokens"] == reply["usage_total"]["total_tokens"]
+    assert {"agents", "usd", "by_role"} <= set(row)
+    assert set(reply) == {"usage_total"}
+
+
+def test_unlocated_run_writes_no_spend_row(tmp_path, monkeypatch):
+    root = _stage(tmp_path, monkeypatch, ambiguous=True)
+    tc._write_usage(root, SID, RUN)
+    assert not (root / "state" / "spend").exists()
+
+
 def test_usage_reads_only_the_runs_own_dir(tmp_path, monkeypatch):
     root = _stage(tmp_path, monkeypatch)
     session = run_locate.session_dir_for(SID)

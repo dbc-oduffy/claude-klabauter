@@ -57,4 +57,7 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
+    if any(_a in ("-h", "--help") for _a in __import__("sys").argv[1:]):
+        print("usage: coordinator-external-session [-h]\nprint the external session context (hook-driven bridge; takes no arguments)")
+        raise SystemExit(0)
     raise SystemExit(main())

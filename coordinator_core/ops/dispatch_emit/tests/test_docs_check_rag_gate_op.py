@@ -223,3 +223,44 @@ def test_only_final_text_is_read_and_rag_down_outranks_unbacked(env):
         _text("m2", "[rag: project_cpp_symbol Ghost]"),
     ])
     assert call()["verdict"] == "rag_corpus_down"
+
+
+def _bind_freshness(monkeypatch, tmp_path, state, remedy=("project-rag", "refresh")):
+    from coordinator_core.ops import rag_freshness
+
+    spawned = []
+    real = rag_freshness.freshness_precondition
+
+    def pre(root):
+        return real(
+            root,
+            verdict_fn=lambda r: rag_freshness.FreshnessVerdict(state, remedy, "test"),
+            spawn_fn=lambda argv, cwd: spawned.append(list(argv)),
+            marker_root=tmp_path / "markers",
+        )
+
+    monkeypatch.setattr(gate.rag_freshness, "freshness_precondition", pre)
+    return spawned
+
+
+def test_stale_index_queues_one_refresh_and_reports_freshness(env, tmp_path, monkeypatch):
+    repo, transcript, call = env
+    transcript([_tool_use("m1", RAG, {"name": "AActor"})])
+    spawned = _bind_freshness(monkeypatch, tmp_path, "stale")
+    out = call()
+    assert out["verdict"] == "ok"
+    assert out["index_freshness"] == {"state": "stale", "refresh_queued": True}
+    assert call()["index_freshness"] == {"state": "stale", "refresh_queued": False}
+    assert spawned == [["project-rag", "refresh"]]
+
+
+def test_fresh_index_queues_nothing_and_not_applicable_carries_no_field(env, tmp_path, monkeypatch):
+    repo, transcript, call = env
+    transcript([_tool_use("m1", RAG, {"name": "AActor"})])
+    spawned = _bind_freshness(monkeypatch, tmp_path, "fresh")
+    assert call()["index_freshness"] == {"state": "fresh", "refresh_queued": False}
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    out = call(repo_root=str(plain))
+    assert out == {"verdict": "not_applicable"}
+    assert spawned == []

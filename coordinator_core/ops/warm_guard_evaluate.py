@@ -188,6 +188,10 @@ def _verdict_from_envelope(
     return {"permissionDecision": "deny", "permissionDecisionReason": reason}
 
 
+#: grok tools routed through `tool_policy.evaluate` (write guards); grok Bash keeps the Claude chain.
+_GROK_WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+
+
 @register_op("warm_guard.evaluate")
 async def _warm_guard_evaluate(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Run the full cold-hook guard chain against a forwarded event, warm.
@@ -219,7 +223,10 @@ async def _warm_guard_evaluate(params: dict, repo_root: Optional[Path] = None) -
             "warm.hook_http.payload_from_event; got %r (%s)."
             % (payload, type(payload).__name__)
         )
-    if payload.get("host") == "codex":
+    if payload.get("host") == "codex" or (
+        payload.get("host") == "grok"
+        and payload.get("tool_name") in _GROK_WRITE_TOOLS
+    ):
         from coordinator_core.host_hooks.tool_policy import evaluate as evaluate_codex
         return await asyncio.to_thread(
             evaluate_codex, payload, policy_file=_policy_file_for(payload),

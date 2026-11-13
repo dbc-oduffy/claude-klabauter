@@ -58,7 +58,7 @@ def test_manifest_schema_admits_wave_test_targets():
     assert prop == {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}}
 
 
-def _run(waves: list[dict], verdicts: dict, targets: dict, extra: str = "") -> dict:
+def _run(waves: list[dict], verdicts: dict, targets: dict, extra: str = "", terminal: bool = False) -> dict:
     """Run each wave through the composed `_commitWave` with stubbed legs; `verdicts` maps wave -> verify reply."""
     node = shutil.which("node")
     if node is None:
@@ -66,7 +66,7 @@ def _run(waves: list[dict], verdicts: dict, targets: dict, extra: str = "") -> d
     machinery = _checkpoint_js(pre_commit_gate_js=_GATE, runtime_plan_js="'p.md'")
     gate = ask_compose._wave_tests_green_js(None, repo_root=None, run_id="r1")
     source = f"""
-let _halted = null; const _runId = 'r1'; const _repoRoot = '/r'; const _runBase = 'b';
+let _halted = null; let _terminalTestsWanted = {json.dumps(terminal)}; const _runId = 'r1'; const _repoRoot = '/r'; const _runBase = 'b';
 const _gateOwed = {{}}; const _stoppedBy = []; const _rows = {{}}; const _ROW_VERIFY_SCHEMA = {{}};
 const _seamRelease = {{}}; const _seamHeldPlans = {{}}; const _seamGates = {{}};
 const _manifest = {{ wave_test_targets: {json.dumps(targets)} }};
@@ -145,6 +145,15 @@ def test_green_verdict_spawns_exactly_one_commit_leg(status):
     assert out["spawned"] == ["verify:wave-0", "commit:wave-0"]
     assert out["shas"] == ["sha-commit:wave-0"]
     assert out["carried"] == [] and out["withheld"] == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_terminal_tests_running_skips_the_wave_verify_leg_and_still_commits():
+    out = _run(_W0, {"0": _verdict("fail")}, {"0": ["t_a.py"]}, terminal=True)
+    assert out["spawned"] == ["commit:wave-0"]
+    assert out["shas"] == ["sha-commit:wave-0"]
+    assert out["withheld"] == [] and out["halted"] is None
 
 
 @pytest.mark.spawns_process

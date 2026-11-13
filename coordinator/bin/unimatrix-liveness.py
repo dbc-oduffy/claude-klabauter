@@ -191,6 +191,49 @@ def codex_holder_live(row):
     return entry_live({"pid": pid, "procStart": row.get("codexProcStart")})
 
 
+CODEX_FACE_GRACE_SECONDS = 600
+
+
+def codex_face_holder(d, home=None):
+    """"live" | "dead" | "unknown" for a local Codex peer face's recorded holder; None when `d` is not
+    a local Codex peer face or its `peers.json` row cannot be found or read (nothing provable).
+    Trap: reads and parses `peers.json` on every call, uncached; keep callers to one call per face."""
+    sid = d.get("sessionId") if isinstance(d, dict) else None
+    if (not isinstance(sid, str) or not sid.startswith("peer-") or d.get("vendor") != "codex"
+            or d.get("unimatrixMirror") or d.get("macSocketPath") or d.get("unimatrixRemote")):
+        return None
+    try:
+        data = json.loads((state_dir(home) / "peers.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    rows = data.get("peers") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        return None
+    target = d.get("target")
+    row = next((r for r in rows if isinstance(r, dict) and r.get("vendor") == "codex"
+                and (r.get("target") == target if isinstance(target, str) else r.get("name") == d.get("name"))),
+               None)
+    if row is None:
+        return None
+    verdict = codex_holder_live(row)
+    return "unknown" if verdict is None else ("live" if verdict else "dead")
+
+
+def codex_holder_unbacked(state, d, now=None):
+    """True when a Codex peer face has no live attached holder: its holder is dead, or none was ever
+    recorded and the face is older than `CODEX_FACE_GRACE_SECONDS` (the session hook records it at start)."""
+    if state == "dead":
+        return True
+    started = d.get("startedAt") if isinstance(d, dict) else None
+    return (state == "unknown" and isinstance(started, int) and not isinstance(started, bool)
+            and not stamp_fresh(d, "startedAt", CODEX_FACE_GRACE_SECONDS, now))
+
+
+def codex_face_unbacked(d, home=None, now=None):
+    """True for a local Codex peer face with no live attached holder; anything unprovable answers False."""
+    return codex_holder_unbacked(codex_face_holder(d, home), d, now)
+
+
 def codex_thread_holder(codex_home, thread_id):
     """The `codexPid`/`codexProcStart` of the Codex process that last logged `thread_id`; {} when unknown.
 

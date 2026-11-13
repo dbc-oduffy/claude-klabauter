@@ -562,15 +562,18 @@ def _baseline_failing(baseline: Mapping) -> list[str]:
 
 
 UNDECLARED_DIRT = "undeclared-dirt"
+PEER_HELD_PATH = "peer-held-path"
+_UNCAUSED_REASONS = frozenset({UNDECLARED_DIRT, PEER_HELD_PATH})
 
 
 def _dirt_ids(baseline: Mapping) -> set[str]:
-    """``foreign`` ids the retest child recorded red only on the live tree (``foreign_reason`` ``undeclared-dirt``)."""
+    """``foreign`` ids the retest child recorded as not the run's: red only on the live tree (``foreign_reason``
+    ``undeclared-dirt``), or red on a path outside the run's writes that a live peer run holds (``peer-held-path``)."""
     reasons = baseline.get("foreign_reason")
     if not isinstance(reasons, Mapping):
         return set()
     foreign = {str(i.get("id") if isinstance(i, Mapping) else i) for i in (baseline.get("foreign") or [])}
-    return {str(n) for n, why in reasons.items() if why == UNDECLARED_DIRT and str(n) in foreign}
+    return {str(n) for n, why in reasons.items() if why in _UNCAUSED_REASONS and str(n) in foreign}
 
 
 def unevidenced_ids(baseline: Mapping, cleared: Collection[str] = (), measured: bool = True) -> list[str]:

@@ -52,6 +52,7 @@ from coordinator_core.ops.check_posix_exec_assumptions import (  # noqa: E402
     check_no_stale_fixture_markers,
     check_tier_a_zero_tolerance,
     is_prefix_excluded,
+    _normalize_repo_key,
     main,
     repo_key_for_root,
     scan,
@@ -1743,15 +1744,23 @@ def test_assert_baseline_not_grown_passes_when_baseline_file_absent(tmp_path):
 _EXEMPTED_IN_CLAUDE_KLABAUTER = "coordinator/bin/plan-tasks-resolve"
 
 
-def _repo_named(tmp_path: Path, dir_name: str) -> Path:
-    """A git repo whose DIRECTORY NAME (the thing `repo_key_for_root` reads)
-    is caller-chosen, seeded with two identical env-shebang mode-755 files:
-    one at a relpath claude-klabauter holds an exemption for, one at a relpath
-    no repo holds an exemption for (the in-fixture control)."""
+def _seed_identity(repo: Path, identity: "str | None") -> None:
+    """Give `repo` the `origin` remote `repo_key_for_root` keys on."""
+    if identity:
+        _git(repo, "remote", "add", "origin", f"git@github.com:example-org/{identity}.git")
+
+
+def _repo_named(tmp_path: Path, dir_name: str, identity: "str | None" = None) -> Path:
+    """A git repo in a caller-chosen folder whose `origin` remote names the
+    repo identity (default: the folder name; `""` seeds no remote), seeded with
+    two identical env-shebang mode-755 files: one at a relpath claude-klabauter
+    holds an exemption for, one at a relpath no repo holds an exemption for
+    (the in-fixture control)."""
     repo = tmp_path / dir_name
     (repo / "coordinator" / "scripts").mkdir(parents=True)
     (repo / "coordinator" / "bin").mkdir(parents=True)
     _git(repo, "init", "-q")
+    _seed_identity(repo, dir_name if identity is None else identity)
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
     exec_paths = (_EXEMPTED_IN_CLAUDE_KLABAUTER, "coordinator/scripts/control.py")
@@ -1771,6 +1780,68 @@ def test_exemption_granted_for_one_repo_does_not_exempt_that_relpath_in_another(
     assert repo_key_for_root(sibling) == "some_unrelated_sibling"
     assert _EXEMPTED_IN_CLAUDE_KLABAUTER in result["env_shebang"]
     assert _EXEMPTED_IN_CLAUDE_KLABAUTER in result["mode_100755"]
+
+
+def test_renamed_clone_scans_identically_to_the_canonically_named_one(tmp_path):
+    """The key is the repo's remote identity, never its folder name: the same
+    claude-klabauter repo under an unrelated folder keeps every exemption."""
+    canonical = _repo_named(tmp_path, "claude-klabauter")
+    renamed = _repo_named(tmp_path, "clV", identity="claude-klabauter")
+
+    assert repo_key_for_root(renamed) == REPO_PROJECT_MAKIMA
+    assert scan(renamed) == scan(canonical)
+    assert _EXEMPTED_IN_CLAUDE_KLABAUTER not in scan(renamed)["env_shebang"]
+    assert _exempt_prefixes_for(renamed) == _exempt_prefixes_for(canonical)
+
+
+def _exempt_prefixes_for(repo: Path):
+    return check_posix_exec_assumptions._exempt_prefixes(repo_key_for_root(repo), repo)
+
+
+def test_folder_named_like_a_repo_without_that_identity_gets_no_grants(tmp_path):
+    """Both sides of the decision: a folder called claude-klabauter whose remote
+    is another repo is not claude-klabauter."""
+    impostor = _repo_named(tmp_path, "claude-klabauter", identity="some-unrelated-sibling")
+
+    assert repo_key_for_root(impostor) == "some_unrelated_sibling"
+    assert _EXEMPTED_IN_CLAUDE_KLABAUTER in scan(impostor)["env_shebang"]
+
+
+def test_no_remote_falls_back_to_the_empty_key_and_over_reports(tmp_path):
+    """No remote, no identity: the documented fallback is the grant-less empty
+    key, so the guard over-reports rather than silently exempting."""
+    bare = _repo_named(tmp_path, "claude-klabauter", identity="")
+
+    assert repo_key_for_root(bare) == ""
+    assert _EXEMPTED_IN_CLAUDE_KLABAUTER in scan(bare)["env_shebang"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "git@github.com:dbc-oduffy/claude-klabauter.git",
+        "https://github.com/dbc-oduffy/claude-klabauter",
+        "https://github.com/dbc-oduffy/Project-Claude-Klabauter.git/",
+        "..\\repos\\claude-klabauter.git",
+    ],
+)
+def test_remote_url_shapes_all_derive_the_same_key(tmp_path, url):
+    repo = tmp_path / "anything"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "remote", "add", "origin", url)
+
+    assert repo_key_for_root(repo) == REPO_PROJECT_MAKIMA
+
+
+def test_origin_wins_over_other_remotes(tmp_path):
+    repo = tmp_path / "anything"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "remote", "add", "upstream", "git@github.com:x/other.git")
+    _git(repo, "remote", "add", "origin", "git@github.com:x/claude-klabauter.git")
+
+    assert repo_key_for_root(repo) == REPO_PROJECT_MAKIMA
 
 
 def test_scan_both_matches_two_independent_scans_on_both_sides_of_the_exemption(tmp_path):
@@ -1809,7 +1880,7 @@ def test_every_exemption_repo_key_is_a_canonical_fleet_repo_key():
     root), which is the failure mode repo-scoping exists to prevent."""
     for cls, per_repo in EXEMPTIONS.items():
         for repo_key in per_repo:
-            assert repo_key == repo_key_for_root(Path(repo_key)), (
+            assert repo_key == _normalize_repo_key(repo_key), (
                 f"EXEMPTIONS[{cls!r}] key {repo_key!r} is not a normalized "
                 "fleet repo key and can never match a scanned root"
             )
@@ -1927,7 +1998,7 @@ _MULTI_CLASS_VIOLATOR = (
 
 
 def _repo_with_preserved_tree(tmp_path: Path, dir_name: str, prefix: str) -> Path:
-    """A git repo whose DIRECTORY NAME is caller-chosen (that is what
+    """A git repo whose `origin` remote names the identity `dir_name` (what
     `repo_key_for_root` reads), seeded with two byte-identical violating
     files: one INSIDE the preserved-tree prefix, one at a deliberately
     similar-looking sibling path just OUTSIDE it."""
@@ -1938,6 +2009,7 @@ def _repo_with_preserved_tree(tmp_path: Path, dir_name: str, prefix: str) -> Pat
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(_MULTI_CLASS_VIOLATOR, encoding="utf-8")
     _git(repo, "init", "-q")
+    _seed_identity(repo, dir_name)
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
     _commit_all(repo)
@@ -2031,6 +2103,64 @@ def test_migrated_m8_snapshot_entries_are_still_excluded_after_migration(tmp_pat
         assert f"{_DOE_PREFIX}{name}" not in result["path_separator"]
 
 
+_MIRRORED_BIN_PREFIX = "coordinator/bin/"
+_MODE_BITS_VIOLATOR = (
+    "import os\n"
+    "def probe(p):\n"
+    "    return os.access(p, os.X_OK)\n"
+)
+
+
+def _repo_with_mirrored_bin(tmp_path: Path, dir_name: str) -> Path:
+    repo = tmp_path / dir_name
+    for rel in ("coordinator/bin/lib/mirrored.py", "coordinator/lib/live.py"):
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(_MODE_BITS_VIOLATOR, encoding="utf-8")
+    _git(repo, "init", "-q")
+    _seed_identity(repo, dir_name)
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
+    _commit_all(repo)
+    return repo
+
+
+def test_doe_scan_skips_the_mirrored_claude_klabauter_bin_but_still_sees_its_own_code(tmp_path):
+    repo = _repo_with_mirrored_bin(tmp_path, "coordinator-content-repo")
+
+    result = scan(repo)
+
+    assert repo_key_for_root(repo) == REPO_DOE_CLAUDE
+    assert is_prefix_excluded("coordinator/bin/lib/mirrored.py", REPO_DOE_CLAUDE)
+    assert "coordinator/bin/lib/mirrored.py" not in result["posix_mode_bits"]
+    assert "coordinator/lib/live.py" in result["posix_mode_bits"]
+
+
+def test_claude_klabauter_scan_still_covers_coordinator_bin(tmp_path):
+    repo = _repo_with_mirrored_bin(tmp_path, "claude-klabauter")
+
+    result = scan(repo)
+
+    assert repo_key_for_root(repo) == REPO_PROJECT_MAKIMA
+    assert _MIRRORED_BIN_PREFIX not in EXEMPT_PREFIXES[REPO_PROJECT_MAKIMA]
+    assert not is_prefix_excluded("coordinator/bin/lib/mirrored.py", REPO_PROJECT_MAKIMA)
+    assert "coordinator/bin/lib/mirrored.py" in result["posix_mode_bits"]
+
+
+def test_real_tree_mirrored_bin_files_are_judged_on_claude_klabauter_side(real_tree_scans):
+    """python_interp.py and unimatrix-install.py both trip posix_mode_bits in
+    claude-klabauter's own scan; each is covered by a live EXEMPTIONS grant, so neither
+    surfaces in the post-exemption result."""
+    result, raw = real_tree_scans
+    for relpath in (
+        "coordinator/bin/lib/python_interp.py",
+        "coordinator/bin/unimatrix-install.py",
+    ):
+        assert relpath in EXEMPTIONS["posix_mode_bits"][REPO_PROJECT_MAKIMA]
+        assert relpath in raw["posix_mode_bits"]
+        assert relpath not in result["posix_mode_bits"]
+
+
 def test_stale_exempt_prefix_is_red(tmp_path):
     """Same discipline as `test_no_parity_exemption_is_stale`: a prefix
     matching no tracked file excuses nothing and would silently cover whatever
@@ -2042,6 +2172,7 @@ def test_stale_exempt_prefix_is_red(tmp_path):
     (repo / "coordinator").mkdir(parents=True)
     (repo / "coordinator" / "live.py").write_text("x = 1\n", encoding="utf-8")
     _git(repo, "init", "-q")
+    _seed_identity(repo, "claude-klabauter")
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
     _commit_all(repo)
@@ -2105,7 +2236,7 @@ def test_every_exempt_prefix_repo_key_is_a_canonical_fleet_repo_key():
     the normalized form of a clone directory name can never match a scanned
     root, so the grant would silently never apply."""
     for repo_key in EXEMPT_PREFIXES:
-        assert repo_key == repo_key_for_root(Path(repo_key)), (
+        assert repo_key == _normalize_repo_key(repo_key), (
             f"EXEMPT_PREFIXES key {repo_key!r} is not a normalized fleet repo "
             "key and can never match a scanned root"
         )

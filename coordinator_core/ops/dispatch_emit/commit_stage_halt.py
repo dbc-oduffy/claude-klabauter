@@ -24,14 +24,29 @@ COMMIT_STAGE_LABELS = frozenset({"commit", "halt-commit"})
 _CLOSED_STATUSES = frozenset({halted_run.STATUS_LANDED, halted_run.STATUS_CLOSED, halted_run.STATUS_SUPERSEDED})
 
 
-def _committed(result: object) -> bool:
-    """True when a leg's `result` (dict, or JSON text of one) reports `committed` or `already_landed`."""
+def _parsed(result: object) -> Optional[dict]:
+    """A leg's `result` as a dict (parsing JSON text), else None."""
     if isinstance(result, str):
         try:
             result = json.loads(result)
         except ValueError:
-            return False
-    return isinstance(result, dict) and (result.get("committed") is True or result.get("already_landed") is True)
+            return None
+    return result if isinstance(result, dict) else None
+
+
+def _committed(result: object) -> bool:
+    """True when a leg's `result` (dict, or JSON text of one) reports `committed` or `already_landed`."""
+    parsed = _parsed(result)
+    return parsed is not None and (parsed.get("committed") is True or parsed.get("already_landed") is True)
+
+
+def _refusal(result: object) -> Optional[str]:
+    """`<refused>: <error>` from an uncommitted leg's parsed result, else None."""
+    parsed = _parsed(result)
+    if parsed is None:
+        return None
+    parts = [str(parsed[k]).strip() for k in ("refused", "error") if parsed.get(k) not in (None, "") and str(parsed[k]).strip()]
+    return ": ".join(parts) or None
 
 
 def _reason(event: dict) -> Optional[str]:
@@ -72,7 +87,11 @@ def commit_leg_outcome(journal_text: str) -> Optional[tuple[str, str, Optional[s
                 legs[ident] = {"label": label, "state": "unsettled", "reason": None}
         elif ident in legs:
             if kind == "result":
-                legs[ident]["state"] = "committed" if _committed(event.get("result")) else "uncommitted"
+                if _committed(event.get("result")):
+                    legs[ident]["state"] = "committed"
+                else:
+                    legs[ident]["state"] = "uncommitted"
+                    legs[ident]["reason"] = _refusal(event.get("result"))
             elif kind == "failed":
                 legs[ident]["state"] = "failed"
                 legs[ident]["reason"] = _reason(event)

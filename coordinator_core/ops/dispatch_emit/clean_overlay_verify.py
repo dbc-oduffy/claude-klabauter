@@ -44,7 +44,8 @@ _OUTPUT_TAIL = 2000
 class OverlayVerdict:
     """`verdict` is "green" (tests ran and passed), "red" (a test failed), "pre_existing" (every failing test
     also fails at the base sha: lands with an advisory) or "inconclusive" (no overlay or no test ran: land_run
-    refuses it like "missing"). `detail` is the tail of the runner output or the reason."""
+    refuses it). "missing" (no verdict was produced) is built by `check_verdict`: land_run lands it with an
+    advisory. `detail` is the tail of the runner output or the reason."""
 
     verdict: str
     detail: str = ""
@@ -286,11 +287,39 @@ def write_verdict(root: Path, run_id: str, measured: dict, outcome: OverlayVerdi
     return path
 
 
+def _touched_left(root: Path, run_id: str, measured: dict) -> list:
+    """Run-touched paths the measured landing set (`blobs` plus `removed`) omits. The run's touched
+    set is `measured["touched"]` when the record carries one, else `measured_rev`'s measured-paths
+    file; neither (or an unreadable file) means unknown, and unknown is not leftover."""
+    touched = measured.get("touched")
+    if not isinstance(touched, list):
+        from coordinator_core.ops.dispatch_emit.measured_rev import touched_record_path
+
+        try:
+            touched = json.loads(touched_record_path(root, run_id).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        if not isinstance(touched, list):
+            return []
+    from coordinator_core.ops.dispatch_emit.run_leftovers import run_touched_left
+
+    blobs = measured.get("blobs") if isinstance(measured.get("blobs"), dict) else {}
+    removed = measured.get("removed") if isinstance(measured.get("removed"), list) else []
+    return run_touched_left(touched, frozenset(touched), [*blobs, *removed], {})
+
+
 def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
     """Read the run's overlay verdict for the `measured` record. One file read, no spawn: "green" or "red"
     (or "inconclusive", which land_run refuses, / "pre_existing", which it lands with an advisory) when a verdict
-    keyed to exactly this landing set and base sha exists; otherwise "missing" (no file, refused) or
-    "mismatch" (keyed to a different landing set or base sha; `detail` says which side moved)."""
+    keyed to exactly this landing set and base sha exists; otherwise "missing" (no file or an unreadable one,
+    which land_run lands with an advisory) or
+    "mismatch" (keyed to a different landing set or base sha; `detail` says which side moved). A run-touched
+    path the `measured` landing set (`blobs` plus `removed`) omits is "mismatch" before any verdict is read
+    (a verdict over half the run's work is not this run's verdict); no recorded touched set is never a
+    mismatch on this account."""
+    left = _touched_left(root, run_id, measured)
+    if left:
+        return OverlayVerdict("mismatch", f"the landing set omits run-touched path(s): {', '.join(left)}")
     try:
         data = json.loads(verdict_path(root, run_id).read_text(encoding="utf-8"))
     except FileNotFoundError:

@@ -181,6 +181,11 @@ def _agent_opts_for(agent: ReviewAgent, *, emitted_agent_type: str = None) -> Di
     return {key: entry} if entry else {}
 
 
+#: A review-wave op entry runs as one verbatim `coordinator-invoke` through this floor-tier relay.
+_OP_RELAY_AGENT_TYPE = "coordinator:op-relay"
+_OP_RELAY_MODEL = "haiku"
+
+
 def _prompt_literal(prompt: str) -> str:
     return prompt_literal(prompt)
 
@@ -1553,6 +1558,9 @@ def compose_execute_review(
     prep_call = _sc(prep_call, "prep", prep_type)
     # -- 2. review-wave -----------------------------------------------------
     wave_phase = "Review wave"
+    sliced_ops = [a.op for a in review.review_wave if a.op is not None and a.per == "slice"]
+    if sliced_ops:
+        raise ValueError(f"review wave op entries {sliced_ops!r} run once per wave; per: slice is not supported")
     if tier is not None and tier_js is not None:
         raise ValueError("compose_execute_review takes at most one of tier / tier_js")
     if tier is not None and tier not in VALID_TIERS:
@@ -1873,6 +1881,40 @@ def compose_execute_review(
             if is_delivery_verifier
             else _not_run_expr(f"{_js_string_literal(_WAVE_REJECTED)} + String(e && e.message || e)") + ";"
         )
+        if agent.op is not None:
+            op_params = json.dumps({"plan_path": plan_path, "run_base_sha": run_base_sha}).replace("'", "'\\''")
+            op_prompt = (
+                "Run this one engine command exactly and return its bare JSON reply. Run nothing else.\n"
+                f"coordinator-invoke {agent.op} '{op_params}' --bare"
+            )
+            op_call = _agent_call_literal(
+                _OP_RELAY_AGENT_TYPE,
+                op_prompt,
+                wave_phase,
+                schema=True,
+                as_arrow=True,
+                agent_opts={_OP_RELAY_AGENT_TYPE: {"model": _OP_RELAY_MODEL, "effort": "low"}},
+                schema_literal=_schema_literal(agent.schema, stage_schemas),
+            )
+            op_line = _degrading(op_call, degrade_on_error)
+            if not prep_in_wave:
+                op_line = (
+                    f"() => _verifyOnly ? ({_not_run_expr(_js_string_literal(_WAVE_SKIPPED + 'verify-only'))}, null)"
+                    f" : ({op_line})()"
+                )
+            gate = _agent_gate(agent)
+            if gate:
+                subject = _skip_subject_js(agent)
+                skipped = (
+                    "("
+                    + _not_run_expr(
+                        f"{_skip_head_js(agent, subject)} + {_js_string_literal(' excludes ' + agent.agent_type)}"
+                    )
+                    + ", null)"
+                )
+                op_line = f"() => ({gate} ? ({op_line})() : {skipped})"
+            item_lines.append(f"    {op_line}")
+            continue
         role_note = (
             f"\n\n{_DELIVERY_VERIFIER_ROLE_PREAMBLE}{delivery_supersession_clause(criterion)}\n{NEW_GATE_CORPUS_PROBE_CLAUSE}"
             if is_delivery_verifier

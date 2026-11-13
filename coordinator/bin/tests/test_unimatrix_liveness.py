@@ -326,3 +326,34 @@ def test_codex_thread_holder_dead_pid_reads_dead(tmp_path):
     got = lv.codex_thread_holder(tmp_path, "t1")
     assert got == {"codexPid": 2147480000}
     assert lv.codex_holder_live(got) is False
+
+
+def _codex_home(tmp_path, **holder):
+    base = tmp_path / "unimatrix"
+    base.mkdir(parents=True, exist_ok=True)
+    (base / "peers.json").write_text(json.dumps([{"name": "codex-x", "vendor": "codex", "target": "t-1", **holder}]))
+    return tmp_path
+
+
+def _codex_face(started_ago_seconds=5000):
+    return {"name": "codex-x", "vendor": "codex", "sessionId": "peer-codex-x-9", "target": "t-1",
+            "startedAt": int((time.time() - started_ago_seconds) * 1000)}
+
+
+def test_codex_face_unbacked_when_its_holder_is_dead_and_backed_while_it_lives(tmp_path):
+    assert lv.codex_face_unbacked(_codex_face(), _codex_home(tmp_path, codexPid=2_000_000_000)) is True
+    assert lv.codex_face_unbacked(_codex_face(), _codex_home(tmp_path, codexPid=os.getpid())) is False
+
+
+def test_codex_face_with_no_recorded_holder_is_unbacked_only_past_its_grace(tmp_path):
+    home = _codex_home(tmp_path)
+    assert lv.codex_face_unbacked(_codex_face(5000), home) is True
+    assert lv.codex_face_unbacked(_codex_face(5), home) is False
+
+
+def test_codex_face_check_never_claims_what_it_cannot_prove(tmp_path):
+    home = _codex_home(tmp_path, codexPid=2_000_000_000)
+    assert lv.codex_face_unbacked(dict(_codex_face(), target="t-other", name="other"), home) is False
+    assert lv.codex_face_unbacked(dict(_codex_face(), unimatrixRemote="me@box"), home) is False
+    assert lv.codex_face_unbacked(dict(_codex_face(), vendor="claude"), home) is False
+    assert lv.codex_face_unbacked(_codex_face(), tmp_path / "no-peers-file") is False

@@ -11,7 +11,7 @@ import pytest
 
 from coordinator_core.ops import review_stamp as m
 from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
-from coordinator_core.ops.dispatch_emit.test_interpreter import PORTABLE_CLAUSE, interpreter_clause
+from coordinator_core.ops.dispatch_emit.interpreter_pin import PORTABLE_CLAUSE, interpreter_clause
 from coordinator_core.ops.tests.test_review_stamp_superseding_record import _git, _plan, _record, _repo
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]

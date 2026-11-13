@@ -64,6 +64,8 @@ def _session_entries():
 
 
 RELAY_SETTLE_SECONDS = 15
+# A mirror row may lack its host (`unimatrixRemote`) yet still carry the far-socket field or a box label.
+_MIRROR_FIELDS = ("unimatrixRemote", "macSocketPath", "unimatrixBox")
 
 
 def _mirror_name(name):
@@ -71,7 +73,7 @@ def _mirror_name(name):
 
     The bridge keys its deliveries.jsonl row on the mirror's own name, never the bare far name."""
     return next((e["name"] for e in _session_entries()
-                 if e.get("unimatrixRemote") and name in (e.get("name"), e.get("unimatrixFarName"))), "")
+                 if any(e.get(f) for f in _MIRROR_FIELDS) and name in (e.get("name"), e.get("unimatrixFarName"))), "")
 
 
 def _is_mirror(name):
@@ -211,6 +213,7 @@ def main(argv=None):
         if outcome is None:
             print(f"unconfirmed: the relay recorded no outcome for {a.to} within {RELAY_SETTLE_SECONDS}s; "
                   "check before resending", file=sys.stderr)
+            return 1
         elif not outcome.get("ok"):
             print(f"undelivered: {a.to}: {outcome.get('error', 'far relay refused')}", file=sys.stderr)
             return 1
@@ -219,6 +222,7 @@ def main(argv=None):
     else:
         print(f"unconfirmed: router gave no delivery receipt for {a.to}; the message may have been delivered, "
               "check before resending", file=sys.stderr)
+        return 1
     return 0
 
 

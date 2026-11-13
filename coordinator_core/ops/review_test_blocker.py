@@ -10,6 +10,7 @@ must match.
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -32,6 +33,11 @@ class TestBlocker:
         """`<node_id>: <first line of message, at most 300 chars>`."""
         lines = self.message.strip().splitlines()
         return f"{self.node_id}: {lines[0].strip()[:_MAX_MESSAGE] if lines else ''}"
+
+
+#: pytest's answer for a node id the file no longer holds (renamed or removed): "ERROR: not found: <id>".
+#: A "fixture 'x' not found" line is a real failure and never matches. The JS mirror repeats this pattern.
+NOT_FOUND_RE = re.compile(r"^\s*(?:ERROR:\s*)?not found:", re.IGNORECASE | re.MULTILINE)
 
 
 def _detail(result: Mapping[str, Any]) -> dict:
@@ -95,7 +101,8 @@ def is_designed_red(node_id: str, root: Optional[str] = None) -> bool:
 
 def from_reverify(result: Mapping[str, Any], root: Optional[str] = None) -> List[TestBlocker]:
     """Blockers for `failing` minus `pre_existing`, `sibling_owned`, `foreign_red` (a {node: paths}
-    map; its keys), `kept` and designed_red nodes, sorted by node id.
+    map; its keys), `kept`, `renamed_node` (ids a run-edited file no longer holds) and designed_red
+    nodes, sorted by node id.
 
     Messages come from `failing_detail`; a node without detail has an empty message. A designed_red
     node is a worklist entry, never a gate (docs/reference/test-tiers.md); `root` locates its module.
@@ -108,6 +115,7 @@ def from_reverify(result: Mapping[str, Any], root: Optional[str] = None) -> List
         | set(result.get("sibling_owned") or [])
         | set(result.get("foreign_red") or [])
         | set(result.get("kept") or [])
+        | set(result.get("renamed_node") or [])
     )
     detail = _detail(result)
     return [
@@ -131,11 +139,17 @@ def own_diff_blockers(
     `passed_at_base` (green at base, red with the diff: the run's own, whatever its file).
 
     The file part is the text before the first `::`; both sides are normalised to `/`
-    separators with a leading `./` stripped. `pre_existing` nodes are already excluded.
+    separators with a leading `./` stripped. `pre_existing` nodes are already excluded. A node in an
+    own file whose message is pytest's "not found:" was renamed or removed by the run: it is no
+    failure, and the file's other nodes still decide.
     """
     own = {_norm_path(p) for p in own_paths or []}
     base = {_norm_path(i) for i in result.get("passed_at_base") or []}
-    return [
-        b for b in from_reverify(result, root)
-        if _norm_path(b.node_id.split("::", 1)[0]) in own or _norm_path(b.node_id) in base
-    ]
+    out = []
+    for b in from_reverify(result, root):
+        in_own = _norm_path(b.node_id.split("::", 1)[0]) in own
+        if in_own and NOT_FOUND_RE.search(b.message):
+            continue
+        if in_own or _norm_path(b.node_id) in base:
+            out.append(b)
+    return out

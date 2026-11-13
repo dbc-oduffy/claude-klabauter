@@ -228,8 +228,9 @@ def _record(
     rechecks: int,
     thresholds: Optional[dict],
     missing_keys: list,
+    freshness: Optional[dict] = None,
 ) -> dict:
-    return {
+    record = {
         "verdict": verdict,
         "route": route,
         "first_reading": first_reading,
@@ -240,6 +241,26 @@ def _record(
         "thresholds": thresholds,
         "missing_keys": missing_keys,
     }
+    if freshness is not None:
+        record["freshness"] = freshness
+    return record
+
+
+def _freshness_advisory(
+    start_dir: Optional[Path], freshness_fn: Optional[Callable[[str], dict]]
+) -> Optional[dict]:
+    """One example-retrieval-repo freshness precondition for the admission's repo, or None
+    when no repo is found. Advisory: never raises, never changes the verdict.
+    Called once per admission, outside `decide` and the poll loop."""
+    repo_root = _find_repo_root(start_dir)
+    if repo_root is None:
+        return None
+    if freshness_fn is None:
+        from coordinator_core.ops.rag_freshness import freshness_precondition as freshness_fn
+    try:
+        return freshness_fn(str(repo_root))
+    except Exception:  # noqa: BLE001 -- advisory, fail open
+        return None
 
 
 def await_admission(
@@ -250,6 +271,7 @@ def await_admission(
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
     rng: Callable[[], float] = random.random,
+    freshness_fn: Optional[Callable[[str], dict]] = None,
 ) -> dict:
     """One blocking wait, re-reading every `recheck_s`, until under
     threshold or `max_hold_s` elapses (only when `hold_allowed`); otherwise
@@ -270,6 +292,8 @@ def await_admission(
             record["repo_root"] = str(repo_root)
         return record
 
+    fresh = _freshness_advisory(start_dir, freshness_fn)
+
     reader = read_load
     if reader is None:
         from coordinator_core.telemetry.host_sampler import read_load as reader
@@ -286,12 +310,22 @@ def await_admission(
             0,
             _thresholds_dict(thresholds),
             [],
+            fresh,
         )
 
     reasons = decide(first, thresholds)
     if not reasons:
         return _record(
-            "admitted", route, first, first, [], 0.0, 0, _thresholds_dict(thresholds), []
+            "admitted",
+            route,
+            first,
+            first,
+            [],
+            0.0,
+            0,
+            _thresholds_dict(thresholds),
+            [],
+            fresh,
         )
 
     if not hold_allowed:
@@ -305,6 +339,7 @@ def await_admission(
             0,
             _thresholds_dict(thresholds),
             [],
+            fresh,
         )
 
     deadline = monotonic() + thresholds.max_hold_s
@@ -337,6 +372,7 @@ def await_admission(
         rechecks,
         _thresholds_dict(thresholds),
         [],
+        fresh,
     )
 
 

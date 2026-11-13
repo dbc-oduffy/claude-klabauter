@@ -103,10 +103,10 @@ def test_send_ok_with_msg_id_is_confirmed_even_without_written_marker(monkeypatc
     assert rc == 0 and "sent to x" in cap.out and cap.err == ""
 
 
-def test_send_unconfirmed_is_worded_unconfirmed_and_exits_zero_so_no_retry_block(monkeypatch, capsys):
+def test_send_unconfirmed_is_worded_unconfirmed_and_exits_nonzero(monkeypatch, capsys):
     rc, _ = _run(monkeypatch, {"ok": True}, ["--to", "x", "hi"])
     cap = capsys.readouterr()
-    assert rc == 0 and "sent to" not in cap.out
+    assert rc == 1 and "sent to" not in cap.out
     assert "unconfirmed" in cap.err and "may have been delivered" in cap.err
     assert "not delivered" not in cap.err and "not confirmed" not in cap.err
 
@@ -222,7 +222,19 @@ def test_send_to_a_mirror_with_no_recorded_outcome_is_unconfirmed_never_sent(mon
     monkeypatch.setattr(us, "relay_outcome", lambda n, since: None)
     rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
     cap = capsys.readouterr()
-    assert rc == 0 and "sent to" not in cap.out and "unconfirmed" in cap.err
+    assert rc == 1 and "sent to" not in cap.out and "unconfirmed" in cap.err
+
+
+def test_hostless_mirror_rows_still_count_as_mirrors(monkeypatch):
+    base = {"name": "grp.farbox", "unimatrixFarName": "grp", "pid": 7}
+    for extra in ({"macSocketPath": "/far/s.sock"}, {"unimatrixBox": "machine-a"}, {"unimatrixRemote": "farbox"}):
+        monkeypatch.setattr(us, "_session_entries", lambda extra=extra: [{**base, **extra}])
+        assert us._mirror_name("grp") == "grp.farbox" and us._is_mirror("grp.farbox")
+
+
+def test_a_plain_local_row_is_not_a_mirror(monkeypatch):
+    monkeypatch.setattr(us, "_session_entries", lambda: [{"name": "grp", "pid": 7}])
+    assert us._mirror_name("grp") == "" and not us._is_mirror("grp")
 
 
 def test_send_to_a_non_mirror_never_waits_for_a_relay_outcome(monkeypatch, capsys):

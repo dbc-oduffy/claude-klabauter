@@ -233,9 +233,29 @@ def covering_dirty_paths(repo_root: Path) -> list[str]:
     return sorted(set(kept))
 
 
-def _repo_root(raw: Optional[str]) -> Path:
+def _run_repo(params: dict) -> Optional[str]:
+    """The worktree root of the repo the run names: an existing-directory ``repo_root``/``target_root``
+    param, else the repo holding an absolute ``script_path``. None when the run names none."""
+    for key in ("repo_root", "target_root"):
+        named = params.get(key)
+        if isinstance(named, str) and named and Path(named).is_dir():
+            return show_toplevel(named)
+    script = params.get("script_path")
+    if isinstance(script, str) and script and Path(script).is_absolute():
+        holder = Path(script).parent
+        while not holder.is_dir() and holder != holder.parent:
+            holder = holder.parent
+        return show_toplevel(str(holder))
+    return None
+
+
+def _repo_root(raw: Optional[str], params: Optional[dict] = None) -> Path:
+    """``--repo-root`` wins, then the run's own repo, then the cwd's repo."""
     if raw:
         return Path(raw).resolve()
+    named = _run_repo(params or {})
+    if named is not None:
+        return Path(named)
     top = show_toplevel()
     if top is None:
         raise RuntimeError("not in a git repo; pass --repo-root")
@@ -1142,6 +1162,55 @@ def _landing_checks(
     return out
 
 
+_SECTION_HEAD = re.compile(r"^_{2,} (.+?) _{2,}$", re.MULTILINE)
+_SUMMARY_HEAD = re.compile(r"^=+ short test summary info =+$", re.MULTILINE)
+_PATH_TOKEN = re.compile(r"(?<![\w./\\-])((?:[\w.-]+/)+[\w.-]+\.\w+)")
+_MAX_NAMED_PATHS = 200
+
+
+def _named_paths(log: Path, strip: Sequence[Path], ids: Sequence[str]) -> dict[str, set[str]]:
+    """``{id: repo-relative POSIX paths its failure text names}`` from the pytest FAILURES section headed by the
+    id's test name and the id's ``FAILED`` summary message in ``log``; an absolute ``strip`` root prefix is cut
+    first. An id with no text maps to an empty set."""
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace").replace("\\", "/")
+    except OSError:
+        return {i: set() for i in ids}
+    for base in strip:
+        text = text.replace(base.as_posix() + "/", "")
+    cut = _SUMMARY_HEAD.search(text)
+    body, summary = (text[:cut.start()], text[cut.start():]) if cut else (text, "")
+    heads = list(_SECTION_HEAD.finditer(body))
+    sections: dict[str, str] = {}
+    for n, m in enumerate(heads):
+        end = heads[n + 1].start() if n + 1 < len(heads) else len(body)
+        sections[m.group(1)] = sections.get(m.group(1), "") + body[m.end():end]
+    named: dict[str, set[str]] = {}
+    for i in ids:
+        test = i.replace("\\", "/").partition("::")[2].replace("::", ".")
+        message = "".join(re.findall(rf"^FAILED {re.escape(i)} - (.*)$", summary, flags=re.MULTILINE))
+        named[i] = set(_PATH_TOKEN.findall(sections.get(test, "") + "\n" + message))
+    return named
+
+
+def _peer_held_reds(
+    root: Path, export_root: Path, export_log: Path, run_id: str, write_set: Sequence[str], ids: Sequence[str],
+) -> dict[str, list[str]]:
+    """``{id: [peer-held paths]}`` for each of ``ids`` whose failure text names a path outside ``write_set``
+    that a live peer run holds (one claim lookup over every named path) and names none of ``write_set``: a
+    red on the run's own paths stays the run's. Empty when nothing is named or held. No git spawn per id."""
+    from coordinator_core.ops.dispatch_emit.run_write_set import _split_peer_held
+
+    own = {str(w).replace("\\", "/") for w in write_set}
+    named = _named_paths(export_log, (export_root, root), ids)
+    candidates = sorted({p for paths in named.values() for p in paths} - own)[:_MAX_NAMED_PATHS]
+    if not candidates:
+        return {}
+    held = _split_peer_held(root, candidates, "", run_id)[1]
+    out = {i: sorted(p for p in paths if p in held) for i, paths in named.items() if not paths & own}
+    return {i: hit for i, hit in out.items() if hit}
+
+
 def _write_dual(
     root, path, log_path, export_log, run_id, tests, dropped, drop_note, meta, dirty, head_sha,
     export_pass, live_pass, fail, baseline=None,
@@ -1168,6 +1237,16 @@ def _write_dual(
     }
     record.update(baseline or {})
     measured_baseline = record.get("baseline")
+    if isinstance(measured_baseline, dict) and measured_baseline.get("caused") and export_log_used:
+        peer = _peer_held_reds(
+            root, Path(meta["root"]), export_log, run_id, meta["write_set"], measured_baseline["caused"],
+        )
+        if peer:
+            measured_baseline["caused"] = [n for n in measured_baseline["caused"] if n not in peer]
+            measured_baseline["foreign"] = [*measured_baseline.get("foreign", []), *peer]
+            measured_baseline["foreign_reason"] = {
+                **measured_baseline.get("foreign_reason", {}), **{n: landing_targeted_tests.PEER_HELD_PATH for n in peer},
+            }
     if isinstance(measured_baseline, dict) and export_log_used and _ran_total(export_log) is not None:
         dirt = [n for n in live_failed if n not in export_failed and n not in measured_baseline.get("foreign", [])]
         if dirt:
@@ -1218,7 +1297,7 @@ def main(
 
     try:
         params = _load_params(args)
-        root = _repo_root(args.repo_root)
+        root = _repo_root(args.repo_root, params)
     except (ValueError, RuntimeError) as exc:
         print(f"retest_targeted: {exc}", file=sys.stderr)
         return 2

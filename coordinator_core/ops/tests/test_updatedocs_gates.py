@@ -304,11 +304,26 @@ def test_tasks_markdown_falls_back_to_disk_walk_outside_git(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+_ADMISSIBLE_BODY = "weighty body\n" * 1000
+
+
+def _cite_in_daily_log(root, paths):
+    """An unharvested daily log naming ``paths``: the citation that admits a plan."""
+    log = root / "archive" / "daily-summaries" / "2026-11-02.md"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("".join(f"- shipped {p}\n" for p in paths), encoding="utf-8")
+
+
 def _implemented_plans(root, n, *, status="implemented"):
+    """``n`` plans heavy enough to clear the weight floor, all cited by a daily log."""
     plans = root / "docs" / "plans"
     plans.mkdir(parents=True, exist_ok=True)
     for i in range(n):
-        (plans / f"2026-11-01-p{i}.md").write_text(f"---\nstatus: {status}\n---\nbody\n", encoding="utf-8")
+        (plans / f"2026-11-01-p{i}.md").write_text(
+            f"---\nstatus: {status}\n---\n{_ADMISSIBLE_BODY}", encoding="utf-8"
+        )
+    if status == "implemented":
+        _cite_in_daily_log(root, [f"docs/plans/2026-11-01-p{i}.md" for i in range(n)])
 
 
 def _empty_log(root):
@@ -322,7 +337,7 @@ def test_distill_threshold_fires_at_50_plus(tmp_path):
     _implemented_plans(tmp_path, 50)
     result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
     assert result.verdict == udg.GateVerdict.FINDING
-    assert result.detail["total"] == 50
+    assert result.detail["total"] == 50  # 50 plans plus the citing log, clamped at the threshold cap
 
 
 def test_distill_threshold_clean_below_threshold(tmp_path):
@@ -355,12 +370,14 @@ def test_distill_threshold_total_equals_compute_scope_scannable(tmp_path):
     _implemented_plans(tmp_path, 7)
     specs = tmp_path / "archive" / "specs"
     specs.mkdir(parents=True)
-    (specs / "2026-07-01-alpha.md").write_text("---\nstatus: implemented\n---\nbody\n", encoding="utf-8")
+    (specs / "2026-07-01-alpha.md").write_text(f"---\nstatus: implemented\n---\n{_ADMISSIBLE_BODY}", encoding="utf-8")
     (specs / "2026-07-02-beta.md").write_text("---\nstatus: draft\n---\nbody\n", encoding="utf-8")
+    spec_log = tmp_path / "archive" / "daily-summaries" / "2026-11-03.md"
+    spec_log.write_text("- shipped archive/specs/2026-07-01-alpha.md\n", encoding="utf-8")
 
     result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
-    scope = compute_scope(tmp_path, run_id="t", cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS))
-    assert result.detail["total"] == scope.counts["scannable"] == 8
+    scope = compute_scope(tmp_path, run_id="t", cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS), admit=True)
+    assert result.detail["total"] == scope.counts["scannable"] + scope.counts["deferred"] == 10
 
 
 # ---------------------------------------------------------------------------
@@ -783,8 +800,8 @@ def test_gates_resolve_corpora_under_the_worktree_not_the_git_dir(tmp_path):
     out = udg._updatedocs_gates({"gates": ["distill-threshold"]}, repo_root=worktree / ".git")
     gate = out["gates"][0]
 
-    assert gate["detail"]["total"] == 3, (
-        f"gate counted {gate['detail']['total']} of 3 files — corpus resolved off the worktree"
+    assert gate["detail"]["total"] == 4, (
+        f"gate counted {gate['detail']['total']} of 4 files (3 plans, 1 daily log) — corpus resolved off the worktree"
     )
     assert gate["verdict"] != "clean" or gate["detail"]["total"] > 0
 

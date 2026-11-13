@@ -621,12 +621,12 @@ def test_admission_declines_a_row_that_fails_its_schema_with_the_reason(tmp_path
     queue_dir.mkdir(parents=True)
     good = dict(created="2026-09-21", title="t", body="b", status="open", scope="project", from_repo="x")
     _write_row(queue_dir / "good.yaml", **good)
-    _write_row(queue_dir / "bad.yaml", **{k: v for k, v in good.items() if k not in ("scope", "from_repo")})
+    _write_row(queue_dir / "bad.yaml", **{**good, "scope": "bogus"})
     manifest = _select(queue=[queue_dir], repo_root=tmp_path, row_schema_gate=_lesson_gate())
     assert [e.row_id for e in manifest.entries] == ["good"]
     (declined,) = manifest.declined
     assert declined.row_id == "bad"
-    assert declined.reason.startswith("admission:") and "scope" in declined.reason and "from_repo" in declined.reason
+    assert declined.reason.startswith("admission:") and "scope" in declined.reason
 
 
 _LEGACY = dict(created="2026-08-21", title="t", body="b", status="open")
@@ -646,8 +646,16 @@ def test_admission_admits_a_row_missing_scope_and_from_repo_when_derivable(tmp_p
     assert sorted(e.row_id for e in manifest.entries) == ["viapath", "viarepo"] and manifest.declined == ()
 
 
-def test_admission_names_the_reason_when_scope_and_from_repo_are_underivable(tmp_path):
+def test_admission_defaults_from_repo_to_the_owning_repo_in_its_own_queue(tmp_path):
     queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    _write_legacy(queue_dir / "bare.yaml", path="/abs/x.md")
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path, row_schema_gate=_lesson_gate())
+    assert [e.row_id for e in manifest.entries] == ["bare"] and manifest.declined == ()
+
+
+def test_admission_still_hands_back_an_outbox_row_with_no_from_repo(tmp_path):
+    queue_dir = tmp_path / "state" / "cross-repo" / "outbox"
     queue_dir.mkdir(parents=True)
     _write_legacy(queue_dir / "bare.yaml", path="/abs/x.md")
     manifest = _select(queue=[queue_dir], repo_root=tmp_path, row_schema_gate=_lesson_gate())

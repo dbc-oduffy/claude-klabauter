@@ -228,7 +228,7 @@ def reap_untracked_if_due(
     if not os.path.isdir(root):
         return 0
     try:
-        with open(stamp, "a"):
+        with open(stamp, "a", encoding="utf-8"):
             pass
         os.utime(stamp, (now, now))
         to_reap = classify_sidecars(

@@ -25,10 +25,6 @@ def run(label: str, cmd: list[str]) -> bool:
 def main() -> int:
     results = [
         run("node: walk-handoff-dag", ["node", "--test", str(BIN_DIR / "lib" / "walk-handoff-dag.test.js")]),
-        run(
-            "python: handoff-has-live-children",
-            [sys.executable, "-m", "pytest", str(SCRIPT_DIR / "test_handoff_has_live_children.py"), "-q"],
-        ),
         run("bats: review-coverage-gate", ["npx", "bats", str(SCRIPT_DIR / "test-review-coverage-gate.bats")]),
         run(
             "bats: review-coverage-gate-derivation",

@@ -51,7 +51,7 @@ def repo(tmp_path):
 def test_foreign_lock_refuses_before_ref_moves_and_index_is_byte_identical(repo, monkeypatch):
     monkeypatch.setattr(commit, "_SPLICE_LOCK_BACKOFF_SECS", ())
     lock = repo / ".git" / "index.lock"
-    lock.write_text("", encoding="utf-8")
+    lock.write_text("peer index bytes", encoding="utf-8")
     index_path = repo / ".git" / "index"
     index_before = index_path.read_bytes()
     cached_before = _git(["diff", "--cached"], repo)
@@ -73,7 +73,7 @@ def test_foreign_lock_refuses_before_ref_moves_and_index_is_byte_identical(repo,
 def test_peer_lock_across_whole_splice_leaves_index_matching_new_head(repo, monkeypatch):
     monkeypatch.setattr(commit, "_SPLICE_LOCK_BACKOFF_SECS", ())
     lock = repo / ".git" / "index.lock"
-    lock.write_text("", encoding="utf-8")
+    lock.write_text("peer index bytes", encoding="utf-8")
     head_before = _git(["rev-parse", "HEAD"], repo).strip()
     landed = None
     refused = False

@@ -48,6 +48,11 @@ def test_reverify_phase_sits_after_the_review_wave_and_before_verify():
         assert titles.index("Review integration") < titles.index("Review re-verify")
 
 
+def test_review_recover_and_blocker_js_exclude_renamed_nodes():
+    assert "?.renamed_node ?? []" in ask_compose._test_blockers_js("_r", "_t")
+    assert "rv?.renamed_node ?? []" in ask_compose._REVIEW_RECOVER_JS
+
+
 def test_reverify_phase_names_the_op_and_the_test_runner():
     script = _compose()
     assert "review.reverify" in script

@@ -130,6 +130,47 @@ def test_worker_marker_is_refused_despite_valid_grant(monkeypatch, tmp_path, mar
         _fire()
 
 
+_LEGACY_SID = '00000000-0000-4000-8000-000000000009'
+
+
+def _legacy_row(monkeypatch, row, argv, env=None, sid=_LEGACY_SID):
+    from coordinator_core.session import external_registry
+    import psutil
+    monkeypatch.setattr(external_registry, 'lookup', lambda s: row)
+    monkeypatch.setattr(psutil, 'Process', lambda pid: type('P', (), {'cmdline': lambda self: argv})())
+    monkeypatch.setattr(authority, 'caller_principal', lambda *a: authority.Principal(sid, 'unknown', env or {}))
+
+
+_EM_ARGV = ['node', 'codex.js']
+
+
+def test_roleless_live_row_on_an_observed_em_host_fires(monkeypatch):
+    _legacy_row(monkeypatch, {'session_id': _LEGACY_SID, 'pid': 7}, _EM_ARGV)
+    caller = authority.require_fire_authority('unused.mjs', None, cwd=None, native=True, backend='codex',
+                                              submitted_session_id=_LEGACY_SID)
+    assert caller.role == 'em' and caller.session_id == _LEGACY_SID
+
+
+@pytest.mark.parametrize('row,argv,env', [
+    ({'session_id': _LEGACY_SID, 'pid': 7, 'role': 'unknown'}, _EM_ARGV, {}),   # recorded role is never reclassified
+    ({'session_id': _LEGACY_SID, 'pid': 7}, ['node', 'codex.js', 'exec', '-'], {'COORDINATOR_PARENT_SESSION_ID': 'p'}),  # engine-issued worker
+    ({'session_id': _LEGACY_SID, 'pid': 7}, _EM_ARGV, {'COORDINATOR_AGENT_WORKER': '1'}),
+    (None, _EM_ARGV, {}),  # no registry row: a caller string alone grants nothing
+])
+def test_unverified_family_em_caller_is_still_refused(monkeypatch, row, argv, env):
+    _legacy_row(monkeypatch, row, argv, env)
+    with pytest.raises(ValueError, match='verified EM'):
+        authority.require_fire_authority('unused.mjs', None, cwd=None, native=True, backend='codex',
+                                         submitted_session_id=_LEGACY_SID)
+
+
+def test_submitted_session_that_is_not_the_invoker_is_refused(monkeypatch):
+    monkeypatch.setattr(authority, 'caller_principal', lambda *a: authority.Principal('actual', 'em', {}))
+    with pytest.raises(ValueError, match='must match'):
+        authority.require_fire_authority('unused.mjs', None, cwd=None, native=True, backend='codex',
+                                         submitted_session_id='someone-elses-em')
+
+
 def test_token_forwarded_via_caller_env_reaches_fire_authority(monkeypatch, tmp_path):
     from coordinator_core.ops.workflow_fire import headless_em_grant as grant
     monkeypatch.setenv('COORDINATOR_SETTINGS_HOME', str(tmp_path))

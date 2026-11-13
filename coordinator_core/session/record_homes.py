@@ -82,6 +82,7 @@ from typing import Pattern
 HOMES = frozenset({
     "apm-rulings",
     "audits",
+    "backlog-pass",
     "backlogs",
     "baselines",
     "bash-guards",
@@ -150,6 +151,13 @@ def _declared(kind: str) -> str:
 
 def home_dir(repo_root: str, kind: str) -> str:
     return os.path.join(repo_root, "state", _declared(kind))
+
+
+def home_rel(kind: str) -> str:
+    """Repo-relative POSIX home (`state/<kind>`) for globs and key-prefix
+    matching against forward-slash repo keys; `home_dir` would emit `\\` on
+    Windows and never match those keys."""
+    return f"state/{_declared(kind)}"
 
 
 _SHARDED_KINDS = frozenset({"sizings", "handoffs"})

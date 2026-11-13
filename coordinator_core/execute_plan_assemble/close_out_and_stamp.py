@@ -973,8 +973,8 @@ def apply_tracker_reconciliation(
     writes back ONLY when at least one edit fired -- a no-op run never
     dirties the tree or perturbs the file's mtime. Returns the same `edits`
     list `reconcile_tracker_shipped_counts` returns (`[]` on a no-op run),
-    for a caller (`ceremony.update_docs_scan`'s manifest today; the mise
-    tracker-sync step once it shares this same compute path) to report."""
+    for a caller (the mise tracker-sync step, once it shares this same compute
+    path) to report."""
     text = tracker_path.read_text(encoding="utf-8")
     new_text, edits = reconcile_tracker_shipped_counts(text, repo_root)
     if edits:

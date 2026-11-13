@@ -176,15 +176,59 @@ def door_fail_open_note(repo_root: object, run_id: object) -> Optional[str]:
     return None
 
 
+_SPAWN_TRANSCRIPT_CAP = 16
+
+
+def _spawn_prompt_for_run(repo_root: object, run_id: str) -> Optional[str]:
+    """The spawn prompt whose params block is `run_id`'s, else None. Never raises.
+
+    Reads the run's emitting session (its emission receipt) and that one session's newest
+    `subagents/workflows/*/agent-*.jsonl` transcripts, capped at `_SPAWN_TRANSCRIPT_CAP`. The
+    session comes from the receipt, never from the process environment: a warm-served retry
+    runs in the engine, whose environment is not the caller's.
+    """
+    try:
+        from coordinator_core.ops.dispatch_emit.halted_run import recorded_emitter
+
+        session = recorded_emitter(Path(str(repo_root)), run_id)
+        if not session or "/" in session or "\\" in session or session in (".", ".."):
+            return None
+        home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+        found = []
+        for transcript in home.glob(f"projects/*/{session}/subagents/workflows/*/agent-*.jsonl"):
+            try:
+                found.append((transcript.stat().st_mtime, transcript))
+            except OSError:
+                continue
+        found.sort(key=lambda item: item[0], reverse=True)
+        for _, transcript in found[:_SPAWN_TRANSCRIPT_CAP]:
+            prompt = read_spawn_prompt(str(transcript))
+            params = prompt_params(prompt)
+            if params is not None and params["run_id"] == run_id:
+                return prompt
+    except Exception:
+        return None
+    return None
+
+
 def recover_params(repo_root: object, run_id: object) -> Optional[Path]:
-    """Re-materialize the run's params file from its recorded product params; the path, else None."""
-    recorded = recorded_land_params(repo_root, run_id)
-    if recorded is None:
-        return None
+    """Re-materialize the run's params file; the path, else None.
+
+    Source order: the recorded product params (`land-params.json`), then the run's own spawn
+    prompt through `materialize_from_prompt`, the guard writer's leg, so token admission is the
+    same one. The prompt route covers a PreToolUse door that failed open and never ran that writer.
+    """
     target = params_path(repo_root, run_id)
-    if target is None or not materialize(target, recorded):
+    if target is None:
         return None
-    return target
+    recorded = recorded_land_params(repo_root, run_id)
+    if recorded is not None:
+        return target if materialize(target, recorded) else None
+    prompt = _spawn_prompt_for_run(repo_root, str(run_id))
+    if prompt is None:
+        return None
+    written, leg = materialize_from_prompt(repo_root, prompt)
+    return written if leg is None else None
 
 
 def missing_file_diagnosis(path: str, cwd: object = None) -> Optional[str]:

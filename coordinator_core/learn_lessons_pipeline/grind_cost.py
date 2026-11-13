@@ -18,10 +18,21 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.distill.prompt_tier import estimate_tokens
+from coordinator_core.learn_lessons_pipeline.mechanical_close import close_candidates
 from coordinator_core.session import record_homes
 
 DEFAULT_PROFILE = "lessons"
 DEFAULT_APPETITE = "standard"
+
+
+_ROUTED_OUT_MARKERS = ("row fails its schema and cannot be closed", "row carries a schema hand-back mark")
+
+
+def _is_routed_out(reason: str) -> bool:
+    """True for a decline `select_rows` writes for a schema-failing row: the first-run schema
+    decline and the later-run decline by the `needs-judgment` mark that first run wrote."""
+    return reason.startswith("admission:") and any(m in reason for m in _ROUTED_OUT_MARKERS)
 
 
 def _default_profile_dir(profile: str) -> Path:
@@ -41,11 +52,17 @@ def measure(
     queue: Optional[Path] = None,
     profile_dir: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """Return {admitted, declined, triage_batches, spawns_per_lesson} for the default emit.
+    """Return the cost shape of the default emit.
 
     `spawns_per_lesson` is triage_batches / admitted (0.0 when nothing is admitted).
+    `max_triage_batch_tokens` is the largest triage batch's summed row-file tokens (bytes/4).
+    `llm_routed` is admitted minus `mechanically_closed` (close_candidates);
+    `routed_out` counts schema-failing declines; `projected_spawns` is triage
+    batches plus pre-vet batches (profile `prevet.batch_size`, when declared)
+    plus one verify leg per triage batch when the graph has a verify node (a floor:
+    a row takes one verdict branch, so branches are not multiplied).
     """
-    from coordinator_core.ops.dispatch_emit.grind_compose import _group_into_batches
+    from coordinator_core.ops.dispatch_emit.grind_compose import _entry_bytes, _group_into_batches
     from coordinator_core.ops.dispatch_emit.grind_profile import load_profile, resolve_appetite, validate_graph
     from coordinator_core.ops.dispatch_emit.queue_emit import _resolved_batch_sizes
     from coordinator_core.ops.dispatch_emit.queue_select import load_row_schema_gate, select_rows
@@ -75,10 +92,22 @@ def measure(
             claimant_sid=None,
             row_schema_gate=load_row_schema_gate(loaded, repo_root),
         )
-        batches = _group_into_batches(manifest, knobs, loaded)
+        batches = _group_into_batches(manifest, knobs, loaded, repo_root=repo_root)
+        max_triage_batch_tokens = max(
+            (sum(estimate_tokens(_entry_bytes(e, repo_root)) for e in entries) for _id, entries in batches),
+            default=0,
+        )
+
+        mechanically_closed = len(close_candidates(manifest, repo_root))
 
     admitted = len(manifest.entries)
     triage_batches = len(batches)
+    llm_routed = admitted - mechanically_closed
+    routed_out = sum(1 for d in manifest.declined if _is_routed_out(d.reason))
+    prevet = getattr(loaded, "prevet", None)
+    prevet_size = int(getattr(prevet, "batch_size", 0) or 0)
+    prevet_batches = -(-llm_routed // prevet_size) if prevet_size > 0 else 0
+    has_verify = any(n.kind == "verify" for n in loaded.graph.values())
     return {
         "profile": profile,
         "appetite": appetite,
@@ -86,6 +115,11 @@ def measure(
         "declined": len(manifest.declined),
         "triage_batches": triage_batches,
         "spawns_per_lesson": (triage_batches / admitted) if admitted else 0.0,
+        "max_triage_batch_tokens": max_triage_batch_tokens,
+        "llm_routed": llm_routed,
+        "mechanically_closed": mechanically_closed,
+        "routed_out": routed_out,
+        "projected_spawns": triage_batches + prevet_batches + (triage_batches if has_verify else 0),
     }
 
 

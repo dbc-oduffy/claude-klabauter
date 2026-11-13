@@ -1881,6 +1881,31 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert "state/sizings/s.yaml" in json.loads(captured.out)["landed"]
         assert list(spawns) == []
 
+    def test_a_landed_done_md_brings_its_unclaimed_verify_md_sibling(self, repo, capsys):
+        done = "state/queue-grind/bug/evidence/r/row-1.done.md"
+        verify = "state/queue-grind/bug/evidence/r/row-1.verify.md"
+        self._write(repo, done, "done\n")
+        self._write(repo, verify, "verified\n", claim=False)
+
+        code, captured = self._run_record(repo, capsys)
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        landed = json.loads(captured.out)["landed"]
+        assert done in landed and verify in landed
+        assert verify in _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).stdout.split()
+
+    def test_a_done_md_without_a_verify_md_lands_alone_and_a_stray_verify_md_stays_out(self, repo, capsys):
+        done = "state/queue-grind/bug/evidence/r/row-2.done.md"
+        stray = "state/queue-grind/bug/evidence/r/row-3.verify.md"
+        self._write(repo, done, "done\n")
+        self._write(repo, stray, "verified\n", claim=False)
+
+        code, captured = self._run_record(repo, capsys)
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        landed = json.loads(captured.out)["landed"]
+        assert done in landed and stray not in landed
+
 
 class TestSplitVerb:
     PARENT = "2026-11-01-three-failures-abc123def456"
@@ -2023,7 +2048,7 @@ class TestCloseAdmitsLegacyLessonRows:
 
     _BASE = 'created: "2026-08-21"\ntitle: "t"\nbody: "b"\nstatus: "open"\n'
 
-    def _close(self, tmp_path, monkeypatch, row_text):
+    def _close(self, tmp_path, monkeypatch, row_text, row_rel="state/lessons/l-1.yaml"):
         import coordinator_core.frontmatter.schema_validate as sv
 
         monkeypatch.chdir(tmp_path)
@@ -2035,7 +2060,7 @@ class TestCloseAdmitsLegacyLessonRows:
         _write_profile(profile_dir, archive_path="archive/lessons", schema_rel="schema/lesson.schema.json")
         profile_file = profile_dir / "bug.yaml"
         profile_file.write_text(profile_file.read_text(encoding="utf-8").replace("closed-fixed", "closed"), encoding="utf-8")
-        row_path = tmp_path / "state" / "lessons" / "l-1.yaml"
+        row_path = tmp_path / row_rel
         row_path.parent.mkdir(parents=True)
         row_path.write_text(row_text, encoding="utf-8", newline="\n")
         evidence = tmp_path / "evidence.txt"
@@ -2043,7 +2068,7 @@ class TestCloseAdmitsLegacyLessonRows:
         code = grind_rows.main(
             [
                 "close", "--profile-dir", str(profile_dir), "--profile", "bug",
-                "--row", "state/lessons/l-1.yaml", "--digest", _sha256(row_text),
+                "--row", row_rel, "--digest", _sha256(row_text),
                 "--verdict", "fix", "--evidence-file", str(evidence),
                 "--closed-by", "test-session", "--run-stamp", "2026-09-21T00:00:00Z",
                 "--repo-root", str(tmp_path),
@@ -2059,9 +2084,16 @@ class TestCloseAdmitsLegacyLessonRows:
         text = closed.read_text(encoding="utf-8")
         assert 'provenance_completeness: "partial"' in text and "from_repo" not in text
 
-    def test_underivable_row_is_refused_with_the_named_reason(self, tmp_path, monkeypatch, capsys):
+    def test_row_with_no_repo_in_its_own_queue_closes_with_from_repo_defaulted(self, tmp_path, monkeypatch):
         code, archive = self._close(tmp_path, monkeypatch, self._BASE)
+        assert code == grind_rows.EXIT_OK
+        (closed,) = archive.rglob("l-1.yaml")
+        assert "from_repo" not in closed.read_text(encoding="utf-8")
+
+    def test_outbox_row_with_no_repo_is_refused_with_the_named_reason(self, tmp_path, monkeypatch, capsys):
+        rel = "state/cross-repo/outbox/l-1.yaml"
+        code, archive = self._close(tmp_path, monkeypatch, self._BASE, row_rel=rel)
         assert code == grind_rows.EXIT_REFUSAL
         err = capsys.readouterr().err
         assert "hand-back" in err and "from_repo" in err and not archive.exists()
-        assert (tmp_path / "state" / "lessons" / "l-1.yaml").exists()
+        assert (tmp_path / rel).exists()

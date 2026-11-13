@@ -374,7 +374,7 @@ def test_existing_handoff_at_derived_path_is_adopted_not_refused(repo):
     result = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
 
     assert result["created"] is False and result["id"] == "hnd-picked-1"
-    assert result["path"] == "state/handoffs/2026-10-01-fixture.md"
+    assert result["path"] == "state/handoffs/2026-10/2026-10-01-fixture.md"
     assert yaml.safe_load(sizing.read_text(encoding="utf-8"))["baton"] == result["path"]
     assert _frontmatter(handoff)["handoff_id"] == "hnd-picked-1"
 

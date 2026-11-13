@@ -68,7 +68,7 @@ def _hook(repo: Path, event: str, **extra) -> dict:
     return _handler({"payload": payload})
 
 
-@pytest.mark.parametrize("value_class", ["scouts", "corpus", "deep", "spike"])
+@pytest.mark.parametrize("value_class", ["scouts", "corpus", "unblock", "spike"])
 def test_research_class_write_opens_research_terminal_and_fire_discharges(repo, value_class) -> None:
     path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
     path.parent.mkdir(parents=True, exist_ok=True)

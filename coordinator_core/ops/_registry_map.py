@@ -59,6 +59,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "op_census.breaches":                     "coordinator_core.ops.op_budget_breaches",
     "doctor.recover_kept_blobs":              "coordinator_core.ops.doctor_kept_blobs",
     "freshness.commit_delta":                 "coordinator_core.ops.freshness_commit_delta",
+    "code_intel.freshness":                   "coordinator_core.ops.code_intel_freshness",
+    "code_intel.workstate_index":             "coordinator_core.ops.code_intel_workstate_index",
     # coordinator_core.hooks registers all 16 hooks.* ops (6 advisory + 8 bookkeeping
     # + 1 pull/poll arrival-check + 1 subagent-fabrication check) in a single module
     # import. This package-level
@@ -320,6 +322,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "changelog.append_day":                   "coordinator_core.ops.changelog_ops",
     "changelog.backfill_gaps":                "coordinator_core.ops.changelog_ops",
     "changelog.compute_day_fields":           "coordinator_core.ops.changelog_ops",
+    "changelog.daily_log":                    "coordinator_core.ops.daily_log",
     "changelog.inject_anchor":                "coordinator_core.ops.changelog_ops",
     "changelog.upsert_reviewed":              "coordinator_core.ops.changelog_ops",
     "cruft_sweep.run":                        "coordinator_core.ops.cruft_sweep",

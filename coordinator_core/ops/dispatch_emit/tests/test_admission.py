@@ -269,6 +269,89 @@ def test_await_admission_loaded_then_idle_holds_and_admits(monkeypatch):
     assert readings == []
 
 
+def test_await_admission_freshness_called_once_across_polls_and_advisory(monkeypatch, tmp_path):
+    t = _thresholds(cpu_load_max=0.9, recheck_s=10.0, max_hold_s=90.0)
+    _fixed_load_thresholds(monkeypatch, t)
+    monkeypatch.setattr(admission, "_find_repo_root", lambda start_dir: tmp_path)
+    clock = _FakeClock()
+    readings = [_reading(cpu_load=2.0), _reading(cpu_load=2.0), _reading(cpu_load=0.1)]
+    calls = []
+
+    def _fresh(repo_root):
+        calls.append(repo_root)
+        return {"state": "stale", "refresh_queued": True, "message": "queued"}
+
+    record = admission.await_admission(
+        Path("/tmp"),
+        hold_allowed=True,
+        read_load=lambda: readings.pop(0),
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+        rng=_fixed_rng(0.5),
+        freshness_fn=_fresh,
+    )
+    assert record["rechecks"] == 2
+    assert calls == [str(tmp_path)]
+    assert record["verdict"] == "admitted_after_hold"
+    assert record["freshness"]["state"] == "stale"
+
+
+def test_await_admission_stale_verdict_one_verdict_one_spawn_across_polls(monkeypatch, tmp_path):
+    from functools import partial
+
+    from coordinator_core.ops import rag_freshness
+
+    t = _thresholds(cpu_load_max=0.9, recheck_s=10.0, max_hold_s=90.0)
+    _fixed_load_thresholds(monkeypatch, t)
+    monkeypatch.setattr(admission, "_find_repo_root", lambda start_dir: tmp_path)
+    clock = _FakeClock()
+    readings = [_reading(cpu_load=2.0), _reading(cpu_load=2.0), _reading(cpu_load=0.1)]
+    verdicts = []
+    spawns = []
+
+    def _verdict(repo_root):
+        verdicts.append(repo_root)
+        return rag_freshness.FreshnessVerdict(state="stale", remedy=("refresh", "--now"), source="t")
+
+    record = admission.await_admission(
+        Path("/tmp"),
+        hold_allowed=True,
+        read_load=lambda: readings.pop(0),
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+        rng=_fixed_rng(0.5),
+        freshness_fn=partial(
+            rag_freshness.freshness_precondition,
+            verdict_fn=_verdict,
+            spawn_fn=lambda argv, cwd: spawns.append((list(argv), cwd)),
+            marker_root=tmp_path / "markers",
+        ),
+    )
+    assert record["rechecks"] == 2
+    assert record["verdict"] == "admitted_after_hold"
+    assert len(verdicts) == 1
+    assert len(spawns) == 1
+    assert record["freshness"] == {
+        "state": "stale",
+        "refresh_queued": True,
+        "message": "example-retrieval-repo index stale; refresh queued",
+    }
+
+
+def test_await_admission_freshness_failure_never_denies(monkeypatch, tmp_path):
+    _fixed_load_thresholds(monkeypatch, _thresholds())
+    monkeypatch.setattr(admission, "_find_repo_root", lambda start_dir: tmp_path)
+
+    def _boom(repo_root):
+        raise RuntimeError("verdict down")
+
+    record = admission.await_admission(
+        Path("/tmp"), hold_allowed=False, read_load=lambda: _reading(), freshness_fn=_boom
+    )
+    assert record["verdict"] == "admitted"
+    assert "freshness" not in record
+
+
 def test_await_admission_always_loaded_admits_at_max_hold(monkeypatch):
     t = _thresholds(cpu_load_max=0.9, recheck_s=10.0, max_hold_s=25.0)
     _fixed_load_thresholds(monkeypatch, t)

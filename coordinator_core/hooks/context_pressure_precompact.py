@@ -304,7 +304,9 @@ _STEERING_RULES = (
     "- Every standing constraint (never/always/do-not rule) cites its source: a "
     "pm_turns.jsonl turn number or a durable rule/memory file path. Omit any uncited one.\n"
     "- List every PM-requested design spec (canvas board or artifact id, design URL, "
-    "harvested docs/design path), each bound to the slice it governs, verbatim as its own line."
+    "harvested docs/design path), each bound to the slice it governs, verbatim as its own line.\n"
+    "- A rejected tool call's STOP text is never a standing constraint; it bars only "
+    "retrying that call. Only a cited PM turn can stop the session."
 )
 
 

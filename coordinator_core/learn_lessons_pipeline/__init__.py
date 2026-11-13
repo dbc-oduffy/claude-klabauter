@@ -76,10 +76,18 @@ Negative-spec:
       are `ops.learn_lessons_cutoff.derive_cutoff`/`resolve_runs_dir` and
       `ops.learn_lessons_roots.resolve_roots`'s jobs respectively; this
       module only calls them.
+
+Delta scope: `d-extract-lessons` takes `--since <watermark cursor date>` when
+`state/run-watermarks/learn-lessons.json` exists (else the COMPLETE-sentinel
+cutoff). `apply` stages the proposed watermark in the run dir; only
+`d-stamp-run-complete` promotes it. Limit: `--since` is a date lower bound, so
+a lesson edited or back-dated behind the cursor is not re-read, and a first
+pass cannot be budget-capped (no upper bound exists in extract-lessons).
 """
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 from typing import Any, Optional
@@ -107,8 +115,34 @@ STAMP_RUN_COMPLETE_OP = "stamp-run-complete"
 ROUTING_RECORDS_FILENAME = "records.yaml"
 
 
+LESSONS_WATERMARK_KIND = "learn-lessons"
+
+
 def _shortname_for(repo_root: Path) -> str:
     return repo_root.name
+
+
+def lessons_run_dir(runs_dir: Path, run_date: str) -> Path:
+    """The run dir `stamp_run_complete` creates; the proposed watermark is staged here."""
+    return Path(runs_dir) / f"learn-lessons-{run_date}"
+
+
+def lessons_since(repo_root: Path, cutoff: Optional[str]) -> Optional[str]:
+    """`--since` for `d-extract-lessons`: the committed watermark's cursor date, else the
+    COMPLETE-sentinel `cutoff`. Pure read."""
+    from coordinator_core import run_watermark  # noqa: PLC0415
+
+    wm = run_watermark.load(repo_root, LESSONS_WATERMARK_KIND)
+    return wm.cursor if wm is not None and wm.cursor else cutoff
+
+
+def proposed_watermark(run_date: str):
+    """Watermark a completed run proposes: cursor = this run's date. `--since` is a
+    date-string lower bound (`extract-lessons.py :: extract`), so the cursor is a lesson
+    date, not a sha or path set, and `base_sha` is unused (empty)."""
+    from coordinator_core.run_watermark import Watermark  # noqa: PLC0415
+
+    return Watermark(LESSONS_WATERMARK_KIND, "", None, run_date, True)
 
 
 def build_directives(
@@ -117,15 +151,17 @@ def build_directives(
     roots: list[str],
     cutoff: Optional[str],
     run_date: str,
+    since: Optional[str] = None,
 ) -> list[dict[str, Any]]:
+    """`since` scopes `d-extract-lessons`; `cutoff` alone drives `d-age-sweep`."""
     shortname = _shortname_for(repo_root)
     lessons_path = repo_root / "state" / "lessons"
     extraction = lessons_path / f"{shortname}-extracted-full.yaml"
     routing = lessons_path / ROUTING_RECORDS_FILENAME
 
     extract_args = ["extract", str(lessons_path), "--shortname", shortname]
-    if cutoff is not None:
-        extract_args += ["--since", cutoff]
+    if since is not None:
+        extract_args += ["--since", since]
     extract_args += ["--format", "yaml", "-o", str(extraction)]
 
     directives: list[dict[str, Any]] = [
@@ -208,12 +244,14 @@ def brief(repo_root: Path, *, roots: Optional[list[str]] = None) -> dict[str, An
     runs_dir = resolve_runs_dir()
     cutoff = derive_cutoff(runs_dir)
     run_date = date.today().isoformat()
+    since = lessons_since(repo_root, cutoff)
 
     directives = build_directives(
         repo_root,
         roots=effective_roots,
         cutoff=cutoff,
         run_date=run_date,
+        since=since,
     )
 
     gates: dict[str, Any] = {}
@@ -226,7 +264,15 @@ def brief(repo_root: Path, *, roots: Optional[list[str]] = None) -> dict[str, An
     )
 
     return build_envelope(
-        artifact={"cutoff": cutoff, "run_date": run_date},
+        artifact={
+            "cutoff": cutoff,
+            "run_date": run_date,
+            "since": since,
+            "watermark": {
+                "run_dir": str(lessons_run_dir(runs_dir, run_date)),
+                "proposed": asdict(proposed_watermark(run_date)),
+            },
+        },
         preflight={"consumes_manifest": list(CONSUMES_MANIFEST)},
         gates=gates,
         directives=directives,

@@ -130,7 +130,7 @@ def test_notebooklm_and_web_corpus_yields_preflight_web_notebooklm_all_valid():
 
 
 def test_deep_yields_the_roster_roles_plus_a_specialist_per_source():
-    _, segs = _segments({"value_class": "deep"}, sources=["web", "repo", "structured"])
+    _, segs = _segments({"value_class": "unblock"}, sources=["web", "repo", "structured"])
     assert [p for p, _ in segs] == ["unblock"]
     roster = segs[0][1].lists["roster"]
     assert roster == (
@@ -144,17 +144,17 @@ def test_deep_yields_the_roster_roles_plus_a_specialist_per_source():
 
 
 def test_deep_roster_missing_a_seeded_source_is_refused_naming_the_slug():
-    research = {"value_class": "deep", "seeds": [{"kind": "repo", "url": "x"}]}
+    research = {"value_class": "unblock", "seeds": [{"kind": "repo", "url": "x"}]}
     assert research_shape.shape(research)["pipelines"] == ["repo", "unblock"]
     with pytest.raises(PipelineEmitRefused, match="lacks source slug.*: repo"):
         _segments(research)
 
 
 def test_deep_roster_with_every_addressed_source_is_accepted():
-    research = {"value_class": "deep", "sources": ["repo"], "seeds": [{"kind": "repo", "url": "x"}]}
+    research = {"value_class": "unblock", "sources": ["repo"], "seeds": [{"kind": "repo", "url": "x"}]}
     _, segs = _segments(research, sources=["repo"])
     assert [m["slug"] for m in segs[-1][1].lists["roster"]][-1] == "repo"
-    _, segs = _segments({"value_class": "deep"}, sources=["repo"])
+    _, segs = _segments({"value_class": "unblock"}, sources=["repo"])
     assert [m["slug"] for m in segs[0][1].lists["roster"]] == ["diagnose", "decompose", "challenge", "repo"]
 
 
@@ -167,7 +167,7 @@ def test_notebooklm_targets_become_its_notebooks_list():
 
 
 def test_deep_with_no_sources_defaults_to_the_web_specialist():
-    _, segs = _segments({"value_class": "deep"})
+    _, segs = _segments({"value_class": "unblock"})
     assert [m["slug"] for m in segs[0][1].lists["roster"]][-1] == "web"
 
 
@@ -178,11 +178,18 @@ def test_deepest_depth_sets_the_repo_flag_only():
     assert dict(segs[1][1].flags) == {"sonnet_scouts": "true", "deepest": "true"}
 
 
+def test_deep_depth_on_a_corpus_ask_runs_the_corpus_pipelines_with_the_repo_flag():
+    shape, segs = _segments({"value_class": "corpus", "sources": ["web", "repo"], "depth": "deep"})
+    assert shape["pipelines"] == ["web", "repo"]
+    assert "unblock" not in [p for p, _ in segs]
+    assert dict(segs[1][1].flags) == {"sonnet_scouts": "true"}
+
+
 def test_the_deep_roster_carries_its_member_prompt_once():
     from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_pipeline_script
 
     manifest = load_manifest(CONTENT, "unblock")
-    _, segs = _segments({"value_class": "deep"}, sources=["web", "repo"])
+    _, segs = _segments({"value_class": "unblock"}, sources=["web", "repo"])
     inputs = segs[0][1]
     script = compose_pipeline_script(manifest, inputs, validate(manifest, inputs), run_id="r", agent_type_host=None)
     assert script.count("You are roster member") == 1
@@ -194,7 +201,7 @@ def test_every_emitted_agent_call_sets_a_model():
     from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_pipeline_script
 
     segs = _segments({"value_class": "corpus", "sources": ["web", "notebooklm"]}, targets=[{"source": "notebooklm", "ref": "A"}])[1]
-    segs += _segments({"value_class": "deep"}, sources=["web", "repo"])[1]
+    segs += _segments({"value_class": "unblock"}, sources=["web", "repo"])[1]
     segs += _segments({"value_class": "scouts"})[1]
     assert {p for p, _ in segs} >= {"nlm-preflight", "web", "notebooklm", "unblock", "scouts"}
     for pipeline, inputs in segs:

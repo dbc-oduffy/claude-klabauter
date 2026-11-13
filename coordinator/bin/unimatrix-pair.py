@@ -218,10 +218,63 @@ def make_host_alias_fn(recorded_fn=None):
     return host_alias
 
 
-def pair_key_for_host(box, host, own_key_fn, alias_fn=None):
+def box_variants(box):
+    """`box` plus its lower-cased and hyphen/underscore-stripped spellings, distinct, `box` first (Mac-mini -> macmini)."""
+    out = []
+    for v in (box, box.lower(), box.lower().replace("-", "").replace("_", "")):
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def _default_read_key(name):
+    """The machine-local value of `name` (one reader spawn), '' when the reader is missing or fails."""
+    roster = _mod("unimatrix-roster.py")
+    reader = roster.settings_home() / "bin" / "_machine_local.py"
+    if not reader.is_file():
+        return ""
+    try:
+        r = subprocess.run([roster.console_python(), str(reader), "get", name], capture_output=True, text=True,
+                           timeout=30, creationflags=_no_window())
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout.strip() if not r.returncode else ""
+
+
+def default_address_fn(read_key=None):
+    """box -> its `unimatrix.addresses.<box>` list, read through the far-box reader under each spelling of the box
+    id until one is recorded; [] when none is."""
+    far = _load("unimatrix_pair_far_addresses", HERE / "lib" / "unimatrix_far_addresses.py")
+
+    def addresses(box):
+        for variant in box_variants(box):
+            found = far.box_addresses(variant, read_key or _default_read_key)
+            if found:
+                return found
+        return []
+
+    return addresses
+
+
+def make_candidate_fn(address_fn):
+    """(box, user) -> alias spellings to try for a member's pair key after its own name: the box id's case/hyphen
+    variants, then `user@<address>` for each address recorded for the box. The address list is read once per box."""
+    cache = {}
+
+    def candidates(box, user):
+        if box not in cache:
+            cache[box] = list(address_fn(box) or [])
+        return box_variants(box)[1:] + ([f"{user}@{a}" for a in cache[box]] if user else [])
+
+    return candidates
+
+
+def pair_key_for_host(box, host, own_key_fn, alias_fn=None, candidate_fn=None, user=None):
     """This box's adopt-only (key path, body) toward a member: the key of the alias its links use for `host`, else the
-    key recorded for `box`. RuntimeError when neither is recorded."""
+    key recorded for `box`, else (with `candidate_fn`) one recorded under a case/hyphen variant of the box id or as
+    `user@<address>`. RuntimeError when none is recorded."""
     alias = alias_fn(host) if alias_fn else None
+    first_err = None
     if alias and alias != box:
         try:
             return own_key_fn(alias)
@@ -229,8 +282,18 @@ def pair_key_for_host(box, host, own_key_fn, alias_fn=None):
             try:
                 return own_key_fn(box)
             except RuntimeError as box_err:
-                raise RuntimeError(f"{box_err} (alias {alias} matched {host}: {alias_err})") from None
-    return own_key_fn(box)
+                first_err = RuntimeError(f"{box_err} (alias {alias} matched {host}: {alias_err})")
+    else:
+        try:
+            return own_key_fn(box)
+        except RuntimeError as box_err:
+            first_err = box_err
+    for name in (candidate_fn(box, user) if candidate_fn else ()):
+        try:
+            return own_key_fn(name)
+        except RuntimeError:
+            continue
+    raise first_err from None
 
 
 def default_box():
@@ -288,7 +351,7 @@ def _describe(mem, m, out):
 
 
 def _apply(mem, relay, home, snap, signer, run, notifier, authorized_keys, is_admin, box, own_key_fn, self_names, out,
-          alias_fn=None):
+          alias_fn=None, candidate_fn=None, target=None):
     """Sign `snap` once, adopt it through the relay's put path, then push to the other members."""
     sig = signer.sign(mem.canonical_bytes(snap))
     snapshot_line = mem.canonical_bytes(snap).decode("ascii")
@@ -298,28 +361,54 @@ def _apply(mem, relay, home, snap, signer, run, notifier, authorized_keys, is_ad
     if reply.get("ok") is not True:
         raise mem.MembershipError(f"signed snapshot was not adopted: {reply.get('reason')}")
     print(f"epoch {snap['epoch']} adopted locally; authorized_keys {reply.get('authorized_keys')}", file=out)
-    _push_all(mem, home, snap, snapshot_line, sig_line, run, own_key_fn, self_names, out, alias_fn)
+    _push_all(mem, home, snap, snapshot_line, sig_line, run, own_key_fn, self_names, out, alias_fn, candidate_fn, target)
 
 
-def _push_all(mem, home, snap, snapshot_line, sig_line, run, own_key_fn, self_names, out, alias_fn=None):
+def _others(snap, self_names):
+    me = {n.lower() for n in self_names}
+    return [m for m in snap["members"] if m["box"].lower() not in me and m["host"].split(".")[0].lower() not in me]
+
+
+def _repush_command(target=None):
+    """The approve invocation that re-pushes the held epoch; a stdin request is carried as a here-string."""
+    return f"python {Path(__file__).resolve()} approve {target if target is not None else '<request file>'}"
+
+
+def _refuse_if_none_pushable(snap, self_names, own_key_fn, alias_fn, candidate_fn, target=None):
+    """MembershipError when `snap` has members besides this box and no pair key reaches any of them: signing would
+    strand the epoch on this box."""
+    others = _others(snap, self_names)
+    for m in others:
+        try:
+            pair_key_for_host(m["box"], m["host"], own_key_fn, alias_fn, candidate_fn, m["user"])
+            return
+        except RuntimeError:
+            continue
+    if others:
+        names = ", ".join(m["box"] for m in others)
+        raise _mod("unimatrix-membership.py").MembershipError(
+            f"no recorded pair key reaches any member to push to ({names}); nothing signed. Record a key "
+            f"(unimatrix.keys.<alias>) toward one, then re-run: {_repush_command(target)}")
+
+
+def _push_all(mem, home, snap, snapshot_line, sig_line, run, own_key_fn, self_names, out, alias_fn=None,
+              candidate_fn=None, target=None):
     """Push the signed snapshot to every member that is not this box, one report line each."""
     pin = mem.load_pin(home)
     pin_line = " ".join(pin.split()[:2]) if pin else None
-    me = {n.lower() for n in self_names}
-    for m in snap["members"]:
-        if m["box"].lower() in me or m["host"].split(".")[0].lower() in me:
-            continue
+    for m in _others(snap, self_names):
         try:
-            key, _ = pair_key_for_host(m["box"], m["host"], own_key_fn, alias_fn)
+            key, _ = pair_key_for_host(m["box"], m["host"], own_key_fn, alias_fn, candidate_fn, m["user"])
         except RuntimeError:
-            print(f"  {m['box']}: refused: no recorded pair key for {m['box']}", file=out)
+            print(f"  {m['box']}: refused: no recorded pair key for {m['box']}; once recorded, re-push: "
+                  f"{_repush_command(target)}", file=out)
             continue
         print(f"  {m['box']}: {push_one(m, snapshot_line, sig_line, key, run, pin_line)}", file=out)
 
 
 def main(argv=None, out=None, err=None, stdin=None, home=None, environ=None, run=subprocess.run, signer=None,
          notifier=None, own_key_fn=None, authorized_keys=None, is_admin=None, box=None, self_names=None,
-         recorded_fn=None, alias_fn=None):
+         recorded_fn=None, alias_fn=None, address_fn=None):
     """Run one subcommand; return the exit status. Every collaborator is injectable for tests.
     `own_key_fn(box)` is this box's adopt-only (key path, body) for the pair with `box`; `recorded_fn()` lists every
     recorded pair key and `alias_fn(host)` names the recorded alias whose link reaches `host`; both default to the
@@ -344,6 +433,8 @@ def main(argv=None, out=None, err=None, stdin=None, home=None, environ=None, run
     if own_key_fn is None:
         own_key_fn, recorded_fn = _default_own_key, recorded_fn or _default_recorded
         alias_fn = alias_fn or make_host_alias_fn(recorded_fn)
+        address_fn = address_fn or default_address_fn()
+    candidate_fn = make_candidate_fn(address_fn) if address_fn else None
     box = box or getattr(args, "box", None) or default_box()
     try:
         if args.cmd == "pin":
@@ -361,7 +452,8 @@ def main(argv=None, out=None, err=None, stdin=None, home=None, environ=None, run
             if args.host.startswith("-"):
                 raise mem.MembershipError(f"invalid host {args.host!r}")
             label = args.host.rpartition("@")[2]
-            key, _ = pair_key_for_host(label.split(".")[0], label, own_key_fn, alias_fn)
+            key, _ = pair_key_for_host(label.split(".")[0], label, own_key_fn, alias_fn, candidate_fn,
+                                       args.host.rpartition("@")[0] or None)
             cmd = ["ssh", "-i", str(key), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "AddressFamily=inet", "-o", "ConnectTimeout=5",
                    args.host, "membership", "get"]
             r = run(cmd, capture_output=True, timeout=PUSH_TIMEOUT_SECONDS, creationflags=_no_window())
@@ -380,6 +472,7 @@ def main(argv=None, out=None, err=None, stdin=None, home=None, environ=None, run
         names = self_names if self_names is not None else {box, default_box()}
         if args.cmd == "approve":
             member = _read_request(args.target, stdin)
+            hint = args.target if args.target != "-" else f"- <<< '{json.dumps(member, sort_keys=True)}'"
             if prev is None:
                 me = local_member(box, args.self_cidr, own_key_fn, recorded_fn, {box, member.get("box")})
                 base = mem.next_snapshot(None, {"op": "join", "member": me})
@@ -389,11 +482,12 @@ def main(argv=None, out=None, err=None, stdin=None, home=None, environ=None, run
                 held, held_sig = mem.load_snapshot(home)
                 print(f"{member['box']} is already a member; re-pushing epoch {held['epoch']}", file=out)
                 _push_all(mem, home, held, mem.canonical_bytes(held).decode("ascii"),
-                          base64.b64encode(held_sig).decode("ascii"), run, own_key_fn, names, out, alias_fn)
+                          base64.b64encode(held_sig).decode("ascii"), run, own_key_fn, names, out, alias_fn, candidate_fn, hint)
                 return 0
             else:
                 snap = mem.next_snapshot(prev, {"op": "join", "member": member})
                 snap = _reissue_own(mem, snap, box, own_key_fn, recorded_fn)
+            _refuse_if_none_pushable(snap, names, own_key_fn, alias_fn, candidate_fn, hint)
             print(f"Join request to approve (pin {mem.fingerprint(pin)}):", file=out)
             _describe(mem, member, out)
         else:
@@ -406,7 +500,8 @@ def main(argv=None, out=None, err=None, stdin=None, home=None, environ=None, run
         print(FRESHNESS_NOTE, file=out)
         if signer is None:
             signer = make_agent_signer(mem, mem.pin_path(home), environ=environ, run=run)
-        _apply(mem, relay, home, snap, signer, run, notifier, ak, is_admin, box, own_key_fn, names, out, alias_fn)
+        _apply(mem, relay, home, snap, signer, run, notifier, ak, is_admin, box, own_key_fn, names, out, alias_fn,
+               candidate_fn, hint if args.cmd == "approve" else None)
         return 0
     except (mem.MembershipError, ValueError, RuntimeError, OSError) as ex:
         print(f"unimatrix-pair: {ex}", file=err)

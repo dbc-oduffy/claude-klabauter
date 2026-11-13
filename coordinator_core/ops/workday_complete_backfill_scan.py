@@ -25,6 +25,13 @@ union span, see below); tip_sha is NEWEST. Rows are emitted OLDEST-FIRST so the
 caller backfills chronologically. Empty stdout = no missed days (the common,
 healthy case).
 
+Fleet-wide driving: one session scans every repo, no per-repo-rooted session
+needed. Pass `--repo-root <dir>` (or `scan(<dir>)`; `COORDINATOR_ROOT` is the
+test-only equivalent) and the scan reads that repo's git history and state, not the
+cwd's. step9-dispatch's repo-identity MISMATCH refusal applies only to a root derived
+from the cwd, so it does not fire for an explicit root. A commit into a sibling repo
+stays assent-gated: this scan is read-only and authorizes none.
+
 Bounded by `--lookback` (default 14 days) so a long-idle repo never triggers an
 unbounded historical backfill.
 
@@ -90,6 +97,14 @@ Negative-spec (do NOT "fix" mid-port — faithfully reproduced oracle quirks):
       reached only when the peer's branch merged into the union refs
       (work/*/* ∪ main ∪ HEAD) before the wrapping machine ran. A merge-only
       day is excluded by `--no-merges`.
+    - Thin-summary leg: a covered, tip-aligned day whose summary text fails the A0
+      content-gap predicate (`changelog_ops._completion_gap_reason` /
+      `_range_gap_reason`: completion entries >= 2x Work Completed bullets, or cited
+      in-range SHAs under 50%) is emitted as the ordinary row and named on stderr
+      (`THIN_SUMMARY_PREFIX`). Its commit set is the day's union bucket from the same
+      one `git log`; cited tokens resolve in the tip leg's one `cat-file`; no
+      per-day spawn. The rewrite for such a row sources `docs/delivery` records first
+      (`changelog_ops.delivery_sources_for_date`).
     - AND-not-OR coverage: `_day_covered` requires BOTH a week-changelog block (live under
       `state/week-changelog/` or swept into `archive/week-changelogs/<week>/`,
       see `_has_changelog_block`) AND
@@ -137,6 +152,9 @@ OLDER_GAPS_CEILING_DAYS = 90
 # stderr line prefix `main()` writes for `older_gaps`; consumers parse by this constant.
 OLDER_GAPS_PREFIX = "older-gaps:"
 
+# stderr line prefix `main()` writes per thin covered day: `thin-summary: <day>: <reason>`.
+THIN_SUMMARY_PREFIX = "thin-summary:"
+
 
 @dataclass(frozen=True)
 class GapRow:
@@ -153,10 +171,13 @@ class GapRow:
 
 @dataclass(frozen=True)
 class GapScan:
-    """Scan result. `older_gaps` holds uncovered days before the lookback window."""
+    """Scan result. `older_gaps` holds uncovered days before the lookback window;
+    `thin` maps each covered day reported as a row because its summary fails the
+    A0 content-gap predicate to the reason."""
 
     rows: List[GapRow] = field(default_factory=list)
     older_gaps: List[str] = field(default_factory=list)
+    thin: Dict[str, str] = field(default_factory=dict)
 
 
 def gap_summary_lines(rows: List[GapRow], cap: int = 12) -> List[str]:
@@ -637,25 +658,91 @@ def _parent_graph(root: str, refs: List[str], anchors: List[str], since_day: str
     return graph
 
 
+def _day_summary_text(root: str, day: str) -> str:
+    """Concatenated text of every `archive/daily-summaries/<day>*.md`."""
+    parts: List[str] = []
+    for path in sorted(glob.glob(os.path.join(root, "archive", "daily-summaries", f"{day}*.md"))):
+        try:
+            parts.append(Path(path).read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    return "\n".join(parts)
+
+
+def _thin_summary_days(
+    root: str,
+    days: List[str],
+    texts: Dict[str, str],
+    buckets: Dict[str, List[Tuple[int, str]]],
+    resolved: Dict[str, Optional[str]],
+) -> Dict[str, str]:
+    """Existence-covered days whose summary fails the A0 content-gap predicate
+    (`changelog_ops._completion_gap_reason` / `_range_gap_reason`, the same guards
+    `inject_anchor` runs), mapped to the reason. Commits per day come from the
+    scan's one batched `git log`, cited tokens from the shared `resolved` map, and
+    completion counts from one uncapped collection: no per-day spawn. An
+    unresolvable completion count skips only the completion guard, with a WARN."""
+    from coordinator_core.ops.changelog_ops import (
+        _bullet_count,
+        _completion_counts_for_dates,
+        _completion_gap_reason,
+        _range_gap_reason,
+        _sha_like_tokens,
+    )
+
+    candidates = [d for d in days if buckets.get(d)]
+    if not candidates:
+        return {}
+    counts: Optional[Dict[str, int]] = None
+    try:
+        counts = _completion_counts_for_dates(Path(root), candidates)
+    except RuntimeError as exc:
+        print(
+            f"workday_complete_backfill_scan: WARN thin-summary completion guard skipped: {exc}",
+            file=sys.stderr,
+        )
+    thin: Dict[str, str] = {}
+    for day in candidates:
+        text = texts.get(day, "")
+        reason = (
+            _completion_gap_reason(counts[day], _bullet_count(text)) if counts is not None else None
+        )
+        if reason is None:
+            range_shas = {sha for _ts, sha in buckets[day]}
+            cited = {resolved.get(t) for t in _sha_like_tokens(text)} & range_shas
+            reason = _range_gap_reason(day, text, len(range_shas), len(cited))
+        if reason is not None:
+            thin[day] = reason
+    return thin
+
+
 def _tip_gap_days(
     root: str,
     covered_days: List[str],
     refs: List[str],
     buckets: Dict[str, List[Tuple[int, str]]],
+    extra_tokens: Tuple[str, ...] = (),
+    resolved_out: Optional[Dict[str, Optional[str]]] = None,
 ) -> Set[str]:
     """Existence-covered days whose every resolvable summary anchor is a strict
     ancestor of the day's union tip. Warns on stderr for a covered day with no
     resolvable anchor. Spawns a fixed number of git processes (at most four,
-    counting the caller's `for-each-ref`) independent of `len(covered_days)`."""
+    counting the caller's `for-each-ref`) independent of `len(covered_days)`.
+    `extra_tokens` ride the same one `cat-file` resolution; the full token map
+    lands in `resolved_out` when given."""
     if not covered_days:
         return set()
     per_day = {day: _day_anchor_tokens(root, day) for day in covered_days}
-    tokens = sorted({t for files in per_day.values() for toks in files.values() for t in toks})
+    tokens = sorted(
+        {t for files in per_day.values() for toks in files.values() for t in toks} | set(extra_tokens)
+    )
     resolved: Dict[str, Optional[str]] = {}
     if tokens:
         from coordinator_core.ops.changelog_ops import _batch_resolve_commits
 
         resolved = _batch_resolve_commits(Path(root), tokens)
+    if resolved_out is not None:
+        resolved_out.update(resolved)
     day_anchors: Dict[str, Set[str]] = {}
     for day, files in per_day.items():
         shas = {resolved.get(t) for toks in files.values() for t in toks}
@@ -852,6 +939,8 @@ def main(argv: List[str]) -> int:
     result = _scan(root, state_root, lookback, today_override)
     for row in result.rows:
         print(row.tsv())
+    for thin_day, thin_reason in result.thin.items():
+        print(f"{THIN_SUMMARY_PREFIX} {thin_day}: {thin_reason}", file=sys.stderr)
     if result.older_gaps:
         print(
             f"{OLDER_GAPS_PREFIX} {len(result.older_gaps)} day(s), "
@@ -899,9 +988,23 @@ def _scan(root: str, state_root: Optional[str], lookback: int, today_override: O
         # The extended range rides the one `git log` the tip leg already makes.
         low = older_first if older_first and older_first < window_first else window_first
         buckets = _commit_buckets(root, refs, low, window_last)
-    gap_days = _tip_gap_days(root, covered, refs, buckets) if covered else set()
+    texts = {day: _day_summary_text(root, day) for day in covered}
+    resolved: Dict[str, Optional[str]] = {}
+    content_tokens: Set[str] = set()
+    if covered:
+        from coordinator_core.ops.changelog_ops import _sha_like_tokens
+
+        content_tokens = {t for text in texts.values() for t in _sha_like_tokens(text)}
+    gap_days = (
+        _tip_gap_days(root, covered, refs, buckets, tuple(sorted(content_tokens)), resolved)
+        if covered
+        else set()
+    )
+    thin = _thin_summary_days(
+        root, [d for d in covered if d not in gap_days], texts, buckets, resolved
+    )
     for day, prev_day in days:
-        if day in covered_set and day not in gap_days:
+        if day in covered_set and day not in gap_days and day not in thin:
             continue
         _scan_full_day_union(root, day, prev_day, out, refs)
 
@@ -916,7 +1019,10 @@ def _scan(root: str, state_root: Optional[str], lookback: int, today_override: O
                 older.append(day)
             day = _date_minus(day, 1)
         older.reverse()
-    return GapScan(rows=out, older_gaps=older)
+    emitted = {row.date for row in out}
+    return GapScan(
+        rows=out, older_gaps=older, thin={d: r for d, r in thin.items() if d in emitted}
+    )
 
 
 if __name__ == "__main__":

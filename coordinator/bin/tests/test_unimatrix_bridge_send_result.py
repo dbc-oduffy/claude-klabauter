@@ -1,4 +1,5 @@
 """A relay send releases the sender before the slow ssh leg; a failed leg still reaches the sender as a notice."""
+import hashlib
 import importlib.util
 import json
 import os
@@ -9,6 +10,8 @@ from pathlib import Path
 import pytest
 
 BIN = Path(__file__).resolve().parents[1]
+SENT = b'{"from": "uds:/s.sock", "message": "hi"}'
+RECEIPTED = json.dumps({"ok": True, "digest": hashlib.sha256(SENT).hexdigest()}).encode() + b"\n"
 
 
 def load_bridge():
@@ -60,7 +63,7 @@ def drive(bridge, deliveries, monkeypatch, returncode):
 
     def run(argv, **kw):
         argvs.append(argv)
-        return subprocess.CompletedProcess(argv, returncode, b"" if returncode else b'{"ok": true}\n', b"denied" if returncode else b"")
+        return subprocess.CompletedProcess(argv, returncode, b"" if returncode else RECEIPTED, b"denied" if returncode else b"")
 
     monkeypatch.setattr(subprocess, "run", run)
     events = []
@@ -118,3 +121,17 @@ def test_far_relay_lacking_send_session_is_a_failed_outcome_the_sender_can_read(
     assert rows[0]["error"] == "far relay lacks send-session; upgrade it"
     assert rows[0]["target"].startswith("far (pid ") and isinstance(rows[0]["at"], float)
     assert bridge.notices == ["far relay lacks send-session; upgrade it"]
+
+
+@pytest.mark.parametrize("stdout", [
+    b'{"ok": true}\n',
+    b'{"ok": true, "digest": "deadbeef"}\n',
+])
+def test_ok_reply_without_the_matching_far_receipt_is_unconfirmed_and_notifies(env, monkeypatch, stdout):
+    bridge, deliveries = env
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout, b""))
+    bridge.serve_one(Conn([], deliveries))
+    rows = [json.loads(l) for l in deliveries.read_text().splitlines()]
+    assert [r["ok"] for r in rows] == [False]
+    assert rows[0]["error"] == "unconfirmed: no far receipt for this line"
+    assert bridge.notices == ["unconfirmed: no far receipt for this line"]

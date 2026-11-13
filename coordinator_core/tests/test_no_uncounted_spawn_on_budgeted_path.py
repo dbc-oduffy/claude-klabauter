@@ -314,6 +314,35 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/init_anchor_injection_state.py",
         ("_handler",),
     ),
+    "box_memory.admit": (
+        "coordinator_core/ops/box_memory_admit.py",
+        ("admit",),
+    ),
+    "box_memory.register": (
+        "coordinator_core/ops/box_memory_admit.py",
+        ("register",),
+    ),
+    "box_memory.release": (
+        "coordinator_core/ops/box_memory_admit.py",
+        ("release",),
+    ),
+    "groupem.box_key_pin_from_peer": (
+        "coordinator_core/ops/group_em_box_federation.py",
+        ("_groupem_box_key_pin_from_peer",),
+    ),
+    "groupem.suite_grant_revoke_receive": (
+        "coordinator_core/ops/group_em_box_federation.py",
+        ("_groupem_suite_grant_revoke_receive",),
+    ),
+    "distill.scope": (
+        "coordinator_core/ops/distill_scope.py",
+        ("_handler",),
+    ),
+    # Spawn-free: plans_completed reads the example-retrieval-repo view or scans plan frontmatter, no git (0987be), 2026-11-13.
+    "changelog.daily_log": (
+        "coordinator_core/ops/daily_log.py",
+        ("_daily_log_handler",),
+    ),
     "dispatch.emit": (
         "coordinator_core/ops/dispatch_emit/op.py",
         ("_dispatch_emit",),
@@ -337,6 +366,15 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "ask_spool.withdraw": (
         "coordinator_core/ops/ask_spool_withdraw.py",
         ("_handler",),
+    ),
+    # Spawn-free on landing (empty function-granular reachable set), 2026-11-13.
+    "code_intel.freshness": (
+        "coordinator_core/ops/code_intel_freshness.py",
+        ("code_intel_freshness",),
+    ),
+    "code_intel.workstate_index": (
+        "coordinator_core/ops/code_intel_workstate_index.py",
+        ("code_intel_workstate_index",),
     ),
     "ceremony.result": (
         "coordinator_core/ops/session_ceremonies.py",
@@ -2184,6 +2222,15 @@ _RESUME_LAUNCH_SEAM = _Legitimation(
 )
 
 _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
+    # distill.scope's coverage watermark: run_watermark.changed_since issues ONE `git diff
+    # --name-only <base>` per run when the example-retrieval-repo doc_files view is absent (d145e6, 2026-11-13).
+    ("distill.scope", "coordinator_core/git/run.py", "run_git", "git", 0): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/tests/test_run_watermark_changed_since_spawn_count.py",
+        executed="Attributed by stack to run.py::run_git under "
+        "`test_git_fallback_issues_exactly_one_spawn_for_many_changed_files` (`assert len(spawns) == 1` "
+        "over three changed files, origin asserted run_git); first run asserted spawn-free.",
+    ),
     **{
         (op, "coordinator_core/ops/ceremony/detached_spawn.py", "spawn_detached", "<dynamic>", 0):
         _RESUME_LAUNCH_SEAM
@@ -2223,6 +2270,30 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
             "workday_complete",
             "workday_start",
             "workstream_start",
+        )
+    },
+    **{
+        (
+            _op,
+            "coordinator_core/ops/ceremony/detached_spawn.py",
+            "spawn_detached",
+            "<dynamic>",
+            0,
+        ): _Legitimation(
+            counter=_SEAM,
+            counted_by="coordinator_core/warm/tests/test_respawn_test_env_scrub.py",
+            executed="Reached via `release_spawn -> _engine_call -> warm.client.try_warm_dispatch -> "
+            "_spawn_once`, the detached warm-server start, never waited on; a test-marked process "
+            "never starts one (`test_try_warm_dispatch_declines_on_the_forbid_var_alone`), so a "
+            "ceremony fixture reaches no Popen here.",
+        )
+        for _op in (
+            "ceremony.handoff",
+            "ceremony.pickup",
+            "ceremony.quick_wrap",
+            "ceremony.workday_complete",
+            "ceremony.workday_start",
+            "ceremony.workstream_start",
         )
     },
     (
@@ -3594,7 +3665,6 @@ _CLUSTER_D5_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "cartography.chunk_table": ("coordinator_core/ops/cartography_chunk_table.py", "_cartography_chunk_table"),
     "cartography.file_index": ("coordinator_core/ops/cartography_file_index.py", "_cartography_file_index"),
     "cartography.tree": ("coordinator_core/ops/cartography_tree.py", "_cartography_tree"),
-    "ceremony.update_docs_scan": ("coordinator_core/ops/ceremony/update_docs_scan.py", "_ceremony_update_docs_scan"),
     "changelog.compute_day_fields": ("coordinator_core/ops/changelog_ops.py", "_compute_day_fields_handler"),
     "changelog.inject_anchor": ("coordinator_core/ops/changelog_ops.py", "_inject_anchor_handler"),
     "crossrepo.closure_status": ("coordinator_core/ops/crossrepo_closure_status.py", "_handler"),
@@ -3603,7 +3673,6 @@ _CLUSTER_D5_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "distill.apply_disposal": ("coordinator_core/ops/distill_apply_disposal.py", "_handler"),
     "distill.assemble_disposal_manifest": ("coordinator_core/ops/distill_disposal_manifest.py", "_handler"),
     "distill.curation_status": ("coordinator_core/ops/distill_curation_status.py", "_distill_curation_status"),
-    "distill.scope": ("coordinator_core/ops/distill_scope.py", "_handler"),
     "goal.append": ("coordinator_core/ops/goal_append.py", "_goal_append"),
     "goal.close_day": ("coordinator_core/ops/goal_close_day.py", "_goal_close_day"),
     "goal.close_day_apply": ("coordinator_core/ops/goal_close_day.py", "_goal_close_day_apply"),
@@ -3664,9 +3733,6 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "cartography.tree": (
         ("coordinator_core/cartography/tree.py", "list_tracked_files", "<dynamic>", 0),
     ),
-    "ceremony.update_docs_scan": (
-        ("coordinator_core/distill/_common.py", "active_reference_guard_many", "rg", 0),
-    ),
     "changelog.compute_day_fields": (
         ("coordinator_core/ops/workday_complete_backfill_scan.py", "_run_git", "git", 0),
     ),
@@ -3697,9 +3763,6 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/distill/delete_guard.py", "_git_object_exists", "git", 0),
     ),
     "distill.curation_status": (
-        ("coordinator_core/distill/_common.py", "active_reference_guard_many", "rg", 0),
-    ),
-    "distill.scope": (
         ("coordinator_core/distill/_common.py", "active_reference_guard_many", "rg", 0),
     ),
     "goal.append": (
@@ -3820,9 +3883,11 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
     # assemble_disposal_manifest rows.
     # 37 -> 35 on 2026-11-09: `workflow.fire` and `workflow.fire_status` no longer reach
     # `fire.py::_pid_alive`.
-    assert total_pairs == 35, (
+    # 35 -> 34: `distill.scope` is spawn-free and no longer reaches `active_reference_guard_many`.
+    # 34 -> 33: `ceremony.update_docs_scan` retired (replaced by `ceremony.update_docs_worklist`).
+    assert total_pairs == 33, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "35 measured 2026-11-09 after workflow.fire and workflow.fire_status stopped reaching _pid_alive; 37 measured 2026-10-28 after active_reference_guard_many joined the two distill rows; 35 measured 2026-10-24 after sizings.summary and workflow_runs.list registered; 33 measured 2026-10-22 after handoff.archive_transition stopped reaching its D5 site; 34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and a since-retired completion op stopped reaching "
+        "33 measured after ceremony.update_docs_scan retired; 34 measured after distill.scope went spawn-free; 35 measured 2026-11-09 after workflow.fire and workflow.fire_status stopped reaching _pid_alive; 37 measured 2026-10-28 after active_reference_guard_many joined the two distill rows; 35 measured 2026-10-24 after sizings.summary and workflow_runs.list registered; 33 measured 2026-10-22 after handoff.archive_transition stopped reaching its D5 site; 34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and a since-retired completion op stopped reaching "
         "their D5 sites (was 38 after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
         "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
         "so its row could only ever read a missing file. 39 - 1 = 38. Update this constant "
@@ -5253,7 +5318,6 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/ops/cartography_churn.py", "_git_ls_files", "<dynamic>", 0),
         ("coordinator_core/ops/cartography_churn.py", "_git_name_only", "<dynamic>", 0),
         ("coordinator_core/ops/cascade_retract.py", "_run_git", "git", 0),
-        ("coordinator_core/ops/ceremony/update_docs_scan.py", "_phase1_git_log_window", "git", 0),
         ("coordinator_core/ops/changelog_ops.py", "_batch_resolve_commits", "git", 0),
         ("coordinator_core/ops/changelog_ops.py", "_get_hostname", "<dynamic>", 0),
         ("coordinator_core/ops/changelog_ops.py", "_git_log_for_date", "git", 0),
@@ -6135,17 +6199,6 @@ _NAMED_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
         "`_PROBE_ORDER`, not reachable from any `_BUDGETED_ENTRYPOINTS` op."
     ),
     (
-        "coordinator_core/ops/ceremony/update_docs_scan.py",
-        "_phase1_git_log_window",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- one bounded `git log --since=... --name-only` "
-        "call per scan, timeout-capped to the op's own end-to-end budget, "
-        "degrading to `available: False` on any failure; `ceremony.*_docs_"
-        "scan` is not a `_BUDGETED_ENTRYPOINTS` op."
-    ),
-    (
         "coordinator_core/ops/distill_apply_disposal.py",
         "_run_git",
         "git",
@@ -6252,7 +6305,6 @@ _TRANCHE_A_FILES: frozenset = frozenset({
     "coordinator_core/install/prereq_probe.py",
     "coordinator_core/ops/release_tagging.py",
     "coordinator_core/ops/run_semgrep_scan.py",
-    "coordinator_core/ops/ceremony/update_docs_scan.py",
     "coordinator_core/ops/distill_apply_disposal.py",
     "coordinator_core/ops/merge_quiet_activity_gate.py",
     "coordinator_core/ops/session/guard_settings_integrity.py",
@@ -6289,9 +6341,10 @@ def test_named_argv0_sites_in_tranche_a_are_dispositioned_on_their_own_terms():
         "reaches outside tranche a's own file scope:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_NAMED_ARGV0_DISPOSITIONS) == 27, (
+    assert len(_NAMED_ARGV0_DISPOSITIONS) == 26, (
         f"_NAMED_ARGV0_DISPOSITIONS carries {len(_NAMED_ARGV0_DISPOSITIONS)} "
-        "entries, not the 27 expected after probe_git_lfs's 3 rows were deleted "
+        "entries, not the 26 expected after update_docs_scan.py's row was deleted "
+        "with the module, probe_git_lfs's 3 rows were deleted "
         "(2026-10-13), fleet.archive_completed_plans's kill "
         "removed its 2 named-argv0 sites (archive_plans.py deleted whole) from "
         "the dispatch brief's own tranche-a slice of 35, "
@@ -7418,6 +7471,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "repo.setup": 0,
     # Five reach-only sites, all detached or background by design: fire_workflow / headless.start
     # launch the workflow, `_shim_plugin_dir` resolves the shim, `publish_lag` is two git reads.
+    # `headless.start` admits through `admit_before_spawn_in_process`, which never dials the engine, so the
+    # warm-server `spawn_detached` reached via `admit_before_spawn -> _engine_call` stays out.
     # Measured 2026-11-10: a detached spawn is 2.3ms wall max (parent never waits); a git read
     # 123.9ms wall max, parent CPU below the 15.6ms clock tick. The pin is a static ceiling; the
     # detached legs add no blocking time, so the op stays under the 500ms bar.
@@ -7616,7 +7671,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "repo.create_and_push_remote": 3,
     "tracker.push_suggestion": 3,
     "cartography.file_index": 2,
-    "ceremony.update_docs_scan": 3,
     "changelog.backfill_gaps": 2,
     #: Lowered 2 -> 1 on 2026-09-03. The machinery relocation (`5a9bb6c5ba`)
     #: repointed this hook onto `session.machinery_paths` and took
@@ -7663,6 +7717,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "research.close": 1,
     "cartography.tree": 1,
     "ceremony.chunk_commits": 1,
+    "ceremony.update_docs_worklist": 1,
     "changelog.compute_day_fields": 1,
     "ci.run_pip_audit": 1,
     "commit.exec_bit_change": 1,
@@ -7672,7 +7727,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "deliverable.rollup": 1,
     "dependency.detect_changed_manifests": 1,
     "distill.curation_status": 1,
-    "distill.scope": 1,
     "engine.drift": 1,
     # 1 -> 2, 2026-09-06. The new site is `git/run.py :: run_git`, reached
     # through `git_state.head_blobs`, which gained an `ls-tree` arm in
@@ -7904,6 +7958,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # One reachable site, the shared `run_git` Popen, measured 2026-11-11 via
     # `_measure_static_spawn_counts`; a ceiling, not execution evidence.
     "roadmap.baton_backfill": 1,
+    # One reachable site, the shared `run_git` in the per-checkout apply; reach-only static
+    # ceiling, not execution evidence.
+    "fleet.authoring_checkout_freshness": 1,
 }
 _STATIC_SPAWN_COUNT_PINS__SUBJECT_CLASS = "op-name"
 
@@ -8115,3 +8172,26 @@ def test_ceremony_launch_ops_spawn_exactly_one_detached_worker(ceremony, tmp_pat
     result = ops._launch(ceremony, params, tmp_path)
     assert result["state"] == "accepted", result
     assert len(popen_calls) == 1, popen_calls
+
+
+def test_headless_admission_is_in_process_and_never_dials_the_engine(monkeypatch):
+    """`headless.start` admits through `admit_before_spawn_in_process`: a PermissionError admits with an
+    advisory and reaches no warm dispatch (and so no `_spawn_once`); `admit_before_spawn` on the
+    same input does dial, which is why headless does not use it."""
+    from coordinator_core.bash_guards import _heavy_command_class as hcc
+
+    dialed = []
+    monkeypatch.setattr(
+        "coordinator_core.warm.client.try_warm_dispatch",
+        lambda msg, **kw: dialed.append(msg["method"]),
+    )
+
+    def denied(*args, **kwargs):
+        raise PermissionError("Access is denied")
+
+    monkeypatch.setattr(hcc, "_load_box_memory_host", denied)
+    monkeypatch.setattr(hcc, "_record_advisory", lambda key, pid: None)
+    verdict = hcc.admit_before_spawn_in_process("headless-workflow-worker", 0.5)
+    assert verdict.admitted and "advisory" in verdict.reason and dialed == []
+    hcc.admit_before_spawn("headless-workflow-worker", 0.5)
+    assert dialed == ["box_memory.admit"]

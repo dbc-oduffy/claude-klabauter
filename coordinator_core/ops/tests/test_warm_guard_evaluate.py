@@ -122,6 +122,53 @@ class TestVerdictShapes:
         assert "permissionDecision" not in result
 
 
+class TestGrokHostRouting:
+    def _edit_event(self, host):
+        return {
+            "host": host,
+            "hook_event_name": "PreToolUse",
+            "session_id": "s-grok",
+            "cwd": "/repo",
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "/repo/a.py"},
+            "env": {},
+        }
+
+    def _stub_write_guard(self, monkeypatch):
+        from coordinator_core.write_guards import engine
+
+        seen = []
+
+        def fake(event, **kw):
+            seen.append(event)
+            return {"hookSpecificOutput": {"additionalContext": "em-code-dispatch: hand edit"}}
+
+        monkeypatch.setattr(engine, "evaluate", fake)
+        return seen
+
+    def test_grok_edit_reaches_the_write_guard_engine_and_keeps_the_advisory(self, monkeypatch):
+        seen = self._stub_write_guard(monkeypatch)
+
+        result = _call(self._edit_event("grok"))
+
+        assert seen and result == {"additionalContext": "em-code-dispatch: hand edit"}
+
+    def test_edit_without_a_host_does_not_take_the_write_guard_route(self, monkeypatch):
+        seen = self._stub_write_guard(monkeypatch)
+
+        _call(self._edit_event(None))
+
+        assert not seen
+
+    def test_grok_bash_still_takes_the_claude_chain(self, monkeypatch):
+        monkeypatch.delenv("COORDINATOR_OVERRIDE_NO_VERIFY", raising=False)
+        event = dict(_event(_NO_VERIFY_CMD), host="grok")
+
+        result = _call(event)
+
+        assert result["permissionDecision"] == "deny"
+
+
 class TestMalformedPayloadRaises:
     """Never fabricate a no-objection on an internal failure -- an absent/malformed
     payload must surface loudly (a JSON-RPC error via `ipc`, once dispatched through the

@@ -21,7 +21,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 RELEASE_SUPERSEDED = "sizing-superseded"
 RELEASE_MARKER_SUPERSEDED = "marker-superseded"
@@ -773,7 +773,50 @@ def _held_tail(root: Path, halted_run_id: str) -> frozenset:
     if held and marker:
         with contextlib.suppress(Exception):  # unknown: the hold stands
             held -= {wrd._norm(p) for p in kept_at_head_paths(root, record, marker)}
+    if held:
+        with contextlib.suppress(Exception):  # unknown: the hold stands
+            held -= _prints_at_head(root, halted_run_id, held)
     return held
+
+
+def _prints_at_head(root: Path, halted_run_id: str, paths) -> frozenset:
+    """The `paths` whose HEAD blob is the blob the holder's index entry printed at its halt: HEAD already
+    carries the withheld content (hand-landed), so nothing is left to hold even when the path is dirty and
+    the record has no kept blob. One batched read for the paths with a print."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+    from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
+
+    entry = idx.run_entry(root, halted_run_id)
+    if entry is None or not entry.prints:
+        return frozenset()
+    wanted = [p for p in sorted(paths) if p in entry.prints]
+    blobs = _blob_batch(root, [f"HEAD:{p}" for p in wanted]) if wanted else None
+    if not blobs:
+        return frozenset()
+    return frozenset(
+        p for p in wanted if blobs[f"HEAD:{p}"] is not None and blob_sha(blobs[f"HEAD:{p}"]) == entry.prints[p]
+    )
+
+
+def still_held_by_index(
+    root: Path, holders: Mapping, committing_run_id: Optional[str], committing_plan: Optional[str] = None,
+) -> dict:
+    """`{path: run id}` of `holders` (the halted withhold index's map) that still hold against the committing
+    run: a run whose record dir is gone holds nothing, and a path `held_paths` frees (release rules, kept or
+    printed content at HEAD) is dropped. Never raises: an unreadable answer keeps the hold."""
+    out: dict = {}
+    by_run: dict = {}
+    for path, run in holders.items():
+        by_run.setdefault(run, []).append(path)
+    for run, paths in by_run.items():
+        try:
+            if not _record(Path(root), run).exists():
+                continue
+            held = held_paths(Path(root), run, committing_run_id, committing_plan)
+        except Exception:  # noqa: BLE001 -- unknown: the hold stands
+            held = frozenset(paths)
+        out.update({p: run for p in paths if p in held})
+    return out
 
 
 def _own_paths(root: Path, run_id: str) -> Optional[tuple]:

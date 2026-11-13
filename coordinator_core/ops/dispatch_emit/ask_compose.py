@@ -9,6 +9,8 @@ dispatch.ask_stage; the script only interprets the manifest. Pure composition: n
 
 from __future__ import annotations
 
+import contextvars
+import functools
 import json
 import posixpath
 import re
@@ -454,6 +456,45 @@ _ROW_EFFORT = "medium"
 _LOW_EFFORT_LABELS = frozenset({"halt-reverify", "ledger-reverify", "remnant-reverify", "footprint", "objective-research"})
 
 
+#: The stager of the compose in progress; `_agent` stages a call's large static runs through it when the
+#: caller passed none, so every leg's brief leaves the script without a per-site `stager=`.
+_ACTIVE_STAGER: contextvars.ContextVar[Optional[Stager]] = contextvars.ContextVar("ask_active_stager", default=None)
+_STAGE_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _unique_stager(stager: Stager, sink: dict) -> Stager:
+    """``stager`` that files a body under the first free ``name``, ``name~2``, ... when the name holds other text."""
+
+    def staged(name: str, text: str) -> str:
+        candidate, n = name, 1
+        while sink.get(candidate, text) != text:
+            n += 1
+            candidate = f"{name}~{n}"
+        return stager(candidate, text)
+
+    return staged
+
+
+def _staging_scope(fn: Callable[..., str]) -> Callable[..., str]:
+    """Clear `_ACTIVE_STAGER` for the call, so one compose never stages through another's sink."""
+
+    @functools.wraps(fn)
+    def inner(*args: Any, **kwargs: Any) -> str:
+        token = _ACTIVE_STAGER.set(None)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _ACTIVE_STAGER.reset(token)
+
+    return inner
+
+
+def _stage_expr(expr: str, name: str, stager: Optional[Stager] = None) -> str:
+    """``expr`` with each large static literal run replaced by a pointer to its staged file; unchanged with no stager."""
+    stager = stager or _ACTIVE_STAGER.get()
+    return expr if stager is None else stage_literal_runs(expr, _STAGE_NAME_UNSAFE.sub("-", name), stager)
+
+
 def _declared_effort(label: str, agent_type: str, agent_model: Optional[str]) -> str:
     """Effort for a leg that names none: low on a haiku-pinned type or a re-read label, else `_ROW_EFFORT`."""
     model = agent_model or _emit._AGENT_MODELS.get(agent_type)
@@ -514,8 +555,7 @@ def _agent(
             clause = _lit(" " + reconcile) + " + " + clause
         if _emit._INVOKE_LITERAL_CLAUSE not in prompt_expr:
             clause = _lit(_emit._INVOKE_LITERAL_CLAUSE) + " + " + clause
-    if stager is not None and stage_as:
-        prompt_expr = stage_literal_runs(prompt_expr, stage_as, stager)
+    prompt_expr = _stage_expr(prompt_expr, stage_as or label, stager)
     schema_js = json.dumps(schema, sort_keys=True)
     judge = (schema.get("properties") or {}).get("judge")
     if isinstance(judge, _JudgeSchemaRef):
@@ -1598,6 +1638,11 @@ def _test_blockers_js(
     if unscoped_when_no_own:
         in_own = f"({p}Own.size === 0 || {in_own})"
     own_filter = f".filter((n) => {in_own})" if own_paths_expr else ""
+    if own_paths_expr:
+        own_filter += (
+            f".filter((n) => !({p}Own.has({p}Norm(n.split('::')[0])) && "
+            f"/^\\s*(?:ERROR:\\s*)?not found:/im.test({p}Detail.get(n) ?? '')))"
+        )
     live = (
         f"[...new Set((Array.isArray({p}Src?.failing) ? {p}Src.failing : (typeof {p}Src?.failing === 'string' ? [{p}Src.failing] : [])).map(String))]"
         f".filter((n) => !{p}Resolved && !{p}Excluded.has(n))"
@@ -1609,7 +1654,7 @@ def _test_blockers_js(
     return (
         f"    const {p}Src = {src_expr};\n"
         + own
-        + f"    const {p}Excluded = new Set([...({p}Src?.pre_existing ?? []), ...({p}Src?.sibling_owned ?? []), ...Object.keys({p}Src?.foreign_red ?? {{}}), ...({p}Src?.kept ?? []), ...({p}Src?.designed_red ?? [])].map(String));\n"
+        + f"    const {p}Excluded = new Set([...({p}Src?.pre_existing ?? []), ...({p}Src?.sibling_owned ?? []), ...Object.keys({p}Src?.foreign_red ?? {{}}), ...({p}Src?.kept ?? []), ...({p}Src?.renamed_node ?? []), ...({p}Src?.designed_red ?? [])].map(String));\n"
         f"    const {p}Resolved = {p}Src?.status_after === 'pass';\n"
         f"    const {p}Detail = new Map();\n"
         f"    const {p}Raw = {p}Src?.{FAILING_DETAIL_FIELD};\n"
@@ -1709,13 +1754,16 @@ _REVIEW_RECOVER_JS = r"""
     const flaky = [];
     const gapsOf = () => {
       const rv = (_reviewReverify && typeof _reviewReverify === 'object') ? _reviewReverify : null;
-      const excluded = new Set([...(rv?.pre_existing ?? []), ...(rv?.kept ?? [])].map(String));
+      const excluded = new Set([...(rv?.pre_existing ?? []), ...(rv?.kept ?? []), ...(rv?.renamed_node ?? [])].map(String));
       const raw = rv?.failing;
       let failing = (rv && rv.status_after !== 'pass')
         ? [...new Set((Array.isArray(raw) ? raw : (typeof raw === 'string' ? [raw] : [])).map(String))].filter((n) => !excluded.has(n)) : [];
       const fr = (rv && rv.foreign_red && typeof rv.foreign_red === 'object' && !Array.isArray(rv.foreign_red)) ? new Set(Object.keys(rv.foreign_red).map(_hfPosix)) : new Set();
       const reverifyForeign = failing.filter((n) => fr.has(_hfPosix(n)));
       failing = failing.filter((n) => !fr.has(_hfPosix(n)));
+      const gone = new Set((Array.isArray(rv?.failing_detail) ? rv.failing_detail : []).filter((d) => d && d.node_id && /^\s*(?:ERROR:\s*)?not found:/im.test(String(d.message ?? ''))).map((d) => _hfPosix(d.node_id)));
+      const ownFiles = new Set((_manifest?.review_declared_paths ?? []).map(_hfPosix));
+      failing = failing.filter((n) => !(gone.has(_hfPosix(n)) && ownFiles.has(_hfPosix(n.split('::')[0]))));
       if (rv && failing.length) {
         const [, found] = classifyFlakes({ ...rv, failing }, _runId);
         const fids = new Set(found.map((f) => f.node_id));
@@ -1958,7 +2006,14 @@ def _wave_tests_green_js(
     With `objective`, the gate opens with `_objectiveWaveCheck(n)`: the wave's falsifier check rides the
     checkpoint leg and never gates the commit.
 
-    An empty scope passes. Otherwise one test-runner leg runs the scope, and only the returned
+    An empty scope passes, and so does every scope while `_terminalTestsWanted` holds: the terminal
+    verify-tests leg then runs the whole run's scope, so no agent runs here. Accepted trade-off: a
+    checkpoint commit then lists no wave reds through `dispatch.checkpoint_reds` (`_waveReds[n]` stays
+    unset), and a run that halts before the terminal verify block leaves its landed waves with no test
+    evidence; acceptable only because this gate never gated (it always returns true). The flag is a
+    strict subset of the terminal `test_guard` (`_testWanted`), so the skip never fires on a run whose
+    terminal leg would not.
+    Otherwise one test-runner leg runs the scope, and only the returned
     `status` gates (`pass` / `pass-with-skips` land); a throw, a missing sidecar or any other
     status records the wave's reds in `_checkpointWithheld` and `_waveReds[n]` and the checkpoint
     still commits: the gate returns true, and the commit leg lists each red through
@@ -1978,6 +2033,7 @@ def _wave_tests_green_js(
         + ("    await _objectiveWaveCheck(n);\n" if objective else "")
         + "    const scope = ((_manifest && _manifest.wave_test_targets) ?? {})[String(n)] ?? [];\n"
         "    if (!scope.length) return true;\n"
+        "    if (_terminalTestsWanted) return true;\n"
         "    let r = null;\n"
         "    try {\n"
         "      r = await agent(\n"
@@ -2272,10 +2328,15 @@ _OVERLAY_SCHEMA = _obj(["exit_code"], {"exit_code": {"type": "integer"}, "detail
 def engine_module_command(module: str, repo_root: str, args: str = "") -> str:
     """`<engine interpreter> -m <module> <args>` for a command an agent runs to reach `coordinator_core`.
     The interpreter is the repo's resolvable pin, else this process's own absolute `sys.executable`; never a
-    bare `python`, which on a host whose PATH python lacks `coordinator_core` fails before the module runs."""
+    bare `python`, which on a host whose PATH python lacks `coordinator_core` fails before the module runs.
+    `PYTHONPATH` names the engine checkout so the module imports from a consumer repo cwd."""
     from coordinator_core.ops.dispatch_emit.clean_overlay_verify import engine_python_command
 
-    return f"{engine_python_command(Path(repo_root))} -m {module}" + (f" {args}" if args else "")
+    engine_root = Path(__file__).resolve().parents[3].as_posix()
+    return (
+        f'PYTHONPATH="{engine_root}" {engine_python_command(Path(repo_root))} -m {module}'
+        + (f" {args}" if args else "")
+    )
 
 
 def _overlay_verify_call(*, head: str, anchor: str, repo_root: str, run_id: str) -> str:
@@ -2300,12 +2361,12 @@ def _overlay_verify_call(*, head: str, anchor: str, repo_root: str, run_id: str)
 
 
 _OVERLAY_FOLD_JS = (
-    "    if (!_halted && _testWanted && _verify && _verify.test) {\n"
+    f"    if (!_halted && _testWanted && _verify && ({_VERIFY_TEST_RESULT_VAR} || _verify.test)) {{\n"
     "      let _ov = null;\n"
     "      try { _ov = await __OVERLAY__; } catch (e) { const _m = String((e && e.message) ?? e); "
     "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('overlay-verify leg threw: ' + _m); } }\n"
     "      if (_ov && _ov.exit_code === 1 && !/No module named .?coordinator_core/.test(String(_ov.detail ?? ''))) {\n"
-    "        const _t = _verify.test ?? {};\n"
+    f"        const _t = _verify.test ?? {_VERIFY_TEST_RESULT_VAR} ?? {{}};\n"
     "        _verify.test = { ..._t, status: 'fail', tests_failed: Math.max(1, Number(_t.tests_failed) || 0), "
     "summary: String('clean-overlay verdict red: ' + (_ov.detail ?? '') + ' | ' + (_t.summary ?? '')).slice(0, 300) };\n"
     "      } else if (_ov && _ov.exit_code !== 0) {\n"
@@ -2760,6 +2821,11 @@ _NO_CHANGE_HALT_JS = (
     f"if (_halted?.refused === {_lit(NO_CHANGE_REFUSAL)}) {{ Object.assign(_halted, {{ halted: 'no-op', "
     f"{MEANT_TO_LAND_KEY}: _commit?.{MEANT_TO_LAND_KEY} ?? null, "
     f"{DIRTY_BEFORE_RUN_KEY}: _commit?.{DIRTY_BEFORE_RUN_KEY} ?? null }}); }} "
+)
+# The commit leg's refusal code plus its error text (the overlay verdict and detail ride in `error`).
+_COMMIT_HALT_REASON_JS = (
+    "([_commit?.refused, _commit?.error].filter((x) => x !== null && x !== undefined && String(x).trim() !== '')"
+    ".map((x) => String(x).trim()).join(': ').slice(0, 600) || null)"
 )
 _GATE_HALT_CAUSE_JS = "(_gate.halt ? 'gate halt: ' + String(_gate.halt.kind ?? _gate.halt.reason ?? 'halt') : 'apm ruling carried no foldable arm (non-XS arm or resume_plan)')"
 
@@ -3848,6 +3914,7 @@ def _s_prep_gate_loop_js(
     return lines
 
 
+@_staging_scope
 def compose_ask_script(
     *,
     repo_root: str,
@@ -3892,7 +3959,8 @@ def compose_ask_script(
 
     `staged_out`, when given, receives each large static prompt body as name -> text and the script
     carries a pointer to `<record_dir>/prompts/<name>.md` in its place; the caller writes the files
-    (`dispatch.emit` does). Absent, every body stays inline.
+    (`dispatch.emit` does). Absent, every body stays inline. Every `_agent` leg and the row and verdict
+    prompts stage through it; a name held by other text is filed as `name~2`.
 
     `run_base_sha`, when given, is the base for the review blocks, the criterion judge brief and
     the test instruction; absent, the base is HEAD at compose time.
@@ -4043,8 +4111,11 @@ def compose_ask_script(
     record_abs = f"{repo_root_abs}/{record_dir}"
     run_abs = f"{repo_root_abs}/{run_dir}"
     stager: Optional[Stager] = (
-        None if staged_out is None else (lambda name, text: _stage_prompt(name, text, staged_out, record_dir=record_abs))
+        None
+        if staged_out is None
+        else _unique_stager(lambda name, text: _stage_prompt(name, text, staged_out, record_dir=record_abs), staged_out)
     )
+    _ACTIVE_STAGER.set(stager)
     parent_copy = run_parent_copy_rel(run_id)
     manifest_rel = f"{record_dir}/manifest.json"
     anchor = _ANCHOR_CLAUSE.format(root=repo_root)
@@ -4210,6 +4281,8 @@ def compose_ask_script(
     b.append(f"  let {_emit._RUN_BASE_VAR} = {_lit(run_base_sha)};")
     # Top level, not in the execute block: the top-level _alreadyDeliveredClose reads it.
     b.append("  let _deliveryNotes = '';")
+    # Top level, declared before `_waveTestsGreen`: that function reads it, and a block-scoped `const` is out of its reach.
+    b.append("  let _terminalTestsWanted = false;")
     b.append(_emit._checkpoint_commit_js(
         agent_type_host, repo_root=repo_root, session_id=session_id, seam=None,
         runtime_plan_js=_RUNTIME_PLAN_PATH_JS, pre_commit_gate_js=_WAVE_TESTS_GATE_FN, reds_var=WAVE_REDS_VAR,
@@ -5806,8 +5879,9 @@ def compose_ask_script(
     if objective_cfg is not None:
         b.append("  await _objectiveCalibrate();")
     b.append(
-        f"  const _rowVerifyWanted = !(_gate.arm !== {_lit(ARM_XS)} && !_xsTail && (_manifest.test_targets ?? []).length);"
+        f"  _terminalTestsWanted = !!(_gate.arm !== {_lit(ARM_XS)} && !_xsTail && (_manifest.test_targets ?? []).length);"
     )
+    b.append("  const _rowVerifyWanted = !_terminalTestsWanted;")
     b.append(
         "  const _waves = "
         + ("_halted ? [] : " if objective_cfg is not None else "")
@@ -5826,7 +5900,7 @@ def compose_ask_script(
     # Rows sharing a `group` share one memoised agent; each member keeps its own `_runRow` and reads
     # its own `<ID>:` line out of the shared reply, so a member the agent omitted reads incomplete.
     b.append(GROUP_MEMBER_RESULT_JS)
-    b.append(f"  const _rowPrompt = (r) => {row_prompt};")
+    b.append(f"  const _rowPrompt = (r) => {_stage_expr(row_prompt, 'row-prompt')};")
     b.append("  const _groups = {};")
     b.append(
         "  function _groupPrompt(g) {\n"
@@ -6126,7 +6200,7 @@ def compose_ask_script(
     )
     if judged:
         b.append(f"  const {_JUDGE_SCHEMA_VAR} = {_compact_json(judge_brief[1])};")
-    b.append("  const _verdictText = () => (" + _cat(*verdict_parts) + ");")
+    b.append("  const _verdictText = () => (" + _stage_expr(_cat(*verdict_parts), "verdict") + ");")
     verdict_parts = ("js:_verdictText()",)
     verify_call = _verify_call(
         head=head,
@@ -6703,14 +6777,17 @@ def _chain_stage_loop_js() -> str:
         "        if (_rd >= 2) { _why = 'stage_pending was not resumable'; break; }",
         f"        const _bn = _chainPath.split('/').pop(); const _rs = {_lit(RUN_SCRIPT_SUFFIX)};",
         "        if (!_bn.endsWith(_rs) || _bn.length === _rs.length || _bn.indexOf('.staged-') !== -1) { _why = 'stage resume path is not a run script'; break; }",
-        f"        const _pre = {_lit(prefix)} + _bn.slice(0, _bn.length - _rs.length) + {_lit(middle)}; const _suf = {_lit(suffix)}; const _tw = _sp.twin_path;",
+        f"        const _fam = (_i) => {{ const _m = /^(warp-.+)-[0-9]{{8}}T[0-9]{{6}}-[0-9a-f]{{6}}$/.exec(_i); return _m ? _m[1] : _i; }};",
+        "        const _hp = _sp.handle && typeof _sp.handle === 'object' ? _sp.handle.path : undefined;",
+        "        const _hm = typeof _hp === 'string' ? /^(?:state|scratch)\\/warp\\/([A-Za-z0-9][A-Za-z0-9._-]*)\\/manifest\\.json$/.exec(_hp) : null;",
+        "        const _stem = _bn.slice(0, _bn.length - _rs.length); const _wid = (_hm && _fam(_hm[1]) === _fam(_stem)) ? _hm[1] : _stem;",
+        f"        const _pre = {_lit(prefix)} + _wid + {_lit(middle)}; const _suf = {_lit(suffix)}; const _tw = _sp.twin_path;",
         "        let _rel;",
         "        if (_tw !== undefined && _tw !== null) {",
-        f"          const _fam = (_i) => {{ const _m = /^(warp-.+)-[0-9]{{8}}T[0-9]{{6}}-[0-9a-f]{{6}}$/.exec(_i); return _m ? _m[1] : _i; }};",
         f"          const _pfx = {_lit(prefix)}; const _sa = _tw.length - _suf.length - 64; const _ma = _sa - {_lit(middle)}.length;",
         f"          const _own = (typeof _tw === 'string' && _tw.startsWith(_pfx) && _tw.endsWith(_suf) && _ma > _pfx.length && _tw.slice(_ma, _sa) === {_lit(middle)} "
         "&& /^[0-9a-f]{64}$/.test(_tw.slice(_sa, _sa + 64))) ? _tw.slice(_pfx.length, _ma) : null;",
-        "          if (_own === null || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_own) || _fam(_own) !== _fam(_bn.slice(0, _bn.length - _rs.length))) "
+        "          if (_own === null || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_own) || _fam(_own) !== _fam(_wid)) "
         "{ _why = 'stage_pending twin_path is not a staged twin of this run'; break; }",
         "          _rel = _tw;",
         "        } else {",
@@ -7584,6 +7661,7 @@ def _append_docs_and_commit(
         "    else { if (!_halted) _halted = { halted: 'commit', refused: _commit?.refused ?? null, "
         "already_landed: _commit?.already_landed ?? null, "
         "error: _commit?.error ?? null, blob_drift: _commit?.blob_drift ?? null, "
+        "reason: " + _COMMIT_HALT_REASON_JS + ", "
         "plan: _planRel ?? null, sizing: _sizingRel ?? null }; " + _NO_CHANGE_HALT_JS + _hijack_halt_js("_commit") +
         "if (_incompleteChunks.length === 0) { _nextAction.params.halted = _halted; _reviseAndRefire = null; } "
         f"else {{ _nextAction = {REVISE_NEXT_ACTION_JS}; _reviseAndRefire = _mkRevise(); }} }}"
@@ -7620,6 +7698,7 @@ def roadmap_commit_lines(
         f"    try {{ _commit = await {call}; }} catch (e) {{ _haltOnUsageLimit(e); }}",
         "    if (!_halted && !(_commit && _commit.committed === true)) { _halted = { halted: 'commit', "
         "refused: _commit?.refused ?? null, error: _commit?.error ?? null, "
+        "reason: " + _COMMIT_HALT_REASON_JS + ", "
         "blob_drift: _commit?.blob_drift ?? null, sizing: _sizingRel, run_id: _runId }; " + _NO_CHANGE_HALT_JS + _hijack_halt_js("_commit") + "}",
         "  }",
         f"  else if (!_halted && {_NO_RUN_TOKEN_COMMIT_SKIPPED_JS}",

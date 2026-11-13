@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
@@ -83,3 +85,36 @@ def test_overlay_exit_one_folds_into_a_red_test_and_other_exits_do_not():
     assert "else if (_ov && _ov.exit_code !== 0)" in fold and "log(" in fold
     text = _compose()
     assert text.index("overlay-verify") < text.index("_testResult = _verify.test")
+
+
+def test_overlay_runs_when_the_tests_leg_ran_even_if_the_verify_result_lacks_test():
+    fold = ask_compose._OVERLAY_FOLD_JS
+    head = fold.split("\n", 1)[0]
+    assert "_testWanted && _verify && (_verifyTest || _verify.test)" in head
+    assert "_verify.test = { ..._t, status: 'fail'" in fold
+    assert "const _t = _verify.test ?? _verifyTest ?? {};" in fold
+    assert "No module named .?coordinator_core" in fold
+    assert "_ov.exit_code !== 0" in fold
+    assert fold.index("_verify.test = { ..._t") > fold.index("_ov.exit_code === 1")
+    text = _compose()
+    assert text.index("(_verifyTest || _verify.test)") < text.index("_testResult = _verify.test")
+
+
+def test_overlay_producer_command_imports_coordinator_core_from_a_consumer_cwd(tmp_path):
+    import shlex
+    import subprocess
+    import sys
+
+    cmd = ask_compose.engine_module_command("coordinator_core.ops.dispatch_emit.clean_overlay_verify", str(tmp_path), "--help")
+    assert cmd.startswith("PYTHONPATH=")
+    cmd = cmd.replace(shlex.split(cmd)[1], shlex.quote(sys.executable), 1)
+    out = subprocess.run(["bash", "-c", cmd], cwd=tmp_path, capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+    assert "No module named" not in out.stderr, out.stderr
+
+
+def test_commit_halt_reason_carries_refusal_and_error_text():
+    lines = "\n".join(
+        ask_compose.roadmap_commit_lines(head="h", anchor="a", repo_root=str(Path(__file__).resolve().parents[4]), run_id="2026-11-13-x-aaaaaa")
+    )
+    assert "reason: " + ask_compose._COMMIT_HALT_REASON_JS in lines
+    assert "_commit?.refused, _commit?.error" in ask_compose._COMMIT_HALT_REASON_JS

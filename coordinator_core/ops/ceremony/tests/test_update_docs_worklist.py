@@ -201,6 +201,31 @@ def test_output_is_bounded(repo, monkeypatch):
     assert out["changed_since_ack"]["truncated"] is True
 
 
+def test_default_result_projects_under_the_long_prompt_tier(repo, monkeypatch):
+    from coordinator_core.distill.prompt_tier import LONG_PROMPT_TIER_TOKENS, estimate_tokens
+
+    assert estimate_tokens(uw.OUTPUT_BYTE_CAP) <= LONG_PROMPT_TIER_TOKENS
+    cache_dir = Path(os.environ["MACHINE_LOCAL_PATHS_UPDATE_DOCS_WORKLIST_CACHE"]) / uw.CACHE_SUBDIR
+    cache_dir.mkdir(parents=True)
+    (cache_dir / uw.CACHE_FILE).write_text(json.dumps({"ack_head": _SHA_A, "files": {}}))
+    out = _run(repo, _Git(changed=[f"coordinator_core/m{i}.py" for i in range(300)]), monkeypatch)
+    assert estimate_tokens(len(json.dumps(out, separators=(",", ":")).encode())) <= LONG_PROMPT_TIER_TOKENS
+    assert out["agent_worklist"][0]["total"] == 300
+
+
+def test_worklist_row_paths_are_cut_to_the_tier_and_a_fitting_row_is_untouched(monkeypatch):
+    import coordinator_core.distill.prompt_tier as pt
+
+    monkeypatch.setattr(pt, "LONG_PROMPT_TIER_TOKENS", 10)
+    paths = ["p" * 17 for _ in range(10)]
+    over = {"kind": "doc_drift_review", "paths": list(paths)}
+    under = {"kind": "lineage_held_disposed_plan", "paths": paths[:1]}
+    uw._bound_phase_paths([over, under])
+    assert over["paths_truncated"] is True
+    assert 0 < len(over["paths"]) < len(paths)
+    assert "paths_truncated" not in under and under["paths"] == paths[:1]
+
+
 def test_cache_root_falls_back_to_repo_local_without_the_key(repo, monkeypatch):
     monkeypatch.setattr(uw, "registry_get", lambda key: None)
     assert uw._cache_path(repo) == repo / ".coordinator-local" / "cache" / uw.CACHE_SUBDIR / uw.CACHE_FILE
@@ -227,3 +252,177 @@ def test_default_params_hold_the_500ms_bar_with_at_most_one_git_spawn(repo, monk
         assert elapsed_ms < 500, f"{label}: {elapsed_ms:.0f}ms"
     assert out["decided_by_op"]["prune_totals"]["plans"] == 400
     assert out["cache"]["reread"] == 0
+
+
+_PHASE_IDS = [
+    "0", "1-2b", "3", "4", "5", "6", "7", "8", "8b", "9", "9b", "10", "10b", "11", "11a", "11b", "11g",
+    "11c", "11d", "12", "11f", "11h", "11h2", "11i", "11j", "11k", "11m", "11n", "11o", "11p", "13", "14", "15",
+]
+
+
+def _handoff(repo: Path, rel: str, text: str) -> str:
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return rel
+
+
+def _archived(repo: Path, n: int) -> list[str]:
+    return [
+        _handoff(repo, f"archive/handoffs/2026-01/2026-01-{i + 1:02d}_000000_h{i}.md", f"---\nid: h{i}\n---\nbody\n")
+        for i in range(n)
+    ]
+
+
+def _counts(out: dict) -> dict:
+    return out["decided_by_op"]["archived_handoffs"]
+
+
+def _seed_ack(cache_dir_env: str) -> None:
+    cache_dir = Path(cache_dir_env) / uw.CACHE_SUBDIR
+    cache_dir.mkdir(parents=True)
+    (cache_dir / uw.CACHE_FILE).write_text(json.dumps({"ack_head": _SHA_A, "files": {}}))
+
+
+def test_phase_ids_are_the_33_row_table():
+    assert list(uw.UPDATE_DOCS_PHASE_IDS) == _PHASE_IDS
+    assert len(set(_PHASE_IDS)) == 33
+
+
+def test_no_change_tree_has_no_agent_verdict_and_a_verdict_per_phase(repo, monkeypatch):
+    verdicts = _run(repo, _Git(), monkeypatch)["phase_verdicts"]
+    assert list(verdicts) == _PHASE_IDS
+    assert uw.AGENT not in verdicts.values()
+    assert verdicts["6"] == "noop" and verdicts["1-2b"] == "noop"
+    assert {verdicts[p] for p in ("11a", "12", "13")} == {"noop"}
+    assert {verdicts[p] for p in ("9b", "10", "11c", "11d", "11i", "11j")} == {"op"}
+
+
+def test_drift_and_lineage_items_make_only_their_phases_agent(repo, monkeypatch):
+    _seed_ack(os.environ["MACHINE_LOCAL_PATHS_UPDATE_DOCS_WORKLIST_CACHE"])
+    _plan(repo, "held-abandoned.md", "abandoned")
+    _plan(repo, "successor.md", "in_progress", supersedes="docs/plans/held-abandoned.md")
+
+    verdicts = _run(repo, _Git(changed=["coordinator_core/x.py"]), monkeypatch)["phase_verdicts"]
+
+    assert {p for p, v in verdicts.items() if v == "agent"} == {"1-2b", "3", "7", "8"}
+    assert verdicts["11a"] == "op" and verdicts["13"] == "op"
+
+
+def test_non_source_drift_is_op_not_agent(repo, monkeypatch):
+    _seed_ack(os.environ["MACHINE_LOCAL_PATHS_UPDATE_DOCS_WORKLIST_CACHE"])
+    verdicts = _run(repo, _Git(changed=["coordinator/bin/y.py"]), monkeypatch)["phase_verdicts"]
+    assert uw.AGENT not in verdicts.values() and verdicts["3"] == "op"
+
+
+def test_phase_6_follows_the_lessons_outbox(repo, monkeypatch):
+    assert _run(repo, _Git(), monkeypatch)["phase_verdicts"]["6"] == "noop"
+    (repo / "state" / "lessons-outbox").mkdir(parents=True)
+    (repo / "state" / "lessons-outbox" / "x.yaml").write_text("a: 1\n")
+    assert _run(repo, _Git(), monkeypatch)["phase_verdicts"]["6"] == "op"
+
+
+def test_archived_handoffs_prune_all_but_newest_ten_and_counts_sum_to_total(repo, monkeypatch):
+    names = _archived(repo, 14)
+    out = _run(repo, _Git(), monkeypatch)
+    assert _counts(out) == {"total": 14, "prune": 4, "keep": 10, "indeterminate": 0}
+    assert out["decided_by_op"]["prune"]["archived_handoffs"] == names[:4]
+    assert out["decided_by_op"]["prune_totals"]["archived_handoffs"] == 4
+
+
+def test_archived_handoff_guards_keep_what_a_dependent_or_roadmap_or_referrer_needs(repo, monkeypatch):
+    names = _archived(repo, 15)
+    for i, kind in ((0, "roadmap-baton"), (1, "spinoff-roadmap")):
+        _handoff(repo, names[i], f"---\nid: h{i}\nkind: {kind}\n---\n")
+    _handoff(repo, "state/handoffs/live.md", f"---\nid: live\npredecessor: {Path(names[2]).name}\nblocked_by: [h3]\n---\n")
+    _handoff(repo, names[4], "---\nstatus: x\n---\n")
+
+    out = _run(repo, _Git(), monkeypatch)
+
+    assert out["decided_by_op"]["prune"]["archived_handoffs"] == []
+    assert _counts(out) == {"total": 15, "prune": 0, "keep": 14, "indeterminate": 1}
+
+
+def test_archived_handoffs_never_prune_when_the_corpus_pass_or_reread_budget_is_spent(repo, monkeypatch):
+    _archived(repo, 14)
+    monkeypatch.setattr(uw, "BLOCKED_PASS_START_SECS", -1.0)
+    out = _run(repo, _Git(), monkeypatch)
+    assert out["decided_by_op"]["prune"]["archived_handoffs"] == []
+    assert _counts(out) == {"total": 14, "prune": 0, "keep": 10, "indeterminate": 4}
+
+    monkeypatch.setattr(uw, "REREAD_BUDGET_SECS", -1.0)
+    spent = _run(repo, _Git(), monkeypatch)
+    assert spent["decided_by_op"]["prune"]["archived_handoffs"] == []
+
+
+def test_archived_handoff_verdict_is_cached_until_the_corpus_changes(repo, monkeypatch):
+    _archived(repo, 14)
+    _run(repo, _Git(), monkeypatch)
+    warm = _run(repo, _Git(), monkeypatch)
+    assert _counts(warm)["prune"] == 4
+    _handoff(repo, "state/handoffs/live.md", "---\nid: live\nblocked_by: [h0]\n---\n")
+    changed = _run(repo, _Git(), monkeypatch)
+    assert _counts(changed)["prune"] == 3 and _counts(changed)["keep"] == 11
+
+
+_MANIFEST = (
+    "terms:\n"
+    "  - term: chroma\n"
+    "    removed: 2026-08-18\n"
+    "    note: replaced by the embedded store\n"
+)
+
+
+def _retired_fixture(repo: Path) -> None:
+    (repo / "docs" / "wiki").mkdir(parents=True, exist_ok=True)
+    _write(repo / "docs" / "retired-terms.yaml", _MANIFEST)
+    _write(repo / "docs" / "wiki" / "host-vs-addons.md", "# Host\n\nVectors live in Chroma.\nclean line\n\nThe chroma collection is per-addon.\n")
+    _write(repo / "docs" / "wiki" / "addon-protocol.md", "# Protocol\n\n- upsert into the CHROMA store\n- chromatic aberration is unrelated\n")
+
+
+def test_retired_term_hits_reach_the_default_worklist_with_file_line_and_record(repo, monkeypatch):
+    _retired_fixture(repo)
+    git = _Git()
+
+    out = _run(repo, git, monkeypatch)
+
+    item = next(w for w in out["agent_worklist"] if w["kind"] == uw.RETIRED_TERM_KIND)
+    assert item["total"] == 3
+    assert item["paths"] == [
+        "docs/wiki/addon-protocol.md:3 chroma (removed 2026-08-18): replaced by the embedded store",
+        "docs/wiki/host-vs-addons.md:3 chroma (removed 2026-08-18): replaced by the embedded store",
+        "docs/wiki/host-vs-addons.md:6 chroma (removed 2026-08-18): replaced by the embedded store",
+    ]
+    assert {(h["file"], h["line"], h["removed"]) for h in item["hits"]} == {
+        ("docs/wiki/addon-protocol.md", 3, "2026-08-18"),
+        ("docs/wiki/host-vs-addons.md", 3, "2026-08-18"),
+        ("docs/wiki/host-vs-addons.md", 6, "2026-08-18"),
+    }
+    assert out["phase_verdicts"]["3"] == uw.AGENT
+    assert item["complete"] is True
+    assert len(git.calls) <= 1
+
+
+def test_retired_item_reports_incomplete_when_the_scan_budget_cuts_it(repo, monkeypatch):
+    _retired_fixture(repo)
+    ticks = iter([0.0, 0.0, 99.0, 99.0, 99.0, 99.0])
+    monkeypatch.setattr("coordinator_core.updatedocs.retired_terms._clock", lambda: next(ticks, 99.0))
+
+    out = _run(repo, _Git(), monkeypatch)
+
+    item = next(w for w in out["agent_worklist"] if w["kind"] == uw.RETIRED_TERM_KIND)
+    assert item["complete"] is False
+    assert "time budget" in item["why"]
+
+
+def test_no_manifest_yields_no_retired_item_and_a_malformed_one_is_reported_not_raised(repo, monkeypatch):
+    (repo / "docs" / "wiki").mkdir(parents=True)
+    _write(repo / "docs" / "wiki" / "p.md", "chroma\n")
+    clean = _run(repo, _Git(), monkeypatch)
+    assert not [w for w in clean["agent_worklist"] if w["kind"].startswith("retired_term")]
+    assert clean["phase_verdicts"]["3"] != uw.AGENT
+
+    _write(repo / "docs" / "retired-terms.yaml", "terms: nope\n")
+    bad = _run(repo, _Git(), monkeypatch)
+    item = next(w for w in bad["agent_worklist"] if w["kind"] == uw.RETIRED_MANIFEST_KIND)
+    assert "terms" in item["why"]

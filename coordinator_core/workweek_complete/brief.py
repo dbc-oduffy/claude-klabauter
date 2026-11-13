@@ -287,6 +287,7 @@ def _build_directives(
     repo_root: Optional[str] = _ROOT_UNSET,
     period: Optional[PeriodMode] = None,
     week_anchor: Optional[date] = None,
+    no_push: bool = False,
 ) -> list[dict[str, Any]]:
     """Tier-1 (mechanical, no open question) directive entries — one per
     collapsed workweek-complete.md step: 1a/1b/2/3.5/4-counts/
@@ -343,6 +344,9 @@ def _build_directives(
           finding (AC14 cardinality bound: findings are per-citation and
           unbounded, so the fan-out is bounded by doc count, not finding
           count).
+
+    `no_push` appends `--no-push` to `d_step13_archive_close`, the one directive whose leaf
+    (`workweek-complete-close archive`) pushes; the catch-up per-week archives always carry it.
     """
     doc_verify_findings_by_doc = doc_verify_findings_by_doc or {}
     _repo_root = (
@@ -469,7 +473,11 @@ def _build_directives(
         ),
         _directive("d_step6_query_completions", cli="query-completions", args=[]),
         _directive("d_step7_6_trail_scope", cli="workweek-trail-scope", args=[]),
-        _directive("d_step13_archive_close", cli="workweek-complete-close", args=[]),
+        _directive(
+            "d_step13_archive_close",
+            cli="workweek-complete-close",
+            args=["--no-push"] if no_push else [],
+        ),
         *(
             _directive(
                 _doc_verify_ack_directive_id(doc_path),
@@ -888,6 +896,7 @@ def brief(
     catch_up: bool = False,
     conclude: bool = False,
     now_local: Optional[datetime] = None,
+    no_push: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     conflict = period_flag_error(catch_up=catch_up, conclude=conclude)
     if conflict is not None:
@@ -906,7 +915,11 @@ def brief(
     )
     in_catch_up = period.mode == "catch_up"
     directives = _build_directives(
-        inputs.doc_verify_findings_by_doc, inputs.repo_root, period, week_anchor
+        inputs.doc_verify_findings_by_doc,
+        inputs.repo_root,
+        period,
+        week_anchor,
+        no_push=no_push,
     )
     all_judgment_points = _build_judgment_points(
         inputs.doc_verify_findings_by_doc,
@@ -955,6 +968,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="workweek-complete-assemble brief", add_help=False)
     parser.add_argument(CATCH_UP_FLAG, dest="catch_up", action="store_true")
     parser.add_argument(CONCLUDE_FLAG, dest="conclude", action="store_true")
+    parser.add_argument("--no-push", dest="no_push", action="store_true")
     parser.add_argument("--only", dest="only_mode", action="store_true")
     parser.add_argument("--for-date", dest="for_date", default=None)
     try:
@@ -971,7 +985,11 @@ def main(argv: list[str]) -> int:
         print(f"workweek-complete-brief: {refusal}", file=sys.stderr)
         return int(WorkweekExitCode.USAGE)
 
-    exit_code, envelope = brief(catch_up=args.catch_up, conclude=args.conclude)
+    exit_code, envelope = brief(
+        catch_up=args.catch_up,
+        conclude=args.conclude,
+        **({"no_push": True} if args.no_push else {}),
+    )
     print(json.dumps(envelope, indent=2, sort_keys=True))
     return exit_code
 

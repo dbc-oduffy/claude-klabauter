@@ -245,3 +245,129 @@ def test_batch_over_relay_cap_refuses():
     payload["batches"][0]["files"] = ["f" * SLUG_SHARD_MAX_BYTES]
     with pytest.raises(ValueError, match="batch-0001.json"):
         shard_workflow_input(payload)
+
+
+def _sized(root, rel, n):
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"x" * n)
+
+
+def _tier_manifest(files_by_batch):
+    flat = [f for b in files_by_batch for f in b]
+    return make_scope_manifest(
+        run_id="rt",
+        batches=files_by_batch,
+        wiki_dirs=["docs/wiki"],
+        wiki_slugs=[{"slug": "g", "path": "docs/wiki/g.md"}],
+        cohorts={"harvest": flat},
+    )
+
+
+def test_handler_digests_an_over_tier_batch_before_splitting(tmp_path):
+    from coordinator_core.distill.run_cost import project_run_cost
+
+    big = "# T\n" + ("prose line\n" * 20) + "```yaml plan-tasks\n" + "- id: C1\n  title: t\n  body: " + "y" * 450_000 + "\n```\n"
+    (tmp_path / "docs" / "wiki").mkdir(parents=True)
+    (tmp_path / "docs" / "wiki" / "g.md").write_text("# g\n", encoding="utf-8")
+    (tmp_path / "a.md").write_text(big, encoding="utf-8")
+    payload = _handler({"manifest": _tier_manifest([["a.md"]]), "repo_root": str(tmp_path)}, repo_root=None)
+    assert payload["batch_count"] == 1
+    assert "a.md" in payload["batches"][0]["digests"]
+    cost = project_run_cost(payload, tmp_path)
+    assert cost["max_scan_prompt_tokens"] <= 100_000
+
+
+def test_handler_splits_when_digests_are_not_enough_and_renumbers(tmp_path):
+    from coordinator_core.distill.run_cost import project_run_cost
+
+    (tmp_path / "docs" / "wiki").mkdir(parents=True)
+    (tmp_path / "docs" / "wiki" / "g.md").write_text("# g\n", encoding="utf-8")
+    for name in ("a.md", "b.md", "c.md"):  # prose-only: the digest keeps every byte
+        (tmp_path / name).write_text("prose line\n" * 15_000, encoding="utf-8")  # 165,000 B each
+    payload = _handler({"manifest": _tier_manifest([["a.md", "b.md", "c.md"]]), "repo_root": str(tmp_path)}, repo_root=None)
+    assert [b["batchId"] for b in payload["batches"]] == ["batch-1", "batch-2"]
+    assert payload["batch_count"] == 2 and payload["total_file_count"] == 3
+    assert [b["files"] for b in payload["batches"]] == [["a.md", "b.md"], ["c.md"]]
+    assert sorted(f for b in payload["batches"] for f in b["files"]) == ["a.md", "b.md", "c.md"]
+    assert payload["batches"][1]["description"] == "Batch 2 of 2 (1 files)"
+    assert validate_workflow_input(payload) == []
+    cost = project_run_cost(payload, tmp_path)
+    assert max(cost["scan_prompt_tokens_by_batch"]) <= 100_000
+
+
+def test_under_tier_batches_are_untouched(tmp_path):
+    (tmp_path / "docs" / "wiki").mkdir(parents=True)
+    (tmp_path / "docs" / "wiki" / "g.md").write_text("# g\n", encoding="utf-8")
+    (tmp_path / "a.md").write_text("small", encoding="utf-8")
+    payload = _handler({"manifest": _tier_manifest([["a.md"]]), "repo_root": str(tmp_path)}, repo_root=None)
+    assert "digests" not in payload["batches"][0] and payload["batches"][0]["batchId"] == "batch-1"
+    assert not (tmp_path / "state").exists()
+
+
+def test_split_past_max_batches_drops_the_trailing_batches_and_never_raises(tmp_path):
+    from coordinator_core.ops.distill_workflow_input import fit_scan_tier
+
+    files = [f"f{i}.md" for i in range(5)]
+    for name in files:
+        _sized(tmp_path, name, 300_000)  # one per batch: each alone is under the tier
+    payload = translate_to_workflow_input(_tier_manifest([files]), repo_root=str(tmp_path))
+    fit_scan_tier(payload, max_batches=2)
+    assert [b["files"] for b in payload["batches"]] == [files[:1], files[1:2]]
+    assert payload["batch_count"] == 2 and payload["total_file_count"] == 2
+    assert [b["batchId"] for b in payload["batches"]] == ["batch-1", "batch-2"]
+
+
+def test_split_within_max_batches_keeps_every_file(tmp_path):
+    from coordinator_core.ops.distill_workflow_input import fit_scan_tier
+
+    files = [f"f{i}.md" for i in range(5)]
+    for name in files:
+        _sized(tmp_path, name, 300_000)
+    for cap in (None, 5, 9):
+        payload = translate_to_workflow_input(_tier_manifest([files]), repo_root=str(tmp_path))
+        fit_scan_tier(payload, max_batches=cap)
+        assert payload["total_file_count"] == 5 and payload["batch_count"] == 5
+
+
+def test_a_manifest_already_over_the_cap_is_not_refused_when_nothing_splits(tmp_path):
+    (tmp_path / "docs" / "wiki").mkdir(parents=True)
+    (tmp_path / "docs" / "wiki" / "g.md").write_text("# g\n", encoding="utf-8")
+    batches = [[f"f{i}.md"] for i in range(8)]
+    payload = _handler({"manifest": _tier_manifest(batches), "repo_root": str(tmp_path)}, repo_root=None)
+    assert payload["batch_count"] == 8
+
+
+def test_fit_scan_tier_prices_guides_into_every_split_batch(tmp_path):
+    from coordinator_core.ops.distill_workflow_input import fit_scan_tier
+
+    _sized(tmp_path, "a.md", 200_000)
+    _sized(tmp_path, "b.md", 200_000)
+    _sized(tmp_path, "docs/wiki/g.md", 150_000)
+    payload = translate_to_workflow_input(_tier_manifest([["a.md", "b.md"]]), repo_root=str(tmp_path))
+    guides = [[{"slug": "g", "path": "docs/wiki/g.md"}]]
+    still_over = fit_scan_tier(payload, guides=guides)
+    assert still_over == [] and payload["batch_count"] == 2
+    # 350,000 B of file+guide is 87,500 tokens: each split batch carries the guide and fits.
+    assert all(b["relevantGuides"] for b in payload["batches"])
+
+
+def test_fit_scan_tier_lone_oversized_file_sheds_guides_and_is_reported(tmp_path):
+    from coordinator_core.ops.distill_workflow_input import fit_scan_tier
+
+    _sized(tmp_path, "huge.md", 500_000)
+    _sized(tmp_path, "docs/wiki/g.md", 1_000)
+    payload = translate_to_workflow_input(_tier_manifest([["huge.md"]]), repo_root=str(tmp_path))
+    still_over = fit_scan_tier(payload, guides=[[{"slug": "g", "path": "docs/wiki/g.md"}]])
+    assert still_over == ["batch-1"] and payload["batches"][0]["relevantGuides"] == []
+
+
+def test_handler_names_a_batch_no_split_can_bring_under_the_tier(tmp_path):
+    (tmp_path / "docs" / "wiki").mkdir(parents=True)
+    (tmp_path / "docs" / "wiki" / "g.md").write_text("# g\n", encoding="utf-8")
+    (tmp_path / "huge.md").write_text("prose line\n" * 40_000, encoding="utf-8")
+    (tmp_path / "small.md").write_text("# s\n", encoding="utf-8")
+    over = _handler({"manifest": _tier_manifest([["huge.md"]]), "repo_root": str(tmp_path)}, repo_root=None)
+    assert over["over_tier_batches"] == ["batch-1"]
+    fine = _handler({"manifest": _tier_manifest([["small.md"]]), "repo_root": str(tmp_path)}, repo_root=None)
+    assert "over_tier_batches" not in fine

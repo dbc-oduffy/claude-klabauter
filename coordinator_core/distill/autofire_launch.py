@@ -7,10 +7,9 @@ Implements `autofire_contract.Launcher`: one detached `claude -p` child running
 
 from __future__ import annotations
 
-import datetime
 from pathlib import Path
-from typing import Optional
 
+from coordinator_core.distill.autofire_contract import AutofireDisabled
 from coordinator_core.ops.workflow_fire import fire
 
 # Gitignored via `.coordinator-local/*`; `state/` is committed substrate and must not hold it.
@@ -33,15 +32,16 @@ def fire_script_path(repo_root: Path) -> Path:
     return (Path(repo_root) / FIRE_SCRIPT_REL).resolve()
 
 
-def mint_run_id(now: Optional[datetime.datetime] = None) -> str:
-    """A `distill.scope` run id: YYYY-MM-DD-HHhMM."""
-    return (now or datetime.datetime.now()).strftime("%Y-%m-%d-%Hh%M")
+# Stable id: every autofire for a repo reuses one `distill.scope` run dir.
+# Invariant: retire_prior_scope_dirs clears downstream artifacts from the reused dir before re-scope.
+AUTOFIRE_RUN_ID = "autofire"
 
 
 def launch(repo_root: Path) -> dict:
     """Fire one detached headless distill run for `repo_root`; return the fire record.
 
-    Never waits on the child. Raises whatever `fire.fire_workflow` raises; the caller
+    Never waits on the child. Raises `AutofireDisabled` when a directory stands at the marker
+    script path (the stopgap), and otherwise whatever `fire.fire_workflow` raises; the caller
     (`autofire.on_idle_tick`) records the failure and releases its claim.
 
     `expected` is deliberately not passed: `fire_workflow` reads it as the script's sha256
@@ -49,13 +49,14 @@ def launch(repo_root: Path) -> dict:
     """
     root = Path(repo_root).resolve()
     script = fire_script_path(root)
+    if script.is_dir():
+        raise AutofireDisabled(f"stopgap directory at {script}")
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(_SCRIPT_BODY, encoding="utf-8", newline="\n")
-    run_id = mint_run_id()
     return fire.fire_workflow(
         str(script),
         cwd=str(root),
-        prompt=_PROMPT.format(run_id=run_id),
-        run_id=run_id,
+        prompt=_PROMPT.format(run_id=AUTOFIRE_RUN_ID),
+        run_id=AUTOFIRE_RUN_ID,
         wait=False,
     )

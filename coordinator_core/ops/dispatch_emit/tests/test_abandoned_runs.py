@@ -251,6 +251,9 @@ def bare(tmp_path):
     _git(["init", "-q"], root)
     _git(["config", "user.email", "t@example.com"], root)
     _git(["config", "user.name", "t"], root)
+    exclude = root / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(exist_ok=True)
+    exclude.write_text(".coordinator-local/\n", encoding="utf-8")
     _write(root, "seed.txt", "seed\n")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)

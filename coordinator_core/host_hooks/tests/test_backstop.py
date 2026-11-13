@@ -61,6 +61,57 @@ def test_raising_guard_is_skipped(monkeypatch):
     assert backstop.match(_event("git push https://github.com/stranger/r.git main")) is None
 
 
+@pytest.mark.parametrize("command", [
+    "git push --force origin main",
+    "git push -f origin main",
+    "git push origin +main",
+    "git push origin +HEAD:refs/heads/main",
+    "git push --force-with-lease origin master",
+    "git -C sub push --force origin main",
+    "git add . && git push origin main --force",
+    "git push --force --all",
+])
+def test_force_push_to_main_denied(command):
+    verdict = backstop.match(_event(command))
+    assert verdict is not None and verdict["decision"] == "deny"
+    assert "force-pushes main" in verdict["reason"]
+
+
+@pytest.mark.parametrize("command", [
+    "git status",
+    "git push origin main",
+    "git push --force origin topic/x",
+    "git push origin +topic/x",
+    "git stash push -f -- file",
+    "git commit -m 'never git push --force origin main'",
+    "echo git push --force origin main",
+])
+def test_non_main_or_non_force_push_not_denied(command):
+    assert backstop.match(_event(command)) is None
+
+
+def _repo_on(tmp_path, branch):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/%s\n" % branch, encoding="utf-8")
+    return str(tmp_path)
+
+
+@pytest.mark.parametrize("command", ["git push --force", "git push -f origin HEAD"])
+def test_bare_force_push_resolves_the_current_branch(tmp_path, command):
+    assert backstop.match(_event(command, cwd=_repo_on(tmp_path, "main")))["decision"] == "deny"
+
+
+@pytest.mark.parametrize("command", ["git push --force", "git push -f origin HEAD"])
+def test_bare_force_push_on_a_topic_branch_passes(tmp_path, command):
+    assert backstop.match(_event(command, cwd=_repo_on(tmp_path, "topic"))) is None
+
+
+def test_agy_force_push_to_main_denied():
+    event = HostEvent(host="agy", event="PreToolUse", session_id="s", tool_name="run_command",
+                      tool_input={"CommandLine": "git push --force origin main"})
+    assert backstop.match(event)["decision"] == "deny"
+
+
 def test_backstop_loads_no_warm_or_ops_module():
     code = (
         "import sys\n"

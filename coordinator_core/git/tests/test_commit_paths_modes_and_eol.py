@@ -318,7 +318,7 @@ def test_lock_held_during_splice_refuses_before_anything_lands(tmp_path, monkeyp
     cached_before = _git(repo, "diff", "--cached").stdout
     index_bytes_before = (repo / ".git" / "index").read_bytes()
 
-    (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
+    (repo / ".git" / "index.lock").write_text("peer index bytes", encoding="utf-8")
 
     with pytest.raises(gcommit.CommitRefused):
         gcommit.commit_paths(repo, ["seed.txt"], "second\n")
@@ -334,7 +334,7 @@ def test_busy_lock_refusal_message_says_nothing_landed_and_retry_is_safe(tmp_pat
     monkeypatch.setattr(gcommit, "_SPLICE_LOCK_BACKOFF_SECS", ())
     repo = _repo(tmp_path)
     (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
-    (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
+    (repo / ".git" / "index.lock").write_text("peer index bytes", encoding="utf-8")
 
     with pytest.raises(gcommit.CommitRefused) as caught:
         gcommit.commit_paths(repo, ["seed.txt"], "second\n")

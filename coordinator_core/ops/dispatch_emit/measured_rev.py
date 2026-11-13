@@ -112,11 +112,18 @@ def _drop_unmeasurable(root: Path, run_id: str, rels: Sequence[str], spine: Dict
     return [r for r in kept if r not in ignored]
 
 
+def touched_record_path(repo_root: Path, run_id: str) -> Path:
+    """The run's measured-paths file, beside its `measured-rev.json`."""
+    return measured_rev_record_path(repo_root, run_id).with_name("measured-touched.json")
+
+
 def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None = None) -> Dict[str, Any]:
     """Params `run_id`, `paths`; returns a dict keyed by `MEASURED_REV_KEYS`
     (`sha`, `base_sha`, `paths`, `removed`, `blobs`, `tree`) plus `reach_dirt`: tracked
     paths the landing set's tests can read, outside the set, that differ from HEAD. Moves no ref, writes no index,
-    spawns nothing. When a measured path also carries hunks outside the run's write_baseline delta (a peer's,
+    spawns nothing. Beside the record it writes `touched_record_path`: the sorted paths measured, which
+    `clean_overlay_verify.check_verdict` ties to the landing set.
+    When a measured path also carries hunks outside the run's write_baseline delta (a peer's,
     `hunk_provenance.peer_split`) the record adds `peer_hunks` `{path: {owner, lines, split}}`, and `overlay_sha`:
     a second candidate whose split paths hold only HEAD plus the run's own hunks. The record is replaced per
     run_id and measures `paths` unioned with the run's own recorded write set (`_run_landing_paths`), so a re-run re-measures the current landing set; a
@@ -230,6 +237,8 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
         result["overlay_sha"] = overlay_sha
     record.parent.mkdir(parents=True, exist_ok=True)
     record.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+    # Trap: the record is pinned equal to the reply and the reply to `MEASURED_REV_KEYS`, so `touched` is its own file.
+    touched_record_path(root, run_id).write_text(json.dumps(rels), encoding="utf-8")
     return result
 
 

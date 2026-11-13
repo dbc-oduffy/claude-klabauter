@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Warm-engine saturation measurement: process time and spawns against the 500ms bar.
 
 Naked stdlib Python 3.11+, Windows/macOS/Linux, no bash, no git spawn. Run as

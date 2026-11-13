@@ -112,9 +112,9 @@ def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = N
         source_root = str(Path(__file__).resolve().parents[3])
         env['PYTHONPATH'] = source_root + os.pathsep + env.get('PYTHONPATH', '')
         command = [sys.executable, '-m', __name__, '--record', str(record_path)]
-        from coordinator_core.bash_guards._heavy_command_class import admit_before_spawn
+        from coordinator_core.bash_guards._heavy_command_class import admit_before_spawn_in_process
 
-        admission = admit_before_spawn('headless-workflow-worker', 0.5)
+        admission = admit_before_spawn_in_process('headless-workflow-worker', 0.5)
         if not admission.admitted:
             raise RuntimeError(f'headless Workflow worker not admitted: {admission.reason}')
         with log.open('wb') as output:
@@ -213,8 +213,82 @@ def _private_commit_receipt(private, request_id, record):
     return receipt['result']
 
 
+def _executor_root() -> Path:
+    """The engine tree this executor runs from: the source revision every engineOp is pinned to."""
+    return Path(__file__).resolve().parents[3]
+
+
+_WARM_ATTEMPT = threading.local()
+_NO_SPAWN_LOCK = threading.Lock()
+
+
+def _install_no_spawn_seam(client) -> None:
+    """Make the warm client's server spawn a recorded no-op for a headless attempt.
+
+    `try_warm_dispatch` calls `_spawn_once` on a missing endpoint; a source-pinned fire
+    uses a running server or goes cold, never starts one. Other threads pass through.
+    """
+    with _NO_SPAWN_LOCK:
+        if getattr(client._spawn_once, '_headless_no_spawn', False):
+            return
+        original = client._spawn_once
+
+        def guarded():
+            if getattr(_WARM_ATTEMPT, 'missed', None) is None:
+                original()
+            else:
+                _WARM_ATTEMPT.missed = True
+
+        guarded._headless_no_spawn = True
+        client._spawn_once = guarded
+
+
+def _warm_reply(op: str, params: dict, repo: str, artifacts: Path, timeout: float | None = None) -> dict | None:
+    """Ask the warm engine at this executor's own engine root; None means cold.
+
+    The endpoint is keyed on this root's stamp token, so a server at another revision is
+    never reached. Every outcome is written to `warm_route.json`: a fall-through is loud.
+    `timeout` bounds a compute-only op's warm read; a delivered mutation waits its own
+    mutation deadline. A None after delivery re-runs the op cold: a mutating op may repeat.
+    `unstamped_root` is a dev checkout: the cold re-run then answers -32005
+    (ipc.UNSTAMPED_ENGINE_ROOT_ERROR) itself, with this reason on disk beside it.
+    """
+    root = _executor_root()
+    note = {'op': op, 'engine_root': str(root)}
+
+    def settle(route: str, reason: str | None = None, reply: dict | None = None):
+        note.update(route=route, reason=reason)
+        (artifacts / 'warm_route.json').write_text(json.dumps(note), encoding='utf-8')
+        if reason is not None:
+            print(f'[headless] {op} routed {route}: {reason}', file=sys.stderr, flush=True)
+        return reply
+
+    try:
+        from coordinator_core.warm import client, skew
+
+        if not client.is_warm_enabled():
+            return settle('cold', 'warm_disabled')
+        try:
+            note['token'] = skew.compute_client_token(root)
+        except skew.UnstampedEngineRootError:
+            return settle('cold', 'unstamped_root')
+        _install_no_spawn_seam(client)
+        _WARM_ATTEMPT.missed = False
+        try:
+            reply = client.try_warm_dispatch({'jsonrpc': '2.0', 'id': 1, 'method': op, 'params': params,
+                                              '_origin_worktree': repo}, read_deadline_secs=timeout)
+            missed = _WARM_ATTEMPT.missed
+        finally:
+            _WARM_ATTEMPT.missed = None
+    except Exception as exc:
+        return settle('cold', f'warm_preamble_error: {type(exc).__name__}: {exc}')
+    if reply is not None:
+        return settle('warm', None, reply)
+    return settle('cold', 'no_server' if missed else 'no_warm_reply: skew, contention or closed pipe')
+
+
 def _invoke_source(op: str, params: dict, repo: str, artifacts: Path, timeout: float):
-    """Run the same source revision as this executor, with a bounded operation process."""
+    """Run the same source revision as this executor: the warm engine at its own stamp, else a bounded cold process."""
     if not isinstance(op, str) or not isinstance(params, dict):
         raise ValueError('engineOp requires an operation name and object params')
     if set(params) == {'paramsFile'}:
@@ -226,13 +300,17 @@ def _invoke_source(op: str, params: dict, repo: str, artifacts: Path, timeout: f
     artifacts.mkdir(parents=True, exist_ok=True)
     request, response = artifacts / 'request.json', artifacts / 'response.json'
     request.write_text(json.dumps({'op': op, 'params': params, 'repo_root': repo}), encoding='utf-8')
-    env = dict(os.environ, COORDINATOR_WARM='0')
-    env['PYTHONPATH'] = str(Path(__file__).resolve().parents[3])
-    with (artifacts / 'stdout.log').open('wb') as out, (artifacts / 'stderr.log').open('wb') as err:
-        subprocess.run([sys.executable, '-m', 'coordinator_core.ops.workflow_fire.cold_operation', str(request), str(response)],
-            cwd=repo, env=env, stdout=out, stderr=err, check=True, timeout=timeout,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    reply = json.loads(response.read_text(encoding='utf-8'))
+    reply = _warm_reply(op, params, repo, artifacts, timeout)
+    if reply is not None:
+        response.write_text(json.dumps(reply), encoding='utf-8')
+    else:
+        env = dict(os.environ, COORDINATOR_WARM='0')
+        env['PYTHONPATH'] = str(_executor_root())
+        with (artifacts / 'stdout.log').open('wb') as out, (artifacts / 'stderr.log').open('wb') as err:
+            subprocess.run([sys.executable, '-m', 'coordinator_core.ops.workflow_fire.cold_operation', str(request), str(response)],
+                cwd=repo, env=env, stdout=out, stderr=err, check=True, timeout=timeout,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        reply = json.loads(response.read_text(encoding='utf-8'))
     if 'error' in reply:
         raise RuntimeError(json.dumps(reply['error']))
     return reply['result']

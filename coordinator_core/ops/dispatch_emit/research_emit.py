@@ -840,7 +840,7 @@ def segments_for(
     pipeline. The scouts segment carries the slugs of `questions` (with none, or in combine `mode`,
     the one entry `question`, the bare or combined ask), the list `probes` (slugs of the questions
     with a local target; combine: `question` when any has one) and the flag `local_probe`
-    (true iff `probes` is non-empty); the unblock segment carries the deep roster, three role members plus
+    (true iff `probes` is non-empty); the unblock segment carries the unblock roster, three role members plus
     one specialist per `sources` entry that has one; the notebooklm segment carries the refs of
     the `targets` whose source is notebooklm as its notebooks. `CORPUS_DEFAULT_LISTS` is bound by
     the caller, which sees which lists each loaded manifest declares. With `repo_segments`, the

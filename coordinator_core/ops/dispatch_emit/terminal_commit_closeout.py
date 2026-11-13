@@ -421,7 +421,7 @@ def _write_usage(worktree_root: Path, session_id: Optional[str], run_id: str) ->
         return {"usage_total": None, "usage_reason": "no session_id"}
     try:
         from coordinator_core.ops.dispatch_emit.work_label import parse_work_label
-        from coordinator_core.usage import agent_usage, run_locate
+        from coordinator_core.usage import agent_usage, run_locate, run_spend
 
         session_dir = run_locate.session_dir_for(session_id)
         wf = run_locate.locate_run_dir(session_dir, run_id) if session_dir is not None else None
@@ -445,6 +445,7 @@ def _write_usage(worktree_root: Path, session_id: Optional[str], run_id: str) ->
         target = worktree_root / RECORD_DIR_ROOT / run_id / USAGE_FILE
         target.parent.mkdir(parents=True, exist_ok=True)
         replace_text(target, json.dumps(body, indent=2, sort_keys=True) + "\n")
+        run_spend.record_run(str(wf), str(worktree_root), run_id, "emit", scan=scan)
         total = scan["run_total"]
         return {"usage_total": {"total_tokens": total["total_tokens"], "usd": total["usd"],
                                 "rag_uptake": total["rag_uptake"]}}

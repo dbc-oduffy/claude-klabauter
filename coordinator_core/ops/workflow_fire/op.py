@@ -200,6 +200,7 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
     principal = require_fire_authority(
         script_path, expected, cwd=str(repo_root) if repo_root is not None else None,
         native=executor == "headless", backend=backend or ("codex" if executor == "headless" else "claude"),
+        submitted_session_id=params.get("caller_session_id"),
     )
     if executor == "headless":
         from coordinator_core.ops.workflow_fire.headless import start, validate_private_engine_config

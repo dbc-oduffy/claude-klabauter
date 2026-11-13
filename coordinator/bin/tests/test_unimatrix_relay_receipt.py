@@ -38,7 +38,7 @@ def rows(relay):
 def test_an_ok_line_appends_a_receipt_with_the_digest_and_no_text(relay, monkeypatch, capsys):
     line = b'{"from":"uds:/a","message":"secret words"}\n'
     replies = run_batch(relay, monkeypatch, capsys, [line], lambda p, l: None)
-    assert replies == [{"ok": True}]
+    assert replies == [{"ok": True, "digest": hashlib.sha256(line.rstrip(b"\n")).hexdigest()}]
     (row,) = rows(relay)
     assert row["session"] == SID
     assert row["digest"] == hashlib.sha256(line.rstrip(b"\n")).hexdigest()
@@ -58,22 +58,109 @@ def test_a_failed_or_blank_line_leaves_no_receipt(relay, monkeypatch, capsys):
 
 
 def test_no_session_id_records_nothing(relay, monkeypatch, capsys):
-    run_batch(relay, monkeypatch, capsys, [b'{"m":"x"}\n'], lambda p, l: None, session=None)
+    replies = run_batch(relay, monkeypatch, capsys, [b'{"m":"x"}\n'], lambda p, l: None, session=None)
+    assert replies == [{"ok": True}]
     assert not relay.receipts_path().exists()
 
 
-def test_a_receipt_write_fault_never_fails_the_delivery(relay, monkeypatch, capsys):
+def test_a_receipt_write_fault_fails_the_line(relay, monkeypatch, capsys):
     monkeypatch.setattr(relay, "receipts_path", lambda: relay.settings_home() / "unimatrix" / "receipts.jsonl" / "x")
     (relay.settings_home() / "unimatrix").mkdir(parents=True)
     (relay.settings_home() / "unimatrix" / "receipts.jsonl").write_text("file, not a dir")
-    assert run_batch(relay, monkeypatch, capsys, [b'{"m":"x"}\n'], lambda p, l: None) == [{"ok": True}]
+    (reply,) = run_batch(relay, monkeypatch, capsys, [b'{"m":"x"}\n'], lambda p, l: None)
+    assert reply["ok"] is False and "digest" not in reply
 
 
-def test_the_receipt_file_is_trimmed_to_the_bound(relay, monkeypatch):
-    monkeypatch.setattr(relay, "RECEIPT_KEEP", 3)
-    for i in range(5):
+def test_a_permission_error_on_trim_replace_fails_the_line_after_bounded_retries(relay, monkeypatch, capsys):
+    monkeypatch.setattr(relay, "RECEIPT_KEEP", 1)
+    calls = []
+
+    def deny(src, dst):
+        calls.append(1)
+        raise PermissionError("held open")
+
+    monkeypatch.setattr(relay.os, "replace", deny)
+    replies = run_batch(relay, monkeypatch, capsys, [b'{"m":"1"}\n'] * 4, lambda p, l: None)
+    assert [r["ok"] for r in replies[:2]] == [True, True]
+    assert replies[-1]["ok"] is False and "PermissionError" in replies[-1]["error"]
+    assert len(calls) % 4 == 0 and calls
+
+
+def test_a_transient_permission_error_on_replace_is_retried(relay, monkeypatch):
+    monkeypatch.setattr(relay, "RECEIPT_KEEP", 1)
+    real, seen = relay.os.replace, []
+
+    def flaky(src, dst):
+        seen.append(1)
+        if len(seen) == 1:
+            raise PermissionError("held open")
+        real(src, dst)
+
+    monkeypatch.setattr(relay.os, "replace", flaky)
+    for i in range(4):
         relay.record_receipt(SID, f"line{i}\n".encode(), now=1000 + i)
-    assert [r["at"] for r in rows(relay)] == [1002, 1003, 1004]
+    assert len(seen) == 2 and [r["at"] for r in rows(relay)] == [1002, 1003]
+
+
+def test_the_receipt_file_is_trimmed_to_the_bound_once_past_twice_it(relay, monkeypatch):
+    monkeypatch.setattr(relay, "RECEIPT_KEEP", 3)
+    for i in range(6):
+        relay.record_receipt(SID, f"line{i}\n".encode(), now=1000 + i)
+    assert len(rows(relay)) == 6
+    relay.record_receipt(SID, b"line6\n", now=1006)
+    assert [r["at"] for r in rows(relay)] == [1004, 1005, 1006]
+
+
+def test_concurrent_receipts_lose_no_row(relay):
+    import threading
+    n = 40
+    ts = [threading.Thread(target=relay.record_receipt, args=(SID, f"l{i}\n".encode())) for i in range(n)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert sorted(r["digest"] for r in rows(relay)) == sorted(hashlib.sha256(f"l{i}".encode()).hexdigest() for i in range(n))
+
+
+def test_a_flush_that_never_returns_raises_within_the_deadline(relay):
+    import threading
+    import time
+    release = threading.Event()
+    t0 = time.monotonic()
+    with pytest.raises(TimeoutError):
+        relay._flush_bounded(release.wait, deadline=0.05)
+    release.set()
+    assert time.monotonic() - t0 < 0.5
+
+
+def test_a_flush_that_returns_or_raises_passes_through(relay):
+    relay._flush_bounded(lambda: None)
+    with pytest.raises(OSError):
+        relay._flush_bounded(lambda: (_ for _ in ()).throw(OSError("pipe broken")))
+
+
+def test_a_never_reading_pipe_replies_ok_false_through_send_batch(relay, monkeypatch, capsys):
+    import sys as _sys
+    import threading
+    import types
+    release = threading.Event()
+    fake = types.SimpleNamespace(
+        GENERIC_READ=1, GENERIC_WRITE=2, OPEN_EXISTING=3,
+        CreateFile=lambda *a: "h", WriteFile=lambda h, line: None,
+        FlushFileBuffers=lambda h: release.wait(), CloseHandle=lambda h: None)
+    monkeypatch.setitem(_sys.modules, "win32file", fake)
+    monkeypatch.setattr(relay, "endpoint_kind", lambda platform=None: "pipe")
+    monkeypatch.setattr(relay, "local_reply_address", lambda line: line)
+    monkeypatch.setattr(relay, "load_roster", lambda: types.SimpleNamespace(authenticated_data=lambda p, l, s: l))
+    monkeypatch.setattr(relay, "PIPE_FLUSH_DEADLINE_S", 0.05)
+
+    class Stdin:
+        buffer = io.BytesIO(b'{"m":"x"}\n')
+
+    monkeypatch.setattr(relay.sys, "stdin", Stdin)
+    relay.send_batch(7, "d" * 16, "e" * 16, SID)
+    release.set()
+    (reply,) = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert reply["ok"] is False and "TimeoutError" in reply["error"]
+    assert not relay.receipts_path().exists()
 
 
 def test_receipts_mode_returns_the_sessions_rows_since_the_timestamp(relay):

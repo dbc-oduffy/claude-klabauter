@@ -13,8 +13,10 @@ assert _spec is not None and _spec.loader is not None
 scan = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(scan)
 
-if not (scan.RETIRED_CLAIMS.is_file() and scan._HOOK.is_file() and FIX_DIR.is_dir()):
-    pytest.skip("fleet-rule contract, hook script and fixtures are not shipped in this tree", allow_module_level=True)
+pytestmark = pytest.mark.skipif(
+    not (scan.RETIRED_CLAIMS.is_file() and scan._HOOK.is_file() and FIX_DIR.is_dir()),
+    reason="fleet-rule contract, hook script and fixtures are not shipped in this tree",
+)
 
 FIX = FIX_DIR
 

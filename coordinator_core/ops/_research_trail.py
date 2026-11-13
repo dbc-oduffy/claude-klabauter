@@ -84,6 +84,7 @@ def record(
         raise ValueError(f"destination not in {rc.DESTINATIONS}: {destination!r}")
     if not isinstance(value_class, str) or not safe_id(value_class):
         raise ValueError(f"value_class not a safe id: {value_class!r}")
+    tier = rc.LEGACY_TIER_ALIASES.get(tier, tier)
     if tier not in rc.TIERS:
         raise ValueError(f"tier not in {rc.TIERS}: {tier!r}")
     if sizing is not None:

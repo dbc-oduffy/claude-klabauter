@@ -231,6 +231,15 @@ def _no_receipt_deny_reason(script_name: str) -> str:
     )
 
 
+_PINNED_DISTILL_HARVEST = ("pipelines", "artifact-distillation", "distill-harvest.workflow.js")
+
+
+def _is_pinned_distill_harvest(script: Path) -> bool:
+    """True when `script` sits at the distill-harvest pin's path, fired directly with no receipt
+    by design. Path-suffix match only (parent dirs plus basename), not a content check."""
+    return script.parts[-len(_PINNED_DISTILL_HARVEST):] == _PINNED_DISTILL_HARVEST
+
+
 def _agent_type_tools(agent_type: str) -> "Optional[frozenset[str]]":
     try:
         from coordinator_core.hooks.block_workflow_unmodeled_agent import _agents_dir
@@ -362,6 +371,8 @@ def _evaluate(params: dict, env: Mapping) -> dict:
 
     receipt_path = script.with_name(script.name + ".emitted.json")
     if not receipt_path.is_file():
+        if _is_pinned_distill_harvest(script):
+            return no_advisory()
         try:
             script_text = script.read_text(encoding="utf-8", errors="replace")
         except Exception:

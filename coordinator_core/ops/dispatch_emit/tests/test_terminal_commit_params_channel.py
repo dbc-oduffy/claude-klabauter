@@ -431,3 +431,72 @@ def test_js_and_python_block_agree():
     )
     assert out.returncode == 0, out.stderr
     assert out.stdout.decode("utf-8") == ch.render_params_block(PARAMS)
+
+
+_SESSION = "sess-door-open"
+
+
+def _door_failed_open_run(tmp_path, monkeypatch, run_id="ask-1", token=None, receipt=True):
+    """A run whose spawn prompt carries the params block but whose guard writer never ran:
+    no params file, no land-params sibling, a door fail-open logged after the mint."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    claude = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude))
+    minted = run_token.mint(repo, run_id, _SCRIPT)
+    params = {
+        "run_id": run_id,
+        "run_token": token or minted,
+        "script_path": _SCRIPT,
+        "inline_review": {"verdict": "met"},
+    }
+    prompt = "Commit.\n" + ch.render_params_block(params)
+    wf = claude / "projects" / "slug" / _SESSION / "subagents" / "workflows" / "wf_1"
+    wf.mkdir(parents=True)
+    (wf / "agent-a.jsonl").write_text(json.dumps(_record(prompt)) + "\n", encoding="utf-8")
+    if receipt:
+        script = repo / "scratch" / "warp" / f"{run_id}.workflow.mjs"
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.with_name(script.name + ".emitted.json").write_text(
+            json.dumps({"session_id": _SESSION}), encoding="utf-8"
+        )
+    return repo, params
+
+
+def test_recover_params_rederives_from_the_spawn_prompt_when_the_door_failed_open(tmp_path, monkeypatch):
+    repo, params = _door_failed_open_run(tmp_path, monkeypatch)
+    target = ch.params_path(repo, "ask-1")
+    assert not target.exists() and not ch.land_params_path(repo, "ask-1").exists()
+    recovered = ch.recover_params(repo, "ask-1")
+    assert recovered == target
+    assert json.loads(target.read_text(encoding="utf-8")) == params
+    assert ch.recorded_land_params(repo, "ask-1") == params
+
+
+def test_cli_retry_recovers_and_never_reports_the_file_unwritten(tmp_path, monkeypatch):
+    from coordinator_core.invoke import __main__ as invoke_main
+
+    repo, _ = _door_failed_open_run(tmp_path, monkeypatch)
+    _, stderr, _ = invoke_main._dispatch_argv(
+        ["dispatch.land_run", "--params-file", str(ch.params_path(repo, "ask-1"))], str(repo), allow_warm=False
+    )
+    assert "recovered it" in stderr
+    assert "was never written" not in stderr
+
+
+def test_spawn_recovery_refuses_a_token_the_run_never_minted(tmp_path, monkeypatch):
+    repo, _ = _door_failed_open_run(tmp_path, monkeypatch, token="f" * 32)
+    assert ch.recover_params(repo, "ask-1") is None
+    assert not ch.params_path(repo, "ask-1").exists()
+
+
+def test_spawn_recovery_needs_the_runs_emission_receipt(tmp_path, monkeypatch):
+    repo, _ = _door_failed_open_run(tmp_path, monkeypatch, receipt=False)
+    assert ch.recover_params(repo, "ask-1") is None
+
+
+def test_spawn_recovery_ignores_another_runs_prompt(tmp_path, monkeypatch):
+    repo, _ = _door_failed_open_run(tmp_path, monkeypatch)
+    assert ch.recover_params(repo, "ask-2") is None

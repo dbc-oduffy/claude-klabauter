@@ -5,7 +5,7 @@ import json
 import sys
 
 from coordinator_core.ops.dispatch_emit import emit
-from coordinator_core.ops.dispatch_emit import test_interpreter as ti
+from coordinator_core.ops.dispatch_emit import interpreter_pin as ti
 
 
 def _repo(tmp_path, **keys):

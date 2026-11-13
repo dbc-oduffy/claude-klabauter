@@ -2161,6 +2161,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md § D2
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "changelog.compute_day_fields": OpClass.COMPUTE_ONLY,
+    # changelog.daily_log — COMPUTE_ONLY: ranked plans completed in a window, from the
+    # example-retrieval-repo plans_completed view or a git-free docs/plans scan; reads only, no model call, never writes.
+    "changelog.daily_log": OpClass.COMPUTE_ONLY,
     # changelog.upsert_reviewed — MUTATING: surgical single-field upsert of the
     # **Reviewed:** line(s) inside state/week-changelog/{date}.md's `## {date} — {machine}`
     # section. Curation-preserving counterpart to changelog.append_day (which recomposes
@@ -5076,6 +5079,13 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      One subprocess spawn (the git log read itself), no network, no cache
     #      write.
     "freshness.commit_delta": OpClass.COMPUTE_ONLY,
+    # code_intel.freshness — COMPUTE_ONLY: DR-208 five-question affirmation: 1 No (returns the
+    # changed-file re-extract and the queue list; the detached batch job is the only writer)
+    # 2 No 3 No 4 No 5 No.
+    "code_intel.freshness": OpClass.COMPUTE_ONLY,
+    # code_intel.workstate_index — MUTATING: writes state/symbol-knowledge/workstate-index.json
+    # (DR-208 Q1 Yes, Q3 Yes, Q5 Yes); never writes into rag's store.
+    "code_intel.workstate_index": OpClass.MUTATING,
     # hooks.cater_subagent_start — MUTATING: composes the SubagentStart
     # additionalContext catering string and, in doing so, writes to disk.
     # coordinator_core/hooks/cater_subagent_start.py::_resolve_sidecar_leg calls

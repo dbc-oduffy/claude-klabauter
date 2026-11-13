@@ -135,7 +135,7 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "plan-prep-repair", "edits the refused plan in place against the gate's findings", _TIER_AUTHORS_PLAN),
     _earns("ask", "plan-patch", "applies a pulled plan's mechanical readiness repairs in place when its review did not find it unsaveable; no re-plan, no second blitz"),
     _earns("ask", "work:", "executes one row"),
-    _earns("ask", "verify:", "runs a row's or a wave's scoped tests and reports"),
+    _earns("ask", "verify:", "runs a row's or a wave's scoped tests and reports; composed only on the XS arm or with no declared test targets, where no terminal verify-tests leg runs"),
     _earns(
         "ask", "verify",
         "takes the verify-tests leg's result inline, writes the declared docs and note, then rules the criterion and the "

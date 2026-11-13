@@ -172,6 +172,12 @@ function _pathRunId(p) {
 }
 
 __TWIN_CHECK_JS__
+// The staged twin is written under the run id in the handle's own manifest path (state/warp/<run id>/manifest.json), the one source the writer and this reader share; a started-script stem that names the same run family without its stamp never stands in for it.
+function _writerRunId(handle, stem) {
+  const p = (handle !== null && typeof handle === 'object') ? handle.path : undefined;
+  const m = typeof p === 'string' ? /^(?:state|scratch)\/warp\/([A-Za-z0-9][A-Za-z0-9._-]*)\/manifest\.json$/.exec(p) : null;
+  return (m && _runFamily(m[1]) === _runFamily(stem)) ? m[1] : stem;
+}
 // The only foreign run id accepted: the one this emit minted as the redirect for this child's halted run.
 function _isOwnRedirect(child, e) {
   const r = e.__REDIRECT_KEY__;
@@ -292,7 +298,7 @@ async function _startLoopRun(child, firstPath, state) {
     if (!base.endsWith(RUN_SCRIPT_SUFFIX) || base.length === RUN_SCRIPT_SUFFIX.length || base.indexOf('.staged-') !== -1) {
       return { run_id: child.run_id, status: 'failed', error: 'stage resume path is not a run script: ' + firstPath };
     }
-    const stem = base.slice(0, base.length - RUN_SCRIPT_SUFFIX.length);
+    const stem = _writerRunId(handle, base.slice(0, base.length - RUN_SCRIPT_SUFFIX.length));
     const named = _replyTwinRel(pending, stem);
     if (named === false) {
       return { run_id: child.run_id, status: 'failed', error: 'stage_pending twin_path is not a staged twin of this run: ' + String(pending.twin_path) };

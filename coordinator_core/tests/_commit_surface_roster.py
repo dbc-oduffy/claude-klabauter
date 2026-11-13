@@ -184,7 +184,7 @@ EXCLUDED_MODULES = {
         "plan's scope:.",
     "coordinator_core/ops/ceremony/snapshot_diff_and_head.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
-    "coordinator_core/ops/ceremony/update_docs_scan.py":
+    "coordinator_core/ops/ceremony/update_docs_worklist.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/wsc_disposition.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",

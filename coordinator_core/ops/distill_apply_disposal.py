@@ -130,6 +130,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from coordinator_core import run_watermark as _run_watermark
+from coordinator_core.ops.distill_scope import WATERMARK_KIND
 from coordinator_core.git.git_state import head_sha as _read_head_sha
 from coordinator_core.dag import _parse_inline_list, _read_meta, handoff_edges, resolve_target
 from coordinator_core.distill import log_append as _log_append
@@ -842,8 +844,12 @@ async def _delete_tracked_and_append_log(
     subject: str,
     denorm_writes: list[dict[str, str]] | None = None,
     confirmed_untracked_child_paths: set[str] | None = None,
+    watermark: tuple[Path, bytes | None] | None = None,
 ) -> tuple[list[str], list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
-    """git-rm every tracked_paths entry FIRST, THEN gate `denorm_writes` on
+    """``watermark`` is (promoted file, its prior bytes): it joins the commit pathspec and is
+    restored to the prior bytes on every path that does not commit.
+
+    git-rm every tracked_paths entry FIRST, THEN gate `denorm_writes` on
     the ACTUAL per-child outcome of that rm loop (plus the caller-confirmed
     untracked-child outcomes in `confirmed_untracked_child_paths`) before any
     parent file is touched — the fix for the defect named in the module
@@ -880,12 +886,22 @@ async def _delete_tracked_and_append_log(
     """
     denorm_writes = denorm_writes or []
     confirmed_untracked_child_paths = confirmed_untracked_child_paths or set()
-    if not tracked_paths and not log_rows and not denorm_writes:
+    if not tracked_paths and not log_rows and not denorm_writes and watermark is None:
         return [], [], [], []
+
+    def restore_watermark() -> None:
+        if watermark is None:
+            return
+        path, prior = watermark
+        if prior is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(prior)
 
     idx_fd, idx_path = tempfile.mkstemp(prefix="distill-apply-idx-", dir=managed_tempdir(worktree_root))
     os.close(idx_fd)
 
+    committed = False
     try:
         base_env = _make_git_env(idx_path=idx_path)
 
@@ -900,6 +916,7 @@ async def _delete_tracked_and_append_log(
         if rc != 0:
             err_msg = err.decode(errors="replace").strip()
             _LOG.error("distill.apply_disposal: git read-tree HEAD failed: %s", err_msg)
+            restore_watermark()
             return [], [], [], [
                 {"path": rel_id(p, worktree_root), "reason": f"index-init-failed: {err_msg}"}
                 for p in tracked_paths
@@ -1065,6 +1082,7 @@ async def _delete_tracked_and_append_log(
                 # it is restored here explicitly (do not assume log_path is
                 # already tracked — restore from captured pre-append state
                 # either way).
+                restore_watermark()
                 if log_existed_before:
                     log_path.write_bytes(pre_append_content)
                 else:
@@ -1096,8 +1114,23 @@ async def _delete_tracked_and_append_log(
         if log_touched:
             commit_paths.append(str(log_path))
 
-        if not commit_paths:
+        wm_staged: list[Path] = []
+        if watermark is not None:
+            rc, _out, err = await _run_git(
+                "add", "--", str(watermark[0]), cwd=worktree_root, env=base_env
+            )
+            if rc == 0:
+                wm_staged.append(watermark[0])
+            else:
+                _LOG.error(
+                    "distill.apply_disposal: git add watermark failed: %s",
+                    err.decode(errors="replace").strip(),
+                )
+                restore_watermark()
+
+        if not commit_paths and not wm_staged:
             return [], denorm_written, denorm_write_failed, failed
+        commit_pathspec = commit_paths + [str(p) for p in wm_staged]
 
         current_head = _read_head_sha(worktree_root, fresh=True)
         if base_head is not None and current_head != base_head:
@@ -1108,7 +1141,7 @@ async def _delete_tracked_and_append_log(
             ).encode()
         else:
             rc, _out, err = await _run_git(
-                "-c", "commit.gpgsign=false", "commit", "-m", subject, "--", *commit_paths,
+                "-c", "commit.gpgsign=false", "commit", "-m", subject, "--", *commit_pathspec,
                 cwd=worktree_root, env=base_env,
             )
         if rc != 0:
@@ -1116,6 +1149,7 @@ async def _delete_tracked_and_append_log(
             _LOG.error("distill.apply_disposal: git commit failed: %s", err_msg)
             main_env_restore = _make_git_env()
             revert_failed_paths: set[str] = set()
+            restore_watermark()
             for p_str in commit_paths:
                 revert_rc, _revert_out, revert_err = await _run_git(
                     "checkout", "HEAD", "--", p_str, cwd=worktree_root, env=main_env_restore
@@ -1147,6 +1181,8 @@ async def _delete_tracked_and_append_log(
             # untracked-parent-only and unaffected by this commit failure —
             # no git operation backs those writes, so they remain landed.
             return [], denorm_written, denorm_write_failed, failed + commit_failed
+
+        committed = True
 
         # Non-fatal index resync (mirrors rm_and_commit's own posture).
         # MUST run before the claim-release call below: the commit just
@@ -1208,7 +1244,7 @@ async def _delete_tracked_and_append_log(
         resync_argv: list[str] = ["git", "update-index"]
         if reaped:
             resync_argv += ["--remove"] + [str(p) for p in reaped]
-        resync_add_paths: list[Path] = list(staged_denorm)
+        resync_add_paths: list[Path] = list(staged_denorm) + wm_staged
         if log_touched:
             resync_add_paths.append(log_path)
         if resync_add_paths:
@@ -1259,7 +1295,7 @@ async def _delete_tracked_and_append_log(
         await asyncio.to_thread(
             session_scope.release_committed_claims_or_retain,
             worktree_root,
-            (rel_id(Path(p), worktree_root) for p in commit_paths),
+            (rel_id(Path(p), worktree_root) for p in commit_pathspec),
             session_core.resolve_session_id(str(worktree_root)),
             "distill.apply_disposal",
         )
@@ -1271,6 +1307,8 @@ async def _delete_tracked_and_append_log(
             failed,
         )
     finally:
+        if not committed:
+            restore_watermark()
         try:
             os.unlink(idx_path)
         except OSError:
@@ -1422,11 +1460,20 @@ async def apply_disposal_manifest(
         f"distill: apply disposal for run {manifest['run_id']} "
         f"({len(tracked_paths)} tracked file(s))"
     )
+    wm_target = _run_watermark.watermark_path(worktree_root, WATERMARK_KIND)
+    wm_prior = wm_target.read_bytes() if wm_target.exists() else None
+    promoted = _run_watermark.promote(
+        worktree_root, manifest_path_for_run(worktree_root, manifest["run_id"]).parent, WATERMARK_KIND
+    )
+    watermark = (
+        (promoted, wm_prior) if promoted is not None and promoted.read_bytes() != wm_prior else None
+    )
     committed_ids, denorm_written, denorm_write_failed, delete_failed = (
         await _delete_tracked_and_append_log(
             worktree_root, tracked_paths, log_path, log_rows, subject,
             denorm_writes=candidate_denorm_writes,
             confirmed_untracked_child_paths=confirmed_untracked_child_paths,
+            watermark=watermark,
         )
     )
     failed.extend(denorm_write_failed)

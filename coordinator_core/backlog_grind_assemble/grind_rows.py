@@ -132,7 +132,10 @@ from typing import Any, Optional
 import yaml
 
 from coordinator_core.backlog_grind_assemble.grind_undo import cmd_undo
-from coordinator_core.backlog_grind_assemble.legacy_row_normalize import normalize_legacy_row
+from coordinator_core.backlog_grind_assemble.legacy_row_normalize import (
+    normalize_legacy_row,
+    owning_repo_default,
+)
 from coordinator_core.contract.grind_vocab import (
     CLOSURE_CLOSING_BRANCHES,
     LEDGER_LINE_FIELDS,
@@ -663,7 +666,11 @@ def cmd_close(rest: list[str]) -> int:
         )
 
     fm_dict = schema_validate.parse_yaml(fm_text)
-    normalized = normalize_legacy_row(fm_dict, schema_obj) if isinstance(fm_dict, dict) else None
+    normalized = (
+        normalize_legacy_row(fm_dict, schema_obj, owning_repo_default(repo_root.resolve(), flags["row"]))
+        if isinstance(fm_dict, dict)
+        else None
+    )
     result = schema_validate.validate_frontmatter_obj(normalized.row if normalized else fm_dict, schema_obj)
     if not (isinstance(result, dict) and result.get("ok")):
         hand_back = f" ({normalized.handback})" if normalized and normalized.handback else ""
@@ -946,7 +953,8 @@ def _land_set(
 ) -> "_LandSet | str":
     """Which of the run's writes still differ from HEAD. Candidates are the paths THIS
     session claims under `roots` minus `baseline_dirty` (claims that predate the run), the
-    `declared` paths under `roots`. `roots=None` is the profile's ledger dir alone. Returns a
+    `declared` paths under `roots`, and the unclaimed `.verify.md` sibling of any `.done.md`
+    among them. `roots=None` is the profile's ledger dir alone. Returns a
     refusal string when HEAD cannot be read.
     Never a directory pathspec; a path a live peer holds is withheld. Zero git spawns."""
     from coordinator_core.git.git_state import head_sha, read_tree_spine
@@ -964,6 +972,10 @@ def _land_set(
         if under_roots(p, roots) and p not in baseline_dirty
     }
     held.update(p for p in declared if under_roots(p, roots))
+    for done in [p for p in held if p.endswith(".done.md")]:
+        verify = done[: -len(".done.md")] + ".verify.md"
+        if verify not in baseline_dirty and (repo_root / verify).is_file():
+            held.add(verify)
     candidates = sorted(p for p in held if not (repo_root / p).is_dir())
     if not candidates:
         return result
@@ -1042,7 +1054,7 @@ def _run_usage(repo_root: Path, run_id: str) -> "dict[str, Any] | None":
     Never raises: usage is evidence beside spend, not a gate on the record."""
     try:
         from coordinator_core.session import core
-        from coordinator_core.usage import run_locate
+        from coordinator_core.usage import run_locate, run_spend
         from coordinator_core.usage.agent_usage import scan_run
 
         sid = core.resolve_session_id(str(repo_root))
@@ -1060,6 +1072,7 @@ def _run_usage(repo_root: Path, run_id: str) -> "dict[str, Any] | None":
         unsettled = run_locate._unsettled_agent_ids(run_dir / "journal.jsonl")
         usage["as_of"] = "run-record"
         usage["unsettled"] = sorted(unsettled)
+        run_spend.record_run(str(run_dir), str(repo_root), run_id, "backlog-grind", scan=usage)
         return usage
     except Exception as exc:  # noqa: BLE001 -- the record write must still happen
         return {"reason": f"usage scan failed: {type(exc).__name__}: {exc}"}

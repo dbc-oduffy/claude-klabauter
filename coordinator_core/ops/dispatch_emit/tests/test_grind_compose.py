@@ -3240,3 +3240,51 @@ def test_lock_keys_hold_shared_write_keys_on_the_withlock_path():
     assert "const SHARED_WRITE_KEYS = [];" in _compose()
     assert "async function _entangle" in script
     assert script.count("withLock(lockKeys, async () => _fixCall(row))") == 1
+
+
+def _sized_manifest(tmp_path, sizes_by_key):
+    """Rows whose files are real, `sizes_by_key` = {key: [bytes, ...]}."""
+    entries = []
+    for key, sizes in sizes_by_key.items():
+        for n, size in enumerate(sizes):
+            rel = f"q/{key}-r{n}.yaml"
+            (tmp_path / "q").mkdir(exist_ok=True)
+            (tmp_path / rel).write_bytes(b"x" * size)
+            entries.append(ManifestEntry(row_id=f"{key}-r{n}", path=rel, digest=f"{len(entries):064x}", batch_key=key))
+    return Manifest(entries=tuple(entries), batch_sizes={}, source=None, digest="d")
+
+
+def test_group_into_batches_splits_a_batch_over_the_tier_and_keeps_one_under_it(tmp_path):
+    from coordinator_core.distill.prompt_tier import LONG_PROMPT_TIER_TOKENS, estimate_tokens
+
+    big = LONG_PROMPT_TIER_TOKENS * 4 // 2 + 400
+    manifest = _sized_manifest(tmp_path, {"A": [big, big, big, big], "B": [100, 100, 100, 100]})
+    batches = dict(gc._group_into_batches(manifest, {"batch_size": 4}, repo_root=tmp_path))
+    assert "B-b0" in batches and len(batches["B-b0"]) == 4
+    assert "A-b0" not in batches
+    split = {bid: rows for bid, rows in batches.items() if bid.startswith("A-b0-s")}
+    assert sorted(split) == ["A-b0-s0", "A-b0-s1", "A-b0-s2", "A-b0-s3"]
+    assert all(":" not in bid for bid in batches)
+    for rows in split.values():
+        assert sum(estimate_tokens(gc._entry_bytes(e, tmp_path)) for e in rows) <= LONG_PROMPT_TIER_TOKENS
+    assert sorted(e.row_id for rows in split.values() for e in rows) == [f"A-r{n}" for n in range(4)]
+
+
+def test_group_into_batches_without_repo_root_is_unchanged_by_row_size(tmp_path):
+    manifest = _sized_manifest(tmp_path, {"A": [800_000] * 4})
+    assert [bid for bid, _ in gc._group_into_batches(manifest, {"batch_size": 4})] == ["A-b0"]
+
+
+def test_group_into_batches_bounds_a_packed_batch_and_keeps_a_lone_oversize_row(tmp_path):
+    from coordinator_core.distill.prompt_tier import LONG_PROMPT_TIER_TOKENS, estimate_tokens
+
+    half = LONG_PROMPT_TIER_TOKENS * 4 // 2 + 400
+    from coordinator_core.ops.dispatch_emit.tests.test_group_into_batches_packing import _profile
+
+    manifest = _sized_manifest(tmp_path, {"K0": [half], "K1": [half], "K2": [LONG_PROMPT_TIER_TOKENS * 4 * 2]})
+    batches = gc._group_into_batches(manifest, {"batch_size": 4}, _profile(), repo_root=tmp_path)
+    assert sorted(e.row_id for _, rows in batches for e in rows) == ["K0-r0", "K1-r0", "K2-r0"]
+    assert any(bid.startswith("@packed-b0-s") for bid, _ in batches)
+    for bid, rows in batches:
+        total = sum(estimate_tokens(gc._entry_bytes(e, tmp_path)) for e in rows)
+        assert total <= LONG_PROMPT_TIER_TOKENS or len(rows) == 1

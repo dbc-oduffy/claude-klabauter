@@ -11,19 +11,31 @@ from __future__ import annotations
 
 from typing import Any
 
+from coordinator_core.distill.prompt_tier import LONG_PROMPT_TIER_TOKENS
+
 LABEL = "estimate"
-PHASES = ("census", "analysis", "synthesis")
 
 CENSUS_AGENT_BASE_TOKENS = 6_000
 TOKENS_PER_CENSUS_FILE = 30
 CENSUS_REMEASURE_TOKENS = 8_000
-ANALYSIS_TOKENS_PER_SYSTEM = 120_000
+ANALYSIS_TOKENS_PER_SYSTEM = LONG_PROMPT_TIER_TOKENS
 SYNTHESIS_SHARD_TOKENS = 40_000
 SYNTHESIS_CROSS_SYSTEM_TOKENS = 60_000
 
 
-def estimate(file_count: int, bucket_count: int, *, census_skipped: bool) -> dict[str, Any]:
+def estimate(
+    file_count: int,
+    bucket_count: int,
+    *,
+    census_skipped: bool,
+    projected_tokens_by_system: dict[str, int] | None = None,
+) -> dict[str, Any]:
     """Estimate agents and tokens for census, analysis and synthesis of one refresh.
+
+    `projected_tokens_by_system` maps each system to its projected analysis prompt tokens (the
+    `projected_tokens` of tree_census buckets): a system projects ceil(p/tier) agents (at least
+    one) and p tokens, each agent at most the long-prompt tier. None assumes every system sits
+    at the tier ceiling, one agent each. `per_agent_tokens` is the largest single analysis prompt.
 
     `census_skipped` is the consume gate's decision: an ok census-shaped payload means the workflow
     dispatches no census agents. Otherwise census costs one agent per bucket, each paying a base
@@ -48,9 +60,24 @@ def estimate(file_count: int, bucket_count: int, *, census_skipped: bool) -> dic
             "agents": bucket_count + 1,
             "tokens": bucket_count * SYNTHESIS_SHARD_TOKENS + SYNTHESIS_CROSS_SYSTEM_TOKENS,
         }
+    if bucket_count == 0:
+        analysis = {"agents": 0, "tokens": 0, "per_agent_tokens": 0}
+    elif projected_tokens_by_system is None:
+        analysis = {
+            "agents": bucket_count,
+            "tokens": bucket_count * ANALYSIS_TOKENS_PER_SYSTEM,
+            "per_agent_tokens": ANALYSIS_TOKENS_PER_SYSTEM,
+        }
+    else:
+        projected = [max(0, int(p)) for p in projected_tokens_by_system.values()]
+        analysis = {
+            "agents": sum(max(1, -(-p // LONG_PROMPT_TIER_TOKENS)) for p in projected),
+            "tokens": sum(projected),
+            "per_agent_tokens": min(LONG_PROMPT_TIER_TOKENS, max(projected, default=0)),
+        }
     phases = {
         "census": census,
-        "analysis": {"agents": bucket_count, "tokens": bucket_count * ANALYSIS_TOKENS_PER_SYSTEM},
+        "analysis": analysis,
         "synthesis": synthesis,
     }
     return {

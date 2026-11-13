@@ -32,9 +32,13 @@ guides by term overlap with the batch's files, each with a heading outline); the
 the guides and batch files for it, and translate_to_workflow_input stays pure over the list it is
 handed.
 
-Negative-spec: performs no scan, no cohort computation, no disk write of
-its own (translation over a caller-supplied manifest; the handler's only read is the guide
-index above), no LLM call, and does NOT add the consumer-side integrity assertion itself —
+Each batch's scan prompt (files or digests, plus listed guides) is held under the long-prompt tier
+(distill.prompt_tier): ``fit_scan_tier`` digests an over-tier batch, then splits it, never past the
+admission batch cap. The handler's one disk write is those digests, and only when a batch is over tier.
+
+Negative-spec: performs no scan, no cohort computation, no other disk write
+(translation over a caller-supplied manifest; the handler's reads are the guide
+index above and file sizes), no LLM call, and does NOT add the consumer-side integrity assertion itself —
 that assertion is DoE's distill-harvest.workflow.js's own change to make
 against this op's batch_count/total_file_count fields; this op only makes the
 declared counts available to be checked against.
@@ -47,18 +51,24 @@ inputfile-silent-truncation.md
 from __future__ import annotations
 
 import json
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 from coordinator_core.distill.guide_index import relevant_guides_for_batches
 from coordinator_core.distill.manifest_schema import check_schema_version
+from coordinator_core.distill.prompt_tier import LONG_PROMPT_TIER_TOKENS, estimate_tokens, over_tier
+from coordinator_core.distill.scan_digest import write_digests
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.distill_scope import wiki_slugs_as_dict
+from coordinator_core.ops.distill_scope import RUN_DIR_REL, wiki_slugs_as_dict
 
 __all__ = [
     "CONSUMER_TOP_LEVEL_FIELDS",
     "CONSUMER_BATCH_FIELDS",
     "translate_to_workflow_input",
     "validate_workflow_input",
+    "fit_scan_tier",
+    "attach_relevant_guides",
+    "guide_paths",
 ]
 
 #: Required top-level fields of the CONSUMER (Workflow script) input shape —
@@ -145,11 +155,132 @@ def _fit_guides(batch: dict[str, Any], guides: list[dict[str, Any]]) -> list[dic
     return path_only if len(path_only) > len(full) else full
 
 
-def attach_relevant_guides(payload: dict[str, Any], guides: list[list[dict[str, Any]]]) -> None:
+def attach_relevant_guides(
+    payload: dict[str, Any], guides: list[list[dict[str, Any]]], *, max_batches: int | None = None
+) -> list[str]:
     """Set each batch's ``relevantGuides`` from ``guides`` (one best-first list per batch), fitted
-    to the relay cap. Call after digests are attached: they share the batch file's budget."""
-    for batch, batch_guides in zip(payload["batches"], guides, strict=True):
-        batch["relevantGuides"] = _fit_guides(batch, batch_guides)
+    to the relay cap, after sizing every scan prompt under the long-prompt tier (``fit_scan_tier``).
+    Call after digests are attached: they share the batch file's budget and the tier projection.
+    Returns the batchIds still over the tier (single files no split can shrink)."""
+    return fit_scan_tier(payload, guides=guides, max_batches=max_batches)
+
+
+def guide_paths(batch: dict[str, Any], all_guides: list[str]) -> list[str]:
+    """Guide paths one scan agent is told to open: the batch's ``relevantGuides``, else every wiki guide."""
+    listed = batch.get("relevantGuides")
+    if listed is None:
+        return all_guides
+    return sorted({g["path"] if isinstance(g, dict) else g for g in listed})
+
+
+def _stat_size(root: Path, rel: str, missing: list[str]) -> int:
+    try:
+        return (root / rel).stat().st_size
+    except OSError:
+        missing.append(rel)
+        return 0
+
+
+def _pack_files(files: list[str], cost: dict[str, int], overhead: int) -> list[list[str]]:
+    """Consecutive groups of `files` whose prompt (`overhead` guide bytes plus file bytes) stays
+    within the tier; a file over the tier alone still gets a group of its own."""
+    groups: list[list[str]] = []
+    current: list[str] = []
+    used = overhead
+    for rel in files:
+        if current and over_tier(estimate_tokens(used + cost[rel])):
+            groups.append(current)
+            current, used = [], overhead
+        current.append(rel)
+        used += cost[rel]
+    if current:
+        groups.append(current)
+    return groups
+
+
+def fit_scan_tier(
+    payload: dict[str, Any],
+    *,
+    guides: list[list[dict[str, Any]]] | None = None,
+    digest_source: Callable[[list[str]], dict[str, str]] | None = None,
+    max_batches: int | None = None,
+) -> list[str]:
+    """Size every batch's scan prompt (file bytes, or digest bytes, plus listed guide bytes) under
+    LONG_PROMPT_TIER_TOKENS, in place. An over-tier batch first takes digests for its undigested
+    files (``digest_source(files) -> {file: digest path}``), then, if still over, is split into
+    consecutive batches renumbered ``batch-N``; ``batch_count`` and ``total_file_count``
+    follow the files kept. A split that lifts the batch count past ``max_batches`` drops the
+    trailing batches from the payload (the caller defers their files); never raises. With
+    ``guides`` (one best-first list per original batch) each resulting batch's ``relevantGuides``
+    is refitted to the relay cap; a lone file too large for the tier sheds its guides.
+    Returns the batchIds still over the tier (a file larger than the tier alone)."""
+    batches: list[dict[str, Any]] = payload["batches"]
+    if guides is not None and len(guides) != len(batches):
+        raise ValueError(f"guides has {len(guides)} lists for {len(batches)} batches")
+    root = Path(payload["repoRoot"])
+    all_guides = sorted(set(payload["wikiSlugs"].values()))
+    missing: list[str] = []
+    sizes: dict[str, int] = {}
+
+    def size(rel: str) -> int:
+        if rel not in sizes:
+            sizes[rel] = _stat_size(root, rel, missing)
+        return sizes[rel]
+
+    produced: list[tuple[dict[str, Any], list[dict[str, Any]] | None]] = []
+    split_any = False
+    for pos, batch in enumerate(batches):
+        full_guides = guides[pos] if guides is not None else None
+        probe = {**batch, "relevantGuides": full_guides} if full_guides is not None else batch
+        overhead = sum(size(g) for g in guide_paths(probe, all_guides))
+        digests = dict(batch.get("digests") or {})
+
+        def cost_of(files: list[str]) -> dict[str, int]:
+            return {rel: size(digests.get(rel, rel)) for rel in files}
+
+        cost = cost_of(batch["files"])
+        if over_tier(estimate_tokens(overhead + sum(cost.values()))) and digest_source is not None:
+            fresh = [f for f in batch["files"] if f not in digests]
+            if fresh:
+                digests.update(digest_source(fresh))
+                cost = cost_of(batch["files"])
+        if not over_tier(estimate_tokens(overhead + sum(cost.values()))):
+            groups = [list(batch["files"])]
+        else:
+            groups = _pack_files(batch["files"], cost, overhead)
+            if any(len(g) == 1 and over_tier(estimate_tokens(overhead + cost[g[0]])) for g in groups):
+                # A lone over-tier file: guides are a hint and yield before the file does.
+                groups = _pack_files(batch["files"], cost, 0)
+                overhead = 0
+                full_guides = []
+        split_any = split_any or len(groups) > 1
+        for group in groups:
+            piece = {**batch, "files": group, "formatHints": dict(batch["formatHints"])}
+            mapped = {f: digests[f] for f in group if f in digests}
+            if mapped:
+                piece["digests"] = mapped
+            produced.append((piece, full_guides))
+
+    if split_any and max_batches is not None:
+        produced = produced[: max(max_batches, 1)]
+    total = len(produced)
+    still_over: list[str] = []
+    out: list[dict[str, Any]] = []
+    for n, (piece, full_guides) in enumerate(produced, start=1):
+        if split_any:
+            piece["batchId"] = f"batch-{n}"
+            piece["description"] = f"Batch {n} of {total} ({len(piece['files'])} files)"
+        if full_guides is not None:
+            piece["relevantGuides"] = _fit_guides(piece, full_guides)
+        spent = sum(size(piece["digests"].get(f, f) if "digests" in piece else f) for f in piece["files"])
+        spent += sum(size(g) for g in guide_paths(piece, all_guides))
+        if over_tier(estimate_tokens(spent)):
+            still_over.append(piece["batchId"])
+        out.append(piece)
+    payload["batches"] = out
+    payload["batch_count"] = len(out)
+    payload["total_file_count"] = sum(len(b["files"]) for b in out)
+    return still_over
 
 
 def _slug_shards(slugs: dict[str, Any]) -> list[dict[str, Any]]:
@@ -291,6 +422,11 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
             root via distill.scope's own dispatch).
         format_hints (dict, optional) — applied uniformly to every batch.
 
+    Batches whose scan prompt projects over the long-prompt tier are digested, then split
+    (``fit_scan_tier``); the returned ``batch_count`` is over the resulting batches. Batches a split
+    cannot bring under the tier (a lone file larger than it) are named in ``over_tier_batches``,
+    present only when non-empty.
+
     The ``repo_root`` HANDLER ARG (engine-injected, per dispatch_message's
     calling convention) is ALWAYS None for this op — it carries no
     _OP_KEY_SCOPE entry, so scope defaults to "none" (a pure computation over
@@ -314,10 +450,19 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
         manifest,
         repo_root=repo_root_param,
         format_hints=params.get("format_hints"),
-        relevant_guides=relevant_guides_for_batches(
-            repo_root_param, manifest["batches"], wiki_slugs
-        ),
     )
+
+    def digest_source(files: list[str]) -> dict[str, str]:
+        written = write_digests(Path(repo_root_param), f"{RUN_DIR_REL}/{manifest['run_id']}", files)
+        return {rel: digest_rel for rel, (digest_rel, _) in written.items()}
+
+    still_over = fit_scan_tier(
+        payload,
+        guides=relevant_guides_for_batches(repo_root_param, manifest["batches"], wiki_slugs),
+        digest_source=digest_source,
+    )
+    if still_over:
+        payload["over_tier_batches"] = still_over
     errors = validate_workflow_input(payload)
     if errors:
         raise ValueError(

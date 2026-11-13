@@ -95,7 +95,7 @@ def test_refuses_bad_destination_and_tier():
 
 def test_local_only_record_has_no_paths_and_no_absolute():
     rec = rt.record(
-        run_id="r-2", sizing=None, value_class="deep", tier="deep",
+        run_id="r-2", sizing=None, value_class="unblock", tier="unblock",
         destination="local-only", paths=None, output_count=3,
     )
     assert "paths" not in rec and rec["output_count"] == 3
@@ -104,8 +104,14 @@ def test_local_only_record_has_no_paths_and_no_absolute():
     assert "/" not in text.replace("null", "")
 
 
+def test_legacy_tier_deep_is_recorded_as_unblock():
+    rec = _repo(value_class="unblock", tier="deep")
+    assert rec["tier"] == "unblock"
+    assert 'tier: "unblock"' in rt.render(rec)
+
+
 def test_local_only_refuses_paths_and_missing_count():
-    kw = dict(run_id="r-2", sizing=None, value_class="deep", tier="deep", destination="local-only")
+    kw = dict(run_id="r-2", sizing=None, value_class="unblock", tier="unblock", destination="local-only")
     with pytest.raises(ValueError):
         rt.record(paths=["docs/x.md"], output_count=1, **kw)
     with pytest.raises(ValueError):

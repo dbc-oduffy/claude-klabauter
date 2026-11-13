@@ -63,9 +63,17 @@ def _record_non_em_submit(session_id: str, cwd: str) -> None:
 
 
 def require_fire_authority(script_path: str, expected: str | None, *, cwd: str | None,
-                           native: bool, backend: str) -> Principal:
-    """Protect native firing and explicit worker callers; retain legacy Claude admission."""
+                           native: bool, backend: str, submitted_session_id: str | None = None) -> Principal:
+    """Protect native firing and explicit worker callers; retain legacy Claude admission.
+
+    `submitted_session_id` is a claim, never authority: it must equal the actual invoking session, and
+    the role still comes only from the registry row or the launcher grant for that session.
+    """
     caller = caller_principal(cwd)
+    if submitted_session_id is not None and caller.session_id != submitted_session_id:
+        raise ValueError('The submitted session must match the actual invoking session.')
+    if caller.role == 'unknown' and _legacy_registry_em(caller):
+        caller = caller._replace(role='em')
     if caller.role == 'em':
         return caller
     if caller.role == 'workflow-agent':
@@ -91,6 +99,27 @@ def _explicit_worker_marker(env: dict) -> bool:
         return True
     role = env.get('COORDINATOR_AGENT_ROLE')
     return bool(role) and role != 'em'
+
+
+def _legacy_registry_em(caller: Principal) -> bool:
+    """True for a live, birth-verified registry row written before rows carried a role, whose host
+    process is observed (not asserted) to be an interactive Codex EM launch. A row that records any
+    role, including `unknown`, is never reclassified; an explicit worker marker always refuses."""
+    if not caller.session_id or _explicit_worker_marker(caller.env):
+        return False
+    try:
+        from coordinator_core.session import agent_role, external_registry
+        row = external_registry.lookup(caller.session_id)
+        if not isinstance(row, dict) or row.get('role') is not None:
+            return False
+        import psutil
+        argv = psutil.Process(row['pid']).cmdline()
+        if argv and Path(argv[0].replace('\\', '/')).stem.lower() == 'node':
+            argv = argv[1:]
+        payload = {'hook_event_name': 'SessionStart', 'source': 'startup', 'session_id': caller.session_id}
+        return agent_role.classify(payload, caller.env, **agent_role.observed_cli_launch(argv)) == 'em'
+    except Exception:
+        return False
 
 
 def _grant_verified_headless_em(caller: Principal) -> bool:

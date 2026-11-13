@@ -111,20 +111,46 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _emit_cost(journal_path: str) -> None:
-    """Write run-cost.json after the terminal line; print `cost: breach <metrics>` on a breach.
+def _repo_root_from_cwd():
+    """First of cwd and its parents holding the warp run-dir root, else None."""
+    from pathlib import Path
 
-    Never raises and prints nothing on failure: the terminal line and exit code are already final.
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    return next((p for p in (Path.cwd(), *Path.cwd().parents) if (p / ask_contract.RUN_DIR_ROOT).is_dir()), None)
+
+
+def _emit_cost(journal_path: str, script_path: str | None = None) -> None:
+    """Write run-cost.json and the ceremony spend row, tighten the repo's ratchet, after the terminal line.
+
+    Prints `cost: breach <metrics>` on a breach. Never raises and prints nothing on failure: the
+    terminal line and exit code are already final. No resolvable repo root skips the spend row and
+    the tightening; a repo without coordinator_core/workflow_watch/run_cost_ratchet.json skips the latter.
     """
     try:
+        import os
+
+        from coordinator_core.usage import run_spend
         from coordinator_core.workflow_watch import run_report  # lazy: run_report -> usage.agent_usage -> this package
-        path = run_report.write_record(journal_path)
+        report, scan = run_report.scan_and_report(journal_path)
+        path = run_report.write_record(journal_path, report=report)
         with open(path, encoding="utf-8") as fh:
             ratchet = json.load(fh).get("ratchet") or {}
         breaches = sorted(m for m, b in ratchet.items() if b.get("verdict") == "breach")
         if breaches:
             print(f"cost: breach {' '.join(breaches)}")
             sys.stdout.flush()
+        root = _repo_root_from_cwd()
+        if root is None:
+            return
+        wf_dir = os.path.dirname(os.path.abspath(journal_path))
+        run_spend.record_run(
+            wf_dir, str(root), os.path.basename(wf_dir), run_spend.ceremony_of(script_path),
+            scan=scan, script_path=script_path,
+        )
+        ratchet_file = root / "coordinator_core" / "workflow_watch" / "run_cost_ratchet.json"
+        if ratchet_file.is_file():
+            run_report.tighten(ratchet, str(ratchet_file))
     except Exception:
         pass
 
@@ -311,7 +337,7 @@ def _watch(
             _write_unrecorded_end_halt(journal_path, record.status, script_path)
             print(f"terminal: {record.status}")
             sys.stdout.flush()
-            _emit_cost(journal_path)
+            _emit_cost(journal_path, script_path)
             return 0
 
         if time.monotonic() >= next_stall_scan:

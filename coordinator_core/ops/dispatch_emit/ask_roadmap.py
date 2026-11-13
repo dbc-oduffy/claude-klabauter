@@ -10,10 +10,13 @@ run. Pure composition: no spawn.
 from __future__ import annotations
 
 import json
+import re
+from bisect import bisect_right
 from pathlib import Path
 from typing import Callable, Optional
 
 from coordinator_core.ops.dispatch_emit import emit as _emit
+from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
 from coordinator_core.ops.dispatch_emit.compose_size import cap_refusal, component_sizes
 from coordinator_core.ops.dispatch_emit.fanout_cost import with_fanout
 from coordinator_core.ops.dispatch_emit.halt_refire import refire_next_action_js
@@ -45,6 +48,7 @@ ROADMAP_STAGE_FN = "roadmapBlitz"
 ROADMAP_BLITZ_SOURCE = ("workflows", "roadmap-blitz.mjs")
 
 _PM_APPROVER, _APM_APPROVER = "pm", "apm"
+_NEWLINE_RUN = re.compile(r"\n[ \t\r\n]*")
 
 
 def wrap_roadmap_stage(text: str) -> tuple[str, list[str]]:
@@ -54,7 +58,20 @@ def wrap_roadmap_stage(text: str) -> tuple[str, list[str]]:
     if not phases:
         raise AskPlanBlitzRefused("roadmap-blitz.mjs meta declares no phase titles")
     fn = f"async function {ROADMAP_STAGE_FN}(args) {{\n{text[:start] + text[end:]}\n}}\n"
-    return strip_comment_lines(fn), phases
+    return _compact_lines(strip_comment_lines(fn)), phases
+
+
+def _compact_lines(js: str) -> str:
+    """`js` without line indentation or blank lines, except inside strings, templates, regexes and comments."""
+    spans, dead = _prompt_fragments._scan(js)
+    starts = sorted(s for s, _ in spans + dead)
+    ends = {s: e for s, e in spans + dead}
+
+    def outside(i: int) -> bool:
+        k = bisect_right(starts, i) - 1
+        return k < 0 or i >= ends[starts[k]]
+
+    return _NEWLINE_RUN.sub(lambda m: "\n" if outside(m.start()) else m.group(0), js)
 
 
 def load_roadmap_blitz_text(plugin_root: Optional[str] = None) -> str:
@@ -92,8 +109,8 @@ def no_ready_reason_js(pulled_js: str) -> str:
     hijacked = f"(r) => {hijack_test_js('r')}"
     plain = f"('{NO_READY_LITERAL}' + {reasons}.reduce((a, r) => a ? a + '; ' + r : ': ' + r, ''))"
     return (
-        f"({reasons}.some({hijacked}) ? '{HIJACK_HALT_REASON}: plan-blitz agent declined its task for a relayed/user line: '"
-        f" + {reasons}.find({hijacked}) : {plain})"
+        f"((_t) => {reasons}.some(_t) ? '{HIJACK_HALT_REASON}: plan-blitz agent declined its task for a relayed/user line: '"
+        f" + {reasons}.find(_t) : {plain})({hijacked})"
     )
 
 #: The run's one commit: lands the planning record, then fans the ready plans out as sibling runs.
@@ -283,6 +300,8 @@ def roadmap_stage_lines(
         *_frozen_waves_lines(repo_root, run_id),
         "  if (!_waves.length) { " + halt("'roadmap-blitz stage reply carries no waves'") + " }",
         "  let _ran = 0;",
+        "  const _unf = (w, b, p, reason, d) => _unfired.push({ wave: w.index, ...(b ? { baton: b } : {}), "
+        "...(p ? { plan: p } : {}), reason, ...(d ? { detail: d } : {}) });",
         "  const _bid = (x) => (x && typeof x === 'object') ? (x.batonId ?? x.baton ?? x.id ?? null) : x;",
         "  const _pth = (x) => (x && typeof x === 'object') ? (x.planPath ?? x.path ?? null) : null;",
         "  for (const w of _waves) {",
@@ -295,14 +314,13 @@ def roadmap_stage_lines(
         "      for (const e of (_pb?.[_k] ?? [])) {",
         "        const _b = _bid(e), _p = _pth(e) ?? ((e && typeof e === 'object') ? null : e);",
         "        _seen.add(_b); _seen.add(_p);",
-        "        _unfired.push({ wave: w.index, ...(_b ? { baton: _b } : {}), ...(_p ? { plan: _p } : {}), reason: _why, "
-        "...((e && e.reason) ? { detail: String(e.reason) } : {}) });",
+        "        _unf(w, _b, _p, _why, (e && e.reason) ? String(e.reason) : null);",
         "      }",
         "    }",
         "    for (const b of (w.batons ?? [])) {",
         "      const _b = _bid(b), _p = _pth(b);",
         "      if (_seen.has(_b) || (_p && _seen.has(_p))) continue;",
-        "      _unfired.push({ wave: w.index, ...(_b ? { baton: String(_b) } : {}), ...(_p ? { plan: _p } : {}), reason: 'absent-from-wave-reply' });",
+        "      _unf(w, _b && String(_b), _p, 'absent-from-wave-reply');",
         "    }",
         "    if ((_pb?.surfacedToPm ?? []).length) { "
         + plan_halt("'plan-blitz surfaced items to the PM'") + " _halted.surfaced = _pb.surfacedToPm; break; }",
@@ -312,7 +330,7 @@ def roadmap_stage_lines(
         "  for (const w of _waves.slice(_ran)) {",
         "    for (const b of (w.batons ?? [])) {",
         "      const _b = _bid(b), _p = _pth(b);",
-        "      _unfired.push({ wave: w.index, ...(_b ? { baton: String(_b) } : {}), ...(_p ? { plan: _p } : {}), reason: 'wave-not-run' });",
+        "      _unf(w, _b && String(_b), _p, 'wave-not-run');",
         "    }",
         "  }",
         "  if (!_halted && !_ready.length) { " + plan_halt(no_ready_reason_js("_pulled")) + " }",

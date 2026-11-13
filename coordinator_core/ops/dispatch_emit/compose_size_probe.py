@@ -10,6 +10,7 @@ from unittest import mock
 
 from coordinator_core.ops.dispatch_emit import ask_compose, ask_plan_blitz, ask_roadmap, emit, prompt_fragments
 from coordinator_core.ops.dispatch_emit.compose_size import component_sizes
+from coordinator_core.session import record_homes
 from coordinator_core.warm.caller_context import resolve_caller_context
 
 _STUB_BLITZ = dict(
@@ -192,10 +193,100 @@ def measure_headroom(repo_root: str) -> dict:
     }
 
 
+_REFUSAL_RE = re.compile(r"(\d+) bytes(?:; largest inlined component (.+?) \((\d+) bytes\))?")
+_ROADMAP_SIZING_REL = record_homes.home_rel("sizings") + "/probe-roadmap.yaml"
+#: Share of the Workflow runner byte cap a composed script may use; the margin ratchet and this probe both read it.
+CEILING_RATIO = 0.90
+
+
+def parse_cap_refusal(text: str) -> dict:
+    """`total` (and the largest inlined component, when named) out of a `compose_size.cap_refusal` message."""
+    m = _REFUSAL_RE.search(text.split("byte cap:", 1)[-1])
+    if m is None:
+        raise ValueError(f"not a cap refusal: {text[:120]}")
+    out = {"total": int(m.group(1)), "refused": True}
+    if m.group(2):
+        out["largest_component"] = {"name": m.group(2), "bytes": int(m.group(3))}
+    return out
+
+
+def compose_bytes(compose) -> dict:
+    """Run `compose()` and report its bytes: `len(script.encode("utf-8"))`, or the total a cap refusal names."""
+    try:
+        script = compose()
+    except ask_compose.AskComposeRefused as exc:
+        return parse_cap_refusal(str(exc))
+    return {"total": len(script.encode("utf-8")), "refused": False}
+
+
+def measure_roadmap_fanout(repo_root: str) -> dict:
+    """Standalone roadmap-fanout and in-run M+ re-fire composed with production assets and the real cap.
+
+    The cap is left in force, so an over-cap variant reports the total its refusal names. Totals differ
+    from the stub-asset ratchet; this answers which component grew."""
+    import os
+    import tempfile
+    from pathlib import Path
+
+    import yaml
+
+    from coordinator_core.ops.dispatch_emit.emission_receipt import _load_review_inputs
+
+    plugin_root = resolve_caller_context().plugin_root
+    fragment, schemas = _load_review_inputs("plan")
+    assets = dict(
+        plan_blitz_text=ask_plan_blitz.load_plan_blitz_text(plugin_root),
+        roadmap_blitz_text=ask_roadmap.load_roadmap_blitz_text(plugin_root),
+        review_roster_fragment=fragment,
+        review_stage_schemas=schemas,
+        run_base_sha="a" * 40,
+    )
+    doc = {
+        "schema": "sizing-object", "name": "rm", "intent": "an XL job",
+        "estimate": {"tshirt": "XL", "provisional": True}, "route": "roadmap",
+        "detents": [], "fork": None, "xl_exit": None, "status": "sized",
+        "premise": {"provenance": "not-applicable", "evidence": "probe"},
+        "deliverable_id": "dlv-probe-abc123", "interaction_mode": "pm",
+        "exit_criterion": {"statement": "done", "accepted": {"pm_quote": "yes", "on": "2026-10-02", "mode": "pm"}},
+    }
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        sizing = Path(tmp) / _ROADMAP_SIZING_REL
+        sizing.parent.mkdir(parents=True)
+        sizing.write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+        os.chdir(tmp)
+        try:
+            with (
+                mock.patch.object(prompt_fragments, "HOIST_ENABLED", True),
+                mock.patch.dict("os.environ", {"CLAUDE_PLUGIN_ROOT": plugin_root or ""}),
+            ):
+                standalone = compose_bytes(
+                    lambda: ask_compose.compose_ask_script(
+                        repo_root=Path(tmp).as_posix(), prompt=None, sizing_rel=_ROADMAP_SIZING_REL,
+                        run_id="probe-1", session_id=None, **assets,
+                    )
+                )
+                with mock.patch.object(ask_compose, "_known_arm", lambda *_: ask_compose.ARM_M_PLUS):
+                    in_run = compose_bytes(
+                        lambda: ask_compose.compose_ask_script(
+                            repo_root=repo_root, prompt="add a thing", sizing_rel=None,
+                            run_id="probe-2", session_id=None, in_run_commit=True, **assets,
+                        )
+                    )
+        finally:
+            os.chdir(cwd)
+    cap = emit._WORKFLOW_SCRIPT_BYTE_CAP
+    ceiling = int(CEILING_RATIO * cap)
+    return {"cap": cap, "ceiling": ceiling, "standalone": standalone, "in_run": in_run}
+
+
 def main() -> int:
     from pathlib import Path
 
     root = str(Path(ask_compose.__file__).resolve().parents[3])
+    if "--roadmap-fanout" in sys.argv[1:]:
+        print(json.dumps(measure_roadmap_fanout(root)))
+        return 0
     if "--headroom" in sys.argv[1:]:
         print(json.dumps(measure_headroom(root)))
         return 0

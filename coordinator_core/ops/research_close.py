@@ -13,7 +13,7 @@ output, segment dirs included, under ``outputs/<scratch-relative path>``) and ma
 (built by ``_research_trail``). The run slug is ``topic_slug`` lowercased, non-``[a-z0-9]``
 runs folded to ``-``; ``<run dir>/workdir/`` is the run's scratch home, never created here.
 
-Params: ``scratch_dir`` (absolute), ``tier`` (scouts|corpus|deep), ``run_id``,
+Params: ``scratch_dir`` (absolute), ``tier`` (scouts|corpus|unblock; legacy ``deep`` reads as unblock), ``run_id``,
 ``topic_slug`` (both safe single path segments), ``topic`` (optional, a valid
 ``_research_layout.TOPIC_RE`` topic; absent, the folded ``topic_slug`` when valid, else ``misc``), ``value_class`` (optional, in
 ``rc.VALUE_CLASSES``, default ``tier``), ``sizing`` (optional repo-relative path named in the
@@ -779,6 +779,7 @@ def _missing_outputs(scratch: Path, require_outputs, name: str = "require_output
 
 def _close_sync(worktree: Path, params: dict) -> dict:
     tier = str(params.get("tier") or "")
+    tier = rc.LEGACY_TIER_ALIASES.get(tier, tier)
     run_id = str(params.get("run_id") or "")
     topic_slug = str(params.get("topic_slug") or "")
     scratch_raw = str(params.get("scratch_dir") or "")

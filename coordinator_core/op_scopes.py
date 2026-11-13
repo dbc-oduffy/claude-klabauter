@@ -409,6 +409,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # substrate append_day writes to (handler derives worktree via
     # main_worktree_root(common_dir), same as append_day).
     "changelog.compute_day_fields":          "common_dir",
+    "changelog.daily_log":                   "common_dir",
     "changelog.upsert_reviewed":             "common_dir",
     "plan.append_session":                   "common_dir",
     # Backfill: records.query (strang-11 C1a COMPUTE_ONLY read op) was registered without an
@@ -1033,6 +1034,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "gate_liveness.reconcile":                  "show_top",
     "op_census.breaches":                       "show_top",
     "freshness.commit_delta":                   "show_top",
+    "code_intel.freshness":                     "show_top",
+    "code_intel.workstate_index":               "show_top",
     "merge_assemble.apply":                      "show_top",
     "baton_assemble.brief":                      "show_top",
     "baton_assemble.apply":                      "show_top",

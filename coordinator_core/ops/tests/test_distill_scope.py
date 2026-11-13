@@ -40,13 +40,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.distill.manifest_schema import canonical_manifest_bytes
+from coordinator_core.ops import distill_scope as ds
 from coordinator_core.ops.distill_scope import (
     DR146_DATE_PREFIX_RE,
     DR146_MIN_STEM_LEN,
@@ -388,7 +391,7 @@ def test_handler_batch_files_carry_digests_and_stay_under_relay_cap(fixture_repo
     for i in range(60):
         _write(
             fixture_repo / "cross-repo" / "archive" / f"2026-07-{i % 28 + 1:02d}-memo-{i:03d}-{'x' * 40}.md",
-            "---\nstatus: implemented\n---\nbody\n",
+            "---\ndistill_fate: ratification\n---\nbody\n",
         )
     result = _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo / ".git")
     manifest = json.loads((fixture_repo / result["workflow_input_path"]).read_text(encoding="utf-8"))
@@ -408,7 +411,11 @@ def test_handler_batch_files_carry_relevant_guides_within_cap(fixture_repo):
 
     _write(
         fixture_repo / "archive" / "specs" / "2026-07-06-percolation-engine-notes.md",
-        "---\nstatus: implemented\n---\npercolation engine notes\n",
+        "---\nstatus: implemented\n---\n" + "percolation engine notes\n" * 600,
+    )
+    _write(
+        fixture_repo / "archive" / "daily-summaries" / "2026-07-06.md",
+        "- percolation engine: archive/specs/2026-07-06-percolation-engine-notes.md\n",
     )
     _write(fixture_repo / "docs" / "wiki" / "unrelated-topic.md", "# Unrelated Topic\n")
     result = _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo / ".git")
@@ -728,15 +735,18 @@ def test_compute_scope_without_fate_rows_emits_empty_mechanical(fixture_repo):
 
 
 def test_handler_workflow_input_excludes_mechanical_rows(fixture_repo):
+    _write(fixture_repo / "cross-repo" / "archive" / "2026-07-04-memo-promote.md", "---\ndistill_fate: commitment\n---\nm\n")
     before = _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo / ".git")
     before_total = json.loads((fixture_repo / before["workflow_input_path"]).read_text(encoding="utf-8"))[
         "total_file_count"
     ]
-    _add_fate_rows(fixture_repo)
+    assert before_total == 1
+    _write(fixture_repo / "archive" / "completed" / "2026-07-07-eph.md", "---\ndistill_fate: ephemeral\n---\nc\n")
+    _write(fixture_repo / "cross-repo" / "archive" / "2026-07-08-memo-promote-two.md", "---\ndistill_fate: commitment\n---\nm\n")
     after = _handler({"run_id": "2026-07-23-02h00"}, repo_root=fixture_repo / ".git")
     payload = json.loads((fixture_repo / after["workflow_input_path"]).read_text(encoding="utf-8"))
-    assert after["counts"]["mechanical"] == 2
-    # +1 promote memo batched; the two ephemeral rows are not
+    assert after["counts"]["mechanical"] == 1
+    # +1 promote memo batched; the ephemeral completed row is not
     assert payload["total_file_count"] == before_total + 1
     assert "mechanical" in after["summary"]
 
@@ -811,15 +821,17 @@ def test_scannable_count_equals_compute_scope_scannable_at_pm_ruling(fixture_rep
         fixture_repo / "docs" / "plans" / "2026-11-06-eph.md",
         "---\nstatus: implemented\ndistill_fate: ephemeral\n---\nbody\n",
     )
-    scope = compute_scope(
-        fixture_repo, run_id="r", cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS)
+    _write(
+        fixture_repo / "archive" / "daily-summaries" / "2026-11-07.md",
+        "- shipped docs/plans/2026-11-01-a.md and docs/plans/2026-11-06-eph.md\n",
     )
-    assert scannable_count(fixture_repo) == scope.counts["scannable"]
+    scope = compute_scope(
+        fixture_repo, run_id="r", cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS), admit=True
+    )
+    assert scannable_count(fixture_repo) == scope.counts["scannable"] + scope.counts["deferred"]
     assert scope.counts["plans"] == 4
     assert scope.counts["mechanical"] == 1  # the ephemeral plan; the ephemeral memo/handoff are not in this cohort set
     assert "docs/plans/2026-11-06-eph.md" not in {p for b in scope.manifest["batches"] for p in b}
-    default_scope = compute_scope(fixture_repo, run_id="r")
-    assert scannable_count(fixture_repo, cohort_specs=_default_cohort_specs("archive/handoffs", "cross-repo/archive")) == default_scope.counts["scannable"]
 
 
 def test_scannable_count_fails_loud_on_a_missing_log(fixture_repo):
@@ -831,9 +843,830 @@ def test_scannable_count_fails_loud_on_a_missing_log(fixture_repo):
 
 
 def test_scannable_count_cap_stops_at_cap_and_is_exact_below_it(fixture_repo):
-    _add_plans(fixture_repo)
+    for day in range(1, 5):
+        _write(fixture_repo / "archive" / "daily-summaries" / f"2026-11-0{day}.md", "- a day\n")
     full = scannable_count(fixture_repo)
     assert full > 2
     assert scannable_count(fixture_repo, cap=2) == 2
     assert scannable_count(fixture_repo, cap=full) == full
     assert scannable_count(fixture_repo, cap=full + 10) == full
+
+
+# ---------------------------------------------------------------------------
+# a repeat scope call replaces the prior unconsumed scope dir
+# ---------------------------------------------------------------------------
+
+
+def _scope_dirs(repo: Path) -> list[str]:
+    base = repo / "state" / "scratch" / "artifact-distillation"
+    return sorted(p.name for p in base.iterdir() if p.is_dir())
+
+
+def _git_init(repo: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+
+
+def _dispatch_scope(repo: Path, run_id: str) -> dict:
+    import coordinator_core.ipc as ipc
+    import coordinator_core.ops  # noqa: F401
+
+    msg = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "distill.scope",
+        "params": {"run_id": run_id},
+        "_origin_worktree": str(repo),
+    }
+    d = _run(ipc.dispatch_message(msg))
+    assert "result" in d, d.get("error")
+    return d
+
+
+def _age(repo: Path, run_id: str, seconds: float = 2 * 86400) -> None:
+    d = repo / "state" / "scratch" / "artifact-distillation" / run_id
+    old = d.stat().st_mtime - seconds
+    for p in [d, *d.iterdir()]:
+        os.utime(p, (old, old))
+
+
+def test_two_scope_calls_through_dispatch_leave_one_run_dir(fixture_repo):
+    _git_init(fixture_repo)
+    _dispatch_scope(fixture_repo, "2026-07-23-01h00")
+    _age(fixture_repo, "2026-07-23-01h00")
+    _dispatch_scope(fixture_repo, "2026-07-23-02h00")
+    assert _scope_dirs(fixture_repo) == ["2026-07-23-02h00"]
+
+
+def test_back_to_back_scope_calls_leave_one_dir(fixture_repo):
+    _git_init(fixture_repo)
+    _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo)
+    _age(fixture_repo, "2026-07-23-01h00")
+    _handler({"run_id": "2026-07-23-02h00"}, repo_root=fixture_repo)
+    assert _scope_dirs(fixture_repo) == ["2026-07-23-02h00"]
+
+
+def test_scope_keeps_a_young_unconsumed_dir_a_live_run_may_still_read(fixture_repo):
+    _git_init(fixture_repo)
+    _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo)
+    _handler({"run_id": "2026-07-23-02h00"}, repo_root=fixture_repo)
+    assert _scope_dirs(fixture_repo) == ["2026-07-23-01h00", "2026-07-23-02h00"]
+
+
+def test_rescoping_a_consumed_same_run_id_clears_stale_downstream_files(fixture_repo):
+    _git_init(fixture_repo)
+    _handler({"run_id": "autofire"}, repo_root=fixture_repo)
+    d = fixture_repo / "state" / "scratch" / "artifact-distillation" / "autofire"
+    (d / "disposal-manifest.json").write_text("{}", encoding="utf-8")
+    _handler({"run_id": "autofire"}, repo_root=fixture_repo)
+    assert not (d / "disposal-manifest.json").exists()
+    assert (d / "input.json").is_file()
+
+
+def test_scope_keeps_a_prior_dir_a_downstream_step_has_written_into(fixture_repo):
+    _git_init(fixture_repo)
+    _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo)
+    consumed = fixture_repo / "state" / "scratch" / "artifact-distillation" / "2026-07-23-01h00"
+    (consumed / "disposal-manifest.json").write_text("{}", encoding="utf-8")
+    _handler({"run_id": "2026-07-23-02h00"}, repo_root=fixture_repo)
+    assert _scope_dirs(fixture_repo) == ["2026-07-23-01h00", "2026-07-23-02h00"]
+
+
+def test_scope_keeps_non_scope_siblings(fixture_repo):
+    _git_init(fixture_repo)
+    base = fixture_repo / "state" / "scratch" / "artifact-distillation"
+    probe = base / "perf-probe"
+    probe.mkdir(parents=True)
+    (probe / "note.txt").write_text("x", encoding="utf-8")
+    (base / "loose.params.json").write_text("{}", encoding="utf-8")
+    _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo)
+    assert _scope_dirs(fixture_repo) == ["2026-07-23-01h00", "perf-probe"]
+    assert (base / "loose.params.json").exists()
+
+
+def test_rescoping_the_same_run_id_keeps_its_dir(fixture_repo):
+    _git_init(fixture_repo)
+    _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo)
+    _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo)
+    assert _scope_dirs(fixture_repo) == ["2026-07-23-01h00"]
+
+
+# ---------------------------------------------------------------------------
+# Incremental scope: the per-file stat cache serves the same scope a cache-less run computes
+# ---------------------------------------------------------------------------
+
+_HOUR_NS = 3600 * 10**9
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_cache_root(monkeypatch):
+    monkeypatch.setattr(ds, "registry_get", lambda _key: None)
+
+
+@pytest.fixture()
+def wide_budget(monkeypatch):
+    """A run budget roomy enough that the default fit never narrows a small fixture."""
+    from coordinator_core.contract.run_budget import RunBudget
+
+    monkeypatch.setattr(ds._run_budget, "load", lambda _ceremony, path=None: RunBudget(1000, 100_000_000, 10_000))
+
+
+def _set_mtime(path: Path, ago_ns: int) -> None:
+    t = time.time_ns() - ago_ns
+    os.utime(path, ns=(t, t))
+
+
+def _age_tree(root: Path, ago_ns: int = _HOUR_NS) -> None:
+    """Move every file's mtime out of the racy window, so its cache entry is storable."""
+    for p in root.rglob("*"):
+        if p.is_file():
+            _set_mtime(p, ago_ns)
+
+
+def _edit(path: Path, text: str, ago_ns: int = _HOUR_NS // 2) -> None:
+    _write(path, text)
+    _set_mtime(path, ago_ns)
+
+
+def _cache_dir(repo: Path) -> Path:
+    return repo / ".coordinator-local" / "cache" / "distill-scope"
+
+
+def _drop_cache(repo: Path) -> None:
+    shutil.rmtree(_cache_dir(repo), ignore_errors=True)
+
+
+def _snapshot(result, run_id: str) -> dict:
+    """The scope a run produced: manifest, counts and digest paths, run id normalised away."""
+    raw = json.dumps(
+        {"manifest": result.manifest, "counts": result.counts, "digests": result.digests}, sort_keys=True
+    )
+    return json.loads(raw.replace(run_id, "RUN"))
+
+
+def _no_source_reads(monkeypatch) -> None:
+    """Fail on any read of a source file or any digest build: only a stat may serve a warm scope."""
+
+    def boom(*_a, **_k):
+        raise AssertionError("a warm scope re-read a source file")
+
+    monkeypatch.setattr(ds._ripe_filter, "_classify_one", boom)
+    monkeypatch.setattr(ds, "_head_fate", boom)
+    monkeypatch.setattr(ds._scan_digest, "build_digest", boom)
+    monkeypatch.setattr(ds, "parse_distillation_log", boom)
+    for name in list(ds._COHORT_FILTERS):
+        monkeypatch.setitem(ds._COHORT_FILTERS, name, boom)
+
+
+def test_cold_and_warm_scope_are_identical_and_the_warm_one_reads_no_source(fixture_repo, monkeypatch):
+    _age_tree(fixture_repo)
+    cold = compute_scope(fixture_repo, run_id="R", write_digests=True)
+    assert (_cache_dir(fixture_repo)).is_dir()
+    with monkeypatch.context() as m:
+        _no_source_reads(m)
+        warm = compute_scope(fixture_repo, run_id="R", write_digests=True)
+    assert _snapshot(warm, "R") == _snapshot(cold, "R")
+    _drop_cache(fixture_repo)
+    assert _snapshot(compute_scope(fixture_repo, run_id="R", write_digests=True), "R") == _snapshot(cold, "R")
+
+
+def test_stale_entries_serve_the_same_scope_a_cache_less_run_computes(fixture_repo):
+    """Touch (same size, new mtime), delete, add, and edit the log: each change shows up in the
+    cached scope exactly as in a scope computed with no cache at all."""
+    _age_tree(fixture_repo)
+    compute_scope(fixture_repo, run_id="R", write_digests=True)
+
+    def assert_matches_cache_less(label: str) -> None:
+        cached = compute_scope(fixture_repo, run_id="R", write_digests=True)
+        _drop_cache(fixture_repo)
+        fresh = compute_scope(fixture_repo, run_id="R", write_digests=True)
+        assert _snapshot(cached, "R") == _snapshot(fresh, "R"), label
+
+    specs = fixture_repo / "archive" / "specs"
+    # same size ("shipped" -> "partial"), new mtime: only the stat key can tell
+    _edit(specs / "2026-07-02-beta.md", "---\nstatus: partial\n---\nbody\n")
+    assert_matches_cache_less("touched")
+    compute_scope(fixture_repo, run_id="R", write_digests=True)
+    (fixture_repo / "cross-repo" / "archive" / "2026-07-01-memo-one.md").unlink()
+    assert_matches_cache_less("deleted")
+    compute_scope(fixture_repo, run_id="R", write_digests=True)
+    _edit(fixture_repo / "cross-repo" / "archive" / "2026-07-09-memo-new.md", "new memo\n")
+    _edit(fixture_repo / "archive" / "handoffs" / "2026-07-09-new-eligible.md", "---\nstatus: claimed\nshipped_in: a1\n---\n")
+    assert_matches_cache_less("added")
+    compute_scope(fixture_repo, run_id="R", write_digests=True)
+    log = fixture_repo / "state" / "distillation-log.md"
+    _edit(
+        log,
+        log.read_text(encoding="utf-8")
+        + "- archive/specs/2026-07-01-alpha.md -> DISTILLED, promoted (run: 2026-07-05-00h00)\n",
+    )
+    cached = compute_scope(fixture_repo, run_id="R", write_digests=True)
+    assert "archive/specs/2026-07-01-alpha.md" not in cached.manifest["cohorts"]["harvest"]
+    assert_matches_cache_less("log edited")
+
+
+def test_a_run_dir_wiped_between_runs_gets_its_digests_back_without_rereading_sources(fixture_repo, monkeypatch):
+    _age_tree(fixture_repo)
+    first = compute_scope(fixture_repo, run_id="R", write_digests=True)
+    expected = {rel: (fixture_repo / d).read_bytes() for rel, d in first.digests.items()}
+    assert expected
+    shutil.rmtree(fixture_repo / "state" / "scratch" / "artifact-distillation" / "R")
+    with monkeypatch.context() as m:
+        _no_source_reads(m)
+        again = compute_scope(fixture_repo, run_id="R", write_digests=True)
+        other = compute_scope(fixture_repo, run_id="S", write_digests=True)
+    for result in (again, other):
+        assert {rel: (fixture_repo / d).read_bytes() for rel, d in result.digests.items()} == expected
+
+
+def test_an_unchanged_digest_is_not_rewritten_and_a_tampered_one_is(fixture_repo, monkeypatch):
+    _age_tree(fixture_repo)
+    first = compute_scope(fixture_repo, run_id="R", write_digests=True)
+    rel, digest_rel = next(iter(first.digests.items()))
+    target = fixture_repo / digest_rel
+    written: list[str] = []
+    real = ds._write_digest_file
+    monkeypatch.setattr(ds, "_write_digest_file", lambda d, name, body: written.append(name) or real(d, name, body))
+    compute_scope(fixture_repo, run_id="R", write_digests=True)
+    assert written == []
+    original = target.read_bytes()
+    target.write_bytes(original + b"tampered")
+    again = compute_scope(fixture_repo, run_id="R", write_digests=True)
+    assert written == [target.name]
+    assert target.read_bytes() == original
+    assert again.digests == first.digests
+
+
+def test_a_changed_fact_deriving_function_discards_the_cache(fixture_repo, monkeypatch):
+    _age_tree(fixture_repo)
+    compute_scope(fixture_repo, run_id="R")
+    calls: list[str] = []
+    real = ds._head_fate
+    monkeypatch.setattr(ds, "_head_fate", lambda path: calls.append(str(path)) or real(path))
+    compute_scope(fixture_repo, run_id="R")
+    assert calls == []
+    ds._code_fingerprint.cache_clear()
+    monkeypatch.setattr(ds, "_handoff_eligible", lambda text: False)
+    try:
+        assert ds._code_fingerprint() != _fingerprint_of_original()
+        compute_scope(fixture_repo, run_id="R")
+        assert calls, "a changed _handoff_eligible must not be served from the old cache"
+    finally:
+        ds._code_fingerprint.cache_clear()
+
+
+def _fingerprint_of_original() -> str:
+    return _ORIGINAL_FINGERPRINT
+
+
+_ORIGINAL_FINGERPRINT = ds._code_fingerprint()
+
+
+def test_a_schema_mismatch_in_the_stored_cache_is_a_full_miss_not_an_error(fixture_repo):
+    _age_tree(fixture_repo)
+    cold = compute_scope(fixture_repo, run_id="R")
+    path = next(_cache_dir(fixture_repo).glob("facts-*.json"))
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored["files"]
+    stored["schema"] = "0:stale"
+    path.write_text(json.dumps(stored), encoding="utf-8")
+    assert _snapshot(compute_scope(fixture_repo, run_id="R"), "R") == _snapshot(cold, "R")
+    assert json.loads(path.read_text(encoding="utf-8"))["schema"] == ds._code_fingerprint()
+    path.write_text("{not json", encoding="utf-8")
+    assert _snapshot(compute_scope(fixture_repo, run_id="R"), "R") == _snapshot(cold, "R")
+
+
+def test_an_entry_modified_inside_the_racy_window_is_never_stored(fixture_repo):
+    """Files created just now sit inside the window where a same-size rewrite could keep the
+    same stat; their facts are recomputed every run instead of cached."""
+    compute_scope(fixture_repo, run_id="R")
+    stored = json.loads(next(_cache_dir(fixture_repo).glob("facts-*.json")).read_text(encoding="utf-8"))
+    assert stored["files"] == {}
+
+
+def test_the_log_entry_obeys_the_racy_window_like_file_entries(fixture_repo):
+    """A log modified inside the window is never stored; once aged out it is."""
+    _age_tree(fixture_repo)
+    log = fixture_repo / "state" / "distillation-log.md"
+    _set_mtime(log, 0)
+    compute_scope(fixture_repo, run_id="R")
+    path = next(_cache_dir(fixture_repo).glob("facts-*.json"))
+    assert json.loads(path.read_text(encoding="utf-8"))["log"] == {}
+    _set_mtime(log, _HOUR_NS)
+    compute_scope(fixture_repo, run_id="R")
+    assert json.loads(path.read_text(encoding="utf-8"))["log"]["canonical"]
+
+
+def test_a_failed_cache_store_is_not_an_error(fixture_repo):
+    _age_tree(fixture_repo)
+    expected = _snapshot(compute_scope(fixture_repo, run_id="R", write_digests=True), "R")
+    shutil.rmtree(_cache_dir(fixture_repo).parent)
+    _cache_dir(fixture_repo).parent.write_text("a file where the cache dir belongs", encoding="utf-8")
+    assert _snapshot(compute_scope(fixture_repo, run_id="R", write_digests=True), "R") == expected
+
+
+def test_the_cache_root_follows_the_settings_registry_key(fixture_repo, tmp_path, monkeypatch):
+    base = tmp_path / "elsewhere"
+    monkeypatch.setattr(ds, "registry_get", lambda key: str(base) if key == "paths.distill_scope_cache" else None)
+    _age_tree(fixture_repo)
+    compute_scope(fixture_repo, run_id="R", write_digests=True)
+    assert list((base / "distill-scope").glob("facts-*.json"))
+    assert not (fixture_repo / ".coordinator-local").exists()
+
+
+def test_a_warm_scope_spawns_nothing(fixture_repo, monkeypatch):
+    _age_tree(fixture_repo)
+    compute_scope(fixture_repo, run_id="R", write_digests=True)
+
+    def no_spawn(*args, **kwargs):
+        raise AssertionError(f"distill.scope spawned: {args[:1]}")
+
+    monkeypatch.setattr(subprocess, "run", no_spawn)
+    monkeypatch.setattr(subprocess, "Popen", no_spawn)
+    compute_scope(fixture_repo, run_id="R", write_digests=True)
+
+
+def test_scandir_cohorts_equal_the_library_oracle_the_scope_used_before(fixture_repo):
+    """harvest / skip / sidecars equal ripe_filter + harvest_debt + sidecar_sweep over a tree with
+    nested month dirs, a non-markdown file, a legacy action-table row and an ambiguous basename."""
+    from coordinator_core.distill.harvest_debt import compute_harvest_debt
+    from coordinator_core.distill.ripe_filter import scan_spec_dir
+    from coordinator_core.distill.sidecar_sweep import sidecar_candidate_ids
+
+    specs = fixture_repo / "archive" / "specs"
+    _write(specs / "2026-06" / "2026-06-01-nested.md", "---\nstatus: implemented\n---\nx\n")
+    _write(specs / "2026-06" / "2026-06-02-dupe.md", "---\nstatus: implemented\n---\nx\n")
+    _write(specs / "2026-07" / "2026-06-02-dupe.md", "---\nstatus: implemented\n---\nx\n")
+    _write(specs / "2026-06" / "2026-06-03-legacy.md", "---\nstatus: implemented\n---\nx\n")
+    _write(specs / "2026-06" / "notes.txt", "not markdown\n")
+    _write(specs / "2026-06" / "2026-06-04-nofm.md", "no frontmatter\n")
+    _write(specs / "2026-06" / "2026-06-05-x.plan-coverage-check.md", "---\nstatus: implemented\n---\n")
+    log = fixture_repo / "state" / "distillation-log.md"
+    log.write_text(
+        log.read_text(encoding="utf-8")
+        + "# Columns: date | action | path | last_sha | belongs_to_spec | reason\n"
+        + "2026-06-10 | harvested | archive/specs/old-place/2026-06-03-legacy.md | abc | - | r\n"
+        + "2026-06-10 | harvested | archive/specs/old-place/2026-06-02-dupe.md | abc | - | r\n",
+        encoding="utf-8",
+    )
+    result = compute_scope(fixture_repo, run_id="R")
+    ripe = scan_spec_dir(specs)
+    debt = compute_harvest_debt(specs, log)
+    assert result.manifest["cohorts"]["harvest"] == sorted(
+        f"archive/specs/{p}" for p in set(ripe.harvest) & set(debt.harvest_debt)
+    )
+    assert result.manifest["cohorts"]["skip"] == sorted(f"archive/specs/{r.path}" for r in ripe.skip)
+    assert result.manifest["cohorts"]["sidecars"] == sorted(sidecar_candidate_ids(specs, fixture_repo))
+    assert result.counts["harvest_debt_total"] == debt.total_specs
+    assert result.counts["harvest_debt_warn"] == int(debt.warn)
+    assert "archive/specs/2026-06/2026-06-03-legacy.md" not in result.manifest["cohorts"]["harvest"]
+    assert "archive/specs/2026-06/2026-06-02-dupe.md" in result.manifest["cohorts"]["harvest"]
+
+
+def test_handler_serves_guides_from_cache_and_ranks_only_the_batches_that_changed(
+    fixture_repo, monkeypatch, wide_budget
+):
+    from coordinator_core.distill import guide_index
+
+    for i in range(6):
+        _write(
+            fixture_repo / "cross-repo" / "archive" / f"2026-07-{10 + i:02d}-memo-{i}.md",
+            f"---\ndistill_fate: ratification\n---\npercolation engine memo {i}\n",
+        )
+    _age_tree(fixture_repo)
+    params = {"run_id": "R", "batch_size": 2}
+    first = _handler(dict(params), repo_root=fixture_repo / ".git")
+    run_dir = (fixture_repo / first["workflow_input_path"]).parent
+
+    def batch_files() -> dict[str, str]:
+        return {p.name: p.read_text(encoding="utf-8") for p in sorted(run_dir.glob("batch-*.json"))}
+
+    expected = batch_files()
+    assert len(expected) > 2
+    real = guide_index.relevant_guides_for_batches
+    ranked: list[list[list[str]]] = []
+    monkeypatch.setattr(
+        guide_index,
+        "relevant_guides_for_batches",
+        lambda root, batches, slugs, **kw: ranked.append(batches) or real(root, batches, slugs, **kw),
+    )
+    _handler(dict(params), repo_root=fixture_repo / ".git")
+    assert ranked == []
+    assert batch_files() == expected
+
+    victim = fixture_repo / "cross-repo" / "archive" / "2026-07-12-memo-2.md"
+    _edit(victim, "---\ndistill_fate: ratification\n---\npercolation engine memo two, rewritten\n")
+    _handler(dict(params), repo_root=fixture_repo / ".git")
+    (reranked,) = ranked
+    assert all(len(batch) <= 2 for batch in reranked)
+    assert len(reranked) == 1 and "cross-repo/archive/2026-07-12-memo-2.md" in reranked[0]
+
+    ranked.clear()
+    _edit(fixture_repo / "docs" / "wiki" / "percolation-engine.md", "# Percolation Engine\n\nchanged\n")
+    _handler(dict(params), repo_root=fixture_repo / ".git")
+    (all_batches,) = ranked
+    assert len(all_batches) == len(expected)
+
+
+# ---------------------------------------------------------------------------
+# Admission: logs first, cited and heavy plans only, a batch budget
+# ---------------------------------------------------------------------------
+
+_HEAVY = "weighty plan body\n" * 800
+_PM_SPECS = list(PM_RULING_2026_08_06_COHORT_SPECS)
+
+
+def _admit_scope(root: Path, **kw):
+    return compute_scope(root, run_id="r", cohort_specs=_PM_SPECS, admit=True, **kw)
+
+
+def _heavy_plan(root: Path, name: str, extra: str = "") -> str:
+    rel = f"docs/plans/{name}.md"
+    _write(root / rel, f"---\nstatus: implemented\n---\n{extra}{_HEAVY}")
+    return rel
+
+
+def _log(root: Path, day: str, *cites: str) -> str:
+    rel = f"archive/daily-summaries/{day}.md"
+    _write(root / rel, "".join(f"- moved the needle: {c}\n" for c in cites) or "- a quiet day\n")
+    return rel
+
+
+def _not_admitted(scope) -> dict[str, str]:
+    return {row["path"]: row["reason"] for row in scope.manifest["not_admitted"]}
+
+
+def _batched(scope) -> list[str]:
+    return [p for batch in scope.manifest["batches"] for p in batch]
+
+
+def test_cite_keys_name_plans_by_dated_stem_or_path():
+    text = (
+        "see docs/plans/2026-11/2026-11-13-Big-Refactor.md and 2026-11-14-new-system-ab12cd, "
+        "also archive/specs/old_spec.md; ignore docs/wiki/guide.md"
+    )
+    assert ds._cite_keys(text) == [
+        "2026-11-13-big-refactor",
+        "2026-11-14-new-system-ab12cd",
+        "old-spec",
+    ]
+
+
+def test_admission_takes_logs_first_newest_first_then_cited_plans(fixture_repo):
+    cited = _heavy_plan(fixture_repo, "2026-11-01-big")
+    _log(fixture_repo, "2026-11-02", cited)
+    _log(fixture_repo, "2026-11-03", "nothing of note")
+    scope = _admit_scope(fixture_repo)
+    assert _batched(scope) == [
+        "archive/daily-summaries/2026-11-03.md",
+        "archive/daily-summaries/2026-11-02.md",
+        cited,
+    ]
+    assert scope.manifest["cohorts"]["logs"] == [
+        "archive/daily-summaries/2026-11-02.md",
+        "archive/daily-summaries/2026-11-03.md",
+    ]
+    assert scope.counts["log_cited_plan_count"] == 1
+
+
+def test_admission_refuses_uncited_plans_and_light_plans_and_names_why(fixture_repo):
+    uncited = _heavy_plan(fixture_repo, "2026-11-01-uncited")
+    light = "docs/plans/2026-11-02-light.md"
+    _write(fixture_repo / light, "---\nstatus: implemented\n---\nsmall\n")
+    _log(fixture_repo, "2026-11-03", light)
+    scope = _admit_scope(fixture_repo)
+    reasons = _not_admitted(scope)
+    assert reasons[uncited] == "not_log_cited"
+    assert reasons[light] == "below_admission"
+    assert reasons["archive/specs/2026-07-01-alpha.md"] == "not_log_cited"
+    assert uncited not in _batched(scope) and light not in _batched(scope)
+    assert scope.counts["not_admitted"] == len(reasons)
+
+
+def test_admission_refuses_what_a_guide_or_decision_already_cites(fixture_repo):
+    in_guide = _heavy_plan(fixture_repo, "2026-11-01-in-guide")
+    in_decision = _heavy_plan(fixture_repo, "2026-11-02-in-decision")
+    fresh = _heavy_plan(fixture_repo, "2026-11-03-fresh")
+    _log(fixture_repo, "2026-11-04", in_guide, in_decision, fresh)
+    _write(fixture_repo / "docs" / "wiki" / "guide.md", "Distilled from docs/plans/2026-11-01-in-guide.md\n")
+    _write(fixture_repo / "docs" / "decisions" / "DR-1.md", "Ratifies 2026-11-02-in-decision\n")
+    scope = _admit_scope(fixture_repo)
+    reasons = _not_admitted(scope)
+    assert reasons[in_guide] == "already_captured"
+    assert reasons[in_decision] == "already_captured"
+    assert fresh in _batched(scope)
+
+
+def test_a_harvested_log_is_no_target_and_its_citations_admit_nothing(fixture_repo):
+    plan = _heavy_plan(fixture_repo, "2026-11-01-big")
+    done = _log(fixture_repo, "2026-11-02", plan)
+    log = fixture_repo / "state" / "distillation-log.md"
+    log.write_text(
+        log.read_text(encoding="utf-8") + f"- {done} -> DISTILLED, promoted (run: 2026-07-05-00h00)\n",
+        encoding="utf-8",
+    )
+    scope = _admit_scope(fixture_repo)
+    assert done not in scope.manifest["cohorts"]["logs"]
+    assert done not in _batched(scope)
+    assert _not_admitted(scope)[plan] == "not_log_cited"
+
+
+def test_log_headers_are_not_log_entries(fixture_repo):
+    _write(fixture_repo / "state" / "week-changelog" / "HEADER.md", "# Week Changelog\n")
+    _write(fixture_repo / "state" / "week-changelog" / "HEADER.priorities.abc.md", "priorities\n")
+    _write(fixture_repo / "state" / "week-changelog" / "2026-11-09.md", "- a day\n")
+    _write(fixture_repo / "archive" / "week-changelogs" / "2026-06-14" / "2026-07-01-machine-a.md", "- a day\n")
+    scope = _admit_scope(fixture_repo)
+    assert scope.manifest["cohorts"]["logs"] == [
+        "archive/week-changelogs/2026-06-14/2026-07-01-machine-a.md",
+        "state/week-changelog/2026-11-09.md",
+    ]
+
+
+def test_cited_plans_rank_by_citation_count_then_bytes(fixture_repo):
+    once = _heavy_plan(fixture_repo, "2026-11-01-once")
+    twice = _heavy_plan(fixture_repo, "2026-11-02-twice")
+    fatter = _heavy_plan(fixture_repo, "2026-11-03-fatter", extra="more\n" * 2000)
+    _log(fixture_repo, "2026-11-05", once, twice, fatter)
+    _log(fixture_repo, "2026-11-06", twice, fatter)
+    plans = [p for p in _batched(_admit_scope(fixture_repo)) if p.startswith("docs/plans/")]
+    assert plans == [fatter, twice, once]
+
+
+def test_an_ephemeral_fate_stays_mechanical_never_not_admitted(fixture_repo):
+    eph = "docs/plans/2026-11-01-eph.md"
+    _write(fixture_repo / eph, "---\nstatus: implemented\ndistill_fate: ephemeral\n---\nx\n")
+    scope = _admit_scope(fixture_repo)
+    assert eph in {row["path"] for row in scope.manifest["mechanical"]}
+    assert eph not in _not_admitted(scope)
+
+
+def test_admission_adds_the_logs_cohort_to_a_caller_set_without_one(fixture_repo):
+    _log(fixture_repo, "2026-11-02", "a day")
+    spec = CohortSpec(name="completed", glob="archive/completed/**/*.md")
+    scope = compute_scope(fixture_repo, run_id="r", cohort_specs=[spec], admit=True)
+    assert scope.manifest["cohorts"]["logs"] == ["archive/daily-summaries/2026-11-02.md"]
+
+
+def test_the_batch_budget_defers_overflow_and_keeps_it_out_of_mechanical(fixture_repo):
+    for day in range(1, 6):
+        _log(fixture_repo, f"2026-11-0{day}", "a day")
+    scope = _admit_scope(fixture_repo, size_of=lambda rel: 600, byte_budget=1000, max_scan_batches=2)
+    assert scope.manifest["batches"] == [
+        ["archive/daily-summaries/2026-11-05.md"],
+        ["archive/daily-summaries/2026-11-04.md"],
+    ]
+    deferred = [row["path"] for row in scope.manifest["deferred"]]
+    assert deferred == [f"archive/daily-summaries/2026-11-0{day}.md" for day in (3, 2, 1)]
+    assert {row["cohort"] for row in scope.manifest["deferred"]} == {"logs"}
+    assert scope.counts["scannable"] == 2 and scope.counts["deferred"] == 3
+    assert not set(deferred) & {row["path"] for row in scope.manifest["mechanical"]}
+
+
+def test_every_candidate_settles_exactly_once_and_scannable_count_agrees(fixture_repo):
+    _add_plans(fixture_repo)
+    _add_fate_rows(fixture_repo)
+    cited = _heavy_plan(fixture_repo, "2026-11-10-cited")
+    _heavy_plan(fixture_repo, "2026-11-11-uncited")
+    for day in range(1, 5):
+        _log(fixture_repo, f"2026-11-0{day}", cited)
+    specs = ds._with_logs(_PM_SPECS)
+    before = compute_scope(fixture_repo, run_id="r", cohort_specs=specs)
+    candidates = set(_batched(before)) | {row["path"] for row in before.manifest["mechanical"]}
+    after = compute_scope(
+        fixture_repo, run_id="r", cohort_specs=specs, admit=True,
+        size_of=lambda rel: 600, byte_budget=1000, max_scan_batches=2,
+    )
+    manifest = after.manifest
+    assert after.counts["deferred"] > 0 and manifest["not_admitted"]
+    settled = (
+        _batched(after)
+        + [row["path"] for row in manifest["mechanical"]]
+        + [row["path"] for row in manifest["not_admitted"]]
+        + [row["path"] for row in manifest["deferred"]]
+    )
+    assert len(settled) == len(set(settled))
+    assert set(settled) == candidates
+    from coordinator_core.distill import manifest_schema
+
+    assert manifest_schema.validate_scope_manifest(manifest) == []
+    assert scannable_count(fixture_repo, cohort_specs=_PM_SPECS) == after.counts["scannable"] + after.counts["deferred"]
+    assert not {row["path"] for row in manifest["not_admitted"]} & {row["path"] for row in manifest["mechanical"]}
+
+
+def test_cohort_excluded_counts_the_dropped_default_cohorts_and_lists_none(fixture_repo):
+    scope = _admit_scope(fixture_repo)
+    assert scope.counts["cohort_excluded"] == 7  # 5 handoffs, 2 memos with no distill_fate
+    listed = {row["path"] for row in scope.manifest["not_admitted"]}
+    assert not any(p.startswith(("archive/handoffs/", "cross-repo/archive/")) for p in listed)
+    assert "handoffs" not in scope.manifest["cohorts"]
+
+
+def test_the_op_default_admits_under_the_pm_ruling_set(fixture_repo):
+    plan = _heavy_plan(fixture_repo, "2026-11-01-big")
+    _log(fixture_repo, "2026-11-02", plan)
+    result = _handler({"run_id": "r"}, repo_root=fixture_repo / ".git")
+    counts = result["counts"]
+    assert "handoffs" not in counts and counts["memos"] == 0
+    assert counts["logs"] == 1 and counts["scannable"] == 2 and counts["deferred"] == 0
+    assert counts["cohort_excluded"] == 7
+    assert "not_admitted=" in result["summary"]
+    manifest = json.loads((fixture_repo / result["input_json_path"]).read_text(encoding="utf-8"))
+    assert manifest["not_admitted"] and manifest["deferred"] == []
+
+
+def test_admission_is_deterministic_across_runs(fixture_repo):
+    plan = _heavy_plan(fixture_repo, "2026-11-01-big")
+    _log(fixture_repo, "2026-11-02", plan)
+    first = _admit_scope(fixture_repo)
+    second = _admit_scope(fixture_repo)
+    assert canonical_manifest_bytes(first.manifest) == canonical_manifest_bytes(second.manifest)
+
+
+# ---------------------------------------------------------------------------
+# Coverage watermark: delta plus backlog slice, advanced only by a promote
+# ---------------------------------------------------------------------------
+
+_LOG_DAYS = ["2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05"]
+
+
+def _watermarked_repo(tmp_path: Path, monkeypatch) -> Path:
+    from coordinator_core import run_watermark
+
+    monkeypatch.setattr(run_watermark, "registry_get", lambda _key: None)
+    root = tmp_path / "wm-repo"
+    _write(root / "state" / "distillation-log.md", "## Run seed\n")
+    for day in _LOG_DAYS:
+        _log(root, day)
+    _git_init(root)
+    for argv in (
+        ["config", "user.email", "t@example.com"],
+        ["config", "user.name", "T"],
+        ["add", "-A"],
+        ["commit", "-q", "-m", "seed"],
+    ):
+        subprocess.run(["git", *argv], cwd=root, check=True, **no_console_passthrough_kwargs())
+    return root
+
+
+def _slice_scope(root: Path):
+    return _admit_scope(root, batch_size=3, max_scan_batches=1)
+
+
+def _commit_watermark(root: Path, result, run_id: str = "r"):
+    from coordinator_core import run_watermark
+
+    run_dir = root / "state" / "scratch" / "artifact-distillation" / run_id
+    run_watermark.stage(run_dir, result.watermark)
+    return run_watermark.promote(root, run_dir, "distill")
+
+
+def _log_rel(day: str) -> str:
+    return f"archive/daily-summaries/{day}.md"
+
+
+def test_scope_after_promote_is_delta_plus_next_backlog_slice(tmp_path, monkeypatch):
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    first = _slice_scope(root)
+    assert sorted(_batched(first)) == [_log_rel(d) for d in _LOG_DAYS[:3]]
+    assert first.counts["deferred"] == 2
+    _commit_watermark(root, first)
+
+    (root / _log_rel(_LOG_DAYS[0])).write_text("- edited after the first run\n", encoding="utf-8")
+    second = _slice_scope(root)
+    assert sorted(_batched(second)) == sorted(_log_rel(d) for d in [_LOG_DAYS[0], *_LOG_DAYS[3:]])
+    assert second.counts["deferred"] == 2
+    assert _log_rel(_LOG_DAYS[1]) not in _batched(second)
+
+
+def test_completed_pass_scopes_only_changed_files(tmp_path, monkeypatch):
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    for _ in range(2):
+        _commit_watermark(root, _slice_scope(root))
+    quiet = _slice_scope(root)
+    assert _batched(quiet) == [] and quiet.counts["deferred"] == len(_LOG_DAYS)
+
+    (root / _log_rel(_LOG_DAYS[3])).write_text("- changed\n", encoding="utf-8")
+    delta = _slice_scope(root)
+    assert _batched(delta) == [_log_rel(_LOG_DAYS[3])]
+    assert delta.counts["deferred"] == len(_LOG_DAYS) - 1
+
+
+def test_unpromoted_runs_leave_the_watermark_absent_and_rescope_identically(tmp_path, monkeypatch):
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    first = _slice_scope(root)
+    second = _slice_scope(root)
+    assert _batched(first) == _batched(second)
+    assert not (root / "state" / "run-watermarks").exists()
+
+
+def test_the_handler_stages_the_proposal_and_never_the_state_file(tmp_path, monkeypatch, wide_budget):
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    result = _handler({"run_id": "r", "batch_size": 2}, repo_root=root / ".git")
+    pending = root / "state" / "scratch" / "artifact-distillation" / "r" / "watermark.pending.json"
+    assert result["counts"]["scannable"] == 5 and pending.is_file()
+    assert json.loads(pending.read_text(encoding="utf-8"))["pass_complete"] is True
+    assert not (root / "state" / "run-watermarks").exists()
+
+
+def test_no_head_means_no_watermark_and_the_full_admitted_scope(tmp_path, monkeypatch):
+    from coordinator_core import run_watermark
+
+    monkeypatch.setattr(run_watermark, "registry_get", lambda _key: None)
+    root = tmp_path / "unborn"
+    _write(root / "state" / "distillation-log.md", "## Run seed\n")
+    for day in _LOG_DAYS:
+        _log(root, day)
+    _git_init(root)
+    scope = _slice_scope(root)
+    assert scope.watermark is None
+    assert _batched(scope) == [_log_rel(d) for d in reversed(_LOG_DAYS[2:])] and scope.counts["deferred"] == 2
+
+
+def test_byte_packing_overflow_holds_the_cursor_before_the_first_deferred_file(tmp_path, monkeypatch):
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    scope = _admit_scope(root, batch_size=100, max_scan_batches=1, byte_budget=1, size_of=lambda _rel: 1)
+    assert len(_batched(scope)) == 1
+    assert scope.watermark.cursor == f"{_LOG_DAYS[0]} {_log_rel(_LOG_DAYS[0])}"
+    assert scope.watermark.pass_complete is False
+
+
+# ---------------------------------------------------------------------------
+# Run budget: the default admission narrows to fit, defers and never refuses
+# ---------------------------------------------------------------------------
+
+
+def test_default_admission_narrows_to_the_run_budget_and_defers_the_rest(tmp_path, monkeypatch):
+    from coordinator_core.contract import run_budget
+
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    scope = _admit_scope(root, batch_size=1)
+    cap = run_budget.load("distill")
+    block = scope.manifest["budget"]
+    assert len(scope.manifest["batches"]) == 1 and scope.counts["deferred"] == len(_LOG_DAYS) - 1
+    assert all(block["within"].values()) and block["cap"]["agents"] == cap.agents
+    assert block["projected"]["agents"] <= cap.agents and block["projected"]["tokens"] <= cap.tokens
+    assert block["over_cap_fixed"] is False
+
+
+def test_a_larger_budget_admits_more_batches_than_the_default(tmp_path, monkeypatch):
+    from coordinator_core.contract.run_budget import RunBudget
+
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    narrow = len(_admit_scope(root, batch_size=1).manifest["batches"])
+    monkeypatch.setattr(ds._run_budget, "load", lambda _c, path=None: RunBudget(1000, 100_000_000, 10_000))
+    wide = _admit_scope(root, batch_size=1)
+    assert len(wide.manifest["batches"]) > narrow and wide.counts["deferred"] < len(_LOG_DAYS) - narrow + 1
+
+
+def test_a_budget_the_fixed_cost_alone_exceeds_still_admits_one_batch(tmp_path, monkeypatch):
+    from coordinator_core.contract.run_budget import RunBudget
+
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(ds._run_budget, "load", lambda _c, path=None: RunBudget(1, 1, 1))
+    scope = _admit_scope(root, batch_size=1)
+    block = scope.manifest["budget"]
+    assert len(scope.manifest["batches"]) == 1
+    assert block["over_cap_fixed"] is True and block["within"]["agents"] is False
+
+
+def test_a_run_narrowed_by_the_budget_is_followed_by_the_files_it_deferred(tmp_path, monkeypatch):
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    seen: list[str] = []
+    for _ in _LOG_DAYS:
+        scope = _admit_scope(root, batch_size=1)
+        assert len(_batched(scope)) == 1
+        seen.extend(_batched(scope))
+        _commit_watermark(root, scope)
+    assert seen == [_log_rel(d) for d in _LOG_DAYS]
+
+
+def test_the_handler_reports_the_budget_and_records_the_run_in_the_backlog_pass_ledger(tmp_path, monkeypatch):
+    from coordinator_core.ops import backlog_pass_ledger
+
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    result = _handler({"run_id": "r", "batch_size": 1}, repo_root=root / ".git")
+    assert all(result["budget"]["within"].values()) and result["counts"]["deferred"] == len(_LOG_DAYS) - 1
+    ledger = backlog_pass_ledger.summary(str(root), "distill")
+    assert ledger["runs"] == 1 and ledger["open"] is True
+    assert ledger["cumulative_tokens"] == result["budget"]["projected"]["tokens"]
+
+
+def test_files_a_tier_split_drops_are_deferred_and_the_watermark_holds_before_them(tmp_path, monkeypatch, wide_budget):
+    from coordinator_core.ops import distill_workflow_input as dwi
+
+    real = dwi.attach_relevant_guides
+
+    def drop_last(payload, guides, **kw):
+        real(payload, guides, **kw)
+        payload["batches"] = payload["batches"][:-1]
+
+    monkeypatch.setattr(dwi, "attach_relevant_guides", drop_last)
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    result = _handler({"run_id": "r", "batch_size": 1}, repo_root=root / ".git")
+    manifest = json.loads((root / result["input_json_path"]).read_text(encoding="utf-8"))
+    dropped = _log_rel(_LOG_DAYS[-1])
+    assert result["counts"]["scannable"] == len(_LOG_DAYS) - 1 and result["counts"]["deferred"] == 1
+    assert [row["path"] for row in manifest["deferred"]] == [dropped]
+    assert dropped not in [p for batch in manifest["batches"] for p in batch]
+    pending = root / "state" / "scratch" / "artifact-distillation" / "r" / "watermark.pending.json"
+    assert json.loads(pending.read_text(encoding="utf-8"))["pass_complete"] is False

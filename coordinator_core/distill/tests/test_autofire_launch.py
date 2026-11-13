@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import datetime
-import re
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.distill import autofire_launch
+from coordinator_core.distill.autofire_contract import AutofireDisabled
 from coordinator_core.ops.workflow_fire import fire
 
 
@@ -33,9 +32,17 @@ def test_launch_passes_headless_arguments(tmp_path, monkeypatch):
     assert Path(script).is_file()
     assert kw["cwd"] == str(root)
     assert kw["wait"] is False
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{2}h\d{2}", kw["run_id"])
+    assert kw["run_id"] == autofire_launch.AUTOFIRE_RUN_ID
     assert "/distill" in kw["prompt"] and kw["run_id"] in kw["prompt"]
     assert "No PM gate" in kw["prompt"]
+
+
+def test_launch_refuses_a_stopgap_directory_with_a_typed_error(tmp_path, monkeypatch):
+    calls = _capture(monkeypatch)
+    autofire_launch.fire_script_path(tmp_path).mkdir(parents=True)
+    with pytest.raises(AutofireDisabled):
+        autofire_launch.launch(tmp_path)
+    assert calls == []
 
 
 def test_launch_never_passes_expected_tag(tmp_path, monkeypatch):
@@ -68,9 +75,14 @@ def test_launch_propagates_fire_failure(tmp_path, monkeypatch):
         autofire_launch.launch(tmp_path)
 
 
-def test_mint_run_id_format():
-    now = datetime.datetime(2026, 11, 13, 4, 7)
-    assert autofire_launch.mint_run_id(now) == "2026-11-13-04h07"
+def test_repeat_launches_reuse_one_run_id(tmp_path, monkeypatch):
+    """Two fires write one `distill.scope` run dir, not one per tick."""
+    calls = _capture(monkeypatch)
+    autofire_launch.launch(tmp_path)
+    autofire_launch.launch(tmp_path)
+    ids = {kw["run_id"] for _, kw in calls}
+    assert ids == {autofire_launch.AUTOFIRE_RUN_ID}
+    assert all(autofire_launch.AUTOFIRE_RUN_ID in kw["prompt"] for _, kw in calls)
 
 
 def test_prompt_only_script_accepted_by_real_command_builder(tmp_path):
@@ -78,7 +90,7 @@ def test_prompt_only_script_accepted_by_real_command_builder(tmp_path):
     script = autofire_launch.fire_script_path(tmp_path)
     script.parent.mkdir(parents=True)
     script.write_text(autofire_launch._SCRIPT_BODY, encoding="utf-8")
-    prompt = autofire_launch._PROMPT.format(run_id="2026-11-13-04h07")
+    prompt = autofire_launch._PROMPT.format(run_id=autofire_launch.AUTOFIRE_RUN_ID)
     argv = fire.build_fire_command(str(script), "plugin-dir", prompt=prompt, add_dir=str(tmp_path))
     assert argv[:3] == ["claude", "-p", prompt]
     fire._assert_script_under_repo_root(script, str(tmp_path))

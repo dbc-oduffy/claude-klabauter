@@ -195,3 +195,47 @@ def test_rag_known_paths_reports_indexed_files_only(tmp_path):
     assert got == {"docs/a.md", "state/b.yaml"}
     with pytest.raises(RagIndexUnavailable):
         rag_known_paths(repo, ["docs/a.md"], tmp_path / "nohome")
+
+
+def _sized_guides(tmp_path: Path, sizes: list[int]) -> dict[str, str]:
+    slugs = {}
+    for i, size in enumerate(sizes):
+        slug = f"g{i:02d}"
+        slugs[slug] = f"docs/wiki/{slug}.md"
+        _write(tmp_path, slugs[slug], "# Topic\nquartz relay\n" + "x" * size)
+    for i in range(30):
+        slugs[f"z{i:02d}"] = f"docs/wiki/z{i:02d}.md"
+        _write(tmp_path, slugs[f"z{i:02d}"], f"# Zed\nfiller{i}\n")
+    _write(tmp_path, "docs/specs/a.md", "quartz relay topic")
+    return slugs
+
+
+def test_byte_budget_stops_at_first_overflow_and_keeps_rank_order(tmp_path):
+    slugs = _sized_guides(tmp_path, [3000] * 6)
+    out = relevant_guides_for_batches(tmp_path, [["docs/specs/a.md"]], slugs, byte_budget=10_000)
+    assert [g["slug"] for g in out[0]] == ["g00", "g01", "g02"]
+
+
+def test_byte_budget_within_limit_leaves_top_k_untouched(tmp_path):
+    slugs = _sized_guides(tmp_path, [100] * 12)
+    out = relevant_guides_for_batches(tmp_path, [["docs/specs/a.md"]], slugs, byte_budget=48_000)
+    assert len(out[0]) == RELEVANT_GUIDES_K
+
+
+def test_rank_one_is_kept_even_when_it_alone_exceeds_the_budget(tmp_path):
+    slugs = _sized_guides(tmp_path, [5000, 10])
+    out = relevant_guides_for_batches(tmp_path, [["docs/specs/a.md"]], slugs, byte_budget=100)
+    assert [g["slug"] for g in out[0]] == ["g00"]
+
+
+def test_rag_ranking_honours_the_byte_budget(tmp_path):
+    repo = tmp_path / "repo-x"
+    repo.mkdir()
+    home = tmp_path / "home"
+    slugs = _sized_guides(repo, [3000] * 6)
+    _make_rag(home, repo, {p: ["Topic"] if "/g" in p else ["Zed"] for p in slugs.values()})
+    source, out = ranked_guides_for_batches(
+        repo, [["docs/specs/a.md"]], slugs, settings_home_dir=home, byte_budget=10_000
+    )
+    assert source == "rag"
+    assert [g["slug"] for g in out[0]] == ["g00", "g01", "g02"]

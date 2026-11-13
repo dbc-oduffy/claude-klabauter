@@ -208,12 +208,15 @@ def peer_split(
             bad, own, head_bytes = _unproduced(root, run_id, path)
         except Exception:  # noqa: BLE001 -- unreadable provenance names a peer only when one co-declares the path
             owner = _peer_owner(root, run_id, own_plan, path)
-            if owner is not None:
+            if owner is not None and not _own_chain(root, run_id, owner):
                 unsettled[path] = {"owner": owner, "lines": UNATTRIBUTABLE_LINES}
             continue
         if not bad:
             continue
-        owner = _peer_owner(root, run_id, own_plan, path) or UNKNOWN_OWNER
+        owner = _peer_owner(root, run_id, own_plan, path)
+        if owner is not None and _own_chain(root, run_id, owner):
+            continue
+        owner = owner or UNKNOWN_OWNER
         blob = None
         if head_bytes is not None:
             try:
@@ -225,6 +228,18 @@ def peer_split(
         else:
             unsettled[path] = {"owner": owner, "lines": bad}
     return split, unsettled
+
+
+def _own_chain(root: Path, run_id: str, owner: str) -> bool:
+    """`owner` is `run_id`'s own chain (the ask run a warp run was chained from, or a resume ancestor):
+    its hunks are this run's work, so splitting them out leaves a candidate missing half the change.
+    Never raises; unreadable lineage is not kin."""
+    try:
+        from coordinator_core.ops.dispatch_emit.ask_stage import _chain_kin
+
+        return owner in _chain_kin(root, run_id, [owner])
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _peer_owner(root: Path, run_id: str, own_plan: Optional[str], path: str) -> Optional[str]:

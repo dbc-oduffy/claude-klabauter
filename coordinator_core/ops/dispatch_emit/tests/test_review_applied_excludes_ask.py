@@ -108,4 +108,7 @@ def test_the_landing_gate_passes_an_approved_review(tmp_path):
     (tmp_path / "a.py").write_text("x = 'new'\n", encoding="utf-8", newline="")
     rows = [{"id": "finding-1", "file": "a.py", "before": "old", "after": "new", "status": "applied", "verified": True}]
     review = _sidecar(tmp_path, rows, verdict="APPROVED")
-    assert refusals._tests_not_run_refusal(tmp_path, {"arm": "s"}, None, review) is None
+    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest
+
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),), plan_path=None, version=1)
+    assert refusals._tests_not_run_refusal(tmp_path, {"arm": "s"}, request, review) is None

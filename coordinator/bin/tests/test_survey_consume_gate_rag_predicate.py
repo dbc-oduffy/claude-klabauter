@@ -138,6 +138,35 @@ def test_rag_absent_on_box_leaves_predicate_unchanged(gate, tmp_path, monkeypatc
     assert set(pred) == {"rag_present", "checked_path", "reason"}
 
 
+def test_rag_present_tree_fills_the_census_slot_without_invoking_an_op(gate, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gate, "_invoke_op", lambda *a, **k: calls.append(a) or (1, None, "boom"))
+    monkeypatch.setattr(gate, "_rag_registration", lambda repo_root: {})
+    monkeypatch.setattr(gate, "_fetch_structure", lambda config: {"structure_path": None})
+    (_rag_dir(tmp_path) / "graph.db").write_bytes(b"x")
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "f.py").write_text("x\n", encoding="utf-8")
+    from coordinator_core.architecture_survey import tree_census
+
+    monkeypatch.setattr(
+        tree_census.subprocess, "run", lambda argv, **k: __import__("subprocess").CompletedProcess(argv, 0, stdout=b"a/f.py\0", stderr=b"")
+    )
+
+    out = gate.run_gate(
+        {
+            "repo_root": str(tmp_path),
+            "claude_klabauter_root": str(Path(__file__).resolve().parents[3]),
+            "run_id": "r",
+            "census_buckets": [{"bucketId": "a", "dirs": ["a"]}],
+        }
+    )
+
+    assert calls == []
+    assert out["rag_present"] is True
+    assert out["chunk_table"]["ok"] is True
+    assert out["chunk_table"]["source"] == "tree"
+
+
 def test_without_predicate_only_a_rag_absent_tree_still_runs_extraction(gate, tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(gate, "_invoke_op", lambda *a, **k: calls.append(a) or (1, None, "boom"))

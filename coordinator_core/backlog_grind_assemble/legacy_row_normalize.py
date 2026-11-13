@@ -56,11 +56,23 @@ def _enum_of(schema: Mapping[str, Any], *keys: str) -> list:
     return list(node.get("enum") or []) if isinstance(node, Mapping) else []
 
 
-def normalize_legacy_row(row: Mapping[str, Any], schema: Mapping[str, Any]) -> NormalizedRow:
+def owning_repo_default(repo_root: Any, row_rel_path: Any) -> str:
+    """The repo a row with no `repo`/`path` provenance belongs to: `repo_root`'s own name for a row
+    in the repo's own queue; empty for a row under a `cross-repo` outbox, whose origin is unknown."""
+    parts = PurePosixPath(str(row_rel_path).replace("\\", "/")).parts
+    if "cross-repo" in parts:
+        return ""
+    return PurePosixPath(str(repo_root).replace("\\", "/")).name
+
+
+def normalize_legacy_row(
+    row: Mapping[str, Any], schema: Mapping[str, Any], default_from_repo: str = ""
+) -> NormalizedRow:
     """Return a validation copy of `row` with derivable required fields filled in.
 
     Only fields the schema declares are touched. A present-but-invalid `scope` is left alone
-    (a genuine failure). `handback` names the fields that could not be derived."""
+    (a genuine failure). `default_from_repo` fills `from_repo` when the row names no repo itself.
+    `handback` names the fields that could not be derived."""
     out = dict(row)
     advisories: list[str] = []
     props = schema.get("properties") or {}
@@ -71,6 +83,9 @@ def normalize_legacy_row(row: Mapping[str, Any], schema: Mapping[str, Any]) -> N
         if derived:
             out["from_repo"] = derived
             advisories.append(f"from_repo derived from repo/path: {derived}")
+        elif default_from_repo:
+            out["from_repo"] = default_from_repo
+            advisories.append(f"from_repo defaulted to the owning repo: {default_from_repo}")
         else:
             missing.append("from_repo")
 

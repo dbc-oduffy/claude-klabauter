@@ -67,6 +67,8 @@ class ReviewAgent:
     executor_rows_per_reviewer: Optional[Tuple[int, int]] = None
     #: Smallest plan t-shirt this agent is admitted at; ``None`` admits every size.
     min_tshirt: Optional[str] = None
+    #: Engine op name; reserved for a model-free op entry (``agent_type`` carries the op name); emitter support pending.
+    op: Optional[str] = None
 
     def runs_at(self, tier: Optional[str]) -> bool:
         """True when this agent runs at ``tier``; an untiered agent or an unknown tier always runs."""
@@ -391,6 +393,29 @@ def _resolve_review_agent(
 
     agent_type = raw_agent.get("agentType")
     accepts_signals = raw_agent.get("accepts_signals")
+
+    op = raw_agent.get("op")
+    if "op" in raw_agent:
+        if not isinstance(op, str) or not op:
+            raise RosterFragmentError(f"{where} 'op' {op!r} must be a non-empty string")
+        for field in ("agentType", "accepts_signals", "model", "effort"):
+            if raw_agent.get(field) is not None:
+                raise RosterFragmentError(f"{where} carries both 'op' and '{field}'")
+        return [
+            ReviewAgent(
+                agent_type=op,
+                model=None,
+                effort=None,
+                per=per,
+                applies=applies,
+                schema=schema,
+                accepts_signals=None,
+                tiers=tiers,
+                executor_rows_per_reviewer=rows_per_reviewer,
+                min_tshirt=min_tshirt,
+                op=op,
+            )
+        ]
 
     if agent_type is not None and accepts_signals is not None:
         raise RosterFragmentError(

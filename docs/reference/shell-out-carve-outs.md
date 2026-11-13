@@ -613,6 +613,25 @@ The worker releases the reservation on completion. Its native driver retains
 per-step admission, timeout, and suite-grant checks; the bounded launch is held
 to the 500ms op bar. No arbitrary executable or caller environment is accepted.
 
+## Recorded — example-retrieval-repo freshness-verdict detached reader
+
+`coordinator_core/ops/rag_freshness.py::_spawn_admitted` starts detached, closed-argv,
+`shell=False` children with hidden Windows flags: the verdict-cache worker
+(`sys.executable -m coordinator_core.ops.rag_freshness --fetch <repo>`, queued by
+`default_verdict_fn` via `default_verdict_spawn_fn`) and example-retrieval-repo's own
+`refresh_from_release` remedy argv (`default_spawn_fn`, only for that action). The worker's
+body, `fetch_and_cache`, runs `<resolved interpreter> project_rag_cli.py freshness-verdict --cwd
+<repo>` with closed argv, `shell=False` and a timeout, and caches the JSON reply atomically.
+This is naked Python, outside shell classes (a)-(i), not a shell exemption; same precedent as
+the ceremony worker above. The verdict costs seconds against the 500ms bar, so it never runs
+on an op or hook path: the engine reads only the cached reply.
+
+The CLI resolves through the machine-local `repos.project_rag` registry
+(`rag_fleet_registration.detect_example_retrieval_repo`); unresolved yields verdict `unknown`, nothing
+spawned. Each spawn passes `admit_before_spawn` and hands its reservation to the child. Known
+not-current cases on example-retrieval-repo's side: a pull-only landing does not stamp the successful-run
+marker (d1050e Finding 2), and the cockpit TypeScript SCIP layer is empty; the CLI's verdict governs.
+
 ## Related, not a carve-out
 
 The polyglot trampoline blessing ("~1-line polyglot trampoline inside an otherwise-Python CLI")

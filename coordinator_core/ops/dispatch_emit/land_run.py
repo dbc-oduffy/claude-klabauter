@@ -1102,6 +1102,35 @@ def _zero_path_prefix_dirty(root: Path, chunks: Sequence, landing: Collection[st
     return credit_gate.zero_path_prefix_credit(zero, {}, dirty)
 
 
+def _unlanded_pairs(root: Path, chunks: Sequence, withhold_reason: Mapping, cache: dict) -> list:
+    """``[(row id, path, reason)]`` for each credited chunk path ``withhold_reason`` keeps out of the commit.
+
+    Read it again after every late withhold: a hold set after the credit gate leaves its row credited otherwise."""
+    pairs: list = []
+    for chunk in chunks:
+        for p in [*chunk.paths, *(_own_prefix_files(root, chunk, cache) or [])]:
+            reason = withhold_reason.get(p)
+            if reason is not None and (chunk.id, p, reason) not in pairs:
+                pairs.append((chunk.id, p, reason))
+    return pairs
+
+
+def _subject_rows_left(contributing: Sequence, manifest, left_paths: Sequence[str], unlanded: Sequence) -> list:
+    """``[(row id, path, reason)]`` for each subject-named row whose declared path in ``left_paths`` stayed
+    dirty after the commit and is not already reported unlanded. A row owns a path through its chunk paths
+    or the manifest row's writes. Pure over the porcelain read already taken."""
+    known = {(row, p) for row, p, _r in unlanded}
+    rows: dict = {c.id: set(c.paths) for c in contributing}
+    for mrow in (manifest.rows if manifest is not None else ()):
+        if mrow.id in rows:
+            rows[mrow.id] |= set(mrow.writes)
+    reason = "declared write left dirty after the commit"
+    return [
+        (row, p, reason) for row, owned in sorted(rows.items()) for p in left_paths
+        if p in owned and (row, p) not in known
+    ]
+
+
 def _manifest_declared(manifest_abs: Optional[Path]) -> tuple[list, Optional[str]]:
     """``(declared product paths, staging head)`` from the stage manifest: its rows' ``writes`` minus
     run-record paths and process state; ``([], None)`` when unreadable."""
@@ -2484,12 +2513,17 @@ def _peer_held(
         pass
     try:
         from coordinator_core.ops import warp_run_deliverable
-        from coordinator_core.ops.dispatch_emit import own_checkpoint_paths
+        from coordinator_core.ops.dispatch_emit import own_checkpoint_paths, sibling_claims
 
-        claims = warp_run_deliverable.live_run_write_claims(
-            root, list(paths), exclude_session=_submitter_session(root, run_id), cwd=str(root),
-            minted_before=minted_before,
-            exclude_run=run_id if isinstance(run_id, str) else None,
+        submitter = _submitter_session(root, run_id)
+        own_run = run_id if isinstance(run_id, str) else None
+        claims = sibling_claims.live_unreleased(
+            root,
+            warp_run_deliverable.live_run_write_claims(
+                root, list(paths), exclude_session=submitter, cwd=str(root), minted_before=minted_before,
+                exclude_run=own_run,
+            ),
+            own_run, minted_before, submitter,
         )
         own = (
             own_checkpoint_paths.checkpoint_landed_paths(root, plan_rel, run_base, list(claims or ()))
@@ -3273,7 +3307,9 @@ def _measured_mismatch(
 ) -> list:
     """Paths where the product changes a commit would introduce (``product`` path -> blob, ``deleted``
     removals) differ from the record's ``blobs``/``removed``. A record path the commit omits counts
-    unless HEAD already holds the recorded blob. Paths *own* (an ``OwnArtifacts``) covers never count.
+    unless HEAD already holds the recorded blob. A deletion the record does not remove counts only
+    while HEAD still holds the path: absent from the record, HEAD and the landing is equal.
+    Paths *own* (an ``OwnArtifacts``) covers never count.
     ``owned_now`` (paths -> the subset whose bytes are the run's own last write) drops a landing path
     the run's review/fix leg rewrote after the record; a foreign rewrite stays. ``no_change`` (paths ->
     the subset the run provably never changed, ``_run_made_no_change``) drops a landing path whose
@@ -3282,10 +3318,10 @@ def _measured_mismatch(
 
     blobs = record.get("blobs") if isinstance(record.get("blobs"), dict) else {}
     removed = set(_measured_strs(record, "removed"))
-    head = _head_entries(root, [*blobs, *removed])
     landing, gone = set(product), set(deleted)
+    head = _head_entries(root, [*blobs, *removed, *gone])
     differing = {p for p in landing if blobs.get(p) != (settled.get(p) or checkin_blob_sha(root, p))}
-    differing |= {p for p in gone if p not in removed}
+    differing |= {p for p in gone if p not in removed and p in head}
     differing |= {
         p for p, blob in blobs.items()
         if p not in landing and p not in gone and (head.get(p) or (None, None))[1] != blob
@@ -4079,12 +4115,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         }
 
     # ---- credit gate and Row-Unlanded
-    unlanded: list = []  # (row id, path, reason)
-    for chunk in credited_chunks:
-        for p in [*chunk.paths, *(_own_prefix_files(root, chunk, cache) or [])]:
-            reason = withhold_reason.get(p)
-            if reason is not None and (chunk.id, p, reason) not in unlanded:
-                unlanded.append((chunk.id, p, reason))
+    unlanded: list = _unlanded_pairs(root, credited_chunks, withhold_reason, cache)  # (row id, path, reason)
     landing_now = set(paths) | set(deleted)
     contributing = [
         c for c in credited_chunks
@@ -4154,7 +4185,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         if withheld_product:
             ledger_met = None
     ledger_partial: dict = {}
-    if unlanded and isinstance(params.get("ledger_verdict"), dict):
+
+    def _downgrade_ledger() -> None:
+        nonlocal ledger_met, ledger_partial
+        if not (unlanded and isinstance(params.get("ledger_verdict"), dict)):
+            return
         from coordinator_core.ops.dispatch_emit import terminal_commit_ledger as _tcl
 
         served = {r.id: tuple(r.register_rows) for r in manifest.rows} if manifest is not None else {}
@@ -4171,6 +4206,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 _tcl.rewrite_note_verdicts(
                     root / delivery_note_locate(root, ask_run_dir.name), downgraded, inline_review, root,
                 )
+
+    _downgrade_ledger()
 
     # A review that applied fixes anchors its trailer on the plan path even when the product matches HEAD.
     fixes_anchor = bool(inline_review.get("fixes")) and bool(request.plan_path) and bool(_review_trailer(record_abs))
@@ -4368,6 +4405,25 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         ]
         withhold_reason.update(tests_without_source)
         named_out.update(tests_without_source)
+    # Holds set after the credit gate: a row whose declared path they keep out is unlanded, not credited.
+    late = [t for t in _unlanded_pairs(root, credited_chunks, withhold_reason, cache) if t not in unlanded]
+    if late:
+        unlanded.extend(late)
+        for row, p, _reason in late:
+            stranded.setdefault(row, [])
+            if p not in stranded[row]:
+                stranded[row].append(p)
+        landing_now = set(paths) | set(deleted)
+        contributing = [
+            c for c in credited_chunks
+            if any(p in landing_now for p in [*c.paths, *(_own_prefix_files(root, c, cache) or [])])
+        ]
+        unlanded_rows = {row for row, _p, _r in unlanded}
+        credited_ids = [c.id for c in credited_chunks if c.id not in unlanded_rows]
+        if ledger is not None:
+            withheld_product = shared_path_landing.withheld_product_paths(unlanded)
+            ledger_met = None
+        _downgrade_ledger()
     if findings:
         _remove(root, receipt_paths)
         first = findings[0]
@@ -4431,12 +4487,15 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         def _owners(claimed: Sequence[str]) -> dict:
             """``{path: owner}`` for claimed paths another run withholds (halted index) or a live peer holds (``_peer_held``)."""
             wanted = set(claimed)
-            from coordinator_core.ops.dispatch_emit import halted_withheld_index
+            from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_withheld_index
 
-            found = {
-                p: str(run) for p, run in halted_withheld_index.withheld_by_path(root).items()
-                if p in wanted and run not in own_run_ids
-            }
+            found = halted_hold_release.still_held_by_index(
+                root, {
+                    p: str(run) for p, run in halted_withheld_index.withheld_by_path(root).items()
+                    if p in wanted and run not in own_run_ids
+                },
+                rid, request.plan_path,
+            )
             held = _peer_held(
                 root, [p for p in claimed if p not in found], session_id, rid, script_path,
                 plan_rel=request.plan_path, run_base=run_base if isinstance(run_base, str) else None,
@@ -4660,8 +4719,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             if not (isinstance(verified.get(p), str) and _worktree_blob(root, p) == verified[p])
         }
 
-    # Only a measured "pre_existing" overlay lands with an advisory; red, inconclusive, missing and
-    # mismatch refuse.
+    # A "pre_existing" overlay (measured) or a "missing" one (the engine never produced a verdict) lands with
+    # an advisory; red, inconclusive and mismatch refuse.
     reach_dirt_foreign: dict = {}
     reach_dirt_overlay: dict = {}
     if measured is not None and merge_plan is None and not (anchor_only or request.review_only):
@@ -4727,7 +4786,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             if overlay.verdict == "mismatch":
                 overlay = clean_overlay_verify.reverify_on_mismatch(root, measured_run, measured, overlay)
             reach_dirt_overlay = {"verdict": overlay.verdict, "seeds": list(overlay.seeds)}
-            if overlay.verdict == "pre_existing":
+            if overlay.verdict in ("pre_existing", "missing"):
                 reach_dirt_overlay["advisory"] = f"clean-overlay verdict {overlay.verdict}: {overlay.detail}"
                 # The landing is recoverable so it proceeds, but unverified: the trailer is what a release
                 # gate reads to list the commits the full-tree regate alone covers.
@@ -4882,6 +4941,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     review_gap: list = []
     declared_left: dict = {}
     gap_dirty: set = set()
+    reply_left_rows: list = []
     review_code = list(manifest.review_code_paths) if manifest is not None else []
     gap_literals = list(dict.fromkeys([*review_code, *sorted(declared_writes)]))
     if gap_literals:
@@ -4904,6 +4964,15 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         ledger_met = None
         credited_ids = []
         withheld_product = sorted({*withheld_product, *review_gap})
+        left_rows = _subject_rows_left(contributing, manifest, review_gap, unlanded)
+        for row, p, reason in left_rows:
+            unlanded.append((row, p, reason))
+            stranded.setdefault(row, [])
+            if p not in stranded[row]:
+                stranded[row].append(p)
+        if left_rows:
+            unlanded_rows = {row for row, _p, _r in unlanded}
+            reply_left_rows = sorted({row for row, _p, _r in left_rows})
     merge_artifacts_reply: Optional[dict] = None
     if merge_plan is not None:
         merge_owner.clear(root)
@@ -4985,6 +5054,14 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             f"ledger rows not reported met: commit omits changed file(s) {withheld_product}"[:_UNDONE_CAP]
         )
     reply.update(recovery_reply)
+    if reply_left_rows:
+        reply["rows_unlanded"] = {row: sorted(stranded.get(row, [])) for row in reply_left_rows}
+        reply["ok"] = False
+        left_error = (
+            "subject-named row(s) " + ", ".join(reply_left_rows)
+            + " have declared writes still dirty after the commit"
+        )
+        reply["error"] = f"{left_error}; {reply['error']}" if reply.get("error") else left_error
     landed_now_set = {*paths, *deleted}
     foreign_named = {p: why for p, why in withhold_reason.items() if p not in landed_now_set}
     foreign_named.update({
@@ -5365,10 +5442,14 @@ def _split_free_targets(
     """``(free, holders)``: ``free`` the sorted targets no run withholds, peer holds or declares (safe to widen
     into the landing); ``holders`` maps every other target to what keeps it out (a run id, session ids, or
     ``barred`` for this run's own withhold)."""
-    from coordinator_core.ops.dispatch_emit import halted_withheld_index, peer_hunk_gate
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_withheld_index, peer_hunk_gate
 
-    halted = halted_withheld_index.withheld_by_path(root)
     own = {str(r) for r in own_run_ids if r}
+    halted = halted_withheld_index.withheld_by_path(root)
+    halted = halted_hold_release.still_held_by_index(
+        root, {p: r for p, r in halted.items() if p in targets and str(r) not in own},
+        next((r for r in reversed(list(own_run_ids)) if r), None), plan_rel,
+    )
     holders: dict = {}
     for t in targets:
         if t in barred:

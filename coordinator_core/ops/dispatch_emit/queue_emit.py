@@ -242,6 +242,7 @@ def emit_queue_script(
         queue_dirs=[Path(os.path.relpath(q, repo_root)).as_posix() for q in guarded_queue_dirs],
         stage_models=stage_models,
         not_admitted=not_admitted_entries(admission) + claimed_entries(manifest.claimed),
+        repo_root=repo_root,
     )
 
     profile_digest = hashlib.sha256(loaded_profile.source_path.read_bytes()).hexdigest()

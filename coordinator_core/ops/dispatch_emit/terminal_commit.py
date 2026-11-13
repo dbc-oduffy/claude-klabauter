@@ -2995,6 +2995,20 @@ def _terminal_commit_inner(
     )
     if left_out_map:
         scope["peer_held_left"] = left_out_map
+    if snapshot is not None and session_id:
+        from coordinator_core.ops.dispatch_emit.run_leftovers import run_touched_left
+
+        leftovers = run_touched_left(
+            snapshot.changed, touched,
+            [*all_paths, *deleted_paths, *run_owned, *owned_deletions], left_out_map,
+        )
+        if leftovers:
+            scope.update(root=worktree_root, request=request, snapshot=snapshot, session_id=session_id)
+            if close_ctx is not None:
+                close_ctx.clear()
+            return _with_process_withheld(_with_siblings({
+                "committed": False, "refused": "run-touched-left", "run_touched_left": leftovers,
+            }))
     run_owned = _bar_stranded(run_owned)
     # Trap: a slice file is any file changed since the run base, a concurrent run's included; an
     # own-dir file whose blob drops lines a foreign commit added since the base is that run's dirt.

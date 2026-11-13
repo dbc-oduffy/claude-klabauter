@@ -210,7 +210,11 @@ def test_blocker_end_wakes_the_waiter_once_and_spools_its_refire(repo, ender):
     assert len(entries) == 1
     _header, payload = entries[0]
     assert payload["tool_input"]["name"] == "coordinator:engine-ask"
-    assert payload["tool_input"]["args"] == {"sizing": SIZING, "resume_run_id": "waiter"}
+    assert payload["tool_input"]["args"] == {
+        "sizing": SIZING,
+        "resume_run_id": "waiter",
+        "repo": str(repo.resolve()),
+    }
     getattr(run_token, ender)(repo, "blocker")
     assert len(_spooled(repo)) == 1
     assert notice.consume_notices(str(repo), "s1") == []

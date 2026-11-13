@@ -549,3 +549,100 @@ def test_approve_keeps_own_record_when_it_already_has_relay_pubs_or_nothing_is_r
     assert next(m for m in snap["members"] if m["box"] == "alpha")["relay_pubs"] == rig.me["relay_pubs"]
     bare = mem.next_snapshot(None, {"op": "join", "member": _member("solo", rig.tmp)})
     assert up._reissue_own(mem, bare, "solo", None, lambda peers=None: {}) is bare
+
+
+def _own_recording(keys, asked=None):
+    def own(name):
+        if asked is not None:
+            asked.append(name)
+        if name not in keys:
+            raise RuntimeError(f"no recorded pair key for {name}")
+        return keys[name], "x"
+    return own
+
+
+def test_pair_key_resolves_a_key_recorded_only_by_user_at_address_of_the_box():
+    cand = up.make_candidate_fn(lambda b: ["192.168.0.175", "192.168.0.174"] if b == "Mac-mini" else [])
+    own = _own_recording({"example-operator@192.168.0.174": "kip"})
+    assert up.pair_key_for_host("Mac-mini", "Mac-mini.local", own, lambda h: None, cand, "example-operator") == ("kip", "x")
+
+
+def test_pair_key_matches_case_and_hyphen_variants_of_the_box_id():
+    cand = up.make_candidate_fn(lambda b: [])
+    own = _own_recording({"macmini": "kv"})
+    assert up.pair_key_for_host("Mac-mini", "Mac-mini.local", own, None, cand, "u") == ("kv", "x")
+    assert up.box_variants("Mac-mini") == ["Mac-mini", "mac-mini", "macmini"]
+
+
+def test_pair_key_still_refuses_when_neither_alias_variant_nor_address_key_is_recorded():
+    cand = up.make_candidate_fn(lambda b: ["10.0.0.5"])
+    with pytest.raises(RuntimeError, match="no recorded pair key for Mac-mini"):
+        up.pair_key_for_host("Mac-mini", "Mac-mini.local", _own_recording({"example-operator@10.0.0.9": "k"}), None, cand, "example-operator")
+
+
+def test_default_address_fn_reads_the_registry_key_under_each_box_spelling():
+    asked = []
+
+    def read(name):
+        asked.append(name)
+        return "192.168.0.175, nonsense" if name == "unimatrix.addresses.macmini" else ""
+
+    assert up.default_address_fn(read)("Mac-mini") == ["192.168.0.175"]
+    assert asked == ["unimatrix.addresses.Mac-mini", "unimatrix.addresses.mac-mini", "unimatrix.addresses.macmini"]
+
+
+def _address_main(rig, argv, stdin, keys, addresses, signer):
+    out, err = io.StringIO(), io.StringIO()
+    rc = up.main(argv, out=out, err=err, stdin=io.StringIO(stdin), home=rig.home, environ={}, run=rig.run,
+                 signer=signer, notifier=rig.notifier, own_key_fn=_own_recording(keys), alias_fn=lambda h: None,
+                 address_fn=lambda b: addresses.get(b, []), authorized_keys=rig.ak, is_admin=lambda: False,
+                 box="alpha", self_names={"alpha"})
+    return rc, out.getvalue(), err.getvalue()
+
+
+def test_approve_pushes_to_a_member_whose_key_is_recorded_only_by_address(rig):
+    member = {**_member("Mac-mini", rig.tmp), "host": "Mac-mini.local", "user": "example-operator"}
+    rig.seed([rig.me, rig.beta])
+    keys = {"example-operator@192.168.0.175": rig.tmp / "k-ip", "beta": rig.tmp / "k-beta"}
+    rc, out, err = _address_main(rig, ["approve", "-"], json.dumps(member), keys, {"Mac-mini": ["192.168.0.175"]}, rig.fake)
+    assert rc == 0, err
+    cmd, _ = {next(a for a in c[0] if "@" in a): c for c in rig.pushes}["example-operator@Mac-mini.local"]
+    assert cmd[cmd.index("-i") + 1] == str(keys["example-operator@192.168.0.175"])
+    assert "Mac-mini: pushed" in out
+
+
+def test_approve_of_existing_member_repushes_through_the_address_resolver(rig):
+    member = {**_member("Mac-mini", rig.tmp), "host": "Mac-mini.local", "user": "example-operator"}
+    rig.seed([rig.me, member])
+    signer = Counting(rig.fake)
+    keys = {"example-operator@192.168.0.175": rig.tmp / "k-ip"}
+    rc, out, err = _address_main(rig, ["approve", "-"], json.dumps(member), keys, {"Mac-mini": ["192.168.0.175"]}, signer)
+    assert rc == 0, err
+    assert signer.calls == 0 and "already a member; re-pushing epoch 1" in out and "Mac-mini: pushed" in out
+
+
+def test_approve_refuses_before_signing_when_no_member_is_pushable_and_names_the_repush_command(rig):
+    rig.seed([rig.me, rig.beta])
+    before = rig.state()
+    signer = Counting(rig.fake)
+    gamma = json.dumps(_member("gamma", rig.tmp), sort_keys=True)
+    rc, out, err = _address_main(rig, ["approve", "-"], gamma, {}, {}, signer)
+    assert rc == 1 and signer.calls == 0 and rig.state() == before and rig.pushes == []
+    assert "nothing signed" in err and "unimatrix-pair.py approve - <<< '" in err
+    assert gamma in err and "<request file>" not in err
+
+
+def test_repush_command_names_the_request_file_when_it_is_a_path(rig):
+    rig.seed([rig.me, rig.beta])
+    req = rig.tmp / "gamma.json"
+    req.write_text(json.dumps(_member("gamma", rig.tmp)), encoding="utf-8")
+    rc, _, err = _address_main(rig, ["approve", str(req)], "", {}, {}, Counting(rig.fake))
+    assert rc == 1 and f"approve {req}" in err
+
+
+def test_unpushable_member_line_names_the_repush_command(rig):
+    rig.seed([rig.me, rig.beta])
+    rc, out, _ = _address_main(rig, ["approve", "-"], json.dumps(_member("gamma", rig.tmp)),
+                               {"gamma": rig.tmp / "k"}, {}, rig.fake)
+    assert rc == 0 and "beta: refused: no recorded pair key for beta; once recorded, re-push:" in out
+    assert "unimatrix-pair.py approve" in out

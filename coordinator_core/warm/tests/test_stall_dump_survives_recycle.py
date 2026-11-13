@@ -37,7 +37,7 @@ def test_record_holds_threads_and_leg_and_survives_prune_and_release(tmp_path, m
     (record,) = stall_dir.glob("*.txt")
     text = record.read_text(encoding="utf-8")
     assert "--- threads ---" in text and "Thread" in text
-    leg_line = text.split("\n")[1]
+    (leg_line,) = [ln for ln in text.split("\n") if ln.startswith("leg: ")]
     assert json.loads(leg_line.partition("leg: ")[2])["leg"]
 
     stderr_dir = tmp_path / "pool-worker-stderr"

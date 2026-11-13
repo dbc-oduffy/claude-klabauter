@@ -225,7 +225,8 @@ def test_write_record_ratchet_ok_and_breach(tmp_path):
     out = run_report.write_record(journal, str(ratchet))
     assert out == str(tmp_path / "run-cost.json")
     record = json.loads((tmp_path / "run-cost.json").read_text(encoding="utf-8"))
-    assert {"phase_split", "executors", "run_total", "ratchet"} <= set(record)
+    assert {"phase_split", "executors", "run_total", "ratchet", "by_role", "by_model", "agents"} <= set(record)
+    assert record["agents"] == 3 and record["by_role"]["plan"]["agents"] == 1
     assert record["ratchet"]["executor_peak_context"] == {
         "ceiling": 4000, "observed": 5000, "verdict": "breach"}
     assert record["ratchet"]["executor_tool_calls"]["verdict"] == "ok"
@@ -243,6 +244,18 @@ def test_tighten_lowers_and_never_raises(tmp_path):
     assert after == {"executor_peak_context": 4000, "executor_tool_calls": 3,
                      "executor_max_same_file_reads": 1}
     assert json.loads(ratchet.read_text(encoding="utf-8")) == after
+
+
+def test_tighten_never_raises_a_peer_lowered_ceiling(tmp_path):
+    ratchet = tmp_path / "ratchet.json"
+    block = {m: {"ceiling": 0, "observed": 0, "verdict": "ok"} for m in
+             ("executor_peak_context", "executor_tool_calls", "executor_max_same_file_reads")}
+    block["executor_tool_calls"]["observed"] = 7
+    for peer_ceiling, expected in ((10, 7), (2, 2)):
+        ratchet.write_text(json.dumps({"executor_peak_context": 4000, "executor_tool_calls": peer_ceiling,
+                                       "executor_max_same_file_reads": 5}), encoding="utf-8")
+        run_report.tighten(block, str(ratchet))
+        assert json.loads(ratchet.read_text(encoding="utf-8"))["executor_tool_calls"] == expected
 
 
 def test_tracked_ratchet_at_or_below_measured_baseline():

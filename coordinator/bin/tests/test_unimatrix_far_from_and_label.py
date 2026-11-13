@@ -44,16 +44,16 @@ def test_unmatched_socket_resolves_to_the_mirror_of_the_same_named_session(endpo
 def test_name_match_is_per_box():
     inbox = load("inbox")
     other = {"name": "far-1.otherbox", "macSocketPath": FAR_SOCK, "messagingSocketPath": POSIX_EP}
-    out = localized(inbox, frame_from(FAR_CC_MSG), [other])
-    assert out["from"] == "far-1.boxlan"
+    inbox._mirrors = lambda: iter([other])
+    line = json.dumps(frame_from(FAR_CC_MSG)).encode()
+    assert inbox.localize(frame_from(FAR_CC_MSG), line, "boxlan") == line
 
 
-def test_no_resolvable_endpoint_leaves_a_name_at_box_label_never_the_far_path():
+def test_no_resolvable_endpoint_leaves_the_frame_refused_visible_never_a_label():
     inbox = load("inbox")
-    out = localized(inbox, frame_from(FAR_CC_MSG), [])
-    assert out["from"] == "far-1.boxlan"
-    assert 'from="far-1.boxlan"' in out["message"]["content"]
-    assert "cc-socks" not in json.dumps(out)
+    inbox._mirrors = lambda: iter([])
+    line = json.dumps(frame_from(FAR_CC_MSG)).encode()
+    assert inbox.localize(frame_from(FAR_CC_MSG), line, "boxlan") == line
 
 
 def test_frame_without_from_name_or_box_is_untouched():
@@ -75,10 +75,13 @@ def test_collision_label_has_no_at_and_bare_name_recovers_a_hyphenated_session_n
     assert roster.bare_name("example-retrieval-repo-8c") == "example-retrieval-repo-8c"
 
 
-def test_inbox_localize_label_equals_roster_label():
-    roster, inbox = load("roster"), load("inbox")
-    out = localized(inbox, frame_from(FAR_CC_MSG, "example-retrieval-repo-8c"), [], box="192.168.0.175")
-    assert out["from"] == roster.labelled("example-retrieval-repo-8c", "me@192.168.0.175")
+def test_inbox_localize_unmatched_sender_gets_the_box_reply_inbox_not_the_roster_label():
+    inbox = load("inbox")
+    reply = {"unimatrixMirror": True, "unimatrixReplyInbox": True, "unimatrixClient": "192.168.0.175",
+             "messagingSocketPath": POSIX_EP}
+    out = localized(inbox, frame_from(FAR_CC_MSG, "example-retrieval-repo-8c"), [reply], box="192.168.0.175")
+    assert out["from"] == "uds:" + POSIX_EP
+    assert "example-retrieval-repo-8c.192.168.0.175" not in json.dumps(out)
 
 
 @pytest.fixture

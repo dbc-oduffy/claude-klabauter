@@ -978,7 +978,7 @@ guard denies it — brief with explicit file or node-id targets instead.
 ## The interpreter targeted tests run under — `targeted_test_python`
 
 Engine-composed scoped-test and ledger-check prompts name the target repo's pinned interpreter
-instead of bare `python3`. `coordinator_core/ops/dispatch_emit/test_interpreter.py ::
+instead of bare `python3`. `coordinator_core/ops/dispatch_emit/interpreter_pin.py ::
 resolve_targeted_test_python` resolves it, first hit wins:
 
 1. `targeted_test_python:` in the target repo's `coordinator.local.md` frontmatter.

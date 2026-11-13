@@ -49,6 +49,8 @@ def harness(tmp_path, monkeypatch):
     registry = tmp_path / "registry"
     registry.mkdir()
     monkeypatch.setattr(fire, "_registry_dir", lambda cwd=None: registry)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+    monkeypatch.delenv("COORDINATOR_DISTILL_AUTOFIRE", raising=False)
 
     calls: list[dict] = []
 
@@ -109,17 +111,61 @@ def test_above_threshold_fires_once_through_the_real_tick(tmp_path, harness):
     assert autofire.last_decisions[repo.resolve()].reason == "run-live"
 
 
-def test_terminal_run_with_debt_still_above_threshold_fires_again(tmp_path, harness):
+def _end_child(registry, fire_id, **fields):
+    record = json.loads((registry / f"{fire_id}.json").read_text())
+    record.update(state="exited", pid=None, **fields)
+    if "outcome" in fields:
+        record["_annotation_version"] = fire._ANNOTATION_VERSION
+    (registry / f"{fire_id}.json").write_text(json.dumps(record))
+
+
+def test_clean_run_that_landed_a_log_entry_fires_again(tmp_path, harness):
     ctx, calls, registry, _marks, mp = harness
     repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 2)
     _tick(ctx, mp, repo, interval_elapsed=True)
     _seed_live_record(registry, repo, "fid1")
-    record = json.loads((registry / "fid1.json").read_text())
-    record.update(state="exited", pid=None)
-    (registry / "fid1.json").write_text(json.dumps(record))
+    _end_child(registry, "fid1", outcome="clean")
+    log = repo / "state" / "distillation-log.md"
+    later = time.time() + 5
+    os.utime(log, (later, later))
 
     _tick(ctx, mp, repo, interval_elapsed=True)
     assert len(calls) == 2
+
+
+def test_dead_child_backs_off_through_the_real_tick(tmp_path, harness):
+    ctx, calls, registry, _marks, mp = harness
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 2)
+    _tick(ctx, mp, repo, interval_elapsed=True)
+    _seed_live_record(registry, repo, "fid1")
+    _end_child(registry, "fid1")
+
+    for _ in range(3):
+        _tick(ctx, mp, repo, interval_elapsed=True)
+    assert len(calls) == 1
+    reason = autofire.last_decisions[repo.resolve()].reason
+    assert reason.startswith("backoff:unknown:failures=")
+
+
+def test_kill_switch_returns_no_launch(tmp_path, harness):
+    ctx, calls, _registry, marks, mp = harness
+    mp.setenv("COORDINATOR_DISTILL_AUTOFIRE", "0")
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 2)
+
+    _tick(ctx, mp, repo, interval_elapsed=True)
+    assert calls == []
+    assert marks == []
+    assert autofire.last_decisions[repo.resolve()].reason == "disabled:kill-switch"
+
+
+def test_stopgap_directory_reads_disabled(tmp_path, harness):
+    ctx, calls, _registry, _marks, mp = harness
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 2)
+    autofire_launch.fire_script_path(repo).mkdir(parents=True)
+
+    _tick(ctx, mp, repo, interval_elapsed=True)
+    assert calls == []
+    assert autofire.last_decisions[repo.resolve()].reason == "disabled:stopgap-dir"
 
 
 def test_at_threshold_fires_nothing(tmp_path, harness):

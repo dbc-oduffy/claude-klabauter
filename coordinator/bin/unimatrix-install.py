@@ -305,7 +305,8 @@ def _copy_if_changed(src, dst):
 
 
 VENDORED_LIB = ("python_interp.py", "unimatrix_box_mux.py", "unimatrix_relay_sessions.py", "session_detach.py",
-                "unimatrix_pair_contract.py")  # sibling lib/ modules the installed scripts load by path
+                "unimatrix_pair_contract.py", "cc_invoke.py", "engine_bootstrap.py",
+                "machine_local_impl_resolve.py", "unimatrix_far_addresses.py", "__init__.py")  # sibling lib/ modules the installed scripts load by path or import; __init__ makes `import lib` put lib/ on sys.path
 UNSHIPPED_LIB = ("unimatrix_test_home.py",)  # loaded by path only under UNIMATRIX_TEST_HOME; absent from installs by design
 
 
@@ -2081,25 +2082,30 @@ def doctrine_root(plugin_root=None):
 def resolve_engine_root():
     """Return (engine_root or None, provenance); never raises.
 
-    Uses the hook-side resolver when this install carries it, else the in-tree settings-home ladder
-    (cc_invoke.resolve_engine_root). A miss returns None with the resolver's first failure line.
+    COORDINATOR_ENGINE_ROOT (an existing directory) is the explicit operator override; otherwise the
+    published klabauter root named by the settings-home registry key repos.claude_klabauter, stamped.
+    Never self-locates and never reads the authoring-checkout registry key. A miss returns None with a
+    provenance naming the key, or the resolver's first failure line.
     """
-    hook_side = PLUGIN_ROOT / "hooks" / "scripts" / "_engine_root.py"
+    override = os.environ.get("COORDINATOR_ENGINE_ROOT") or ""
+    if override and Path(override).is_dir():
+        return override, "COORDINATOR_ENGINE_ROOT override"
     try:
-        if hook_side.is_file():
-            spec = importlib.util.spec_from_file_location("_engine_root_for_install", hook_side)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            root, _cls, prov = mod.resolve_claude_klabauter_root_with_provenance()
-        else:
-            spec = importlib.util.spec_from_file_location("_cc_invoke_for_install", _BIN_DIR / "lib" / "cc_invoke.py")
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            root, prov = mod.resolve_engine_root(str(Path(__file__).resolve())), "settings-home ladder"
+        shim_path = next((p for p in (PLUGIN_ROOT / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py",
+                                      _BIN_DIR.parent / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py") if p.is_file()), None)
+        if shim_path is None:
+            raise RuntimeError("lib/resolve-claude-klabauter/_resolve_claude_klabauter.py not found")
+        spec = importlib.util.spec_from_file_location("_resolve_claude_klabauter_for_install", shim_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        root = mod._resolve_published_engine(mod._ml_dir())
     except Exception as exc:
         lines = str(exc).strip().splitlines()
         return None, f"resolver failed: {lines[0] if lines else type(exc).__name__}"
-    return (str(root), prov) if root and Path(root).is_dir() else (None, prov if root is None else "root missing")
+    if root and Path(root).is_dir():
+        return str(Path(root)), "published klabauter (repos.claude_klabauter)"
+    return None, ("repos.claude_klabauter unset or not a stamped engine build; "
+                  "run: machine-local set repos.claude_klabauter <published klabauter root>")
 
 
 def trust_codex_hook(hooks_path, timeout=30):

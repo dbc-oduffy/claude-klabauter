@@ -7,7 +7,7 @@ larger transcript turns and peak context are lower bounds (`partial`). No subpro
 Never called from the fire op, a hook or an emitted script; the one in-process caller is
 workflow_watch's terminal path (a background Monitor process, post-run by definition).
 
-`write_record` writes run-cost.json beside the journal: phase_split, executors and a shrink-only
+`write_record` writes run-cost.json beside the journal: phase_split, executors, by_role, by_model, agents and a shrink-only
 ratchet against run_cost_ratchet.json (`--tighten` lowers a ceiling a run beat, never raises one).
 
     python3 -m coordinator_core.workflow_watch.run_report --journal <abs path to journal.jsonl> [--json] [--record] [--tighten]
@@ -20,6 +20,7 @@ import datetime
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.ops.dispatch_emit.executor_economy import (
@@ -136,11 +137,16 @@ def _agent_row(run_dir: str, agent_id: str, label: str) -> dict:
 
 
 def build_report(journal_path: str) -> dict:
-    """{"rows", "over_cap", "by_model", "run_total"} for one run's journal.
+    """{"rows", "over_cap", "by_model", "by_role", "agents", "run_total", ...} for one run's journal.
 
     Token sums, usd and model come from usage.agent_usage.scan_run (full transcript read);
-    context, turns and wall time stay head+tail bounded.
+    context, turns and wall time stay head+tail bounded. `agents` is the scanned agent count.
     """
+    return scan_and_report(journal_path)[0]
+
+
+def scan_and_report(journal_path: str) -> tuple[dict, dict]:
+    """(report, scan): build_report's report plus the one scan_run result it was built from."""
     run_dir = os.path.dirname(journal_path)
     usage = scan_run(run_dir)
     by_id = {a["agent_id"]: a for a in usage["agents"]}
@@ -177,9 +183,11 @@ def build_report(journal_path: str) -> dict:
     grand = sum(b["total_tokens"] for b in split.values())
     for bucket in split.values():
         bucket["share"] = round(bucket["total_tokens"] / grand, 4) if grand else 0.0
-    return {"wall_cap_seconds": EXECUTOR_WALL_CAP_SECONDS, "rows": rows, "over_cap": over,
-            "by_model": usage["by_model"], "run_total": usage["run_total"],
-            "phase_split": split, "executors": executors}
+    report = {"wall_cap_seconds": EXECUTOR_WALL_CAP_SECONDS, "rows": rows, "over_cap": over,
+              "by_model": usage["by_model"], "by_role": usage["by_role"],
+              "agents": len(usage["agents"]), "run_total": usage["run_total"],
+              "phase_split": split, "executors": executors}
+    return report, usage
 
 
 def _journal_phases(journal_path: str) -> dict[str, str]:
@@ -231,17 +239,25 @@ def ratchet_block(report: dict, ceilings: dict[str, int]) -> dict[str, dict[str,
 
 
 def tighten(block: dict, path: Optional[str] = None) -> dict[str, int]:
-    """Lower each ceiling to a better observed value (only when the run had executors); never raise."""
+    """Lower each ceiling to a better observed value (only when the run had executors); never raise.
+
+    The file is re-read under a cross-process lock immediately before the write, so two runs
+    finishing together each lower from the other's result instead of overwriting it.
+    """
+    from coordinator_core.locked_write import held_lock
+    from coordinator_core.session.claimed_write import replace_text
+
     target = path or RATCHET_FILE
-    ceilings = load_ratchet(target)
-    changed = False
-    for metric, cell in block.items():
-        observed = cell["observed"]
-        if observed > 0 and observed < ceilings[metric]:
-            ceilings[metric] = observed
-            changed = True
-    if changed:
-        _atomic_write(target, json.dumps(ceilings, indent=2, sort_keys=True) + "\n")
+    with held_lock(Path(target), holder_label="run_report.tighten"):
+        ceilings = load_ratchet(target)
+        changed = False
+        for metric, cell in block.items():
+            observed = cell["observed"]
+            if observed > 0 and observed < ceilings[metric]:
+                ceilings[metric] = observed
+                changed = True
+        if changed:
+            replace_text(target, json.dumps(ceilings, indent=2, sort_keys=True) + "\n")
     return ceilings
 
 
@@ -252,11 +268,16 @@ def _atomic_write(path: str, text: str) -> None:
     os.replace(tmp, path)
 
 
-def write_record(journal_path: str, ratchet_path: Optional[str] = None) -> str:
-    """Write run-cost.json beside the journal; returns its path. Contains no wall-clock field."""
-    report = build_report(journal_path)
+def write_record(journal_path: str, ratchet_path: Optional[str] = None,
+                 report: Optional[dict] = None) -> str:
+    """Write run-cost.json beside the journal; returns its path. Contains no wall-clock field.
+
+    A caller holding a build_report result passes it as `report` so the scan runs once.
+    """
+    report = report if report is not None else build_report(journal_path)
     record = {"phase_split": report["phase_split"], "executors": report["executors"],
-              "run_total": report["run_total"],
+              "run_total": report["run_total"], "by_role": report["by_role"],
+              "by_model": report["by_model"], "agents": report["agents"],
               "ratchet": ratchet_block(report, load_ratchet(ratchet_path))}
     out = os.path.join(os.path.dirname(journal_path), RUN_COST_FILE)
     _atomic_write(out, json.dumps(record, indent=2, sort_keys=True) + "\n")

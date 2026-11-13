@@ -63,14 +63,18 @@ def test_spine_read_status_edge_hold_treats_closed_like_abandoned():
 
 
 @pytest.mark.parametrize("status,expected_blocked", [("abandoned", False), ("closed", False), ("approved", True)])
-def test_update_docs_scan_lineage_successor(tmp_path, status, expected_blocked):
-    from coordinator_core.ops.ceremony import update_docs_scan
+def test_update_docs_worklist_lineage_successor(status, expected_blocked):
+    import datetime as dt
 
-    plans = tmp_path / "docs" / "plans"
-    plans.mkdir(parents=True)
-    (plans / "2026-01-01-successor.md").write_text(
-        f"---\nstatus: {status}\nsupersedes: docs/plans/old.md\n---\nbody\n", encoding="utf-8"
+    from coordinator_core.ops.ceremony import update_docs_worklist
+
+    files = {
+        "docs/plans/2026-01-01-successor.md": [0, 0, status, "docs/plans/old.md", ""],
+        "docs/plans/old.md": [0, 0, "superseded", "", ""],
+    }
+    prune, _totals, blocked, held = update_docs_worklist._classify(
+        files, "state/cross-repo/archive", set(), dt.datetime.now(tz=dt.timezone.utc)
     )
-    edges = update_docs_scan._phase8_lineage_backstop(tmp_path)
-    assert len(edges) == 1
-    assert edges[0]["blocked"] is expected_blocked
+    assert (("docs/plans/old.md" in blocked) is expected_blocked)
+    assert (held == ["docs/plans/old.md"]) is expected_blocked
+    assert ("docs/plans/old.md" in prune["plans"]) is (not expected_blocked)

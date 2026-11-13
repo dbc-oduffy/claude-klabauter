@@ -615,6 +615,96 @@ def test_git_add_failure_and_revert_failure_both_surface_in_reason(
     assert "revert-also-failed" in candidate_failure["reason"]
 
 
+def _stage_pending_watermark(root: Path, run_id: str, **fields) -> None:
+    from coordinator_core import run_watermark
+
+    run_dir = root / "state" / "scratch" / "artifact-distillation" / run_id
+    run_watermark.stage(
+        run_dir, run_watermark.Watermark(kind="distill", base_sha=fields.pop("base_sha", "a" * 40), **fields)
+    )
+
+
+def test_apply_promotes_pending_watermark_into_the_one_commit(tmp_path: Path):
+    shas = _init_repo_with_commits(tmp_path)
+    manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
+    _stage_pending_watermark(tmp_path, manifest["run_id"], cursor="2026-01-01 x.md")
+    commits_before = int(_git("rev-list", "--count", "HEAD", cwd=tmp_path))
+
+    result = _run(
+        apply_disposal_manifest(tmp_path, _stamped(manifest), harvest_committed_sha=shas["harvest"])
+    )
+
+    assert result.failed == []
+    assert int(_git("rev-list", "--count", "HEAD", cwd=tmp_path)) == commits_before + 1
+    committed = _git("show", "--name-only", "--format=", "HEAD", cwd=tmp_path).splitlines()
+    assert "state/run-watermarks/distill.json" in committed
+    assert "archive/handoffs/eligible.md" in committed
+    assert _git("status", "--porcelain", "--", "state/run-watermarks", "archive", cwd=tmp_path) == ""
+    stored = json.loads((tmp_path / "state" / "run-watermarks" / "distill.json").read_text(encoding="utf-8"))
+    assert stored["cursor"] == "2026-01-01 x.md"
+
+
+def test_apply_without_pending_watermark_leaves_state_absent(tmp_path: Path):
+    shas = _init_repo_with_commits(tmp_path)
+    manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
+
+    _run(apply_disposal_manifest(tmp_path, _stamped(manifest), harvest_committed_sha=shas["harvest"]))
+
+    assert not (tmp_path / "state" / "run-watermarks" / "distill.json").exists()
+    assert "state/run-watermarks" not in _git("show", "--name-only", "--format=", "HEAD", cwd=tmp_path)
+
+
+def test_failed_commit_restores_the_prior_watermark(tmp_path: Path, monkeypatch):
+    from coordinator_core.ops import distill_apply_disposal as mod
+
+    shas = _init_repo_with_commits(tmp_path)
+    prior = tmp_path / "state" / "run-watermarks" / "distill.json"
+    prior.parent.mkdir(parents=True)
+    prior.write_text('{"base_sha": "old"}\n', encoding="utf-8")
+    _git("add", "--", "state/run-watermarks/distill.json", cwd=tmp_path)
+    _git("commit", "-q", "-m", "prior watermark", cwd=tmp_path)
+    manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
+    _stage_pending_watermark(tmp_path, manifest["run_id"], cursor="c")
+
+    real_run_git = mod._run_git
+
+    async def failing_commit(*args, **kwargs):
+        if "commit" in args:
+            return 1, b"", b"boom"
+        return await real_run_git(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "_run_git", failing_commit)
+    _run(apply_disposal_manifest(tmp_path, _stamped(manifest), harvest_committed_sha=shas["harvest"]))
+
+    assert prior.read_text(encoding="utf-8") == '{"base_sha": "old"}\n'
+
+
+def test_exception_on_commit_restores_the_prior_watermark(tmp_path: Path, monkeypatch):
+    from coordinator_core.ops import distill_apply_disposal as mod
+
+    shas = _init_repo_with_commits(tmp_path)
+    prior = tmp_path / "state" / "run-watermarks" / "distill.json"
+    prior.parent.mkdir(parents=True)
+    prior.write_text('{"base_sha": "old"}\n', encoding="utf-8")
+    _git("add", "--", "state/run-watermarks/distill.json", cwd=tmp_path)
+    _git("commit", "-q", "-m", "prior watermark", cwd=tmp_path)
+    manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
+    _stage_pending_watermark(tmp_path, manifest["run_id"], cursor="c")
+
+    real_run_git = mod._run_git
+
+    async def raising_commit(*args, **kwargs):
+        if "commit" in args:
+            raise RuntimeError("boom")
+        return await real_run_git(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "_run_git", raising_commit)
+    with pytest.raises(RuntimeError):
+        _run(apply_disposal_manifest(tmp_path, _stamped(manifest), harvest_committed_sha=shas["harvest"]))
+
+    assert prior.read_text(encoding="utf-8") == '{"base_sha": "old"}\n'
+
+
 def test_apply_disposal_manifest_absent_run_raises(tmp_path: Path):
     _init_repo_with_commits(tmp_path)
     with pytest.raises(DisposalStampError, match="not found on disk"):

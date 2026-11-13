@@ -7,10 +7,16 @@ Drives `headless._invoke_source('dispatch.ask_gate', ...)` exactly as `headless.
 
 `route` is `cold` when the call spawned `coordinator_core.ops.workflow_fire.cold_operation` (an interpreter
 outside the warm engine) and `warm` when it did not. A call that outlives `--timeout` reports
-`error_code` `timeout` with the process time measured up to the kill, never a hang.
+`error_code` `timeout` with the process time measured up to the kill, never a hang on the cold route;
+a delivered warm mutation waits the client's mutation deadline, not `--timeout`.
 
-`op_body_reached` is false when the engine root is an unstamped dev checkout (reply -32005): run against a
-stamped engine for the op's own cost.
+`route` comes from the `warm_route.json` the call writes when present, else from the spawn record;
+`fallthrough_reason` is that note's reason for a cold route (`unstamped_root`, `no_server`, ...).
+
+`op_body_reached` is false when the engine root is an unstamped dev checkout: the cold interpreter refuses
+with -32005 (`ipc.UNSTAMPED_ENGINE_ROOT_ERROR`, "no stamp, no engine"), so `process_ms` is interpreter plus
+refusal cost. A dev checkout never reaches a warm server either (`fallthrough_reason` `unstamped_root`);
+run against a stamped engine root with a server at it for the warm route and the op's own cost.
 
 Run: `python -m coordinator_core.benchmarks.headless_fire_ask_gate_route [--timeout S] [--enforce-bar]`.
 Scratch lives in a managed temp dir this script removes.
@@ -38,6 +44,16 @@ UNSTAMPED_ENGINE_ROOT_CODE = -32005
 def classify_route(spawn_argv: list[list[str]]) -> str:
     """`cold` when any recorded spawn launched the cold-operation interpreter, else `warm`."""
     return "cold" if any(COLD_MODULE in part for argv in spawn_argv for part in argv) else "warm"
+
+
+def read_route_note(artifacts: Path) -> dict:
+    """The `warm_route.json` a source-pinned `_invoke_source` writes (route, reason, token, engine root); `{}` at a
+    base that predates it, where the spawn record alone classifies the route."""
+    try:
+        note = json.loads((artifacts / "warm_route.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return note if isinstance(note, dict) else {}
 
 
 def error_code_of(exc: BaseException | None):
@@ -74,8 +90,10 @@ def _child_main(repo: str, params_json: str, artifacts: str, timeout: float, out
             exc = caught
     mp.undo()
     argv = [list(s.argv) for s in spawns]
+    note = read_route_note(Path(artifacts))
     report = {
-        "route": classify_route(argv),
+        "route": note.get("route") or classify_route(argv),
+        "fallthrough_reason": note.get("reason"),
         "spawns": len(argv),
         "spawn_argv": argv,
         "error_code": error_code_of(exc),
@@ -122,6 +140,7 @@ def measure(timeout: float = DEFAULT_TIMEOUT_SECS) -> dict:
                 "process_ms": round(tree["process_time_ms"], 1),
                 "spawns": child["spawns"],
                 "error_code": child["error_code"],
+                "fallthrough_reason": child["fallthrough_reason"],
                 "bar_ms": BAR_MS,
                 "timeout_secs": timeout,
                 "procs": tree["procs"],

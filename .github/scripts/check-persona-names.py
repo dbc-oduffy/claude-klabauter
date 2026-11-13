@@ -279,6 +279,7 @@ PROTECTED_LITERALS = (
     "project_rag.bin.project_rag_cli",
     "PROJECT_RAG_FOCUS_REPO",
     "PROJECT_RAG_REGISTRY_PATH",
+    "paths.project_rag_doc_files_db",
     "COORDINATOR_HOOK_PROJECT_RAG_DETECT_DISABLED",
     "project_rag_cli.py",
     "project-rag: UNINITIALIZED",

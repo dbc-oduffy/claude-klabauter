@@ -6,7 +6,7 @@ slug table it re-reads guides to decide; handed the few guides that share terms 
 batch it checks those and nothing else. This module indexes the guides under wiki_dirs by
 heading and body terms (lexical, no model, no network) and returns, per batch, the top
 RELEVANT_GUIDES_K guides by IDF-weighted term overlap with the batch's files, each with a
-short heading outline.
+short heading outline, stopping early once summed guide bytes would pass GUIDE_BYTE_BUDGET.
 
 Invariant: a pure function of file contents and the slug table; ties break on slug, so two
 runs over the same tree emit byte-identical lists. A missing or unreadable file degrades to
@@ -21,6 +21,8 @@ import math
 import re
 from pathlib import Path
 from typing import Any, Iterable
+
+from coordinator_core.distill.manifest_schema import GUIDE_BYTE_BUDGET
 
 __all__ = [
     "RAG_INDEX_KEY",
@@ -122,6 +124,26 @@ def _outline(headings: list[tuple[int, str]], slug: str, path: str) -> list[str]
     return out
 
 
+def _within_byte_budget(
+    root: Path, ranked: list[int], guides: list[dict[str, Any]], k: int, budget: int
+) -> list[int]:
+    """The best-first prefix of `ranked`, at most `k` long, whose summed on-disk bytes stay within
+    `budget`. Stops at the first guide that would overflow (rank order is never skipped past);
+    rank 1 is always kept. An unstattable guide counts 0 bytes."""
+    kept: list[int] = []
+    total = 0
+    for gi in ranked[:k]:
+        try:
+            size = (root / guides[gi]["path"]).stat().st_size
+        except OSError:
+            size = 0
+        if kept and total + size > budget:
+            break
+        kept.append(gi)
+        total += size
+    return kept
+
+
 def build_index(repo_root: str | Path, wiki_slugs: dict[str, str]) -> dict[str, Any]:
     """Index every guide in `wiki_slugs` (slug -> repo-relative path). Returns an opaque
     dict holding guide entries, an inverted term index and per-term IDF; pass it to
@@ -166,10 +188,12 @@ def relevant_guides_for_batches(
     *,
     k: int = RELEVANT_GUIDES_K,
     index: dict[str, Any] | None = None,
+    byte_budget: int = GUIDE_BYTE_BUDGET,
 ) -> list[list[dict[str, Any]]]:
     """For each batch (a list of repo-relative file paths) the top `k` guides by IDF-weighted
-    term overlap, as `{"slug", "path", "outline"}` dicts, best first. A batch sharing no term
-    with any guide gets []."""
+    term overlap whose summed on-disk bytes fit `byte_budget` (rank 1 always kept), as
+    `{"slug", "path", "outline"}` dicts, best first. A batch sharing no term with any guide
+    gets []."""
     root = Path(repo_root)
     idx = index if index is not None else build_index(root, wiki_slugs)
     guides, inverted, idf = idx["guides"], idx["inverted"], idx["idf"]
@@ -183,7 +207,8 @@ def relevant_guides_for_batches(
             weight = idf[term]
             for gi, w in postings:
                 scores[gi] = scores.get(gi, 0.0) + weight * w
-        ranked = sorted(scores, key=lambda gi: (-scores[gi], guides[gi]["slug"]))[:k]
+        ranked = sorted(scores, key=lambda gi: (-scores[gi], guides[gi]["slug"]))
+        ranked = _within_byte_budget(root, ranked, guides, k, byte_budget)
         result.append([dict(guides[gi]) for gi in ranked])
     return result
 
@@ -267,8 +292,9 @@ def rag_relevant_guides(
     db: Path,
     *,
     k: int = RELEVANT_GUIDES_K,
+    byte_budget: int = GUIDE_BYTE_BUDGET,
 ) -> list[list[dict[str, Any]]]:
-    """Top `k` guides per batch ranked by IDF-weighted overlap between the batch's terms and
+    """Top `k` guides per batch (within `byte_budget` summed on-disk bytes) ranked by IDF-weighted overlap between the batch's terms and
     the guides' slug and heading terms as the example-retrieval-repo index holds them (no guide is read).
     Same entry shape and tie-break as relevant_guides_for_batches. Raises RagIndexUnavailable
     when the index does not cover the guides."""
@@ -301,7 +327,8 @@ def rag_relevant_guides(
         for term in _batch_terms(root, files):
             for gi in inverted.get(term, ()):
                 scores[gi] = scores.get(gi, 0.0) + idf[term]
-        ranked = sorted(scores, key=lambda gi: (-scores[gi], guides[gi]["slug"]))[:k]
+        ranked = sorted(scores, key=lambda gi: (-scores[gi], guides[gi]["slug"]))
+        ranked = _within_byte_budget(root, ranked, guides, k, byte_budget)
         result.append([dict(guides[gi]) for gi in ranked])
     return result
 
@@ -314,15 +341,18 @@ def ranked_guides_for_batches(
     k: int = RELEVANT_GUIDES_K,
     settings_home_dir: str | Path | None = None,
     index: dict[str, Any] | None = None,
+    byte_budget: int = GUIDE_BYTE_BUDGET,
 ) -> tuple[str, list[list[dict[str, Any]]]]:
     """(source, lists): the example-retrieval-repo ranking when the repo's index serves it, source "rag";
     otherwise the lexical ranking, source "lexical". Never raises on a missing or unusable
     index."""
     try:
         db = rag_graph_db(repo_root, settings_home_dir)
-        return "rag", rag_relevant_guides(repo_root, batches, wiki_slugs, db, k=k)
+        return "rag", rag_relevant_guides(repo_root, batches, wiki_slugs, db, k=k, byte_budget=byte_budget)
     except RagIndexUnavailable:
-        return "lexical", relevant_guides_for_batches(repo_root, batches, wiki_slugs, k=k, index=index)
+        return "lexical", relevant_guides_for_batches(
+            repo_root, batches, wiki_slugs, k=k, index=index, byte_budget=byte_budget
+        )
 
 
 def rag_known_paths(

@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Iterable, Mapping, Optional, Sequence
@@ -145,6 +146,73 @@ def _indexed_halt_marker(record: Path) -> Optional[dict]:
     }
 
 
+RELEASED_OWN_PREFIRE = "own-prefire-ask"
+RELEASED_LANDED_ASK = "landed-ask-successor"
+_RUN_STAMP = re.compile(r"\d{8}T\d{6}-[0-9a-f]{6}")
+
+
+def _own_prefire_key(root: Path, own_run_id: Optional[str]) -> tuple:
+    """`(sizing_rel, session id)` of the landing run: the pair its pre-fire ask token must carry to be one
+    owner with it. `("", "")` when either is unknown, so nothing aliases."""
+    from coordinator_core.ops import warp_run_deliverable
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit import landing_halted_view
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+
+    if not own_run_id or not safe_id(own_run_id):
+        return "", ""
+
+    def compute() -> tuple:
+        sizing = warp_run_deliverable._lineage_sizing(root, own_run_id)
+        sid = (read_run_stage(root, own_run_id) or {}).get("session_id")
+        return (sizing, sid) if sizing and isinstance(sid, str) and sid else ("", "")
+
+    return landing_halted_view.shared("own_prefire_key", (str(root), own_run_id), compute)
+
+
+def _ask_successor_landed(root: Path, ask_id: str, sizing: str) -> bool:
+    """Whether a run of `sizing` minted at or after the ask `ask_id` has landed (its spent token receipt
+    carries `landed`). Reads the shared record-dir listing and one spent receipt per matching run; no spawn."""
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, run_token
+
+    prefix = f"warp-{Path(sizing).stem}-"
+    since = ask_id[4:19]
+    home = run_token._record_home(root)
+    for name, _stamp in halted_hold_release.record_stamps(root):
+        tail = name[len(prefix):]
+        if not name.startswith(prefix) or not _RUN_STAMP.fullmatch(tail) or tail[:15] < since:
+            continue
+        receipt = run_token.read_cached(run_token._record_path(root, name, spent=True, home=home))
+        if isinstance(receipt, dict) and isinstance(receipt.get("landed"), dict):
+            return True
+    return False
+
+
+def released_ask_holder(root: Path, run_id: str, own_run_id: Optional[str]) -> Optional[str]:
+    """Why the pre-fire ask run `run_id` holds nothing against the landing run `own_run_id`, else None.
+
+    `RELEASED_OWN_PREFIRE`: the ask token binds the landing run's sizing and its session, so the ask id and
+    the run id are one owner. `RELEASED_LANDED_ASK`: a run of the ask's sizing minted since has landed.
+    Only `ask-` ids with a token record are weighed; a foreign ask of another session or sizing never
+    releases. Token and receipt reads only."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    if run_id == own_run_id or not run_token.is_ask_run_id(run_id):
+        return None
+    home = run_token._record_home(root)
+    record = next((
+        r for claimed in (False, True)
+        if (r := run_token.read_cached(run_token._record_path(root, run_id, claimed=claimed, home=home))) is not None
+    ), None)
+    sizing = _norm(record.get("sizing_rel")) if record else ""
+    if not sizing:
+        return None
+    own_sizing, own_sid = _own_prefire_key(root, own_run_id)
+    if own_sid and own_sizing == sizing and record.get("session_id") == own_sid:
+        return RELEASED_OWN_PREFIRE
+    return RELEASED_LANDED_ASK if _ask_successor_landed(root, run_id, sizing) else None
+
+
 def _unlanded_run_ids(
     root: Path, own_run_id: Optional[str], own_plan: Optional[str] = None, minted_before: Optional[tuple] = None,
     covering: Optional[Sequence[str]] = None,
@@ -170,6 +238,8 @@ def _unlanded_run_ids(
         if run_id == own_run_id or run_id in clear:
             continue
         if stamp is not None and now - stamp > run_token.TTL_SECONDS:
+            continue
+        if released_ask_holder(root, run_id, own_run_id):
             continue
         try:
             if warp_run_deliverable._no_marker(root, run_id):
@@ -391,6 +461,54 @@ def _declares(root: Path, run_id: str, path: str) -> bool:
     return path in paths or any(path == p or path.startswith(p + "/") for p in prefixes)
 
 
+def live_unreleased(
+    root: Path, live: Optional[dict], own_run_id: Optional[str], minted_before: Optional[tuple],
+    exclude_session: str = "",
+) -> Optional[dict]:
+    """`live` (`warp_run_deliverable.live_run_write_claims`' `{path: sessions}`, called with the same
+    `exclude_session`, `minted_before` and `own_run_id`) without the holders `released_ask_holder` frees:
+    the token view names runs, so a path held only by released ask runs drops out and a shared one keeps
+    the other sessions. A path the run-naming view does not carry keeps its sessions. When no live ask
+    run is released, `live` returns as given and the token store is not listed again."""
+    if not live or not _released_ask_ids(root, own_run_id):
+        return live
+    from coordinator_core.ops import warp_run_deliverable
+
+    scan = warp_run_deliverable._live_claim_scan(root, set(live), exclude_session, str(root), minted_before, own_run_id)
+    if not scan:
+        return live
+    unreleased = _sessions_unreleased(root, scan, own_run_id)
+    return {p: unreleased[p] if p in scan else sessions for p, sessions in live.items() if p not in scan or p in unreleased}
+
+
+def _released_ask_ids(root: Path, own_run_id: Optional[str]) -> frozenset:
+    """The in-TTL `ask-` run ids `released_ask_holder` frees against `own_run_id`, from the shared record-dir
+    listing and one token read per in-TTL ask id."""
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, run_token
+
+    now = time.time()
+    return frozenset(
+        name for name, stamp in halted_hold_release.record_stamps(root)
+        if run_token.is_ask_run_id(name) and (stamp is None or now - stamp <= run_token.TTL_SECONDS)
+        and released_ask_holder(root, name, own_run_id)
+    )
+
+
+def _sessions_unreleased(root: Path, scan: Mapping, own_run_id: Optional[str]) -> dict:
+    """`{path: sorted sessions}` of a `_live_claim_scan` result, minus the holders `released_ask_holder` frees;
+    a path left with none is absent."""
+    freed: dict = {}
+    out: dict = {}
+    for path, entries in scan.items():
+        kept = {
+            sid for _minted, rid, sid in entries
+            if freed.setdefault(rid, released_ask_holder(root, rid, own_run_id)) is None
+        }
+        if kept:
+            out[path] = sorted(kept)
+    return out
+
+
 def sibling_run_claims(
     worktree_root: Path, own_run_id: Optional[str], candidates: Iterable[str], *,
     own_plan: Optional[str] = None, minted_before: Optional[tuple] = None,
@@ -429,9 +547,13 @@ def sibling_run_claims(
             halted = warp_run_deliverable.halted_run_write_claims(
                 root, wanted, exclude_run=own_run_id, own_plan=own_plan,
             ) or {}
-            live = warp_run_deliverable.live_run_write_claims(
-                root, wanted, exclude_session="", cwd=str(root), exclude_run=own_run_id,
-                minted_before=minted_before,
+            live = live_unreleased(
+                root,
+                warp_run_deliverable.live_run_write_claims(
+                    root, wanted, exclude_session="", cwd=str(root), exclude_run=own_run_id,
+                    minted_before=minted_before,
+                ),
+                own_run_id, minted_before,
             ) or {}
             for path, run_ids in sorted(halted.items()):
                 claims.setdefault(path, run_ids[0])

@@ -33,7 +33,7 @@ def test_import_with_lib_cached_and_bin_lib_absent():
         ops._eager_import_all()
         assert not ops.get_poisoned_modules(), ops.get_poisoned_modules()
         from coordinator_core import ipc
-        assert "ceremony.update_docs_scan" in ipc._REGISTRY
+        assert "ceremony.update_docs_worklist" in ipc._REGISTRY
         """
     )
     r = subprocess.run(

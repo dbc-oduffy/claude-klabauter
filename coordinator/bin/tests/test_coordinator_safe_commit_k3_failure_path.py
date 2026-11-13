@@ -10,7 +10,7 @@ ERROR-then-exit-0 site reproduces in the pathspec form (see `test_b_*`).
   (c) `test_c_*`  `--dry-run` previews a call the real run refuses as an exact-blob rollback.
   (d) `test_d_*`  a 0-byte `index.lock` with no holder is named "a peer holds the index".
 
-Reply shape C1/C2 share, on any refusal AFTER a landing: `committed: true, partial: true, sha,
+Reply shape C1/C2 share, on any refusal AFTER a landing: `committed: false, partial: true, sha,
 landed_paths, unlanded_paths, error`; the error text never contains "Nothing was written". A
 refusal BEFORE any landing keeps `committed: false` and "Nothing was written" (true there).
 """

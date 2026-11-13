@@ -252,6 +252,11 @@ def entries(repo_root: Path) -> dict:
     return out
 
 
+def run_entry(repo_root: Path, run_id: str) -> Optional[RunEntry]:
+    """The run's index entry (paths, prints, declared), or None when absent or unreadable."""
+    return _parse(_run_file(repo_root, run_id))
+
+
 def fresh_entry(repo_root: Path, run_id: str) -> Optional[RunEntry]:
     """The run's entry when it names withheld paths and `halted.json` has not been rewritten since the
     entry was written (marker mtime < `at_ns`), so the marker still reads `halted` with those paths.

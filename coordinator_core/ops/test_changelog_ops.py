@@ -1211,3 +1211,85 @@ def test_git_log_for_date_renders_the_corrected_subject_and_ignores_free_form_no
     corrected = _git_log_for_date(str(repo), "2026-07-15", "2026-07-16")
     assert corrected == plain.replace("dmaged", "damaged")
     assert corrected.startswith(plain.split(" ", 1)[0]) and short[:4] in corrected
+
+
+def _completion_entries(repo: Path, day: str, n: int) -> None:
+    base = repo / "archive" / "completed" / day[:7]
+    base.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        (base / f"{day}-e{i}.md").write_text(
+            f"---\ntitle: e{i}\ncreated: {day}\n---\nbody\n", encoding="utf-8"
+        )
+
+
+def test_completion_count_is_not_capped_at_the_query_completions_page(tmp_path: Path) -> None:
+    from coordinator_core.ops.changelog_ops import (
+        _completion_count_for_date,
+        _completion_counts_for_dates,
+    )
+
+    repo = _init_repo(tmp_path)
+    _completion_entries(repo, "2026-03-10", 60)
+    _completion_entries(repo, "2026-03-11", 2)
+    assert _completion_count_for_date(repo, "2026-03-10") == 60
+    assert _completion_counts_for_dates(repo, ["2026-03-10", "2026-03-11", "2026-03-12"]) == {
+        "2026-03-10": 60,
+        "2026-03-11": 2,
+        "2026-03-12": 0,
+    }
+
+
+def _delivery_record(repo: Path, rel: str, body: str) -> None:
+    path = repo / "docs" / "delivery" / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+
+def test_delivery_sources_mark_a_halted_run_halted_and_a_clean_one_landed(tmp_path: Path) -> None:
+    from coordinator_core.ops.changelog_ops import delivery_sources_for_date
+
+    repo = _init_repo(tmp_path)
+    _delivery_record(repo, "2026-11/ask-20261112T171044-6e6049.md", "# Delivery\n\n## What shipped\n\n- x\n")
+    _delivery_record(
+        repo,
+        "2026-11/warp-2026-11-12-thing-20261112T172108-8c87ff.md",
+        "# Delivery\n\n## Halted\n\nThe run stopped at wave 1; nothing landed.\n",
+    )
+    _delivery_record(
+        repo, "2026-11/ask-20261112T180000-aaaaaa.md", "# D\n\n## Halt/revert\n\nNone.\n\n## Next\n\n- y\n"
+    )
+    _delivery_record(repo, "2026-11/ask-20261111T090000-bbbbbb.md", "# other day\n")
+    _delivery_record(repo, "2026-11-12-flat-note.md", "# flat\n")
+
+    got = {r["run_id"]: r["status"] for r in delivery_sources_for_date(repo, "2026-11-12")}
+    assert got == {
+        "ask-20261112T171044-6e6049": "landed",
+        "warp-2026-11-12-thing-20261112T172108-8c87ff": "halted",
+        "ask-20261112T180000-aaaaaa": "landed",
+        "2026-11-12-flat-note": "landed",
+    }
+    paths = [r["path"] for r in delivery_sources_for_date(repo, "2026-11-12")]
+    assert "docs/delivery/2026-11/ask-20261111T090000-bbbbbb.md" not in paths
+
+
+def test_content_gap_result_names_delivery_records_before_other_sources(tmp_path: Path) -> None:
+    from coordinator_core.ops.changelog_ops import inject_anchor
+
+    repo = _init_repo(tmp_path)
+    day = "2026-03-10"
+    sha = _commit_on(repo, day, "a.txt")
+    _completion_entries(repo, day, 3)
+    (repo / "archive" / "daily-summaries").mkdir(parents=True)
+    (repo / "archive" / "daily-summaries" / f"{day}-box.md").write_text(
+        "# Daily Summary\n\n## Work Completed\n\n- one\n", encoding="utf-8"
+    )
+    _delivery_record(repo, "2026-03/ask-20260310T100000-cccccc.md", "# D\n\n## Reverted\n\nrolled back\n")
+
+    result = inject_anchor(worktree=repo, date=day, machine="box", full_sha=sha, today=day)
+
+    assert result["action"] == "content_gap"
+    assert result["source_priority"][0].startswith("docs/delivery")
+    assert result["source_priority"][-1].startswith("commits")
+    assert [(r["run_id"], r["status"]) for r in result["delivery_records"]] == [
+        ("ask-20260310T100000-cccccc", "halted")
+    ]

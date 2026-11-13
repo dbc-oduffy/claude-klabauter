@@ -159,11 +159,13 @@ def localize(frame, line, box=None):
 
     A mirror holding the sender's far socket wins. Failing that, the mirror of the same
     session found by `from-name` (the far socket can be a cc-msg path no mirror lists).
-    Failing that, the name-and-box label replaces the far /tmp/cc-socks path: a label, not an endpoint,
-    and not proven replyable by the receiver. A frame with no from-name or no box is left as is.
+    Failing that, the sending box's single reply-inbox mirror endpoint (the one address that routes back
+    to that box). With none or several the frame is left as is, its far address visibly unroutable,
+    and the miss is logged: a name label is never substituted, it is not an endpoint.
     """
     src = str(frame.get("from", "")).removeprefix("uds:")
-    mirrors = _roster().remote_mirrors(_mirrors(), box)
+    all_mirrors = list(_mirrors())
+    mirrors = _roster().remote_mirrors(all_mirrors, box)
     candidates = [d for d in mirrors if d.get(FAR_SOCKET_FIELD) == src]
     if len(candidates) == 1:
         return _readdress(frame, src, "uds:" + candidates[0]["messagingSocketPath"])
@@ -175,7 +177,17 @@ def localize(frame, line, box=None):
                   and (d.get("name") == want or d.get("unimatrixFarName") == name)]
     if len(candidates) == 1:
         return _readdress(frame, src, "uds:" + candidates[0]["messagingSocketPath"])
-    return _readdress(frame, src, want) if box else line
+    if box:
+        label = _roster().box_label(box)
+        replies = [d for d in all_mirrors
+                   if d.get("unimatrixMirror") and d.get("unimatrixReplyInbox") is True
+                   and d.get("messagingSocketPath")
+                   and d.get("unimatrixClient") == label]
+        if len(replies) == 1:
+            return _readdress(frame, src, "uds:" + replies[0]["messagingSocketPath"])
+    if log:
+        log.write(f"localize: no routable reply endpoint for {src!r} from box {box!r}; frame left unrouted\n")
+    return line
 
 
 def registration_payload(entry, key):

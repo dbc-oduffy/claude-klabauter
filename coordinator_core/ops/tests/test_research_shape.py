@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator_core.ops.research_shape import shape
+from coordinator_core.ops.research_shape import _research_shape, shape
 
 TABLE = {
     ("scouts", "small"): "scouts",
@@ -13,9 +13,9 @@ TABLE = {
     ("corpus", "small"): "scouts",
     ("corpus", "medium"): "corpus",
     ("corpus", "large"): "corpus",
-    ("deep", "small"): "corpus",
-    ("deep", "medium"): "deep",
-    ("deep", "large"): "deep",
+    ("unblock", "small"): "corpus",
+    ("unblock", "medium"): "unblock",
+    ("unblock", "large"): "unblock",
 }
 
 
@@ -41,7 +41,7 @@ def test_floor_never_fires_for_web():
     assert "floor" not in r["reason"]
 
 
-@pytest.mark.parametrize("vc", ["scouts", "corpus", "deep"])
+@pytest.mark.parametrize("vc", ["scouts", "corpus", "unblock"])
 @pytest.mark.parametrize("ap", ["small", "medium", "large"])
 def test_preflight_first_iff_notebooklm(vc, ap):
     with_nlm = shape({"value_class": vc, "appetite": ap, "sources": ["web", "notebooklm"]})
@@ -56,8 +56,8 @@ def test_corpus_keeps_sources_order_and_defaults_to_web():
     assert shape({"value_class": "corpus"})["pipelines"] == ["web"]
 
 
-def test_deep_is_unblock():
-    assert shape({"value_class": "deep", "appetite": "medium"})["pipelines"] == ["unblock"]
+def test_unblock_class_runs_the_unblock_pipeline():
+    assert shape({"value_class": "unblock", "appetite": "medium"})["pipelines"] == ["unblock"]
 
 
 def test_corpus_large_stays_corpus_with_source_pipelines_never_unblock():
@@ -67,8 +67,8 @@ def test_corpus_large_stays_corpus_with_source_pipelines_never_unblock():
     assert "unblock" not in r["pipelines"]
 
 
-def test_deep_class_alone_reaches_unblock_at_large():
-    assert shape({"value_class": "deep", "appetite": "large"})["pipelines"] == ["unblock"]
+def test_unblock_class_alone_reaches_unblock_at_large():
+    assert shape({"value_class": "unblock", "appetite": "large"})["pipelines"] == ["unblock"]
 
 
 def test_unknown_value_class_refused():
@@ -92,8 +92,8 @@ def test_deeper_runs_sonnet_scouts_and_standard_keeps_haiku():
     assert shape({"value_class": "corpus", "sources": ["repo"]})["flags"] == {}
 
 
-def test_deep_reason_names_the_unblock_diagnostic():
-    reason = shape({"value_class": "deep"})["reason"]
+def test_unblock_reason_names_the_unblock_diagnostic():
+    reason = shape({"value_class": "unblock"})["reason"]
     assert "unblock-us diagnostic" in reason and "--research-class corpus" in reason
 
 
@@ -117,8 +117,8 @@ def test_any_seed_floors_scouts_to_corpus():
     assert "floor raised scouts to corpus (seeds)" in r["reason"]
 
 
-def test_deep_runs_a_seeded_repo_before_the_team():
-    r = shape({"value_class": "deep", "sources": ["web"], "seeds": [_seed("repo")]})
+def test_unblock_runs_a_seeded_repo_before_the_team():
+    r = shape({"value_class": "unblock", "sources": ["web"], "seeds": [_seed("repo")]})
     assert r["pipelines"] == ["repo", "unblock"]
     assert r["pipelines"].index("repo") < r["pipelines"].index("unblock")
 
@@ -129,8 +129,8 @@ def test_primary_repo_orders_repo_first_and_preflight_before_notebooklm():
     assert r["primary"] == "repo"
 
 
-def test_primary_repo_stays_its_own_pipeline_at_deep():
-    r = shape({"value_class": "deep", "sources": ["web", "repo"], "primary": "repo"})
+def test_primary_repo_stays_its_own_pipeline_at_unblock():
+    r = shape({"value_class": "unblock", "sources": ["web", "repo"], "primary": "repo"})
     assert r["pipelines"] == ["repo", "unblock"] or r["pipelines"][0] == "repo"
     assert r["pipelines"][-1] == "unblock"
 
@@ -155,3 +155,21 @@ def test_unknown_primary_refused():
 def test_unknown_seed_kind_raises():
     with pytest.raises(ValueError):
         shape({"value_class": "corpus", "seeds": [_seed("podcast")]})
+
+
+def test_depth_deep_corpus_runs_the_corpus_pipelines():
+    r = _research_shape({"research": {"value_class": "corpus", "depth": "deep"}})
+    assert r["tier"] == "corpus" and r["pipelines"] == ["web"]
+    assert "unblock" not in r["pipelines"] and "unblock-us" not in r["reason"]
+
+
+def test_depth_deep_runs_sonnet_scouts_on_the_repo_pipeline_only():
+    assert shape({"value_class": "corpus", "sources": ["web", "repo"], "depth": "deep"})["flags"] == {
+        "repo": {"sonnet_scouts": "true"}
+    }
+    assert shape({"value_class": "corpus", "sources": ["web"], "depth": "deep"})["flags"] == {}
+
+
+def test_value_class_deep_is_refused():
+    with pytest.raises(ValueError):
+        shape({"value_class": "deep"})

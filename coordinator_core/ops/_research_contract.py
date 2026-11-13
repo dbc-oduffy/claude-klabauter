@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Final, NotRequired, TypedDict
 
-VALUE_CLASSES: Final = ("scouts", "corpus", "deep", "spike")
+VALUE_CLASSES: Final = ("scouts", "corpus", "unblock", "spike")
 APPETITES: Final = ("small", "medium", "large")
 SOURCES: Final = ("web", "repo", "structured", "notebooklm")
 # research.seeds[].kind -> the source (pipeline) a seed of that kind feeds. paper -> web is an
@@ -23,17 +23,20 @@ SEED_KIND_SOURCE: Final[dict[str, str]] = {
     "doc": "web",
     "paper": "web",
 }
-DEPTHS: Final = ("standard", "deeper", "deepest")
-TIERS: Final = ("scouts", "corpus", "deep")
+DEPTHS: Final = ("standard", "deep", "deeper", "deepest")
+TIERS: Final = ("scouts", "corpus", "unblock")
+# A tier spelling an emitted script may still send, mapped to its current name.
+LEGACY_TIER_ALIASES: Final[dict[str, str]] = {"deep": "unblock"}
 # local-only: every output stays under machine-local research.local_root, outside every repo.
 DESTINATIONS: Final = ("repo", "local-only")
 
 # TIER_TABLE[value_class][appetite] -> tier: small moves down a notch, large up, clamped.
-# corpus never rises to deep: deep is the unblock diagnostic, reached only by value_class deep.
+# corpus never rises to unblock: unblock is the stuck-delivery diagnostic, reached only by
+# value_class unblock. More thoroughness is depth (standard < deep < deeper < deepest).
 TIER_TABLE: Final[dict[str, dict[str, str]]] = {
     "scouts": {"small": "scouts", "medium": "scouts", "large": "corpus"},
     "corpus": {"small": "scouts", "medium": "corpus", "large": "corpus"},
-    "deep": {"small": "corpus", "medium": "deep", "large": "deep"},
+    "unblock": {"small": "corpus", "medium": "unblock", "large": "unblock"},
 }
 # spike is its own verdict class (procedure: /coordinator:spike, run by the EM); the engine has no
 # spike pipeline, so it has no TIER_TABLE row and `research_shape.shape` refuses it.
@@ -47,7 +50,7 @@ SCOUTS_PIPELINE: Final = "scouts"
 DEEP_PIPELINE: Final = "unblock"
 PREFLIGHT_PIPELINE: Final = "nlm-preflight"
 
-# What each pipeline is for, named in the shape reason: `deep` resolves to the unblock
+# What each pipeline is for, named in the shape reason: class `unblock` resolves to the unblock
 # diagnostic, which a comprehension ask must not run by mistake.
 PIPELINE_JOBS: Final[dict[str, str]] = {
     SCOUTS_PIPELINE: "quick web scouts over the ask",
@@ -56,7 +59,8 @@ PIPELINE_JOBS: Final[dict[str, str]] = {
     "structured": "structured-data corpus survey",
     "notebooklm": "NotebookLM corpus survey",
     DEEP_PIPELINE: "the unblock-us diagnostic (diagnose, decompose, challenge) for an EM stuck "
-    "delivering, not a comprehension survey; use --research-class corpus to understand a subject",
+    "delivering, not a comprehension survey; use --research-class corpus to understand a subject, "
+    "with --research-depth deep|deeper|deepest for more thoroughness",
 }
 
 # Deep roster: role members carry the role in DoE's templates, not in a persona.

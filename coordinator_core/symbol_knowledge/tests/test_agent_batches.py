@@ -53,7 +53,8 @@ def test_one_call_per_model_and_kind_routing(tmp_path):
     assert [m for m, _ in rec.calls] == ["haiku", "sonnet"]
     assert ADJ in rec.calls[0][1] and NEW not in rec.calls[0][1]
     assert NEW in rec.calls[1][1] and ADJ not in rec.calls[1][1]
-    assert (status, detail) == ("ran", f"2 current at {SHA[:10]}")
+    assert status == "ran" and detail.startswith(f"2 current at {SHA[:10]}")
+    assert "tokens_in=" in detail and "tokens_per_symbol=" in detail
     entries = sidecar.read_sidecar(tmp_path)
     assert entries[ADJ]["definition"] == "adj def" and entries[NEW]["sha"] == SHA
     assert commits == [(tmp_path, SHA, 2)]
@@ -154,5 +155,78 @@ def test_main_amends_leg_outcome_and_removes_payload(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_batches, "_commit_sidecar", lambda *a: None)
     assert agent_batches.main(["--job", str(path)]) == 0
     leg = json.loads(jobfile.read_text(encoding="utf-8"))["legs"][agent_batches.LEG]
-    assert leg == {"status": "ran", "detail": f"2 current at {SHA[:10]}"}
+    assert leg["status"] == "ran" and leg["detail"].startswith(f"2 current at {SHA[:10]}")
+    assert "tokens_in=" in leg["detail"] and "tokens_out=" in leg["detail"]
     assert not path.exists()
+    cost = json.loads(agent_batches.cost_path(tmp_path, "r1").read_text(encoding="utf-8"))
+    assert cost["op"] == agent_batches.COST_OP and cost["symbols_sent"] == 2
+
+
+SRC = 'import os\n\n\ndef alpha(x):\n    return x\n\n\ndef beta(y):\n    """Documented."""\n    return y\n'
+
+def _repo(tmp_path):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "m.py").write_text(SRC, encoding="utf-8")
+
+
+def _sym(name, kind="net-new", **extra):
+    return {"qualified_name": name, "path": "pkg/m.py", "kind": kind, "public": True, **extra}
+
+
+def _job(flagged):
+    return {"run_id": "r1", "sha": SHA, "flagged": flagged, "traps": {}, "repo": "demo"}
+
+
+def test_prompt_carries_one_context_block_per_file_and_no_read_instruction(tmp_path):
+    _repo(tmp_path)
+    rec = Recorder({"sonnet": json.dumps({"pkg.m.alpha": "A.", "pkg.m.beta": "B."})})
+    agent_batches.run_job(tmp_path, _job([_sym("pkg.m.alpha"), _sym("pkg.m.beta")]), rec, lambda *a: None)
+    prompt = rec.calls[0][1]
+    assert prompt.count("### pkg/m.py") == 1
+    assert "def alpha(x):" in prompt and "imports: os" in prompt
+    assert "Read the named file" not in prompt
+
+
+def test_reported_usage_lands_in_detail_and_cost_record(tmp_path):
+    _repo(tmp_path)
+
+    def runner(model, prompt):
+        return agent_batches.RunnerReply(json.dumps({"pkg.m.alpha": "A."}), 1000, 100)
+
+    status, detail = agent_batches.run_job(tmp_path, _job([_sym("pkg.m.alpha")]), runner, lambda *a: None)
+    assert "tokens_in=1000 tokens_out=100 tokens_per_symbol=1100 (reported)" in detail
+    cost = json.loads(agent_batches.cost_path(tmp_path, "r1").read_text(encoding="utf-8"))
+    assert (cost["tokens_in"], cost["tokens_out"], cost["tokens_per_symbol"]) == (1000, 100, 1100)
+
+
+def test_claude_runner_parses_envelope_usage(monkeypatch):
+    envelope = {"result": "hi", "usage": {"input_tokens": 5, "cache_read_input_tokens": 7, "output_tokens": 3}}
+    done = subprocess.CompletedProcess([], 0, stdout=json.dumps(envelope), stderr="")
+    monkeypatch.setattr(agent_batches.shutil, "which", lambda n: "claude")
+    monkeypatch.setattr(agent_batches.subprocess, "run", lambda *a, **k: done)
+    assert agent_batches.claude_runner("haiku", "p") == agent_batches.RunnerReply("hi", 12, 3)
+    done.stdout = "plain text"
+    assert agent_batches.claude_runner("haiku", "p") == "plain text"
+
+
+def test_run_job_emits_no_description_ndjson(tmp_path):
+    _repo(tmp_path)
+    agent_batches.run_job(
+        tmp_path, _job([_sym("pkg.m.alpha")]), Recorder({"sonnet": json.dumps({"pkg.m.alpha": "A."})}), lambda *a: None
+    )
+    assert not (tmp_path / "state" / "symbol-knowledge" / "symbol-descriptions.ndjson").exists()
+
+
+def test_oversize_symbol_is_deferred_and_reported_not_sent(tmp_path, monkeypatch):
+    _repo(tmp_path)
+    monkeypatch.setattr(agent_batches.batch_context, "PER_SYMBOL_TOKEN_CAP", 1)
+    rec = Recorder({"sonnet": json.dumps({"pkg.m.beta": "B."})})
+    flagged = [_sym("pkg.m.alpha"), _sym("pkg.m.beta")]
+    monkeypatch.setattr(
+        agent_batches.batch_context, "estimate_tokens", lambda t: 10 if "alpha" in t and "beta" not in t else 0
+    )
+    status, detail = agent_batches.run_job(tmp_path, _job(flagged), rec, lambda *a: None)
+    assert "- pkg.m.alpha" not in rec.calls[0][1] and "- pkg.m.beta" in rec.calls[0][1]
+    assert "1 deferred over budget" in detail
+    cost = json.loads(agent_batches.cost_path(tmp_path, "r1").read_text(encoding="utf-8"))
+    assert cost["deferred"] == ["pkg.m.alpha"]

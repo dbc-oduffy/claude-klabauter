@@ -66,6 +66,26 @@ def _parent(root):
     parent.write_text("{}", encoding="utf-8")
 
 
+def test_a_reaped_scratch_parent_rebinds_from_the_runs_durable_copy(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import run_parent_copy_rel
+
+    _parent(tmp_path)
+    op._bind_reserved_run(tmp_path, "r1", "p1")
+    copy = tmp_path / run_parent_copy_rel("r1")
+    (tmp_path / parent_record_rel("p1")).unlink()
+    _status(tmp_path, "halted")
+    op._bind_reserved_run(tmp_path, "r1", "p1")
+    assert json.loads((tmp_path / status_rel("r1")).read_text())["status"] == "running"
+    assert copy.read_text(encoding="utf-8") == "{}"
+
+
+def test_a_rebind_with_neither_parent_record_is_refused_and_leaves_status(tmp_path):
+    _status(tmp_path, "halted")
+    with pytest.raises(ValueError, match="is missing"):
+        op._bind_reserved_run(tmp_path, "r1", "p1")
+    assert json.loads((tmp_path / status_rel("r1")).read_text())["status"] == "halted"
+
+
 def test_a_stale_running_status_settles_halted_and_rebinds(tmp_path, monkeypatch):
     import subprocess
 

@@ -64,6 +64,7 @@ class GrokAdapter:
         if host_event.event not in SERVED_EVENTS:
             return None
         return {
+            "host": HOST_GROK,
             "hook_event_name": host_event.event,
             "session_id": host_event.session_id or None,
             "cwd": host_event.cwd or None,

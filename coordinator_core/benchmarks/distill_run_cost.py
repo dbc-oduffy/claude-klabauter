@@ -24,8 +24,10 @@ from typing import Any, Optional
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from coordinator_core.contract import run_budget as _run_budget
 from coordinator_core.distill import manifest_schema as _schema
 from coordinator_core.distill.run_cost import project_run_cost, scoped_files
+from coordinator_core.ops import backlog_pass_ledger
 from coordinator_core.win_portability import no_console_creationflags
 
 RUN_ID = "bench-run-cost"
@@ -99,6 +101,33 @@ def disposal_manifest_for(fates: dict[str, str]) -> dict[str, Any]:
     return _schema.make_disposal_manifest(RUN_ID, rows, _schema.make_scan_stats(len(rows), eligible, len(rows) - eligible))
 
 
+def bar_verdict(dispatches_total: int, tokens_total: int, minutes_total: int) -> dict[str, Any]:
+    """The run budget per axis (agents, tokens, minutes): projected against cap, `met` only when
+    every axis is within it. A run is narrowed to fit, never refused, so `refused` is always False."""
+    budget = _run_budget.load("distill")
+    projected = _run_budget.UnitCost(dispatches_total, tokens_total, minutes_total)
+    report = _run_budget.budget_report(budget, projected)
+    return {**report, "met": all(report["within"].values()), "refused": False, "source": budget.source}
+
+
+def modeled_minutes(batch_count: int) -> int:
+    """Minutes the distill.scope cost model prices for a run of `batch_count` scan batches."""
+    return _schema.LOAD_RELAY_MINUTES + batch_count * _schema.SCAN_BATCH_MINUTES
+
+
+def before_after(before: dict[str, Any], after: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Per-axis `{before, after, cap}` from two `measure` reports, either bar shape (agents, tokens, minutes)."""
+    def axes(report: dict[str, Any]) -> dict[str, int]:
+        return {
+            "agents": report["dispatches_total"],
+            "tokens": report["input_tokens_est_total"],
+            "minutes": modeled_minutes(report["batch_count"]),
+        }
+
+    was, now, cap = axes(before), axes(after), after["bar"]["cap"]
+    return {axis: {"before": was[axis], "after": now[axis], "cap": cap[axis]} for axis in was}
+
+
 def measure(repo: Path, out_dir: Optional[Path] = None, keep: bool = False) -> dict[str, Any]:
     result = run_scope(repo)
     run_dir = repo / "state" / "scratch" / "artifact-distillation" / RUN_ID
@@ -118,8 +147,15 @@ def measure(repo: Path, out_dir: Optional[Path] = None, keep: bool = False) -> d
         (out_dir / "disposal-manifest.json").write_bytes(_schema.canonical_manifest_bytes(disposal))
     dispatches = cost["dispatches_by_phase"]
     input_bytes = cost["input_bytes_by_phase"]
+    counts = result["counts"]
+    tokens_total = sum(input_bytes.values()) // BYTES_PER_TOKEN
     return {
-        "scope_counts": result["counts"],
+        "scope_counts": counts,
+        "not_admitted_count": counts.get("not_admitted", 0),
+        "deferred_count": counts.get("deferred", 0),
+        "log_cited_plan_count": counts.get("log_cited_plan_count", 0),
+        "bar": bar_verdict(sum(dispatches.values()), tokens_total, modeled_minutes(len(payload["batches"]))),
+        "backlog_pass": backlog_pass_ledger.summary(str(repo), "distill"),
         "scoped_file_count": len(files),
         "scoped_files_sha256": cost["scoped_files_sha256"],
         "dispatches_by_phase": dispatches,
@@ -145,8 +181,12 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
     ap.add_argument("--out-dir", type=Path, default=None, help="write fates-fixture.json and disposal-manifest.json here")
     ap.add_argument("--keep", action="store_true", help="keep the run's scratch directory")
+    ap.add_argument("--before", type=Path, default=None, help="an earlier report JSON; adds per-axis before/after")
     ns = ap.parse_args(argv)
-    print(json.dumps(measure(ns.repo.resolve(), ns.out_dir, ns.keep), indent=2))
+    report = measure(ns.repo.resolve(), ns.out_dir, ns.keep)
+    if ns.before is not None:
+        report["before_after"] = before_after(json.loads(ns.before.read_text(encoding="utf-8")), report)
+    print(json.dumps(report, indent=2))
     return 0
 
 

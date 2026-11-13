@@ -1,9 +1,11 @@
 """
 coordinator_core.symbol_knowledge.contract -- the interface the symbol-knowledge builders share.
 
-Purpose: pins ``FlaggedSymbol`` and the three entry points the leg composes. Each function delegates
-to the module that owns its body (lazy import, so this module stays cheap and cycle-free):
-``flag.flag_symbols``, ``agent_batches.launch_batches``, ``traps.record_traps``.
+Purpose: pins ``FlaggedSymbol``, ``WorkstateRef``, ``BuildCost`` and the entry points the leg and
+the ``code_intel.*`` ops compose. Each function delegates to the module that owns its body (lazy
+import, so this module stays cheap and cycle-free): ``flag.flag_symbols``,
+``agent_batches.launch_batches``, ``traps.record_traps``, ``freshness.freshness``,
+``workstate_index.workstate_index``.
 
 Negative-spec:
   - ``flag_symbols`` spawns no git process and writes nothing.
@@ -33,13 +35,60 @@ class FlaggedSymbol:
     path: str
     kind: str
     public: bool
+    docstring_empty: bool = True
 
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
             raise ValueError(f"unknown flagged-symbol kind: {self.kind!r}")
 
 
+DOC_KIND_PLAN = "plan"
+DOC_KIND_DR = "dr"
+DOC_KIND_LESSON = "lesson"
+DOC_KIND_LOG = "log"
+DOC_KINDS = (DOC_KIND_PLAN, DOC_KIND_DR, DOC_KIND_LESSON, DOC_KIND_LOG)
+
+
+@dataclass(frozen=True)
+class WorkstateRef:
+    """One workstate-index edge: a symbol qualified name or repo-relative path, the repo-relative
+    ``doc_path`` of the plan, DR, lesson or log that mentions it, and that doc's ``doc_kind``."""
+
+    symbol_or_path: str
+    doc_path: str
+    doc_kind: str
+
+    def __post_init__(self) -> None:
+        if self.doc_kind not in DOC_KINDS:
+            raise ValueError(f"unknown workstate doc_kind: {self.doc_kind!r}")
+
+
+@dataclass(frozen=True)
+class BuildCost:
+    """What one op cost to run: ``process_ms`` is CPU time across this process and its children,
+    ``spawns`` the process creations it made, ``tokens_in``/``tokens_out`` the model tokens it
+    spent (0 for an op that calls no model), ``files_reextracted`` the files it re-parsed."""
+
+    op: str
+    process_ms: float
+    spawns: int
+    tokens_in: int
+    tokens_out: int
+    files_reextracted: int
+
+
 PathLike = Union[str, Path]
+
+FRESHNESS_NOT_APPLICABLE: "dict[str, Any]" = {
+    "status": "not_applicable",
+    "files_reextracted": 0,
+    "queued": [],
+    "blocked_on": "example-retrieval-repo OKR run ask-20261113T131322-7e8139",
+    "gaps": [
+        "a: example-retrieval-repo serves no Python docstring/has_docstring (doc_comment NULL for Python symbols)",
+        "b: no in-process per-file staleness/body-hash read from example-retrieval-repo",
+    ],
+}
 
 
 def flag_symbols(common_dir: PathLike, sha: str, graph_db: PathLike) -> "list[FlaggedSymbol]":
@@ -48,6 +97,27 @@ def flag_symbols(common_dir: PathLike, sha: str, graph_db: PathLike) -> "list[Fl
     from coordinator_core.symbol_knowledge.flag import flag_symbols as impl
 
     return impl(common_dir, sha, graph_db)
+
+
+def freshness(root: PathLike, sha: str) -> "dict[str, Any]":
+    """Re-extract only the files commit *sha* changed and queue tier-1 descriptions for changed
+    symbols whose docstring is empty; returns ``{files_reextracted, queued, ...}``. COMPUTE_ONLY."""
+    try:
+        from coordinator_core.symbol_knowledge.freshness import freshness as impl
+    except ModuleNotFoundError as exc:
+        if exc.name != "coordinator_core.symbol_knowledge.freshness":
+            raise
+        return {k: list(v) if isinstance(v, list) else v for k, v in FRESHNESS_NOT_APPLICABLE.items()}
+
+    return impl(root, sha)
+
+
+def workstate_index(root: PathLike) -> "dict[str, Any]":
+    """Rebuild the symbol/file -> plan/DR/lesson/log index (``WorkstateRef`` rows) under
+    ``state/symbol-knowledge/``, re-reading only docs whose blob oid changed; returns a summary."""
+    from coordinator_core.symbol_knowledge.workstate_index import workstate_index as impl
+
+    return impl(root)
 
 
 def launch_batches(

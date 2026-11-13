@@ -24,8 +24,9 @@ import json
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 
 #: Seconds a parked stage may wait for its blockers; past it the baseline refusal applies.
 STAGE_WAIT_DEADLINE_S = 7200.0
@@ -110,6 +111,11 @@ def read(root: Path, run_id: str) -> Optional[dict]:
     return record if isinstance(record, dict) else None
 
 
+def iso_utc(epoch: float) -> str:
+    """`epoch` seconds as an ISO-8601 UTC stamp, second resolution (`2026-11-13T12:21:04Z`)."""
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def park(
     root: Path,
     run_id: str,
@@ -118,11 +124,14 @@ def park(
     *,
     session_id: str = "",
     now: Optional[float] = None,
+    last_activity: Optional[Mapping[str, float]] = None,
 ) -> Optional[dict]:
     """Write the run's one wait record naming `blockers`; None when no record home or run id resolves.
 
     A repeat park of a still-waiting run replaces the blocker set and keeps the first deadline, so
-    re-attempts never extend the bound. `session_id` receives the start notice."""
+    re-attempts never extend the bound. `session_id` receives the start notice. `last_activity` maps a
+    blocker to its last-activity epoch; the record carries it as ISO UTC under `last_activity`, so a
+    reader tells a live blocker from a dead one without the stage stamp."""
     path = _path(root, run_id)
     names = sorted({b for b in blockers if isinstance(b, str) and b})
     if path is None:
@@ -141,6 +150,7 @@ def park(
             "parked_at": prior["parked_at"] if keep else stamp,
             "deadline": prior["deadline"] if keep else stamp + STAGE_WAIT_DEADLINE_S,
             "started": False,
+            "last_activity": {b: iso_utc(last_activity[b]) for b in names if b in (last_activity or {})},
         }
         _write(path, record)
     return record

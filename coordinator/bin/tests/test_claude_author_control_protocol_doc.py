@@ -20,11 +20,12 @@ def _load():
     return mod
 
 
-if not _DOC.is_file():
-    pytest.skip("protocol wiki page is not shipped in this tree", allow_module_level=True)
+pytestmark = pytest.mark.skipif(
+    not _DOC.is_file(), reason="protocol wiki page is not shipped in this tree"
+)
 
 proto = _load()
-DOC = _DOC.read_text(encoding="utf-8")
+DOC = _DOC.read_text(encoding="utf-8") if _DOC.is_file() else ""
 
 
 def test_every_op_documented():

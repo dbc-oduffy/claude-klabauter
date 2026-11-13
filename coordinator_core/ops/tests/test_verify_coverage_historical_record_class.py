@@ -65,6 +65,15 @@ def test_delivery_records_and_archived_deferred_plans_exempt(tmp_path, capsys):
     ])
 
 
+def test_queue_grind_evidence_exempt_but_other_evidence_dirs_halt(tmp_path, capsys):
+    code, flagged = _sweep(tmp_path, {
+        "state/queue-grind/bug/evidence/20261111T004924Z/a.verify.md": QUOTE,
+        "docs/evidence/live.md": QUOTE,
+    }, capsys)
+    assert code == 1
+    assert flagged == [os.path.join("docs", "evidence", "live.md")]
+
+
 def test_recent_unfinished_plan_still_halts(tmp_path, capsys):
     code, flagged = _sweep(tmp_path, {
         "docs/plans/live.md": _plan("executing", date.today().isoformat()),

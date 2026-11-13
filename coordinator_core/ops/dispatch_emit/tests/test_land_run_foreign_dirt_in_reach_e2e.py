@@ -142,8 +142,8 @@ def test_a_landing_whose_test_would_fail_on_the_peer_dirt_lands_green_in_the_cle
     assert FIXTURE in _git(halted, "status", "--porcelain", "--", FIXTURE)
 
 
-def test_peer_dirt_in_reach_with_no_overlay_verdict_refuses_as_unverified(halted):  # noqa: F811
-    """A missing verdict is unverified: the dirt-in-reach landing refuses, commits nothing, and leaves the dirt."""
+def test_peer_dirt_in_reach_with_no_overlay_verdict_lands_with_an_advisory(halted):  # noqa: F811
+    """A verdict the engine never produced lands with an `Overlay: missing` trailer and leaves the dirt."""
     _track_fixture(halted)
     resume, token = _stage(halted)
     _lane_test_reads_the_fixture(halted)
@@ -153,8 +153,11 @@ def test_peer_dirt_in_reach_with_no_overlay_verdict_refuses_as_unverified(halted
 
     out = _terminal_with(halted, token, resume, _VERDICT)
 
-    assert out["committed"] is False and out["refused"] == "verify-overlay-unverified", out
-    assert _git(halted, "rev-parse", "HEAD").strip() == head
+    assert out["committed"] is True and not out.get("refused"), out
+    assert out["clean_overlay_verify"]["verdict"] == "missing", out
+    assert _git(halted, "rev-parse", "HEAD").strip() != head
+    assert _git(halted, "log", "-1", "--format=%(trailers:key=Overlay,valueonly)").strip().startswith("missing"), out
+    assert FIXTURE not in set(_git(halted, "show", "--name-only", "--format=", out["sha"]).split())
     assert (halted / FIXTURE).read_text(encoding="utf-8") == _DIRT
 
 

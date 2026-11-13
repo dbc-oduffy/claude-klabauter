@@ -162,6 +162,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.ceremony.commit_v2", 'registers "ceremony.commit_v2"'),
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
     ("coordinator_core.ops.canvas_harvest", 'registers "canvas.harvest"'),
+    ("coordinator_core.ops.daily_log", 'registers "changelog.daily_log"'),
     ("coordinator_core.ops.design_registry_lookup", 'registers "design.registry.lookup"'),
     ("coordinator_core.ops.memo_correct_note", 'registers "memo.correct_note"'),
     ("coordinator_core.ops.handoff_transition", 'registers "handoff.transition"'),
@@ -815,6 +816,14 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "freshness.commit_delta" (workday-start doc/test/bug-sweep '
         "commit-delta producer — docs/plans/2026-09-10-cartography-churn-producer-"
         "and-staleness-registrations.md § C3)",
+    ),
+    (
+        "coordinator_core.ops.code_intel_freshness",
+        'registers "code_intel.freshness" (changed-file re-extract and empty-docstring queue)',
+    ),
+    (
+        "coordinator_core.ops.code_intel_workstate_index",
+        'registers "code_intel.workstate_index" (symbol/file to plan, DR, lesson and log index)',
     ),
     (
         "coordinator_core.ops.warm_guard_evaluate",

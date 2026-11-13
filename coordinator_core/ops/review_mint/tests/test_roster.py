@@ -286,6 +286,45 @@ def test_unknown_or_malformed_tiers_refuse(bad):
         parse_execute_review(fragment)
 
 
+def _op_entry() -> dict:
+    return {"op": "dispatch.test_leg", "per": "whole-diff", "applies": "none", "schema": "whole-diff-review-result"}
+
+
+def test_op_entry_resolves_into_review_agent_op_and_others_stay_none():
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"][1]["agents"].append(_op_entry())
+    review = parse_execute_review(fragment)
+    by_type = {a.agent_type: a for a in review.review_wave}
+    leg = by_type["dispatch.test_leg"]
+    assert leg.op == "dispatch.test_leg"
+    assert (leg.model, leg.effort, leg.accepts_signals) == (None, None, None)
+    assert by_type["coordinator:code-reviewer"].op is None
+    assert review.prep.op is None
+
+
+@pytest.mark.parametrize("bad", ["", None, 3, ["dispatch.test_leg"]])
+def test_op_entry_with_invalid_op_refuses(bad):
+    fragment = _v5_fragment()
+    entry = _op_entry()
+    entry["op"] = bad
+    fragment["execute_review"]["stages"][1]["agents"].append(entry)
+    with pytest.raises(RosterFragmentError, match="'op'"):
+        parse_execute_review(fragment)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("agentType", "coordinator:code-reviewer"), ("accepts_signals", "named"), ("model", "haiku"), ("effort", "low")],
+)
+def test_op_entry_carrying_a_model_spend_field_refuses(field, value):
+    fragment = _v5_fragment()
+    entry = _op_entry()
+    entry[field] = value
+    fragment["execute_review"]["stages"][1]["agents"].append(entry)
+    with pytest.raises(RosterFragmentError, match=field):
+        parse_execute_review(fragment)
+
+
 def _live_fragment() -> dict:
     """DoE's final shape: ratio on code-reviewer, min_tshirt on Kira, no delivery-verifier."""
     fragment = _v5_fragment()

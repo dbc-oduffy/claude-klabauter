@@ -248,4 +248,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if any(_a in ("-h", "--help") for _a in __import__("sys").argv[1:]):
+        print("usage: unimatrix-codex-hook-sessionstart [-h]\nCodex SessionStart hook body; reads hook JSON on stdin, emits JSON")
+        raise SystemExit(0)
     sys.exit(main())

@@ -30,9 +30,9 @@
     "mirror_blob": "44fbbac200c224f51bef835f78521529d9d81a89"
   },
   "completion-receipt.schema.json": {
-    "blob": "23342e83820402f4607399d6031ac885420819d1",
-    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219",
-    "mirror_blob": "890a435a005bd5c270aa447d9d07d759d58826f5"
+    "blob": "9c998fd466af44cc5ce26ee564caf688302a98a0",
+    "doe_commit": "cdb80b68a35a817c4fb91590e6ca817835f26b8b",
+    "mirror_blob": "84046fd5f9892fa3a57ee135175a633d7404fe35"
   },
   "cross-repo-commitment.schema.json": {
     "blob": "e340062dc8ff54aca9c861c848e20e0ea9ae9c97",

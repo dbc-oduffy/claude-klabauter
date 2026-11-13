@@ -411,17 +411,15 @@ fleet-shaped, so `coordinator/scripts/setup.py` — granted for claude-klabauter
 genuinely defective sibling file the guard exists to report. `repo_key` is
 NOT a new identity mechanism: it is the fleet's existing `repos.<key>`
 machine-local registry vocabulary (`repos.content_root`,
-`repos.claude_klabauter`), derived from the repo directory basename by the
-same normalization as `coordinator_core.install.first_run._derive_repo_key`,
-`cross-repo-memo`'s `_receiver_repo_key`, and
-`coordinator_core.ops.register_discovered_repos` — see `repo_key_for_root`.
-**Named residual gap:** a clone checked out under a NON-canonical directory
-name (`claude-klabauter-2`, a CI `work/` dir) derives a different key and gets
-none of its exemptions, so the guard OVER-reports there. That is the
-fail-loud direction — a visibly red ratchet an operator can diagnose in one
-read — and is the deliberate trade against the silent under-report this
-keying replaces. The remedy is naming the clone canonically, never widening
-a key back to bare-relpath.
+`repos.claude_klabauter`), derived by the same normalization as
+`coordinator_core.install.first_run._derive_repo_key` -- but from the repo's
+OWN identity, the last path segment of its git `origin` remote URL (read
+straight from `.git/config`, no spawn), never the clone's folder name. A clone
+under any directory name therefore scans identically to the canonical one.
+**Fallback:** a repo with no readable remote derives the empty key `""`, which
+matches no EXEMPTIONS / EXEMPT_PREFIXES entry, so the guard OVER-reports there
+-- the fail-loud direction, never a silent under-report. The remedy is giving
+the clone its `origin` remote, never widening a key back to bare-relpath.
 
 EXEMPT_PREFIXES (directory-scope exclusion, 2026-08-03) is the OTHER
 carve-out mechanism, and it is deliberately not a convenience spelling of
@@ -897,6 +895,28 @@ _M8_REVIEW_TRAIL_SNAPSHOT_REASON = (
     "a snapshot lands."
 )
 
+_REASON_PMB_DARWIN_HOMEBREW_PROBE = (
+    "Admission test: the posix_mode_bits two-way discriminator "
+    "(docs/reference/posix-portability-fix-vs-carveout.md), carve-out side, "
+    "platform semantic gap. `unimatrix_python`'s default checker runs "
+    "`os.access(p, os.X_OK)` only inside a `(platform or sys.platform) == "
+    "\"darwin\"` branch over the two Homebrew interpreter paths, so Windows "
+    "never reaches it; the detector cannot see through the injectable "
+    "`platform or sys.platform` operand, and no code change makes the probe "
+    "meaningful on NTFS."
+)
+
+_MIRRORED_CLAUDE_KLABAUTER_BIN_REASON = (
+    "CLAUDE-KLABAUTER-OWNED MIRRORED CONTENT, not this repo's code. coordinator/bin/ in "
+    "coordinator-content-repo is a byte-for-byte resync of claude-klabauter's coordinator/bin/ "
+    "(published through klabauter), so every file under it is authored, "
+    "scanned and fixed or granted in claude-klabauter, where claude-klabauter's own scan "
+    "covers coordinator/bin/ in full. Scanning the mirror here double-counts "
+    "claude-klabauter's debt into DoE's shrink-only baseline and asks DoE to edit "
+    "bytes the next resync overwrites. Scoping by owner, not a loosening: "
+    "claude-klabauter carries no such prefix."
+)
+
 _MIRROR_NATIVE_DESTINATION_REASON = (
     "VERBATIM DESTINATION-NATIVE MIRROR CONTENT, not this repo's code. "
     "dist/mirror-native/ is the source-of-truth home for files that live in a "
@@ -1258,21 +1278,10 @@ REPO_DOE_CLAUDE = "content_root"
 REPO_CLAUDE_UNREAL_HOLODECK = "claude_unreal_holodeck"
 
 
-_REASON_PRE_COMMIT_HOOK_COPY = (
-    "Admission test: direct POSIX exec target. `--install-hook` generates "
-    ".git/hooks/pre-commit as a sh hook that execs this file, so the "
-    "`#!/usr/bin/env python3` shebang stays load-bearing for direct exec; "
-    "stripping it breaks that exec on every platform."
-)
-
-
 EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     "env_shebang": {
         REPO_CLAUDE_UNREAL_HOLODECK: {
             "plugin/example-game-repo-control/bin/example-game-repo-control": _EXAMPLE_GAME_REPO_FORWARDER_REASON,
-        },
-        REPO_DOE_CLAUDE: {
-            "coordinator/bin/pre_commit_corpus_artifact_guard.py": _REASON_PRE_COMMIT_HOOK_COPY,
         },
         REPO_PROJECT_MAKIMA: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
@@ -1324,6 +1333,7 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     "posix_mode_bits": {
         REPO_PROJECT_MAKIMA: {
             "coordinator/bin/unimatrix-install.py": _REASON_PMB_ATOMIC_MODE_COPY,
+            "coordinator/bin/lib/python_interp.py": _REASON_PMB_DARWIN_HOMEBREW_PROBE,
             "coordinator/lib/tests/test_lib_disk_budget_cache.py": _REASON_PMB_DIR_RWX_ARRANGEMENT,
             "coordinator_core/benchmarks/door_hook_read_latency.py": _REASON_PMB_DIR_RWX_ARRANGEMENT,
             "coordinator_core/tests/test_owner_safe_rmtree.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
@@ -1475,27 +1485,78 @@ EXEMPT_PREFIXES: Dict[str, Dict[str, str]] = {
     },
     REPO_DOE_CLAUDE: {
         "state/review-trail/diffs/m8-baseline/": _M8_REVIEW_TRAIL_SNAPSHOT_REASON,
+        "coordinator/bin/": _MIRRORED_CLAUDE_KLABAUTER_BIN_REASON,
     },
 }
+
+
+def _normalize_repo_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def _git_config_path(root) -> "Path | None":
+    """`root`'s git config file, following a `.git` gitfile (linked worktree)
+    through `gitdir:` and `commondir`; None when `root` is not a git checkout."""
+    dot_git = Path(root) / ".git"
+    try:
+        if dot_git.is_file():
+            text = dot_git.read_text(encoding="utf-8").strip()
+            if not text.startswith("gitdir:"):
+                return None
+            gitdir = Path(root) / text[len("gitdir:"):].strip()
+            common = gitdir / "commondir"
+            if common.is_file():
+                gitdir = gitdir / common.read_text(encoding="utf-8").strip()
+            return gitdir / "config"
+        return dot_git / "config"
+    except OSError:
+        return None
+
+
+_REMOTE_SECTION = re.compile(r'^\s*\[remote\s+"([^"]+)"\s*\]')
+_URL_LINE = re.compile(r"^\s*url\s*=\s*(\S.*?)\s*$")
+
+
+def _origin_url(root) -> str:
+    """The `origin` remote URL (else the first remote's) from `.git/config`;
+    empty when there is none. One file read, no git spawn."""
+    config = _git_config_path(root)
+    if config is None:
+        return ""
+    try:
+        lines = config.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    urls: Dict[str, str] = {}
+    remote = None
+    for line in lines:
+        section = _REMOTE_SECTION.match(line)
+        if section:
+            remote = section.group(1)
+        elif line.lstrip().startswith("["):
+            remote = None
+        elif remote is not None:
+            url = _URL_LINE.match(line)
+            if url:
+                urls.setdefault(remote, url.group(1))
+    return urls.get("origin") or next(iter(urls.values()), "")
 
 
 def repo_key_for_root(root) -> str:
     """The fleet `repos.<key>` identity of the repo checked out at `root`.
 
-    Lowercase the clone directory's basename, collapse every non-alnum run
-    to `_`, strip the edges — byte-identical to
-    `coordinator_core.install.first_run._derive_repo_key`, `cross-repo-memo`'s
-    `_receiver_repo_key`, and `coordinator_core.ops.register_discovered_repos`,
-    which is what makes `EXEMPTIONS`'s repo keys the SAME names the
-    machine-local registry already uses (`repos.content_root`,
-    `repos.claude_klabauter`) rather than a second, private repo vocabulary.
-
-    See the module docstring's "Keying" paragraph for the named residual gap
-    (a non-canonically-named clone derives a different key and gets none of
-    its exemptions — over-report, never under-report).
+    Keyed on the `origin` remote URL's final path segment (minus a trailing
+    `.git`), normalized byte-identically to
+    `coordinator_core.install.first_run._derive_repo_key`, so `EXEMPTIONS`'s
+    keys stay the names the machine-local registry already uses. The clone's
+    folder name is never read. No readable remote yields `""`, which matches
+    no grant (over-report); see the module docstring's "Keying" paragraph.
     """
-    name = Path(root).resolve().name
-    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+    url = _origin_url(root).rstrip("/\\")
+    if url.endswith(".git"):
+        url = url[:-4]
+    segment = re.split(r"[/\\:]", url)[-1] if url else ""
+    return _normalize_repo_key(segment)
 
 
 def _exempt_relpaths(cls: str, repo_key: str) -> Dict[str, str]:

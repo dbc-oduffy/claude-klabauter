@@ -355,6 +355,8 @@ def walk_markdown(
                     continue
                 if (os.path.basename(d), entry.name) in EXCLUDED_SUBPATHS:
                     continue
+                if entry.name == "evidence" and os.path.basename(os.path.dirname(d)) == "queue-grind":
+                    continue
                 if ignored_dirs and os.path.normcase(os.path.normpath(full)) in ignored_dirs:
                     continue
                 stack.append(full)
@@ -573,6 +575,17 @@ REF_ALLOWLIST: Set[str] = {
     # name (post-mortem/history context) without a live agent artifact.
     "coordinator:sid",
     "coordinator:the Data Science Reviewer",
+    # RETIRED-agent: dated plans name these retired agent ids as the subject
+    # (roster history, verify-coverage residue, delivery receipts); retargeting
+    # would falsify the quoted text.
+    "coordinator:delivery-verifier",
+    "coordinator:enricher-only",
+    "coordinator:em",
+    "coordinator:code-rev",
+    "coordinator:dep-cve-auditor",
+    "coordinator:parallel-review-synthesizer",
+    "coordinator:test-evidence-parser",
+    "python-executor",
 }
 
 

@@ -29,8 +29,9 @@ from cwd => silent exit; the example-game-repo-specific hook owns that banner.
 Called IN-PROCESS by the thin DoE SessionStart stub
 (coordinator/hooks/scripts/example-retrieval-repo-detect.py), mirroring
 preuse-write-dispatch.py's direct-import shape — no IPC round trip, no
-register_op(); this is a pure, side-effect-free banner computation, not a
-mutating op.
+register_op(); not a mutating op. Its only side effect is the detached refresh
+that `rag_freshness.freshness_precondition` queues for a stale or absent index
+(advisory, fail-open). An index under the settings home counts as indexed.
 
 Spec backlink: C:/coordinator-content-repo/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md § 2.8
 """
@@ -96,7 +97,43 @@ def _git(repo_root: str, *args: str) -> str | None:
     return result.stdout.strip() or None
 
 
-def detect_banner(cwd: str) -> str:
+def _git_root_upward(start_dir: str, max_levels: int = 8) -> str | None:
+    d = start_dir
+    for _ in range(max_levels):
+        if os.path.exists(os.path.join(d, ".git")):
+            return d
+        parent = os.path.dirname(d)
+        if not parent or parent == d:
+            break
+        d = parent
+    return None
+
+
+def _settings_index_db(repo_root: str) -> str | None:
+    """Settings-home graph.db for ``repo_root`` (`project-rag/indexes/<name, '-'->'_'>/root/`)."""
+    try:
+        from coordinator_core._settings_home import settings_home
+
+        slug = os.path.basename(os.path.abspath(repo_root)).replace("-", "_")
+        db = settings_home() / "project-rag" / "indexes" / slug / "root" / "graph.db"
+        return str(db) if db.is_file() else None
+    except Exception:  # noqa: BLE001 -- locator failure reads as no settings-home index
+        return None
+
+
+def _acted(pre: dict) -> str:
+    """The refresh fact the adapter reports, in banner words."""
+    if pre.get("refresh_queued"):
+        return "refresh queued"
+    if "already queued" in str(pre.get("message", "")):
+        return "refresh already queued"
+    return "refresh not queued"
+
+
+def detect_banner(cwd: str, *, verdict_fn=None, spawn_fn=None, marker_root=None) -> str:
+    """Session-start banner. A stale or absent index queues example-retrieval-repo's refresh
+    through ``rag_freshness.freshness_precondition`` and the banner states that
+    outcome. The keyword seams pass through to the adapter."""
     if os.environ.get("COORDINATOR_HOOK_PROJECT_RAG_DETECT_DISABLED") == "1":
         return ""
 
@@ -105,16 +142,30 @@ def detect_banner(cwd: str) -> str:
     if _find_marker_upward(cwd, os.path.join("Saved", "ExampleGameRepoProjectRag")) is not None:
         return ""
 
+    from coordinator_core.ops import rag_freshness
+
+    def _precondition(root: str) -> dict:
+        return rag_freshness.freshness_precondition(
+            root, verdict_fn=verdict_fn, spawn_fn=spawn_fn, marker_root=marker_root
+        )
+
     example_retrieval_repo_dir = find_example_retrieval_repo_dir(cwd)
-    if not example_retrieval_repo_dir:
-        return ""
-
-    repo_root = os.path.dirname(example_retrieval_repo_dir)
-
-    db_path = os.path.join(example_retrieval_repo_dir, "graph.db")
+    if example_retrieval_repo_dir:
+        repo_root = os.path.dirname(example_retrieval_repo_dir)
+        db_path = os.path.join(example_retrieval_repo_dir, "graph.db")
+    else:
+        repo_root = _git_root_upward(cwd)
+        if repo_root is None:
+            return ""
+        db_path = _settings_index_db(repo_root)
+        if db_path is None:
+            pre = _precondition(repo_root)
+            if pre["state"] == "absent":
+                return f"project-rag: UNINITIALIZED — no index; {_acted(pre)}"
+            return ""
 
     if not os.path.isfile(db_path):
-        return "project-rag: UNINITIALIZED — no graph.db; run the project-RAG indexer"
+        return f"project-rag: UNINITIALIZED — no graph.db; {_acted(_precondition(repo_root))}"
 
     try:
         db_mtime_epoch = Path(db_path).stat().st_mtime
@@ -133,7 +184,7 @@ def detect_banner(cwd: str) -> str:
 
     built_commit = _git(repo_root, "log", "-1", f"--before={mtime_str}", "--format=%H")
     if not built_commit:
-        return "project-rag: UNINITIALIZED — graph.db predates git history; run the project-RAG indexer"
+        return f"project-rag: UNINITIALIZED — graph.db predates git history; {_acted(_precondition(repo_root))}"
 
     delta_raw = _git(repo_root, "rev-list", f"{built_commit}..HEAD", "--count")
     if delta_raw is None:
@@ -146,20 +197,18 @@ def detect_banner(cwd: str) -> str:
     if delta == 0:
         return "example-retrieval-repo: fresh (HEAD aligned)"
 
+    acted = _acted(_precondition(repo_root))
     base_msg = (
-        f"project-rag: STALE — {delta} commits behind HEAD; "
+        f"project-rag: STALE — {delta} commits behind HEAD; {acted}; "
         "example-retrieval-repo queries may miss recent changes"
     )
 
     if delta > 50 or age_days > 7:
         lines = ["<system-reminder>", base_msg]
         if delta > 50:
-            lines.append(
-                f"  WARNING: {delta} commits — index is significantly out of date. "
-                "Run the project-RAG indexer to rebuild."
-            )
+            lines.append(f"  WARNING: {delta} commits — index is significantly out of date.")
         if age_days > 7:
-            lines.append(f"  WARNING: index is {age_days} days old. Run the project-RAG indexer to rebuild.")
+            lines.append(f"  WARNING: index is {age_days} days old.")
         lines.append("</system-reminder>")
         return "\n".join(lines)
 

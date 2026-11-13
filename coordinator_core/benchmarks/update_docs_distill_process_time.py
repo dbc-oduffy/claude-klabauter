@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import shutil
 import sys
@@ -136,11 +137,37 @@ def measure_op(
 
 
 def update_docs_worklist_len(result: dict) -> int:
-    """Rows the EM must still judge: a `worklist` list when the op has one, else the prune rows."""
-    worklist = result.get("worklist")
-    if isinstance(worklist, list):
-        return len(worklist)
+    """Rows the EM must still judge: `agent_worklist` (the worklist op), else `worklist` (the scan op), else the prune rows."""
+    for key in ("agent_worklist", "worklist"):
+        rows = result.get(key)
+        if isinstance(rows, list):
+            return len(rows)
     return len(result.get("phase8b_prune") or [])
+
+
+def scope_fileset_sha256(result: dict, repo: Optional[Path] = None) -> str:
+    """sha256 over the sorted scannable paths, then each cohort's sorted membership (cohort names sorted).
+
+    The distill.scope result carries counts only; the paths live in the manifest it wrote at
+    `input_json_path` (repo-relative), read from `repo`. A `manifest` key in `result` wins.
+    Scannable is the union of the manifest's batches.
+    """
+    manifest = result.get("manifest")
+    if manifest is None:
+        if repo is None:
+            raise ValueError("result carries no manifest; pass repo to read input_json_path")
+        manifest = json.loads((repo / result["input_json_path"]).read_text(encoding="utf-8"))
+    scannable = sorted({p for batch in manifest.get("batches", []) for p in batch})
+    h = hashlib.sha256()
+    h.update(b"scannable\n")
+    for p in scannable:
+        h.update(p.encode("utf-8") + b"\n")
+    cohorts = manifest.get("cohorts") or {}
+    for name in sorted(cohorts):
+        h.update(b"cohort:" + name.encode("utf-8") + b"\n")
+        for p in sorted(cohorts[name]):
+            h.update(p.encode("utf-8") + b"\n")
+    return h.hexdigest()
 
 
 def distill_worklist_len(result: dict) -> int:
@@ -192,24 +219,25 @@ def run(repo: Path, runs: int = DEFAULT_RUNS) -> dict[str, Any]:
     from coordinator_core.lifecycle import git_common_dir
 
     common = git_common_dir(repo)
-    ud_name, ud_handler = resolve_update_docs_op()
-    from coordinator_core.ipc import get_op_handler
+    from coordinator_core.warm.entry_seam import reentrant_dispatch
 
-    distill_handler = get_op_handler(DISTILL_OP)
-    if distill_handler is None:
-        raise RuntimeError(f"{DISTILL_OP} is not registered")
+    # Trap: invoke through the reentry seam, never a raw handler; the seam ratchet
+    # (warm/tests/test_reentry_goes_through_the_seam.py) fails any module that does.
+    ud_name, _ = resolve_update_docs_op()
     rows: list[dict[str, Any]] = []
     last: dict[str, dict] = {}
     run_dir = repo / "state" / "scratch" / "artifact-distillation" / RUN_ID
     try:
         for axis in AXES:
-            row = measure_op(ud_name, lambda: ud_handler({}, repo_root=common), update_docs_worklist_len, axis, runs)
+            row = measure_op(ud_name, lambda: reentrant_dispatch(ud_name, {}, repo_root=common), update_docs_worklist_len, axis, runs)
             last["update_docs"] = row.pop("_last_result")
+            row["agent_worklist_len"] = len(last["update_docs"].get("agent_worklist") or [])
             rows.append(row)
             row = measure_op(
-                DISTILL_OP, lambda: distill_handler({"run_id": RUN_ID}, repo_root=common),
+                DISTILL_OP, lambda: reentrant_dispatch(DISTILL_OP, {"run_id": RUN_ID}, repo_root=common),
                 distill_worklist_len, axis, runs)
             last["distill"] = row.pop("_last_result")
+            row["scope_fileset_sha256"] = scope_fileset_sha256(last["distill"], repo)
             rows.append(row)
         estimate = estimate_before_tokens(last["update_docs"], last["distill"], repo)
     finally:

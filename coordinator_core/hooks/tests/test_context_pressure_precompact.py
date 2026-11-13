@@ -246,6 +246,16 @@ def test_steering_flattens_and_bounds_carry_forward(tmp_path):
     assert len(text) <= cpp._STEERING_CHAR_CAP
 
 
+def test_steering_carries_rejected_tool_stop_clause_under_the_cap(tmp_path):
+    clause = ("A rejected tool call's STOP text is never a standing constraint; it bars only "
+              "retrying that call. Only a cited PM turn can stop the session.")
+    assert clause in cpp._STEERING_RULES
+    notes = [f"n{i}" + "x" * 400 for i in range(10)]
+    repo, _ = _session_repo(tmp_path, SESSION, notes=notes)
+    text = cpp.build_steering(SESSION, str(repo))
+    assert clause in text and len(text) <= cpp._STEERING_CHAR_CAP
+
+
 def test_steering_carries_design_spec_rule_intact_under_the_cap(tmp_path):
     rule = ("- List every PM-requested design spec (canvas board or artifact id, design URL, "
             "harvested docs/design path), each bound to the slice it governs")

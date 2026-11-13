@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "repos": [
+    {
+      "slug": "repo_stale",
+      "verdict": "stale",
+      "reason": "behind_head",
+      "indexed_commit": "379d97cc5a8f",
+      "head_commit": "e648350842df",
+      "index_behind_head": 25239,
+      "release_target": "owner/repo-stale",
+      "remedy": {
+        "action": "refresh_from_release",
+        "argv": ["/opt/rag/bin/python3", "/opt/rag/project_rag_cli.py", "refresh-from-release", "--repo", "repo_stale"],
+        "network": true
+      },
+      "alias_of": null
+    },
+    {
+      "slug": "repo_absent",
+      "verdict": "absent",
+      "reason": "no_structural_db",
+      "indexed_commit": null,
+      "head_commit": "e648350842df",
+      "index_behind_head": null,
+      "release_target": null,
+      "remedy": {"action": "register_publish_repo", "argv": [], "network": false},
+      "alias_of": null
+    },
+    {
+      "slug": "repo_current",
+      "verdict": "current",
+      "reason": null,
+      "indexed_commit": "e648350842df",
+      "head_commit": "e648350842df",
+      "index_behind_head": 0,
+      "release_target": "owner/repo-current",
+      "remedy": {"action": "none", "argv": [], "network": false},
+      "alias_of": null
+    },
+    {
+      "slug": "repo_unknown",
+      "verdict": "unknown",
+      "reason": "git_budget_exceeded",
+      "indexed_commit": null,
+      "head_commit": null,
+      "index_behind_head": null,
+      "release_target": "owner/repo-unknown",
+      "remedy": {
+        "action": "refresh_from_release",
+        "argv": ["/opt/rag/bin/python3", "/opt/rag/project_rag_cli.py", "refresh-from-release", "--repo", "repo_unknown"],
+        "network": true
+      },
+      "alias_of": null
+    }
+  ]
+}

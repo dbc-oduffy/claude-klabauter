@@ -24,7 +24,7 @@ def test_withdrawn_spool_entry_wins_over_stale_minted_stage(tmp_path):
 
     _stale_minted_run(tmp_path)
     notice.append_notice(str(tmp_path), "s1", "abc", "run-1")
-    open(record.entry_path(str(tmp_path), "abc", record.WITHDRAWN_SUFFIX), "w").close()
+    open(record.entry_path(str(tmp_path), "abc", record.WITHDRAWN_SUFFIX), "w", encoding="utf-8").close()
     text = notice.advisory_text(str(tmp_path), "s1")
     assert text == "Your spooled ask abc minted run run-1; it is now withdrawn, nothing to start."
 

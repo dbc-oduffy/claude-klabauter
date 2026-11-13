@@ -9,7 +9,11 @@ import time
 import pytest
 
 from coordinator_core.distill import autofire, autofire_launch
-from coordinator_core.distill.autofire_contract import AUTOFIRE_INTERVAL_SECS, AUTOFIRE_THRESHOLD
+from coordinator_core.distill.autofire_contract import (
+    AUTOFIRE_INTERVAL_SECS,
+    AUTOFIRE_THRESHOLD,
+    BACKOFF_MAX_SECS,
+)
 from coordinator_core.ops.workflow_fire import fire
 
 LOG = "## Run r-2026-07-12a\n- archive/specs/2026-07/spec-0.md -> DISTILLED, folded (run: r-2026-07-12a)\n"
@@ -22,6 +26,8 @@ def _isolate(tmp_path, monkeypatch):
     autofire.last_decisions.clear()
     registry = tmp_path / "registry"
     monkeypatch.setattr(fire, "_registry_dir", lambda cwd=None: registry)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+    monkeypatch.delenv("COORDINATOR_DISTILL_AUTOFIRE", raising=False)
     yield registry
 
 
@@ -134,14 +140,170 @@ def test_orphan_claim_past_interval_is_reclaimed(tmp_path):
     assert len(fake.calls) == 1
 
 
-def test_claim_with_terminal_record_is_released(tmp_path, _isolate):
-    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3)
+def _terminal_claim(tmp_path, registry, outcome, *, claim_stamp="current", fire_id="gone1"):
+    """A claim whose run ended with `outcome`; `claim_stamp` is the at-launch stamp ('current' =
+    the repo's stamp now, i.e. no input change since launch)."""
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3).resolve()
+    stamp = autofire._normalised_stamp(autofire._input_stamp(repo)) if claim_stamp == "current" else claim_stamp
     claim = repo / autofire.CLAIM_REL
-    claim.parent.mkdir(parents=True)
-    claim.write_text(json.dumps({"fire_id": "gone1"}))
-    _seed_record(_isolate, repo.resolve(), "gone1", "exited", 1)
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    claim.write_text(json.dumps({"fire_id": fire_id, "stamp": stamp}))
+    _seed_record(registry, repo, fire_id, "exited", None)
+    path = registry / f"{fire_id}.json"
+    record = json.loads(path.read_text())
+    if outcome is not None:
+        record["outcome"] = outcome
+        record["_annotation_version"] = fire._ANNOTATION_VERSION
+    path.write_text(json.dumps(record))
+    return repo
+
+
+def test_claim_with_unknown_outcome_backs_off_not_refires(tmp_path, _isolate):
+    repo = _terminal_claim(tmp_path, _isolate, None)
+    fake = Fake()
+    assert _tick(repo, fake) is False
+    assert fake.calls == []
+    assert autofire.last_decisions[repo].reason == "backoff:unknown:failures=1"
+    assert not (repo / autofire.CLAIM_REL).exists()
+    assert json.loads((repo / autofire.BACKOFF_REL).read_text())["failures"] == 1
+
+
+def test_claim_with_missing_record_backs_off(tmp_path, _isolate):
+    repo = _terminal_claim(tmp_path, _isolate, None)
+    (_isolate / "gone1.json").unlink()
+    assert _tick(repo, Fake()) is False
+    assert autofire.last_decisions[repo].reason == "backoff:missing:failures=1"
+
+
+def test_clean_outcome_with_unchanged_inputs_backs_off(tmp_path, _isolate):
+    """Exit 0 that recorded nothing is a failure: the stamp is what proves a log entry landed."""
+    repo = _terminal_claim(tmp_path, _isolate, "clean")
+    fake = Fake()
+    assert _tick(repo, fake) is False
+    assert autofire.last_decisions[repo].reason == "backoff:clean:failures=1"
+
+
+def test_clean_outcome_with_changed_inputs_refires(tmp_path, _isolate):
+    repo = _terminal_claim(tmp_path, _isolate, "clean", claim_stamp=[1, 2, []])
     fake = Fake()
     assert _tick(repo, fake) is True
+    assert len(fake.calls) == 1
+    assert not (repo / autofire.BACKOFF_REL).exists()
+
+
+def test_launch_writes_normalised_stamp_into_claim(tmp_path):
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3)
+    assert _tick(repo, Fake()) is True
+    stamp = json.loads((repo / autofire.CLAIM_REL).read_text())["stamp"]
+    assert stamp == autofire._normalised_stamp(autofire._input_stamp(repo.resolve()))
+
+
+def _backoff_state(repo):
+    return json.loads((repo / autofire.BACKOFF_REL).read_text())
+
+
+def test_backoff_grows_exponentially_and_caps(tmp_path):
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3).resolve()
+    stamp = autofire._input_stamp(repo)
+    waits = []
+    for _ in range(12):
+        before = time.time()
+        autofire._record_failure(repo, "f", "unknown", stamp)
+        waits.append(round(_backoff_state(repo)["next_at"] - before))
+    assert waits[0] == AUTOFIRE_INTERVAL_SECS * 2
+    assert waits[1] == AUTOFIRE_INTERVAL_SECS * 4
+    assert waits[2] == AUTOFIRE_INTERVAL_SECS * 8
+    assert waits[-1] == BACKOFF_MAX_SECS
+    assert _backoff_state(repo)["failures"] == 12
+
+
+def test_standing_backoff_holds_then_expires(tmp_path):
+    """The JSON round-trip of the stamp must not read as 'inputs changed'."""
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3).resolve()
+    autofire._record_failure(repo, "f", "unknown", autofire._input_stamp(repo))
+    fake = Fake()
+    assert _tick(repo, fake, t=0) is False
+    assert autofire.last_decisions[repo].reason == "backoff:unknown:failures=1"
+    assert _tick(repo, fake, t=AUTOFIRE_INTERVAL_SECS + 1) is False
+    assert fake.calls == []
+    state = _backoff_state(repo)
+    state["next_at"] = time.time() - 1
+    (repo / autofire.BACKOFF_REL).write_text(json.dumps(state))
+    assert _tick(repo, fake, t=2 * AUTOFIRE_INTERVAL_SECS + 2) is True
+
+
+def test_input_change_clears_backoff(tmp_path):
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3).resolve()
+    autofire._record_failure(repo, "f", "unknown", autofire._input_stamp(repo))
+    month = repo / "archive" / "specs" / "2026-07"
+    later = time.time() + 5
+    os.utime(month, (later, later))
+    fake = Fake()
+    assert _tick(repo, fake) is True
+    assert not (repo / autofire.BACKOFF_REL).exists()
+
+
+def test_kill_switch_env_blocks_every_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_DISTILL_AUTOFIRE", "off")
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3)
+    fake = Fake()
+    assert _tick(repo, fake) is False
+    assert fake.calls == []
+    assert autofire.last_decisions[repo.resolve()].reason == "disabled:kill-switch"
+
+
+def test_kill_switch_env_unset_values_do_not_block(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_DISTILL_AUTOFIRE", "1")
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3)
+    assert _tick(repo, Fake()) is True
+
+
+def test_kill_switch_flag_file_blocks_and_removal_rearms(tmp_path):
+    flag = tmp_path / "settings-home" / "distill-autofire.off"
+    flag.parent.mkdir()
+    flag.write_text("")
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3)
+    fake = Fake()
+    assert _tick(repo, fake) is False
+    assert fake.calls == []
+    assert autofire.last_decisions[repo.resolve()].reason == "disabled:kill-switch"
+    flag.unlink()
+    assert _tick(repo, fake, t=1.0) is True
+
+
+def test_unresolved_settings_home_disables(tmp_path, monkeypatch):
+    from coordinator_core import _settings_home
+
+    def boom():
+        raise RuntimeError("no home")
+
+    monkeypatch.setattr(_settings_home, "settings_home", boom)
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3)
+    fake = Fake()
+    assert _tick(repo, fake) is False
+    assert fake.calls == []
+    assert autofire.last_decisions[repo.resolve()].reason == "disabled:settings-home-unresolved"
+
+
+def test_stopgap_directory_reads_disabled_not_error(tmp_path):
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3)
+    autofire_launch.fire_script_path(repo).mkdir(parents=True)
+    fake = Fake()
+    assert _tick(repo, fake) is False
+    assert fake.calls == []
+    assert autofire.last_decisions[repo.resolve()].reason == "disabled:stopgap-dir"
+
+
+def test_launcher_raising_autofire_disabled_reads_stopgap(tmp_path):
+    from coordinator_core.distill.autofire_contract import AutofireDisabled
+
+    def refuse(repo):
+        raise AutofireDisabled("stopgap")
+
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3)
+    assert _tick(repo, refuse) is False
+    assert autofire.last_decisions[repo.resolve()].reason == "disabled:stopgap-dir"
+    assert not (repo / autofire.CLAIM_REL).exists()
 
 
 def test_log_absent_is_recorded_not_raised(tmp_path):

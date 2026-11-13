@@ -151,10 +151,16 @@ def test_path_shaped_repo_refs_are_unchanged(repo: Path, registered: str) -> Non
 
 
 def test_research_appetite_never_touches_top_level_appetite(repo: Path) -> None:
-    code, doc = _run(repo, "--research-class", "deep", "--research-appetite", "small")
+    code, doc = _run(repo, "--research-class", "unblock", "--research-appetite", "small")
     assert code == sa.EXIT_OK
     assert "appetite" not in doc
     assert doc["research"]["appetite"] == "small"
+
+
+def test_research_depth_deep_is_accepted(repo: Path) -> None:
+    code, doc = _run(repo, "--research-class", "corpus", "--research-depth", "deep")
+    assert code == sa.EXIT_OK
+    assert doc["research"]["depth"] == "deep"
 
 
 def test_no_research_flags_writes_no_research_key(repo: Path) -> None:
@@ -167,11 +173,12 @@ def test_no_research_flags_writes_no_research_key(repo: Path) -> None:
     "flags",
     [
         ("--research-class", "bogus"),
-        ("--research-class", "deep", "--research-appetite", "huge"),
-        ("--research-class", "deep", "--research-source", "dns"),
-        ("--research-class", "deep", "--research-depth", "abyssal"),
-        ("--research-class", "deep", "--research-target", "dns=x"),
-        ("--research-class", "deep", "--research-target", "web"),
+        ("--research-class", "deep"),
+        ("--research-class", "unblock", "--research-appetite", "huge"),
+        ("--research-class", "unblock", "--research-source", "dns"),
+        ("--research-class", "unblock", "--research-depth", "abyssal"),
+        ("--research-class", "unblock", "--research-target", "dns=x"),
+        ("--research-class", "unblock", "--research-target", "web"),
         ("--research-appetite", "small"),
     ],
 )
@@ -187,7 +194,7 @@ def test_bad_values_are_refused_with_usage_exit_and_nothing_written(
 def test_research_flags_without_write_are_refused(
     capsys: pytest.CaptureFixture[str], repo: Path
 ) -> None:
-    code = sa.main(["--tshirt", "XS", "--interaction-mode", "pm", "--research-class", "deep"])
+    code = sa.main(["--tshirt", "XS", "--interaction-mode", "pm", "--research-class", "unblock"])
     assert code == sa.EXIT_USAGE
     assert "--research-* requires --write" in capsys.readouterr().err
 

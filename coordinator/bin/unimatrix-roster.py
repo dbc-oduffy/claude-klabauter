@@ -241,7 +241,13 @@ def entry_listed(d):
     for a mirror, its far session was seen on a recent poll and, for an agy router face, its agy
     process is still alive."""
     return (entry_live(d) and not mirror_orphaned(d) and not mirror_unbacked(d)
-            and not _liveness().agy_face_unbacked(d))
+            and not _liveness().agy_face_unbacked(d) and not _liveness().codex_face_unbacked(d))
+
+
+def far_codex_unbacked(entry):
+    """True for a far Codex peer row whose box reported no live holder (`codexHolder`, stamped by
+    `session_identity` on the far box); a row from a box that does not report it is listed."""
+    return _liveness().codex_holder_unbacked(entry.get("codexHolder"), entry)
 
 
 def far_seen_fields():
@@ -545,6 +551,26 @@ def box_label(remote):
     return str(remote).rpartition("@")[2]
 
 
+def box_key(remote):
+    """Identity of the box behind an ssh alias: `box_label` lower-cased and cut at its first dot, so
+    `machine-b` and `Machine-b.local` are one box. An address (IPv4, or IPv6 with colons) stays whole."""
+    host = box_label(remote).lower()
+    if ":" in host or re.fullmatch(r"\d+(?:\.\d+){3}", host):
+        return host
+    return host.partition(LABEL_SEP)[0] or host
+
+
+def alias_duplicate(remote, far_sock, scan):
+    """True when another alias of this box already holds a live mirror of `far_sock`; the lowest alias
+    keeps it, so two roster supervisors for one box never list the one far session twice."""
+    want = box_key(remote)
+    for key in {s for _, s in scan if isinstance(s, str) and "\0" in s}:
+        other, _, sock = key.partition("\0")
+        if sock == far_sock and other != remote and box_key(other) == want and other < remote:
+            return True
+    return False
+
+
 def labelled(name, remote):
     """The name, a dot, then the box, for a mirror's session name; idempotent, so a re-mirror never stacks labels."""
     if not isinstance(name, str) or not name:
@@ -646,6 +672,7 @@ def mirrorable(rows, skip, inbound):
     return {r["entry"]["messagingSocketPath"]: r for r in rows
             if r["entry"]["messagingSocketPath"] not in skip
             and not (r["entry"].get("unimatrixMirror") or r["entry"].get(FAR_SOCKET_FIELD))
+            and not far_codex_unbacked(r["entry"])
             and bare_name(r["entry"].get("name")) not in inbound}
 
 
@@ -871,7 +898,11 @@ def session_identity(entry, box=None):
             vendor = "unknown"
     far = entry.get(FAR_SOCKET_FIELD) or entry.get("unimatrixMirror")
     origin = entry.get("box") or box or ("unknown" if far else socket.gethostname().lower())
-    return {"vendor": vendor, "box": str(origin), "cwd": entry.get("cwd") or ""}
+    out = {"vendor": vendor, "box": str(origin), "cwd": entry.get("cwd") or ""}
+    holder = _liveness().codex_face_holder(entry) if box is None and vendor == "codex" else None
+    if holder:
+        out["codexHolder"] = holder
+    return out
 
 
 def mirror_identity(entry, remote):
@@ -1080,6 +1111,11 @@ def sync(bridges, rows, cfg, say):
         _ABSENT.pop(sock, None)
     for sock, row in rows.items():
         b = bridges.get(sock)
+        if alias_duplicate(cfg.remote, sock, scan):
+            if b:
+                unmirror(bridges.pop(sock).pid)
+                say(f"unmirror {sock}: another alias of this box mirrors it")
+            continue
         if b and b.poll() is None:
             rename_live_mirror(b.pid, sock, row, cfg, say, scan)
             continue

@@ -83,6 +83,37 @@ def test_worklist_len_shapes():
     assert bench.distill_worklist_len({"counts": {"batches": 2}}) == 2
 
 
+def test_worklist_len_reads_the_worklist_ops_real_key():
+    real_shape = {"ack_head": "x", "decided_by_op": {}, "agent_worklist": [{"kind": "a"}, {"kind": "b"}]}
+    assert bench.update_docs_worklist_len(real_shape) == 2
+    assert bench.update_docs_worklist_len({"agent_worklist": [], "phase8b_prune": [1]}) == 0
+    assert bench.update_docs_worklist_len({"agent_worklist": [1], "worklist": [1, 2, 3]}) == 1
+
+
+def _manifest(batches, cohorts):
+    return {"manifest": {"batches": batches, "cohorts": cohorts}}
+
+
+def test_scope_fileset_sha_is_order_independent_and_sensitive_to_membership():
+    base = bench.scope_fileset_sha256(_manifest([["b", "a"], ["c"]], {"harvest": ["a", "b"], "skip": ["z"]}))
+    assert len(base) == 64
+    same = bench.scope_fileset_sha256(_manifest([["c"], ["a", "b"]], {"skip": ["z"], "harvest": ["b", "a"]}))
+    assert same == base
+    assert bench.scope_fileset_sha256(_manifest([["a", "b"], ["d"]], {"harvest": ["a", "b"], "skip": ["z"]})) != base
+    assert bench.scope_fileset_sha256(_manifest([["b", "a"], ["c"]], {"harvest": ["a"], "skip": ["z", "b"]})) != base
+
+
+def test_scope_fileset_sha_reads_the_manifest_at_input_json_path(tmp_path):
+    import json
+
+    manifest = {"batches": [["a"]], "cohorts": {"harvest": ["a"]}}
+    (tmp_path / "m.json").write_text(json.dumps(manifest), encoding="utf-8")
+    got = bench.scope_fileset_sha256({"input_json_path": "m.json"}, tmp_path)
+    assert got == bench.scope_fileset_sha256({"manifest": manifest})
+    with pytest.raises(ValueError):
+        bench.scope_fileset_sha256({"input_json_path": "m.json"})
+
+
 def test_verdict_pins_both_sides_of_the_bar():
     assert bench.verdict([{"process_ms": 499.9}, {"process_ms": 10.0}])
     assert not bench.verdict([{"process_ms": 500.0}])

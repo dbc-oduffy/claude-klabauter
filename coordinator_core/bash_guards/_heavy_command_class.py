@@ -700,6 +700,7 @@ def in_engine():
 
 
 def _record_advisory(key: str, pid: Optional[int]) -> None:
+    """Best-effort telemetry row for an advisory admit; a failed write never changes the verdict."""
     try:
         from coordinator_core.warm import telemetry
 
@@ -812,7 +813,7 @@ def _admit_local(
                 )
                 verdict = host.admit(int(peak_gib * host.GIB), status)
                 if verdict.admit and register_pid is not None:
-                    if not register_spawn(key, peak_gib, register_pid, host):
+                    if not _register_for_admit(key, peak_gib, register_pid, host):
                         return None, status
             return verdict, status
 
@@ -837,10 +838,38 @@ def _admit_local(
             reason = hold if not granted else "%s; slot wait: %s" % (hold, granted.get("reason"))
             return SpawnAdmission(False, reason, key, peak_gib)
         if register_pid is not None:
-            if not register_spawn(key, peak_gib, register_pid, host):
+            if not _register_for_admit(key, peak_gib, register_pid, host):
                 return SpawnAdmission(False, "memory reservation write failed", key, peak_gib)
         return SpawnAdmission(True, "ADMIT %s: slot %s" % (key, granted.get("reason")), key, peak_gib)
     return SpawnAdmission(True, "ADMIT %s: peak %sGiB" % (key, round(peak_gib, 1)), key, peak_gib)
+
+
+def admit_before_spawn_in_process(key: str, default_peak_gib: float) -> SpawnAdmission:
+    """`admit_before_spawn` for a caller already running in the engine process: a PermissionError
+    admits with an advisory, never dials the engine, so the call reaches no warm-server spawn."""
+    try:
+        return _admit_local(key, default_peak_gib)
+    except PermissionError:
+        _record_advisory(key, None)
+        return SpawnAdmission(
+            True, "ADMIT %s: advisory, memory unreadable under sandbox" % key, key, float(default_peak_gib))
+
+
+def _register_for_admit(key: str, peak_gib: float, pid: int, host: Any) -> bool:
+    """`_admit_local`'s reservation write. Inside the engine a PermissionError is an advisory and a
+    refusal; elsewhere it propagates, so `admit_before_spawn` dials `box_memory.admit` once with
+    `register_pid` and the engine reserves."""
+    try:
+        host = host or _load_box_memory_host()
+        host.register_command(host.admission_file(), key, pid, peak_gib)
+        return True
+    except PermissionError:
+        if _IN_ENGINE.get():
+            _record_advisory(key, pid)
+            return True
+        raise
+    except Exception:
+        return False
 
 
 def register_spawn(key: str, peak_gib: float, pid: int, host: Any = None) -> bool:

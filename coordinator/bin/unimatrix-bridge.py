@@ -378,6 +378,8 @@ def relay_send(conn):
         if i < len(replies):
             if replies[i].get("ok") is False:
                 error = f"relay: {replies[i].get('error', 'delivery refused')}"
+            elif replies[i].get("digest") != hashlib.sha256(line.rstrip(b"\n")).hexdigest():
+                error = "unconfirmed: no far receipt for this line"
         elif r.returncode:
             log.write(f"relay send failed {r.returncode}: {r.stderr!r}\n")
             error = f"ssh exit {r.returncode}: " + r.stderr.decode(errors="replace").strip()[-300:]

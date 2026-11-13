@@ -1451,7 +1451,7 @@ def _em_mailbox(root: Path, scratch_rel: str) -> dict:
 
 
 #: A research manifest fired by name (`--pipeline`) closes like the research route's segment.
-_LEGACY_RESEARCH_TIER = {"scouts": "scouts", "notebooklm": "corpus", "unblock": "deep"}
+_LEGACY_RESEARCH_TIER = {"scouts": "scouts", "notebooklm": "corpus", "unblock": "unblock"}
 
 
 def _sizing_scout_mode(research: dict, given_mode: Optional[str]) -> Optional[str]:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import test_reach as tr
+from coordinator_core.ops.dispatch_emit import landing_reach as tr
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 

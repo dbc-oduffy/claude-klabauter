@@ -1,7 +1,7 @@
 """Falsifier: the landing set's scoped tests run in a shared clone of the candidate commit (verify stage), so
 peer dirt in the worktree neither fails nor greens them; land_run only reads the keyed verdict, landing on green,
-inconclusive or missing (the last two with an advisory) and refusing on red or a mismatched key, and never runs a
-test itself."""
+pre_existing or missing (the last two with an advisory) and refusing on red, inconclusive or a mismatched key, and
+never runs a test itself."""
 
 from __future__ import annotations
 
@@ -446,15 +446,17 @@ def test_land_run_reverifies_a_mismatched_verdict_and_lands_when_pre_existing(ha
     assert result["clean_overlay_verify"]["verdict"] == "pre_existing"
 
 
-def test_land_run_refuses_a_missing_verdict(halted, monkeypatch):  # noqa: F811
+def test_land_run_lands_a_missing_verdict_with_an_advisory_trailer(halted, monkeypatch):  # noqa: F811
     _no_spawn(monkeypatch)
 
     _, result = _dirty_land(halted, None)
 
-    assert result["committed"] is False
-    assert result["refused"] == "verify-overlay-unverified", result
-    assert _git(halted, "log", "-1", "--format=%s").strip() == "fixture"
+    assert result["committed"] is True, result
+    assert not result.get("refused")
+    assert result["clean_overlay_verify"]["verdict"] == "missing"
+    assert "no overlay verdict was written" in result["clean_overlay_verify"]["advisory"]
     assert FIXTURE in result["reach_dirt_foreign"]
+    assert _git(halted, "log", "-1", "--format=%(trailers:key=Overlay,valueonly)").strip().startswith("missing — no overlay verdict"), _git(halted, "log", "-1", "--format=%B")
 
 
 @pytest.mark.parametrize("field", ["blobs", "base_sha"])
@@ -643,3 +645,54 @@ def test_a_red_with_no_peer_hunk_recorded_stays_red(tmp_path):
     out = cov.name_peer_owners(cov.verify(root, "run1", head, [READER]), measured)
 
     assert out.red and "peer" not in out.detail
+
+
+def _green_over(root, measured):
+    cov.write_verdict(root, "run1", measured, cov.OverlayVerdict("green", "ok", ()))
+
+
+def test_measured_rev_records_the_touched_paths_it_measured(tmp_path):
+    root, _head = _repo(tmp_path)
+    _write(root, READER, _READER_SRC + "\n# edited\n")
+
+    measured = mr.measured_rev("run1", [READER], repo_root=root)
+
+    assert json.loads(mr.touched_record_path(root, "run1").read_text(encoding="utf-8")) == [READER]
+    assert "touched" not in measured
+    _green_over(root, measured)
+    assert cov.check_verdict(root, "run1", measured).verdict == "green"
+
+
+def test_check_verdict_reads_the_recorded_touched_set_when_the_record_carries_none(tmp_path):
+    root, head = _repo(tmp_path)
+    measured = {"sha": head, "base_sha": head, "blobs": {READER: "a" * 40}, "removed": []}
+    _green_over(root, measured)
+    path = mr.touched_record_path(root, "run1")
+    path.write_text(json.dumps([READER, "t/data.txt"]), encoding="utf-8")
+
+    out = cov.check_verdict(root, "run1", measured)
+
+    assert out.verdict == "mismatch" and "t/data.txt" in out.detail, out
+
+
+def test_a_landing_set_omitting_a_run_touched_path_is_a_mismatch_naming_it(tmp_path):
+    root, head = _repo(tmp_path)
+    measured = {
+        "sha": head, "base_sha": head, "blobs": {READER: "a" * 40}, "removed": [],
+        "touched": [READER, "t/data.txt"],
+    }
+    _green_over(root, {**measured, "touched": [READER]})
+
+    out = cov.check_verdict(root, "run1", measured)
+
+    assert out.verdict == "mismatch", out
+    assert "t/data.txt" in out.detail and READER not in out.detail
+
+
+def test_a_removed_touched_path_and_a_record_without_touched_are_not_leftovers(tmp_path):
+    root, head = _repo(tmp_path)
+    base = {"sha": head, "base_sha": head, "blobs": {READER: "a" * 40}, "removed": ["t/gone.txt"]}
+    _green_over(root, base)
+
+    assert cov.check_verdict(root, "run1", {**base, "touched": [READER, "t/gone.txt"]}).verdict == "green"
+    assert cov.check_verdict(root, "run1", base).verdict == "green"

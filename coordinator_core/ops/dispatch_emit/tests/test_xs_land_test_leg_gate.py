@@ -57,10 +57,11 @@ def test_no_test_file_in_scope_not_refused(tmp_path):
     ) is None
 
 
-def test_other_arm_not_refused(tmp_path):
-    assert tc._tests_not_run_refusal(
+def test_other_arm_refused_too(tmp_path):
+    reply = tc._tests_not_run_refusal(
         tmp_path, {"arm": "s"}, _request(["pkg/tests/test_a.py"]), _review({"status": "not_run"})
-    ) is None
+    )
+    assert reply is not None and reply["refused"] == tc.REFUSED_TESTS_NOT_RUN
 
 
 def test_met_item_on_not_run_evidence_refused_replay_of_b1f64a(tmp_path):

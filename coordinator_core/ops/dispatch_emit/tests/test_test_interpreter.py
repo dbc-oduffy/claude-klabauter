@@ -1,4 +1,4 @@
-"""test_interpreter: pin ladder, clause rendering, no spawn."""
+"""interpreter_pin: pin ladder, clause rendering, no spawn."""
 from __future__ import annotations
 
 import subprocess
@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import test_interpreter as ti
+from coordinator_core.ops.dispatch_emit import interpreter_pin as ti
 
 
 def _repo(tmp_path, **keys):

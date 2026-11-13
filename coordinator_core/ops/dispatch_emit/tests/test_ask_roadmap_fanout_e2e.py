@@ -13,29 +13,38 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit import leg_register as lr
 from coordinator_core.ops.dispatch_emit.ask_contract import FANOUT_RECORD_PARAM
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose as _compose_raw
-from coordinator_core.ops.dispatch_emit.tests.test_ask_roadmap import _compose as _compose_standalone, _put, repo  # noqa: F401
+from coordinator_core.ops.dispatch_emit import prompt_fragments
+from coordinator_core.ops.dispatch_emit.tests.test_ask_roadmap import _compose as _compose_standalone_raw, _put, repo  # noqa: F401
 
 _RB_TEXT = "export const meta = { name: 'rb', description: 'd', phases: [{ title: 'RB' }] };\nreturn {};\n"
 _CUT = ("waves", "execute", "workstream-complete")
 
 
+def _compose_standalone(repo, **over):
+    """Composed as a real ask fires it: with the production hoist pass on (the dispatch_emit conftest forces it off)."""
+    with mock.patch.object(prompt_fragments, "HOIST_ENABLED", True):
+        return _compose_standalone_raw(repo, **over)
+
+
 def _compose_in_run(**over):
     """The in-run roadmap leg rides only a script that embeds plan-blitz, i.e. an M+ re-fire."""
-    with mock.patch.object(ask_compose, "_known_arm", lambda *_: ask_compose.ARM_M_PLUS):
+    with mock.patch.object(prompt_fragments, "HOIST_ENABLED", True), mock.patch.object(
+        ask_compose, "_known_arm", lambda *_: ask_compose.ARM_M_PLUS
+    ):
         return _compose_raw(**over)
 
 
-def _scripts(repo):
+def _script(repo, which, **over):
+    """Composes only the requested variant, so one variant's refusal never reddens the other's tests."""
     _put(repo)
-    return {
-        "standalone": _compose_standalone(repo),
-        "in-run": _compose_in_run(roadmap_blitz_text=_RB_TEXT, in_run_commit=True),
-    }
+    if which == "standalone":
+        return _compose_standalone(repo, **over)
+    return _compose_in_run(roadmap_blitz_text=_RB_TEXT, in_run_commit=True, **over)
 
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
 def test_no_waves_execute_or_workstream_complete_leg(repo, which):
-    script = _scripts(repo)[which]
+    script = _script(repo, which)
     labels = [leg.label for leg in lr.emitted_legs(script)]
     assert not set(labels) & set(_CUT), set(labels) & set(_CUT)
     assert "phase('execute')" not in script and "phase('workstream-complete')" not in script
@@ -43,7 +52,7 @@ def test_no_waves_execute_or_workstream_complete_leg(repo, which):
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
 def test_exactly_one_haiku_commit_leg_fires_the_fanout(repo, which):
-    script = _scripts(repo)[which]
+    script = _script(repo, which)
     commits = [leg for leg in lr.emitted_legs(script) if leg.label == "commit"]
     assert len(commits) == {"standalone": 1, "in-run": 2}[which], "in-run adds the post-retest recommit leg"
     assert {leg.model for leg in commits} == {"haiku"}
@@ -61,21 +70,21 @@ def test_exactly_one_haiku_commit_leg_fires_the_fanout(repo, which):
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
 def test_the_commit_gate_carries_no_roadmap_exclusion(repo, which):
-    script = _scripts(repo)[which]
+    script = _script(repo, which)
     gates = [ln for ln in script.splitlines() if "_nextAction.kind === 'terminal_commit' && _RUN_TOKEN" in ln]
     assert len(gates) == 1 and "_viaRoadmap" not in gates[0]
 
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
 def test_waves_come_from_the_stage_reply_and_a_missing_field_halts_by_name(repo, which):
-    script = _scripts(repo)[which]
+    script = _script(repo, which)
     assert "let _waves = [...(_rb?.stage?.waves ?? [])].sort((a, c) => a.index - c.index);" in script
     assert "roadmap-blitz stage reply carries no waves" in script
     assert script.index("_rb?.stage?.waves") < script.index("waveIndex: w.index")
 
 
 def test_the_in_run_fan_out_survives_the_closeable_overwrite(repo):
-    script = _scripts(repo)["in-run"]
+    script = _script(repo, "in-run")
     assert "const _roadmapFan = !!(_viaRoadmap && !_halted" in script
     assert "_nextAction = _roadmapFan ? _nextAction : _closeable ?" in script
     assert "const _closeable = !!(_roadmapFan || (" in script
@@ -84,19 +93,11 @@ def test_the_in_run_fan_out_survives_the_closeable_overwrite(repo):
 _SCRIPT_PATH = "scratch/warp/r1.mjs"
 
 
-def _scripts_with_path(repo):
-    _put(repo)
-    return {
-        "standalone": _compose_standalone(repo, script_path=_SCRIPT_PATH),
-        "in-run": _compose_in_run(roadmap_blitz_text=_RB_TEXT, in_run_commit=True, script_path=_SCRIPT_PATH),
-    }
-
-
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
 def test_the_commit_params_block_carries_every_key_the_run_token_hook_requires(repo, which):
     from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import REQUIRED_STR_KEYS
 
-    script = _scripts(repo)[which]
+    script = _script(repo, which)
     calls = [ln for ln in script.splitlines() if "_terminalCommitParamsBlock({" in ln and "..._nextAction.params" in ln]
     assert len(calls) == {"standalone": 1, "in-run": 2}[which]
     for call in calls:
@@ -109,21 +110,21 @@ def test_the_commit_params_block_carries_every_key_the_run_token_hook_requires(r
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
 def test_a_known_script_path_rides_the_next_action_and_the_commit_block(repo, which):
-    script = _scripts_with_path(repo)[which]
+    script = _script(repo, which, script_path=_SCRIPT_PATH)
     assert f"script_path: '{_SCRIPT_PATH}', {FANOUT_RECORD_PARAM}: {{ plans:" in script
     assert f"script_path: _nextAction.params.script_path ?? '{_SCRIPT_PATH}', run_id: _runId" in script
 
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
 def test_the_fan_out_next_action_params_replay_with_a_run_id(repo, which):
-    script = _scripts(repo)[which]
+    script = _script(repo, which)
     assert f"params: {{ run_id: _runId, {FANOUT_RECORD_PARAM}: {{ plans:" in script
     assert "script_path: null" not in script
 
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
 def test_both_scripts_lint_clean(repo, which):
-    assert not [f for f in run_checks(_scripts(repo)[which]) if f.severity is Severity.ERROR]
+    assert not [f for f in run_checks(_script(repo, which)) if f.severity is Severity.ERROR]
 
 
 # --- the fan-out record reaches a sibling run that reviews and commits ----------------------------

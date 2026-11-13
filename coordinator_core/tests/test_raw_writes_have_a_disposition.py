@@ -316,6 +316,7 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
+    'coordinator_core/ops/backlog_pass_ledger.py': ('in-repo-non-state', 'mkdir of the backlog-pass record home; ledger rows go through atomic_append.append_line: record_run'),
     'coordinator_core/ops/repo_setup.py': ('outside-repo', 'rendered template files (open "w") and the .gitignore append (open "a") under the caller-supplied target root, never the engine checkout state/: _write_new, .gitignore block'),
     'coordinator_core/agent_pipe/__main__.py': ('outside-repo', 'relay worker result.json (tmp + os.replace), argv.json and agent log under <settings-home>/agent-pipe/runs/<run_id>, never the repo: _relay'),
     'coordinator_core/agent_pipe/mailbox.py': ('outside-repo', 'O_APPEND mailbox lines, lock file and drain os.replace under <settings-home>/agent-pipe/mailboxes, never the repo: append, drain'),
@@ -477,6 +478,10 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/resource_lifecycle/store.py': ('in-repo-non-state', 'append-only JSONL at the caller-supplied path; the module picks no target and has no caller yet, so the first caller re-dispositions it: BoundedStore.append'),
     'coordinator_core/session/incident_claims.py': ('git-internal', 'incident-claim holder fields under .coordinator-local/coordinator-sessions: _write_field'),
     'coordinator_core/hooks/support/turn_intent.py': ('git-internal', 'per-session turn-intent record, block counter and role marker inside the session dir under .coordinator-local/coordinator-sessions: _atomic_write'),
+    'coordinator_core/hooks/preuse_search_dispatch.py': ('git-internal', 'per-agent grep-after-nudge counter inside the session dir under .coordinator-local/coordinator-sessions: _count_grep_after_nudge'),
+    'coordinator_core/architecture_survey/mechanical_report.py': ('ignored-target', 'atlas mechanical report json under gitignored scratch/atlas-mechanical: produce'),
+    'coordinator_core/ops/dispatch_emit/compose_size_probe.py': ('outside-repo', 'probe sizing yaml under tempfile.TemporaryDirectory(), never a clone'),
+    'coordinator_core/learn_lessons_pipeline/mechanical_close.py': ('claims-explicitly', 'claim token in apply_closures: declare_write(row_path) before the annotate/restore write_bytes'),
     'coordinator_core/hooks/guard_manufactured_blocker.py': ('git-internal', 'per-session has-fired marker inside the session dir under .coordinator-local/coordinator-sessions: _mark_fired_this_session'),
     'coordinator_core/ops/handoff_discharge_landed.py': ('git-internal', 'O_EXCL batch lock under the git common dir: _acquire_lock; the handoff stamp write itself goes through claimed_write.replace_text'),
     'coordinator_core/telemetry/traffic_manifest.py': ('in-repo-non-state', 'operator-named --out file for a generated traffic manifest; no state/ target'),
@@ -557,6 +562,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/daily_branch.py': ('git-internal', 'appends coordinator.dayBranch to the git common-dir config file'),
     'coordinator_core/diagnostics/contained_run.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_spawn_script'),
     'coordinator_core/distill/_common.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: active_reference_guard_many'),
+    'coordinator_core/distill/launch_args.py': ('ignored-target', 'launch-args.json under the distill run dir (RUN_DIR_REL, gitignored): build'),
     'coordinator_core/distill/log_append.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: append_row, append_rows'),
     'coordinator_core/distill/log_normalize.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: normalize_arrow_dialects_log, normalize_log'),
     'coordinator_core/distill/scan_digest.py': ('in-repo-non-state', 'raw-write site(s) confined to the distill run dir digest/ (mkstemp + os.replace), no state/-component signal: write_digests'),
@@ -643,7 +649,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/dispatch_emit/op.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>, _dispatch_emit, _write_emission_receipt, restamp'),
     'coordinator_core/ops/distill_apply_disposal.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: _delete_tracked_and_append_log, _write_denormalizations, write_apply_receipt'),
     'coordinator_core/ops/distill_disposal_manifest.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: write_disposal_manifest'),
-    'coordinator_core/ops/distill_scope.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: write_scope_manifest'),
+    'coordinator_core/ops/distill_scope.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: write_scope_manifest; scope cache json via tmp + os.replace under the registry paths.distill_scope_cache dir, or the gitignored .coordinator-local/cache fallback, never state/: _store_cache'),
     'coordinator_core/ops/distill_stamp_disposal.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: write_stamped_manifest'),
     'coordinator_core/ops/distill_write_curated_clusters.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: _write_atomic'),
     'coordinator_core/ops/docindex_emit.py': ('to-fix', "raw-write site(s): _docindex_emit; runtime observed=no (n=0), sample=n/a [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),

@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -119,3 +120,48 @@ def test_send_to_a_reaped_mirror_fails_loudly_naming_the_peer(roster, monkeypatc
     monkeypatch.setattr(send, "_is_mirror", lambda n: False)
     assert send.main(["--to", DEAD, "hello", "there"]) == 1
     assert DEAD in capsys.readouterr().err
+
+
+def _codex_peer(tmp_path, monkeypatch, **holder):
+    home = tmp_path / "home"
+    (home / "unimatrix").mkdir(parents=True, exist_ok=True)
+    (home / "unimatrix" / "peers.json").write_text(
+        json.dumps([{"name": "codex-x", "vendor": "codex", "target": "t-1", **holder}]), encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+
+
+def _codex_face(roster, started_ago=5000):
+    return {"pid": os.getpid(), "procStart": roster.proc_start(os.getpid()), "name": "codex-x", "vendor": "codex",
+            "sessionId": "peer-codex-x-9", "target": "t-1", "cwd": "/home/u",
+            "startedAt": int((time.time() - started_ago) * 1000)}
+
+
+def test_codex_peer_face_without_a_live_holder_is_unlisted_and_a_live_one_is_listed(roster, tmp_path, monkeypatch):
+    _codex_peer(tmp_path, monkeypatch, codexPid=2_000_000_000)
+    assert not roster.entry_listed(_codex_face(roster))
+    _codex_peer(tmp_path, monkeypatch, codexPid=os.getpid())
+    assert roster.entry_listed(_codex_face(roster))
+
+
+def test_codex_peer_face_with_no_recorded_holder_is_unlisted_once_past_its_grace(roster, tmp_path, monkeypatch):
+    _codex_peer(tmp_path, monkeypatch)
+    assert not roster.entry_listed(_codex_face(roster, 5000))
+    assert roster.entry_listed(_codex_face(roster, 5))
+
+
+def test_far_codex_row_reported_holderless_is_not_mirrored_and_an_unreporting_box_is_listed(roster):
+    def row(**extra):
+        entry = {"messagingSocketPath": "/far/a.sock", "name": "codex-x", "vendor": "codex",
+                 "startedAt": int((time.time() - 5000) * 1000), **extra}
+        return {"entry": entry}
+    assert roster.mirrorable([row(codexHolder="dead")], set(), set()) == {}
+    assert roster.mirrorable([row(codexHolder="unknown")], set(), set()) == {}
+    assert roster.mirrorable([row(codexHolder="live")], set(), set()) != {}
+    assert roster.mirrorable([row()], set(), set()) != {}
+
+
+def test_local_codex_face_exports_its_holder_state_and_a_mirror_identity_never_does(roster, tmp_path, monkeypatch):
+    _codex_peer(tmp_path, monkeypatch, codexPid=2_000_000_000)
+    face = _codex_face(roster)
+    assert roster.session_identity(face)["codexHolder"] == "dead"
+    assert "codexHolder" not in roster.mirror_identity(face, "me@box")

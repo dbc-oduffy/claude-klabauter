@@ -33,6 +33,7 @@ def repo(tmp_path: Path) -> Path:
     r = tmp_path / "repo"
     r.mkdir()
     _git(r, "init", "-q")
+    (r / ".git" / "info" / "exclude").write_text(".coordinator-local/\n")
     (r / "seed.txt").write_text("seed\n")
     _git(r, "add", "seed.txt")
     _git(r, "commit", "-q", "-m", "seed")
@@ -130,7 +131,7 @@ def test_reclose_with_a_sizing_returns_the_landed_sha(repo, scratch):
     assert second["committed"] is True and second["sha"] == first["sha"] and _count(repo) == n
 
 
-@pytest.mark.parametrize("tier", ["scouts", "corpus", "deep"])
+@pytest.mark.parametrize("tier", ["scouts", "corpus", "unblock"])
 def test_trail_record_is_in_the_commit_with_repo_relative_paths(repo, scratch, tier):
     _write_sizing(repo)
     out = _close(repo, scratch, tier, sizing="state/sizings/x.yaml")
@@ -140,6 +141,15 @@ def test_trail_record_is_in_the_commit_with_repo_relative_paths(repo, scratch, t
     assert f"value_class: \"{tier}\"" in text and f"tier: \"{tier}\"" in text
     assert 'destination: "repo"' in text and 'sizing: "state/sizings/x.yaml"' in text
     assert "\\" not in text and ":/" not in text and "paths:\n  - \"docs/research/" in text
+
+
+def test_legacy_tier_deep_closes_and_records_unblock(repo, scratch):
+    _write_sizing(repo)
+    out = _close(repo, scratch, "deep", sizing="state/sizings/x.yaml")
+    assert out["exit_code"] == 0, out
+    text = _git(repo, "show", f"HEAD:{_TRAIL}")
+    assert 'tier: "unblock"' in text and 'value_class: "unblock"' in text
+    assert 'tier: "deep"' not in text
 
 
 def test_value_class_param_is_named_in_the_record_and_validated(repo, scratch):
@@ -212,7 +222,7 @@ def test_a_same_run_id_drift_the_same_day_is_not_versioned(repo, scratch):
     assert not (repo / f"{_run()}-v2").exists()
 
 
-@pytest.mark.parametrize("tier", ["corpus", "deep"])
+@pytest.mark.parametrize("tier", ["corpus", "unblock"])
 def test_one_commit_whose_delta_is_the_copied_paths(repo, scratch, tier):
     before = _count(repo)
     out = _close(repo, scratch, tier, outputs=["final.md", "digest-a.md"])
@@ -852,7 +862,7 @@ def test_grounding_param_that_is_not_a_bool_is_refused_before_any_write(repo, sc
     assert _git(repo, "rev-parse", "HEAD") == head and not (scratch / "digest.md").exists()
 
 
-@pytest.mark.parametrize("tier", ["corpus", "deep"])
+@pytest.mark.parametrize("tier", ["corpus", "unblock"])
 def test_grounding_param_on_a_non_scouts_tier_is_refused(repo, scratch, tier):
     head = _git(repo, "rev-parse", "HEAD")
     out = _close(repo, scratch, tier, require_grounding=True)

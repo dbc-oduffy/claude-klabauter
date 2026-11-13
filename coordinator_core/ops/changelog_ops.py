@@ -2014,20 +2014,36 @@ def _completion_count_for_date(worktree: Path, date: str) -> int:
     `inject_anchor` refuses to inject on an unresolved guard rather than
     silently anchoring a possible content gap.
     """
+    return _completion_counts_for_dates(worktree, [date])[date]
+
+
+def _completion_counts_for_dates(worktree: Path, dates: List[str]) -> Dict[str, int]:
+    """Completion-record count per date in `dates`, from ONE uncapped collection.
+
+    The count is over `_collect_type_records`' full set, never the 50-row
+    default `query-completions` applies to its output, so a date with more
+    than 50 entries counts all of them. Fail-CLOSED exactly as
+    `_completion_count_for_date`: RuntimeError on any resolution failure.
+    """
+    label = dates[0] if len(dates) == 1 else f"{len(dates)} dates"
     scan_error = _completion_scan_error(worktree)
     if scan_error is not None:
         raise RuntimeError(
-            f"inject_anchor: completion-count guard unresolved for {date}: {scan_error}"
+            f"inject_anchor: completion-count guard unresolved for {label}: {scan_error}"
         )
+    counts: Dict[str, int] = {d: 0 for d in dates}
     try:
         records = _collect_type_records(worktree, "completion")
-        clauses = _parse_where(f"created={date}")
-        records = [r for r in records if _matches_where(r["frontmatter"], clauses)]
+        per_date = {d: _parse_where(f"created={d}") for d in counts}
+        for rec in records:
+            for d, clauses in per_date.items():
+                if _matches_where(rec["frontmatter"], clauses):
+                    counts[d] += 1
     except (_RecordsCollectError, ValueError, SystemExit, OSError) as exc:
         raise RuntimeError(
-            f"inject_anchor: completion-count guard unresolved for {date}: {exc}"
+            f"inject_anchor: completion-count guard unresolved for {label}: {exc}"
         ) from exc
-    return len(records)
+    return counts
 
 
 def _bullet_count(content: str) -> int:
@@ -2130,6 +2146,11 @@ def _batch_resolve_commits(worktree: Path, tokens: List[str]) -> Dict[str, Optio
     return resolved
 
 
+def _sha_like_tokens(body: str) -> List[str]:
+    """Sorted unique lowercase 7-40 hex tokens in `body`: the candidates for a cited commit."""
+    return sorted({t.lower() for t in re.findall(r"\b[0-9a-fA-F]{7,40}\b", body)})
+
+
 def _cited_in_range_count(worktree: Path, body: str, range_shas: List[str]) -> int:
     """Count how many of `range_shas` are cited (as resolvable commit-ish
     tokens) in `body`. Byte-parity port of the oracle's cited-SHA scan.
@@ -2140,7 +2161,7 @@ def _cited_in_range_count(worktree: Path, body: str, range_shas: List[str]) -> i
     resolvable-to-a-commit-in-range is unchanged, only the spawn shape is.
     """
     range_set = set(range_shas)
-    tokens = sorted({t.lower() for t in re.findall(r"\b[0-9a-fA-F]{7,40}\b", body)})
+    tokens = _sha_like_tokens(body)
     resolved_map = _batch_resolve_commits(worktree, tokens)
     cited: set = set()
     for full in resolved_map.values():
@@ -2159,16 +2180,28 @@ def _content_gap_reason(worktree: Path, date: str, full_sha: str, content: str) 
     (see that function's docstring for why this diverges from the oracle).
     """
     completion_count = _completion_count_for_date(worktree, date)  # may raise RuntimeError
-    bullet_count = _bullet_count(content)
+    reason = _completion_gap_reason(completion_count, _bullet_count(content))
+    if reason is not None:
+        return reason
+
+    range_shas = _range_commit_shas(worktree, date, full_sha)
+    cited_count = _cited_in_range_count(worktree, content, range_shas)
+    return _range_gap_reason(date, content, len(range_shas), cited_count)
+
+
+def _completion_gap_reason(completion_count: int, bullet_count: int) -> Optional[str]:
+    """Guard 1 on precomputed counts: completion entries >= 2x summary bullets."""
     if completion_count >= 3 and completion_count >= bullet_count * 2:
         return (
             f"{completion_count} completion entries vs {bullet_count} Work Completed "
             "bullets"
         )
+    return None
 
-    range_shas = _range_commit_shas(worktree, date, full_sha)
-    range_count = len(range_shas)
-    cited_count = _cited_in_range_count(worktree, content, range_shas)
+
+def _range_gap_reason(date: str, content: str, range_count: int, cited_count: int) -> Optional[str]:
+    """Guards 2 and 3 on precomputed counts: cited in-range SHAs under 50% of the
+    range, or a morning-run note anchored to a 10+-commit range."""
     if range_count >= 3 and cited_count >= 1 and (cited_count * 2) < range_count:
         return (
             f"summary cites {cited_count} in-range commit SHAs vs {range_count} commits "
@@ -2176,8 +2209,84 @@ def _content_gap_reason(worktree: Path, date: str, full_sha: str, content: str) 
         )
     if _MORNING_SIGNAL_RE.search(content) and range_count >= 10:
         return f"morning-run/tail-wrap note anchored to a {range_count}-commit range"
-
     return None
+
+
+_DELIVERY_SOURCE_PRIORITY = (
+    "docs/delivery records (primary; a halted record is not a landed change)",
+    "completion entries, handoffs, plans",
+    "commits (confirm landing only; subjects do not say what shipped)",
+)
+
+_RUN_STAMP_RE = re.compile(r"(\d{4})(\d{2})(\d{2})T\d{6}")
+_DATED_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[-.]")
+_HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$")
+_HALT_HEADING_RE = re.compile(r"\b(halt(?:ed)?|revert(?:ed)?)\b", re.IGNORECASE)
+_EMPTY_SECTION_RE = re.compile(r"^(none|n/?a|no|nothing|-)\b", re.IGNORECASE)
+
+
+def _delivery_record_date(stem: str) -> Optional[str]:
+    """Day a `docs/delivery` record belongs to: the run-id timestamp
+    (`ask-YYYYMMDDTHHMMSS-…`, `warp-…-YYYYMMDDTHHMMSS-…`) or a leading
+    `YYYY-MM-DD-` name prefix."""
+    stamps = _RUN_STAMP_RE.findall(stem)
+    if stamps:
+        y, m, d = stamps[-1]
+        return f"{y}-{m}-{d}"
+    named = _DATED_NAME_RE.match(stem)
+    return named.group(1) if named else None
+
+
+def _delivery_record_halted(text: str) -> bool:
+    """True iff a heading names a halt or revert and its section has real content."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        m = _HEADING_RE.match(line)
+        if not m or not _HALT_HEADING_RE.search(m.group(1)):
+            continue
+        body: List[str] = []
+        for nxt in lines[i + 1:]:
+            if _HEADING_RE.match(nxt):
+                break
+            body.append(nxt)
+        section = " ".join(body).strip().lstrip("*_ ")
+        if section and not _EMPTY_SECTION_RE.match(section):
+            return True
+    return False
+
+
+def delivery_sources_for_date(worktree: Path, date: str) -> List[dict]:
+    """`docs/delivery` records dated `date`, as `{path, run_id, status}` with
+    status `halted` or `landed`, sorted by path.
+
+    Source of truth for rewriting a thin daily (`_DELIVERY_SOURCE_PRIORITY`).
+    Looks in `docs/delivery/<YYYY-MM>/` and the flat `docs/delivery/` root.
+    """
+    base = worktree / "docs" / "delivery"
+    found: List[dict] = []
+    for directory in (base / date[:7], base):
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith(".md"):
+                continue
+            stem = name[:-3]
+            if _delivery_record_date(stem) != date:
+                continue
+            try:
+                text = (directory / name).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            found.append(
+                {
+                    "path": (directory / name).relative_to(worktree).as_posix(),
+                    "run_id": stem,
+                    "status": "halted" if _delivery_record_halted(text) else "landed",
+                }
+            )
+    return found
 
 
 def inject_anchor(
@@ -2295,7 +2404,13 @@ def inject_anchor(
     except RuntimeError as exc:
         return {"out_path": str(target), "action": "error", "error": str(exc)}
     if gap_reason is not None:
-        return {"out_path": str(target), "action": "content_gap", "error": gap_reason}
+        return {
+            "out_path": str(target),
+            "action": "content_gap",
+            "error": gap_reason,
+            "source_priority": list(_DELIVERY_SOURCE_PRIORITY),
+            "delivery_records": delivery_sources_for_date(worktree, date),
+        }
 
     new_content = _render_anchor_injection(content, full_sha, machine, resolved_today)
     if new_content is None:

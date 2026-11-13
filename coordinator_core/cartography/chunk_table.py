@@ -30,7 +30,7 @@ the caller-boundary bucketing function (deliberately NOT
 is documented as intentional and is not touched by this module).
 
 Ordering discipline: copied verbatim from
-``coordinator_core.ops.distill_scope`` (``compute_scope`` /
+``coordinator_core.ops.distill_scope`` (``build_scope`` /
 ``write_scope_manifest``) — every list here is deterministically sorted
 (never filesystem mtime), so two runs over an unmodified tree produce
 byte-identical chunk tables.

@@ -719,7 +719,7 @@ def hook_root_env_expr(*, windows: bool) -> str:
     already established, repo-wide convention — see e.g.
     `coordinator/docs/wiki/multi-channel-claim-discipline.md`'s own
     "shell `$REPO_*` env vars; PowerShell `$env:REPO_*`" row and
-    `coordinator/docs/wiki/portable-code-substrate.md`'s PowerShell
+    `coordinator/docs/wiki/portability/portable-code-substrate.md`'s PowerShell
     snippets, all of which use `$env:`, never a bare `$VAR`, to read an
     OS env var from PowerShell.
 

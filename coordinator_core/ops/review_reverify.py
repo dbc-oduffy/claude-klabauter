@@ -62,7 +62,10 @@ anything is written, the revert (tripwire-named paths included) refuses (``error
 the whole call) when it would remove a top-level symbol that a committed file in the run's surface
 (manifest paths plus paths changed anchor..HEAD) still uses. An id implicating nothing is
 ``unattributed`` and reverts nothing. A path an open ``kept.json`` holds (``kept_work.held_paths``)
-is never restored, unlinked or inverted: it lands in ``kept`` as ``kept-work-held:<run_id>``. Every
+is never restored, unlinked or inverted: it lands in ``kept`` as ``kept-work-held:<run_id>``. A failing id
+in an edited or created test file whose ``failing_output`` is pytest's ``not found:`` was renamed or removed
+by the run: it is ``renamed_node`` (never implicated, reverted or blocking) and its file is in ``recollect``
+(speculative: no engine consumer yet; the caller reruns that file). Every
 rewritten or removed path is passed to ``declare_write``. The record ``reverify.json`` merges across calls. Revert refuses while a probe is open.
 
 Probe: ``"probe":"open"`` (with ``failing`` and ``sidecars``) writes the finding-inverted bytes of
@@ -121,6 +124,7 @@ from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused
 from coordinator_core.ops.owned_red import read_owned_red
 from coordinator_core.ops.pre_existing_ruling import ruled_pre_existing
 from coordinator_core.ops.review_reverify_findings import applied_rows, invert
+from coordinator_core.ops.review_test_blocker import NOT_FOUND_RE
 from coordinator_core.ops.review_tripwires import TripwireScanUnavailable, literal_namers, names_in, tree_scanners, walked_created
 from coordinator_core.ops.reverify_callers import callers_of, removed_symbols
 from coordinator_core.pyimports import collect_imports, module_name_for_file, resolve_relative_module
@@ -924,11 +928,16 @@ def review_reverify(
         pre_existing = sorted(n for n in ids if n in explicit_base or n in prior_red)
         owned_red = sorted(n for n in ids if n in owned and n not in explicit_base and n not in prior_red)
         not_base_red = sorted(n for n in ids if n in vouched and n not in at_base and n not in prior_red)
-        skip = set(pre_existing) | set(owned_red) | set(not_base_red)
+        renamed_node = sorted(
+            n for n in ids
+            if n not in pre_existing and _node_file(n) in {*edited, *created_set}
+            and NOT_FOUND_RE.search(str((failing_output or {}).get(n) or ""))
+        )
+        skip = set(pre_existing) | set(owned_red) | set(not_base_red) | set(renamed_node)
         base_measured = (failing_at_base is not None or bool(base_export_path)) and not base_unmeasured
         base_green = {n for n in ids if base_measured and n not in skip}
     else:
-        pre_existing, owned_red, not_base_red, skip, base_green = [], [], [], set(), set()
+        pre_existing, owned_red, not_base_red, renamed_node, skip, base_green = [], [], [], [], set(), set()
         ruled = {}
     foreign_set, foreign_ids = set(foreign), []  # type: Set[str], List[str]
     foreign_node = {n for n in ids if n not in skip and n not in base_green and _node_file(n) in foreign_set}
@@ -1098,6 +1107,8 @@ def review_reverify(
         "unattributed": unattributed,
         "pre_existing": pre_existing,
         "owned_red": owned_red,
+        "renamed_node": renamed_node,
+        "recollect": sorted({_node_file(n) for n in renamed_node}),
         "ruled_pre_existing": {n: ruled[n] for n in pre_existing if n in ruled},
         "sibling_owned": sibling_owned,
         "foreign_red": foreign_red,

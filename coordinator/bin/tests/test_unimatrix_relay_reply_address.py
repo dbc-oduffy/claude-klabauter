@@ -153,6 +153,36 @@ def test_unmirrored_far_pipe_sender_gets_the_sending_boxs_reply_inbox(monkeypatc
     assert PIPE not in out["message"]["content"]
 
 
+def test_cc_msg_pipe_sender_matches_a_roster_mirror_by_its_far_socket_field(monkeypatch):
+    serve(monkeypatch, [roster_mirror(far=PIPE), reply_inbox("10.0.0.1")], client="10.0.0.1")
+    out = json.loads(R.local_reply_address(frame(f"uds:{PIPE}")))
+    assert out["from"] == f"uds:{LOCAL}"
+    assert PIPE not in out["message"]["content"]
+
+
+POSIX_EP = "/tmp/cc-socks/mirror-machine-b.sock"
+
+
+def test_uds_box_rewrites_a_uds_scheme_local_pipe_from_to_a_posix_endpoint(monkeypatch):
+    serve(monkeypatch, [roster_mirror(local=POSIX_EP, far=PIPE)], client="10.0.0.1")
+    out = json.loads(R.local_reply_address(frame(f"uds:{PIPE}")))
+    assert out["from"] == f"uds:{POSIX_EP}"
+    assert "pipe" not in out["message"]["content"]
+
+
+def test_uds_box_unmirrored_uds_scheme_local_pipe_gets_the_reply_inbox(monkeypatch):
+    serve(monkeypatch, [reply_inbox("10.0.0.1", POSIX_EP)], client="10.0.0.1")
+    out = json.loads(R.local_reply_address(frame(f"uds:{PIPE}")))
+    assert out["from"] == f"uds:{POSIX_EP}"
+    assert PIPE not in out["message"]["content"]
+
+
+def test_uds_box_leaves_a_local_pipe_unrouted_when_no_endpoint_matches(monkeypatch):
+    serve(monkeypatch, [reply_inbox("10.0.0.2", POSIX_EP)], client="10.0.0.1")
+    line = frame(f"uds:{PIPE}")
+    assert R.local_reply_address(line) == line
+
+
 def test_unmirrored_sender_from_an_unknown_box_stays_unchanged(monkeypatch):
     serve(monkeypatch, [reply_inbox("10.0.0.1")], client="10.0.0.9")
     line = frame(PIPE)

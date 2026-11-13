@@ -23,6 +23,14 @@ def test_spike_has_no_tier_row():
     assert rc.SPIKE_CLASS not in rc.TIER_TABLE
 
 
+def test_depth_ladder_and_unblock_class_vocabulary():
+    assert rc.DEPTHS == ("standard", "deep", "deeper", "deepest")
+    assert "deep" not in rc.VALUE_CLASSES and "deep" not in rc.TIERS
+    assert "unblock" in rc.VALUE_CLASSES and "unblock" in rc.TIERS
+    assert rc.LEGACY_TIER_ALIASES == {"deep": "unblock"}
+    assert set(rc.LEGACY_TIER_ALIASES.values()) <= set(rc.TIERS)
+
+
 def test_floor_sources_exclude_web_and_are_sources():
     assert rc.FLOOR_SOURCES == {"repo", "structured", "notebooklm"}
     assert rc.FLOOR_SOURCES <= set(rc.SOURCES)

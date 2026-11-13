@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.ops import rag_freshness
 from coordinator_core.ops.dispatch_emit.ask_contract import HALT_CITATION_UNBACKED
 from coordinator_core.ops.dispatch_emit import docs_check_citations, rag_use
 
@@ -118,6 +119,23 @@ def _unreadable(branch: str, reason: str, queryable: Any) -> dict:
 
 @register_op(OP_NAME)
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """`_verdict` plus ``index_freshness {state, refresh_queued}``, raised before the RAG-use judgment.
+
+    Only a UE repo with example-retrieval-repo installed carries the field; the precondition is advisory
+    and never changes the verdict.
+    """
+    root = str(params.get("repo_root") or repo_root or Path.cwd())
+    fresh = None
+    if rag_use.is_ue_repo(root) and rag_use.rag_installed(root):
+        pre = rag_freshness.freshness_precondition(root)
+        fresh = {"state": pre["state"], "refresh_queued": pre["refresh_queued"]}
+    out = _verdict(params, repo_root)
+    if fresh is not None:
+        out["index_freshness"] = fresh
+    return out
+
+
+def _verdict(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Verdict for the docs-checker leg `label` of run `run_id`.
 
     Params: ``repo_root``, ``run_id``, ``label``, optional ``session_id`` (else the caller's

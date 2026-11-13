@@ -1176,11 +1176,98 @@ def _run_closed_lines(ctx: JobContext) -> list:
     return run_closed_trailer_lines(b for b in closing_bases(ctx.root, ctx.run_id, ctx.record) if b not in closed)
 
 
+_USAGE_COMMIT_LABELS = frozenset({"commit", "halt-commit"})
+
+
+def _locate_land_wf_dir(session_dir: Path, run_id: str) -> Optional[Path]:
+    """The one ``wf_`` dir whose commit-labelled agent transcript names the run's
+    ``terminal-commit-params.json``, settled or not (the close job may outlive that agent).
+    The journal gates the reads; None when absent or ambiguous."""
+    from coordinator_core.usage import agent_usage
+
+    if not run_id or Path(run_id).name != run_id:
+        return None
+    needle = f"scratch/warp/{run_id}/terminal-commit-params.json"
+    wf_root = session_dir / "subagents" / "workflows"
+    try:
+        wf_dirs = [Path(e.path) for e in os.scandir(wf_root) if e.name.startswith("wf_") and e.is_dir()]
+    except OSError:
+        return None
+    hits = []
+    for wf in wf_dirs:
+        for agent_id, label in agent_usage.started_agents(str(wf / "journal.jsonl")):
+            if label not in _USAGE_COMMIT_LABELS or Path(agent_id).name != agent_id:
+                continue
+            try:
+                with open(wf / f"agent-{agent_id}.jsonl", "rb") as handle:
+                    head = handle.read(8192).decode("utf-8", errors="replace")
+            except OSError:
+                continue
+            if needle in head.replace("\\\\", "/").replace("\\/", "/"):
+                hits.append(wf)
+                break
+    return hits[0] if len(hits) == 1 else None
+
+
+def _usage_wf_dir(ctx: JobContext) -> tuple:
+    """``(wf_dir, reason)``: the run's Workflow dir via ``run_locate`` then the land-params locator."""
+    from coordinator_core.usage import run_locate
+
+    sid = ctx.record.get("session_id")
+    if not isinstance(sid, str) or not sid:
+        return None, "close record carries no session_id"
+    session = run_locate.session_dir_for(sid)
+    if session is None:
+        return None, "session dir not found or ambiguous"
+    wf = run_locate.locate_run_dir(session, ctx.run_id) or _locate_land_wf_dir(session, ctx.run_id)
+    return (wf, "") if wf is not None else (None, "wf dir not located for the run")
+
+
+def _record_usage(ctx: JobContext) -> None:
+    """Merge the run's ``scan_run`` shape into the warp ``usage.json`` (``as_of`` preserved: sibling_hold
+    reads it as the landed marker) and write the ceremony-keyed spend row. A dir not located records
+    ``usage_reason``. Never raises and never changes the leg's outcome."""
+    try:
+        from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+        from coordinator_core.session.claimed_write import replace_text
+        from coordinator_core.usage import run_spend
+
+        rel = f"{RECORD_DIR_ROOT}/{ctx.run_id}/usage.json"
+        target = ctx.root / rel
+        if not target.parent.is_dir():
+            return
+        try:
+            body = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            body = None
+        body = dict(body) if isinstance(body, dict) else {"unsettled": []}
+        if "run_total" in body:
+            return
+        wf, reason = _usage_wf_dir(ctx)
+        if wf is None:
+            body["usage_reason"] = reason
+        else:
+            from coordinator_core.usage.agent_usage import scan_run
+
+            scan = scan_run(str(wf))
+            body.update(scan)
+            body.pop("usage_reason", None)
+            spent = run_spend.record_run(str(wf), str(ctx.root), ctx.run_id, "emit", scan=scan)
+            if spent.get("spend_row"):
+                _note_written(ctx, spent["spend_row"])
+        replace_text(target, json.dumps(body, indent=2, sort_keys=True) + "\n")
+        _note_written(ctx, rel)
+    except Exception:  # noqa: BLE001 - telemetry never fails the close
+        return
+
+
 def _close_commit(ctx: JobContext) -> LegResult:
     """Land exactly the paths the legs wrote in one Form 4 commit, never a peer's dirty file. A lost
     compare-and-swap re-seeds from the new HEAD (``CLOSE_COMMIT_CAS_RETRIES`` times), then the leg fails
     naming the paths still dirty."""
     from coordinator_core.ops.dispatch_emit import process_artifact_policy
+
+    _record_usage(ctx)
 
     if not process_artifact_policy.hosts_coordinator_state(ctx.root):
         process_artifact_policy.exclude_locally(ctx.root, ctx.written)

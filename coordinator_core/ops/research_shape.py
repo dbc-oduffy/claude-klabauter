@@ -34,8 +34,10 @@ def shape(research: Mapping) -> dict[str, Any]:
     Effective sources are the declared `sources` (default web, only when there are no seeds), then
     the sources `research.seeds` feed (rc.seed_sources). Any seed floors scouts to corpus.
 
-    `depth` reaches the repo manifest only: `deeper` runs Sonnet scouts, `deepest` adds the
-    relay pass. Haiku scouts are the `standard` default and the documented failure on large repos.
+    `depth` (ladder standard < deep < deeper < deepest) reaches the repo manifest only: `deep` and
+    `deeper` run Sonnet scouts, `deepest` adds the relay pass. Haiku scouts are the `standard`
+    default and the documented failure on large repos. Depth is independent of value_class:
+    only class `unblock` runs the unblock team.
 
     Raises ValueError on spike (own procedure, no tier) or an unknown value_class, appetite, source, seed kind or depth.
     """
@@ -73,8 +75,8 @@ def shape(research: Mapping) -> dict[str, Any]:
 
     if tier == "scouts":
         pipelines = [rc.SCOUTS_PIPELINE]
-    elif tier == "deep":
-        # A named source with no deep specialist runs its own corpus ahead of the team, or deep
+    elif tier == "unblock":
+        # A named source with no unblock specialist runs its own corpus ahead of the team, or unblock
         # would drop it while the preflight still runs (named sources are honoured above scouts).
         pipelines = [
             s

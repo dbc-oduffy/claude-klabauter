@@ -988,7 +988,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                         if found is None:
                             raise
                         print(
-                            f"params file for run {recover_run} was absent; recovered it from the run's recorded land params.",
+                            f"params file for run {recover_run} was absent; recovered it from the run's recorded land params or its spawn prompt.",
                             file=sys.stderr,
                         )
                     params_json_str = found.read_text(encoding="utf-8")

@@ -82,8 +82,15 @@ from coordinator_core.ceremony_common.cli_dispatch import (
 )
 from coordinator_core.contract import apply_base
 from coordinator_core.contract.apply_base import assert_in_repo_root
-from coordinator_core.learn_lessons_pipeline import CONSUMES_MANIFEST, brief
+from coordinator_core import run_watermark
+from coordinator_core.learn_lessons_pipeline import (
+    CONSUMES_MANIFEST,
+    LESSONS_WATERMARK_KIND,
+    brief,
+    lessons_run_dir,
+)
 from coordinator_core.learn_lessons_pipeline.run_stamp import stamp_run_complete
+from coordinator_core.run_watermark import Watermark
 
 #: This assembler's own name for `apply_base.assert_dispatchable`'s
 #: `ASSEMBLER_DISPATCHABLE` lookup (§ C5) — matches the key
@@ -224,7 +231,10 @@ def _dispatch_stamp_run_complete(args: list[str], repo_root: Path) -> dict[str, 
     runs_dir = Path(args[0])
     run_date = args[1]
     sentinel = stamp_run_complete(runs_dir, run_date)
-    return {"sentinel": str(sentinel)}
+    promoted = run_watermark.promote(
+        repo_root, lessons_run_dir(runs_dir, run_date), LESSONS_WATERMARK_KIND
+    )
+    return {"sentinel": str(sentinel), "watermark": str(promoted) if promoted else None}
 
 
 #: The single `op:` verb this package's `directives[]` may name — kept
@@ -249,6 +259,11 @@ def apply(
     set the moment any directive's handler raises; nothing after it
     dispatches."""
     envelope = brief(repo_root, roots=roots)
+    staged = (envelope.get("artifact") or {}).get("watermark")
+    if staged:
+        run_watermark.stage(
+            Path(staged["run_dir"]), Watermark(**staged["proposed"])
+        )
     return apply_base.execute_directives(
         envelope["directives"],
         envelope["judgment_points"],

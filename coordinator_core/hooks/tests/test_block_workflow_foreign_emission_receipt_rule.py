@@ -204,6 +204,64 @@ def test_emit_wave_fire_receipt_shape_is_sanctioned(tmp_path):
     assert result == {}
 
 
+_WRITE_CAPABLE_CALL = 'agent({ prompt: "do it", agentType: "executor" });\n'
+
+
+def _fire(tmp_path: Path, script: Path) -> dict:
+    return bwfe._handler(
+        {
+            "tool_name": "Workflow",
+            "tool_input": {"scriptPath": str(script)},
+            "cwd": str(tmp_path),
+        }
+    )
+
+
+def _write_script(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_WRITE_CAPABLE_CALL, encoding="utf-8")
+    return path
+
+
+def test_pinned_distill_harvest_without_receipt_draws_no_advisory(tmp_path, monkeypatch):
+    agents_dir = _agents_dir(tmp_path)
+    _write_agent_def(agents_dir, "executor", "[Read, Edit, Write, Bash]")
+    _patch_agents_dir(monkeypatch, agents_dir)
+    script = _write_script(
+        tmp_path / "pipelines" / "artifact-distillation" / "distill-harvest.workflow.js"
+    )
+    assert _fire(tmp_path, script) == {}
+
+
+def test_same_named_script_outside_the_pinned_dir_is_still_denied(tmp_path):
+    script = _write_script(tmp_path / "elsewhere" / "distill-harvest.workflow.js")
+    hso = _fire(tmp_path, script)["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "no receipt" in hso["permissionDecisionReason"]
+
+
+def test_pinned_dir_with_a_different_basename_is_still_denied(tmp_path):
+    script = _write_script(
+        tmp_path / "pipelines" / "artifact-distillation" / "other.workflow.js"
+    )
+    hso = _fire(tmp_path, script)["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+
+
+def test_pinned_script_with_a_stale_receipt_keeps_the_sha_check(tmp_path):
+    import json
+
+    script = _write_script(
+        tmp_path / "pipelines" / "artifact-distillation" / "distill-harvest.workflow.js"
+    )
+    script.with_name(script.name + ".emitted.json").write_text(
+        json.dumps({"sha256": "0" * 64, "session_id": "s1"}), encoding="utf-8"
+    )
+    hso = _fire(tmp_path, script)["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "changed after emission" in hso["permissionDecisionReason"]
+
+
 def _assert_names_both_doors(result) -> None:
     hso = result["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"

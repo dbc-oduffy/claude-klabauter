@@ -6,7 +6,7 @@ import sys
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import _TARGETED_TESTS_JS, _test_instruction_js
-from coordinator_core.ops.dispatch_emit.test_interpreter import PORTABLE_CLAUSE
+from coordinator_core.ops.dispatch_emit.interpreter_pin import PORTABLE_CLAUSE
 
 
 def _repo(tmp_path, frontmatter: str) -> str:
