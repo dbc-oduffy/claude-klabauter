@@ -32,8 +32,9 @@ Stager = Callable[[str, str], str]
 def stage(name: str, text: str, sink: dict[str, str], *, record_dir: str) -> str:
     """Record ``text`` as ``name`` in ``sink`` and return the JS literal pointing at its record-dir file.
 
-    ``record_dir`` is spelled as the stage spells the ask text path, repo-relative, so a leg run
-    from another cwd resolves it the same way. A name already recorded with other text is refused.
+    ``record_dir`` is the pointer's path prefix and must be absolute, so a leg whose cwd is not the
+    repo holding the record dir (a cross-repo ask) still resolves it. A name already recorded with
+    other text is refused.
     """
     if sink.get(name, text) != text:
         raise ValueError(f"staged prompt {name!r} already recorded with different text")

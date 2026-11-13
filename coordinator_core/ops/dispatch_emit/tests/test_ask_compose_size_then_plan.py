@@ -170,6 +170,17 @@ def test_failed_assembler_halts_the_chain_naming_what_was_skipped():
     assert "_halted ? { arm: null, halt: null }" in script
 
 
+def test_failed_assembler_halt_detail_carries_the_scout_halt_reason_capped():
+    """Both sides: a scout halt.reason wins as detail; absent, the stderr/stdout join remains."""
+    block = _compose()
+    start = block.index("sizing-assemble failed (exit '")
+    end = block.index("run_id: _runId }; }", start)
+    halt = block[start:end]
+    assert "typeof _scouted.halt.reason === 'string'" in halt
+    assert halt.index("? _scouted.halt.reason") < halt.index("[_scouted.stderr, _scouted.stdout]")
+    assert ".slice(0, 600)" in halt
+
+
 def test_gate_halt_carries_the_pm_exit_question():
     script = _compose()
     assert f"{PM_EXIT_QUESTION_KEY}: _pmExit" in script

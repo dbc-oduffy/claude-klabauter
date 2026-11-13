@@ -834,20 +834,68 @@ def check_destructive_rm(
         ):
             _gr_after = re.sub(r".*\bgit\b.*?\brm(\s|$)", " ", seg, count=1)
             if "--cached" not in _gr_after.split():
-                for _gr_tok in _gr_after.split():
+                # Directory and glob tokens name files git rm deletes without
+                # naming them; ONE batched `ls-files` per segment expands them.
+                _gr_specs: List[str] = []
+                _gr_toks = _gr_after.split()
+                _gr_nul = "--pathspec-file-nul" in _gr_toks
+                _gr_pff = ""
+                for _gr_i, _gr_tok in enumerate(_gr_toks):
+                    if _gr_tok.startswith("--pathspec-from-file="):
+                        _gr_pff = _strip_q(_gr_tok.split("=", 1)[1])
+                    elif _gr_tok == "--pathspec-from-file" and _gr_i + 1 < len(_gr_toks):
+                        _gr_pff = _strip_q(_gr_toks[_gr_i + 1])
+                if _gr_pff and _gr_pff != "-" and "$" not in _gr_pff:
+                    # Entries are raw git pathspecs (no shell expansion), so they
+                    # go to ls-files verbatim, like the argv form of `git rm`.
+                    try:
+                        with open(
+                            os.path.join(_rm_cwd, os.path.expanduser(_gr_pff)),
+                            encoding="utf-8",
+                        ) as _gr_fh:
+                            _gr_body = _gr_fh.read()
+                    except OSError:
+                        _gr_body = ""
+                    _gr_ents = _gr_body.split("\0" if _gr_nul else "\n")
+                    _gr_specs.extend(
+                        (e if _gr_nul else e.rstrip("\r")) for e in _gr_ents if e.strip()
+                    )
+                for _gr_tok in _gr_toks:
                     if _gr_tok == "--" or _gr_tok.startswith("-"):
                         continue
-                    if "$" in _gr_tok or any(c in _gr_tok for c in ("*", "?", "[")):
+                    if _gr_tok == _gr_pff:
+                        continue
+                    if "$" in _gr_tok:
                         continue
                     _gr_t = _strip_q(_gr_tok)
                     if _gr_t.endswith(")"):
                         _gr_t = _gr_t[:-1]
                     if _gr_t.endswith("}"):
                         _gr_t = _gr_t[:-1]
+                    if any(c in _gr_t for c in ("*", "?", "[")):
+                        # `:(glob)` keeps shell semantics: `*` does not cross `/`.
+                        _gr_specs.append(":(glob)" + _gr_t)
+                        continue
                     _gr_resolved = os.path.join(_rm_cwd, os.path.expanduser(_gr_t)) if _gr_t else ""
                     if not _gr_resolved or not os.path.exists(_gr_resolved):
                         continue
+                    if os.path.isdir(_gr_resolved):
+                        _gr_specs.append(_gr_t)
+                        continue
                     _pending_rm_touch_paths.append(_abs_path(_gr_resolved))
+                if _gr_specs:
+                    # Output is cwd-relative, so it joins against the same base
+                    # the pathspecs resolved from.
+                    _gr_rc, _gr_out = _dc_git_probe._run_git(
+                        ["-C", _rm_cwd, "--no-optional-locks", "ls-files", "-z", "--"]
+                        + _gr_specs
+                    )
+                    if _gr_rc == 0:
+                        for _gr_rel in _gr_out.split("\0"):
+                            if _gr_rel:
+                                _pending_rm_touch_paths.append(
+                                    _abs_path(os.path.join(_rm_cwd, _gr_rel))
+                                )
             continue
 
         if not _rm_is_rm_segment(seg):

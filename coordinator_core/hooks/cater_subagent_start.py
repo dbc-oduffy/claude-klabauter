@@ -1303,6 +1303,41 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
     return "".join(parts)
 
 
+#: Repo roots with a cadence reap running; stops a second SubagentStart from queuing a duplicate while the stamp is still being claimed.
+_REAP_INFLIGHT: set = set()
+
+
+def _kick_untracked_reap(cwd: Optional[str]) -> None:
+    """Start the cadence sidecar reap detached on the engine's executor when it is due.
+
+    The hook pays one `stat` (`reap_is_due`); the scan and removals run off the
+    event loop and are never awaited. Never raises, never spawns a process.
+    """
+    root = None
+    try:
+        import asyncio
+
+        from coordinator_core import sidecar_reap
+        from coordinator_core.session.liveness import session_live
+
+        root = _show_toplevel_no_spawn(cwd) if cwd else None
+        if not root or root in _REAP_INFLIGHT or not sidecar_reap.reap_is_due(root):
+            return
+
+        def _run() -> None:
+            try:
+                sidecar_reap.reap_untracked_if_due(root, session_live)
+            except Exception:
+                pass
+            finally:
+                _REAP_INFLIGHT.discard(root)
+
+        _REAP_INFLIGHT.add(root)
+        asyncio.get_running_loop().run_in_executor(None, _run)
+    except Exception:
+        _REAP_INFLIGHT.discard(root)
+
+
 @register_op(OP_NAME)
 async def _handler(params: dict, repo_root=None) -> dict:
     """SubagentStart relay target (C3) -- registration only, no second hooks.json
@@ -1342,6 +1377,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     cwd = field(params, "cwd") or None
     text = await asyncio.to_thread(compose_catering, params, cwd=cwd)
+    _kick_untracked_reap(cwd)
     if not text:
         return no_advisory()
     return context_only("SubagentStart", text)

@@ -429,6 +429,29 @@ def _settings_home(override: Optional[str]) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _tasks_holds_markdown(repo_root: Path, tasks_dir: Path) -> bool:
+    """Does `tasks/` hold any `.md`, tracked or not (ignored files included)?
+
+    One `git ls-files` spawn answers it; a non-git tree, a failed or timed-out spawn falls back to
+    the disk walk. `--others` without `--exclude-standard` keeps gitignored files in the answer,
+    since `tasks/` is usually ignored ephemera and the probe asks about disk, not the index.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "-z", "--cached", "--others",
+             "--", ":(glob)tasks/**/*.md"],
+            capture_output=True,
+            check=False,
+            timeout=2.0,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return any(tasks_dir.rglob("*.md"))
+    if proc.returncode != 0:
+        return any(tasks_dir.rglob("*.md"))
+    return bool(proc.stdout.strip(b"\0"))
+
+
 def _gate_fresh_scaffold_probe(repo_root: Path, _settings: Path, _overrides: dict) -> GateResult:
     """3-axis conjunctive freshly-scaffolded-repo probe. A FINDING (not a
     CLEAN) when it fires — "the repo is too fresh to run the rest of the
@@ -444,7 +467,11 @@ def _gate_fresh_scaffold_probe(repo_root: Path, _settings: Path, _overrides: dic
     completed_dir = repo_root / "archive" / "completed"
     axis2 = not completed_dir.is_dir() or not any(completed_dir.iterdir())
     tasks_dir = repo_root / "tasks"
-    axis3 = not tasks_dir.is_dir() or not any(tasks_dir.rglob("*.md"))
+    # Conjunctive: the tasks/ probe (a git spawn) runs only when both cheap axes already hold.
+    axis3 = (
+        axis1 and axis2
+        and (not tasks_dir.is_dir() or not _tasks_holds_markdown(repo_root, tasks_dir))
+    )
 
     if axis1 and axis2 and axis3:
         return GateResult(
@@ -526,39 +553,28 @@ def _last_distillation_days_ago(log_path: Path) -> Optional[int]:
     return max(delta.days, 0)
 
 
+#: Scannable count at which the gate fires; the count stops here, so ``detail.total`` is a lower bound at it.
+_DISTILL_THRESHOLD_TOTAL = 50
+
+
 def _gate_distill_threshold(repo_root: Path, _settings: Path, overrides: dict) -> GateResult:
-    plans = len(list((repo_root / "docs" / "plans").glob("*.md"))) if (repo_root / "docs" / "plans").is_dir() else 0
-    handoffs = (
-        len(list((repo_root / "archive" / "handoffs").rglob("*.md")))
-        if (repo_root / "archive" / "handoffs").is_dir()
-        else 0
-    )
-    completed = (
-        len(list((repo_root / "archive" / "completed").rglob("*.md")))
-        if (repo_root / "archive" / "completed").is_dir()
-        else 0
-    )
-    tasks_dir = repo_root / "tasks"
-    tasks = 0
-    if tasks_dir.is_dir():
-        for p in tasks_dir.rglob("*.md"):
-            try:
-                rel_parts = p.relative_to(tasks_dir).parts
-            except ValueError:
-                continue  # per-file loop; a path outside tasks_dir (should not occur from rglob) is skipped
-            if len(rel_parts) >= 2:
-                tasks += 1
-    total = plans + handoffs + completed + tasks
+    from coordinator_core.distill.harvest_debt import DistillationLogMissingError, DistillationLogUnparseableError
+    from coordinator_core.ops.distill_scope import scannable_count
 
     log_path = Path(overrides["log_path"]) if overrides.get("log_path") else repo_root / "state" / "distillation-log.md"
+    try:
+        # The count is distill.scope's scannable set, so a log distill.scope refuses is a log this gate cannot count against.
+        total = scannable_count(repo_root, log_path=str(log_path), cap=_DISTILL_THRESHOLD_TOTAL)
+    except (DistillationLogMissingError, DistillationLogUnparseableError) as exc:
+        return GateResult("distill-threshold", GateVerdict.UNAVAILABLE, f"distill.scope cannot count: {exc}")
     days_ago = _last_distillation_days_ago(log_path)
 
-    if total >= 50:
-        reason, fire = f"total count {total} >= 50", True
+    if total >= _DISTILL_THRESHOLD_TOTAL:
+        reason, fire = f"total count {total} >= {_DISTILL_THRESHOLD_TOTAL}", True
     elif days_ago is not None and days_ago > 14:
         reason, fire = f"last distillation {days_ago} days ago (> 14)", True
     elif days_ago is None and total >= 20:
-        reason, fire = f"no distillation log and total count {total} >= 20", True
+        reason, fire = f"no distillation date in log and total count {total} >= 20", True
     else:
         reason = f"total count {total}, last distillation {days_ago if days_ago is not None else 'never'} days ago"
         fire = False

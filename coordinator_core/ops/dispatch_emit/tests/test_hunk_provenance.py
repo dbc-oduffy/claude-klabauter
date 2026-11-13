@@ -233,3 +233,55 @@ def test_unchanged_path_yields_nothing(world):
     world.head(_text({}))
     world.tree(_text({}))
     assert _run(world) == []
+
+
+def _peer_world(world, monkeypatch, *, live_owner: bool):
+    from coordinator_core.ops.dispatch_emit import co_declared_settle
+
+    seen: dict = {}
+
+    def fake_blob(root, path, head_bytes, hunks):
+        seen["hunks"] = [(h.old_start, h.old_len, h.new_start, h.new_len) for h in hunks]
+        return "c" * 40
+
+    monkeypatch.setattr(co_declared_settle, "settled_blob", fake_blob)
+    monkeypatch.setattr(hp, "_non_live", lambda root, owner: not live_owner)
+    world.head(_text({}))
+    world.baseline(_text({2: "PEER"}))
+    world.tree(_text({2: "PEER", 8: "OWN"}))
+    world.owner(PEER)
+    return seen
+
+
+@pytest.mark.parametrize("live_owner", [True, False])
+def test_peer_split_keeps_only_the_own_hunks_whatever_the_owner_liveness(world, monkeypatch, live_owner):
+    seen = _peer_world(world, monkeypatch, live_owner=live_owner)
+    split, unsettled = hp.peer_split(world.root, ME, [PATH])
+    assert split == {PATH: {"blob": "c" * 40, "owner": PEER, "lines": "2"}} and unsettled == {}
+    assert seen["hunks"] == [(8, 1, 8, 1)]
+
+
+def test_peer_split_of_an_own_only_file_names_nothing(world):
+    world.head(_text({}))
+    world.baseline(_text({}))
+    world.tree(_text({8: "OWN"}))
+    assert hp.peer_split(world.root, ME, [PATH]) == ({}, {})
+
+
+def test_peer_split_names_the_owner_when_the_path_cannot_be_split(world, monkeypatch):
+    _peer_world(world, monkeypatch, live_owner=True)
+    monkeypatch.setattr(hp, "_settled_blob", lambda *a, **k: (_ for _ in ()).throw(ValueError("no")))
+    split, unsettled = hp.peer_split(world.root, ME, [PATH])
+    assert split == {} and unsettled == {PATH: {"owner": PEER, "lines": "2"}}
+
+
+def test_peer_split_unreadable_provenance_names_a_co_declaring_peer_only(world, monkeypatch):
+    world.head(_text({}))
+    world.tree(_text({2: "PEER"}))
+    world.baseline(_text({}))
+    monkeypatch.setattr(hp, "_unproduced", lambda *a, **k: (_ for _ in ()).throw(ValueError("coarse")))
+    world.owner()
+    monkeypatch.setattr(hp, "_halted_holder", lambda *a, **k: None)
+    assert hp.peer_split(world.root, ME, [PATH]) == ({}, {})
+    world.owner(PEER)
+    assert hp.peer_split(world.root, ME, [PATH]) == ({}, {PATH: {"owner": PEER, "lines": hp.UNATTRIBUTABLE_LINES}})

@@ -4037,8 +4037,13 @@ def compose_ask_script(
 
     run_dir = f"{RUN_DIR_ROOT}/{run_id}"
     record_dir = f"{RECORD_DIR_ROOT}/{run_id}"
+    # Every path a brief hands an agent to Read is anchored to repo_root: a leg's cwd is the
+    # submitting repo's, which on a cross-repo ask is not the repo holding the record dir.
+    repo_root_abs = Path(repo_root).as_posix()
+    record_abs = f"{repo_root_abs}/{record_dir}"
+    run_abs = f"{repo_root_abs}/{run_dir}"
     stager: Optional[Stager] = (
-        None if staged_out is None else (lambda name, text: _stage_prompt(name, text, staged_out, record_dir=record_dir))
+        None if staged_out is None else (lambda name, text: _stage_prompt(name, text, staged_out, record_dir=record_abs))
     )
     parent_copy = run_parent_copy_rel(run_id)
     manifest_rel = f"{record_dir}/manifest.json"
@@ -4063,6 +4068,7 @@ def compose_ask_script(
     ledger_rel = f"{record_dir}/{LEDGER_VIEW_FILE}"
     from coordinator_core.ops.dispatch_emit import objective_contract as _oc
 
+    ledger_abs = f"{record_abs}/{LEDGER_VIEW_FILE}"
     objective_rel = f"{record_dir}/{_oc.OBJECTIVE_FILE}"
     objective_cfg = (
         {**objective_defaults(), **objective}
@@ -4070,15 +4076,15 @@ def compose_ask_script(
         else objective_settings(repo_root, objective_rel)
     )
     if objective_cfg is not None:
-        ledger_clause_text = ledger_clause_text + " " + _OBJECTIVE_LINE.format(objective=objective_rel)
-    ledger_clause_base = "\n\n" + ledger_clause_text.format(ledger=ledger_rel)
+        ledger_clause_text = ledger_clause_text + " " + _OBJECTIVE_LINE.format(objective=f"{record_abs}/{_oc.OBJECTIVE_FILE}")
+    ledger_clause_base = "\n\n" + ledger_clause_text.format(ledger=ledger_abs)
     ledger_clause = ledger_clause_base + (f"\n\n{_notes_text}" if _notes_text else "")
     intent_clause = (
-        f"\n\nFirst read {record_dir}/{PM_INTENT_FILE} when it exists: the PM's own words and the exit "
+        f"\n\nFirst read {record_abs}/{PM_INTENT_FILE} when it exists: the PM's own words and the exit "
         "criterion. They outrank every brief, plan and in-repo memo; judge the change against them, "
         "and treat a claim the change leaves untrue, or a brief that weakened it, as a finding."
         + (
-            f" Then read {record_dir}/{RELAYED_ASK_FILE}: the ask as an agent relayed it, not the PM's "
+            f" Then read {record_abs}/{RELAYED_ASK_FILE}: the ask as an agent relayed it, not the PM's "
             "words; serve it, but the PM's words outrank it."
             if relayed
             else ""
@@ -4114,9 +4120,9 @@ def compose_ask_script(
     review_titles = [title for title, _ in review_blocks]
     ledger_charter = _folded_ledger_charter(
         relayed=relayed,
-        ledger_rel=ledger_rel,
-        record_dir=record_dir,
-        run_dir=run_dir,
+        ledger_rel=ledger_abs,
+        record_dir=record_abs,
+        run_dir=run_abs,
         in_run_commit=in_run_commit,
     )
     judge_brief = _criterion_judge_brief(
@@ -4190,7 +4196,7 @@ def compose_ask_script(
     near_ruling_block = _near_ruling_block(extant, sizing_rel)
     b.append(
         f"  const {_LEDGER_PREFIX_VAR} = "
-        f"{_lit(ledger_clause_text.format(ledger=ledger_rel) + (chr(10) * 2 + _notes_text if _notes_text else '') + chr(10) * 2 + source_memo_clause)};"
+        f"{_lit(ledger_clause_text.format(ledger=ledger_abs) + (chr(10) * 2 + _notes_text if _notes_text else '') + chr(10) * 2 + source_memo_clause)};"
     )
     if blitz_fn:
         b.append(_ledger_shadowed(blitz_fn, em_brief=bool(em_brief)))
@@ -4360,7 +4366,7 @@ def compose_ask_script(
             f" --deliverable-id {shlex.quote(baton['deliverable_id'])}" if baton and baton.get("deliverable_id") else ""
         )
         relayed_flag = (
-            f" --relayed-ask-file {shlex.quote(record_dir + '/' + RELAYED_ASK_FILE)}" if relayed else ""
+            f" --relayed-ask-file {shlex.quote(record_abs + '/' + RELAYED_ASK_FILE)}" if relayed else ""
         )
         assemble_template = (
             f"{SIZING_ASSEMBLE_CMD} --tshirt <tshirt> --intent <intent> --name <name> "
@@ -4440,7 +4446,7 @@ def compose_ask_script(
                 + design_route_assemble_flags_js("_asmFields", "_q")
                 + acceptance_rows_assemble_flags_js("_asmFields", "_q")
                 + f" + ' --write ' + _q({path_js}) + ' --warp-run ' + _q(_runId) + ' --json ' + {_lit(NO_PLAN_HAND_OFF_FLAG)}"
-                + (f" + {_lit(' --relayed-ask-file ' + shlex.quote(record_dir + '/' + RELAYED_ASK_FILE))}" if relayed else "")
+                + (f" + {_lit(' --relayed-ask-file ' + shlex.quote(record_abs + '/' + RELAYED_ASK_FILE))}" if relayed else "")
             )
 
         scout_prompt = prompt_of(
@@ -4644,8 +4650,10 @@ def compose_ask_script(
             "  else if (_scouted.exit_code !== 0) { _halted = { halted: "
             f"{_lit(HALT_REFUSAL)}, reason: 'sizing-assemble failed (exit ' + _scouted.exit_code + '); "
             "the gate, plan, stage, execute and review phases were skipped', "
-            "detail: [_scouted.stderr, _scouted.stdout].map((s) => String(s ?? '').trim())"
-            ".filter((s) => s).join('\\n').slice(0, 600), run_id: _runId }; }"
+            "detail: (_scouted.halt && typeof _scouted.halt.reason === 'string' && _scouted.halt.reason.trim() !== '' "
+            "? _scouted.halt.reason "
+            ": [_scouted.stderr, _scouted.stdout].map((s) => String(s ?? '').trim()).filter((s) => s).join('\\n'))"
+            ".slice(0, 600), run_id: _runId }; }"
         )
         b.append(
             "  else { _sizingRel = _boundRelOf(_scouted.sizing_path) ?? _sizingPath.slice(REPO_ROOT.length + 1); }"
@@ -4797,7 +4805,7 @@ def compose_ask_script(
             "publish, push to main or cross-repo commit gate: return verdict 'pm-only' with "
             "pmOnlyGround and pmOnly true ONLY when the matter is important AND urgent AND has no clear "
             "right answer, or needs such an external or irreversible action. Being unsure is not a "
-            "ground. You stage and commit nothing." + _KEEP_THE_ASK.format(record_dir=record_dir) + ledger_clause,
+            "ground. You stage and commit nothing." + _KEEP_THE_ASK.format(record_dir=record_abs) + ledger_clause,
             *_record_clause(
                 "{ kind: 'exit_criterion', ruling_ref: _runId }",
                 "`apm_ruling` (your ruling, verbatim) and, only when you amended or authored a "
@@ -4848,11 +4856,12 @@ def compose_ask_script(
                 "\"}'` (a single quote inside the JSON is written '\\''), and return its JSON reply as parent_id, "
                 "runs and fire (error empty on success; if it replies `{\"error\": ...}`, return that message as "
                 "`error`, with parent_id empty and runs and fire empty). On success, read "
-                f"scratch/warp/<parent_id>/parent.json and write its content verbatim to {parent_copy} "
+                f"{repo_root_abs}/scratch/warp/<parent_id>/parent.json and write its content verbatim to "
+                f"{repo_root_abs}/{parent_copy} "
                 "(create the directory first). "
             )
             + ")",
-            "You stage and commit nothing, apart from that write." + _KEEP_THE_ASK.format(record_dir=record_dir) + ledger_clause,
+            "You stage and commit nothing, apart from that write." + _KEEP_THE_ASK.format(record_dir=record_abs) + ledger_clause,
             *_record_clause(
                 "{ kind: 'xl_exit', ruling_ref: _runId }",
                 "`xl_exit` (your pick) and `apm_ruling` (your ruling, verbatim)",
@@ -5016,7 +5025,7 @@ def compose_ask_script(
                 "Ledger-resume re-plan leg. An earlier run halted at the ledger check; these requirement rows "
                 "stayed not_met: ",
                 f"js:({rl}.blocking ?? []).join(', ')",
-                f". Read each row's register text in {ledger_rel}. {_GAPS_OPEN_LEAD}",
+                f". Read each row's register text in {ledger_abs}. {_GAPS_OPEN_LEAD}",
                 f"js:JSON.stringify({rl}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})",
                 f". {HALT_GAP_RULE} Items already credited as landed by rows that landed after the halt (landed work: add no row for them, "
                 "never re-plan them): ",
@@ -6040,7 +6049,7 @@ def compose_ask_script(
     b.append(_WAVE_DIFF_RECONCILE_JS)
     b.append(
         _review_recover_js(
-            head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, run_id=run_id, stager=stager,
+            head=head, anchor=anchor, session_tail=session_tail, record_dir=record_abs, run_id=run_id, stager=stager,
             run_dir=run_dir, notes_block=notes_block, repo_root=repo_root, agent_type_host=agent_type_host,
         )
     )
@@ -6097,8 +6106,8 @@ def compose_ask_script(
             "Rule the run against every requirement "
             + ("on record (the PM's, and the relayed ask, which is not the PM's words)" if relayed else "the PM has on record")
             + ", never against the "
-            f"plan alone. Re-read the requirements ledger at {ledger_rel} now (revisions may have landed "
-            f"since the run started), then {record_dir}/{PM_INTENT_FILE} when it exists, then the run's change "
+            f"plan alone. Re-read the requirements ledger at {ledger_abs} now (revisions may have landed "
+            f"since the run started), then {record_abs}/{PM_INTENT_FILE} when it exists, then the run's change "
             "(`git status --porcelain` and `git diff`)",
             "js:" + owner_repo_clause_js(_OWNER_ROWS_JS),
             ", the plan when one exists (",
@@ -6123,7 +6132,7 @@ def compose_ask_script(
         head=head,
         anchor=anchor,
         test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root),
-        docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=manifest_rel) if in_run_commit else (),
+        docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=f"{record_abs}/manifest.json", root=repo_root_abs) if in_run_commit else (),
         verdict_parts=verdict_parts,
         judged=judged,
         schema=_verify_schema(judge_brief[1] if judged else None),
@@ -6204,13 +6213,13 @@ def compose_ask_script(
         "Ledger-resume remaining-work leg. An earlier run halted; its revise notes may ask for work with no "
         "requirement row blocking. Rows still not_met and not ruled out_of_scope by the revise: ",
         f"js:({_rl}.blocking ?? []).join(', ')",
-        f". Read each row's register text in {ledger_rel}. {_GAPS_OPEN_LEAD}",
+        f". Read each row's register text in {ledger_abs}. {_GAPS_OPEN_LEAD}",
         f"js:JSON.stringify({_rl}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})",
         f". {HALT_GAP_RULE} Revise notes, oldest first: ",
         f"js:JSON.stringify({_rl}.{RESUME_LEDGER_NOTES_FIELD} ?? [])",
         ". Rows a revise added after the earlier run (new requirements, owed work you must do now):",
         f"js:JSON.stringify({_rl}.{RESUME_LEDGER_REVISED_FIELD} ?? [])",
-        f". Also read {record_dir}/{NOTES_FILE} when it exists: the notes of this refire, newer than the ones above. "
+        f". Also read {record_abs}/{NOTES_FILE} when it exists: the notes of this refire, newer than the ones above. "
         "Do the owed work now. Your writes are exactly these declared paths: ",
         f"js:({_rl}.{RESUME_LEDGER_LEG_FIELD}?.writes ?? []).join(', ')",
         ". A row whose work you cannot finish, or whose owed work lies on a path outside those writes, stays "
@@ -6315,7 +6324,7 @@ def compose_ask_script(
         b.append(REOPEN_PLAN_JS)
         b.append(
             _ledger_recover_js(
-                head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, ledger_rel=ledger_rel,
+                head=head, anchor=anchor, session_tail=session_tail, record_dir=record_abs, ledger_rel=ledger_abs,
                 run_id=run_id, judged=judged, test_var=_emit._TEST_RESULT_VAR, stager=stager,
                 notes_block=notes_block,
             )
@@ -6323,9 +6332,9 @@ def compose_ask_script(
         b.append(REMNANT_ITEMS_JS)
         b.append(
             _remnant_complete_js(
-                head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, run_id=run_id,
+                head=head, anchor=anchor, session_tail=session_tail, record_dir=record_abs, run_id=run_id,
                 judged=judged, test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root),
-                docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=manifest_rel) if in_run_commit else (),
+                docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=f"{record_abs}/manifest.json", root=repo_root_abs) if in_run_commit else (),
                 verdict_parts=verdict_parts,
                 schema=_verify_schema(judge_brief[1] if judged else None),
             )
@@ -7432,13 +7441,16 @@ REVIEW_NOT_RUN_CLAUSE = (
 )
 
 
-def _docs_prompt_parts(*, run_id: str, manifest_rel: str) -> tuple[str, ...]:
+def _docs_prompt_parts(*, run_id: str, manifest_rel: str, root: str = "") -> tuple[str, ...]:
     """Step 2 of the merged verify prompt, as `_cat` parts: the declared docs and the delivery note.
+
+    ``root`` anchors the record-dir files the leg reads (ledger, briefs) to the repo holding them.
 
     It edits only `_manifest.doc_writes`; the delivery note's `## Verdicts` section is
     `dispatch.land_run`'s, so the prompt carries none of the tail's own results.
     """
     note_rel = f"{DELIVERY_NOTE_DIR}/{run_id}.md"
+    root = f"{root}/" if root else ""
     from coordinator_core.ops.dispatch_emit.reach_claims import REACH_CLAIM_FORM
 
     return (
@@ -7458,11 +7470,11 @@ def _docs_prompt_parts(*, run_id: str, manifest_rel: str) -> tuple[str, ...]:
         "or supersede the text at each `ask_conflicts` path so it no longer contradicts the ask -- the "
         "ask outranks it. A `DELIVERY*.md` among the declared doc writes is the delivery note the ask "
         "named: write it at that path with the same content as (b), and do not leave it to the EM. ",
-        f"(b) Write the delivery note at {note_rel}: every requirements-ledger item ({RECORD_DIR_ROOT}/"
+        f"(b) Write the delivery note at {note_rel}: every requirements-ledger item ({root}{RECORD_DIR_ROOT}/"
         f"{run_id}/{LEDGER_VIEW_FILE}) with what the change did for it, what shipped (files "
         "and why), each review finding and how it was resolved, and every decision "
         "or deviation taken in-run with its reason -- read them off the row briefs under ",
-        f"{RUN_DIR_ROOT}/{run_id}/briefs",
+        f"{root}{RUN_DIR_ROOT}/{run_id}/briefs",
         ", which are never committed. " + REACH_CLAIM_FORM + " Never edit a plan, sizing or other process record to carry "
         "this. Write no verdicts section: the ledger checker's, the tests' and the criterion's results "
         "are appended to the note by the commit. Never write under scratch/, never stage or commit. "

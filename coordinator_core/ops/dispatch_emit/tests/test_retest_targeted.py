@@ -1328,3 +1328,34 @@ def test_each_session_argv_carries_exactly_its_own_group(repo, tmp_path):
     cap = retest_targeted.RETEST_MAX_NODES
     seen = _sessions(repo, tmp_path, cap + 1, "run_pass")
     assert [sum(a.startswith("test_a.py::") for a in argv) for argv in seen] == [cap, 1]
+
+
+def test_overlay_sha_reads_the_measured_record_and_is_none_without_one(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+
+    assert retest_targeted._overlay_sha(tmp_path, "r1") is None
+    path = measured_rev_record_path(tmp_path, "r1")
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"sha": "a" * 40}), encoding="utf-8")
+    assert retest_targeted._overlay_sha(tmp_path, "r1") is None
+    path.write_text(json.dumps({"sha": "a" * 40, "overlay_sha": "b" * 40}), encoding="utf-8")
+    assert retest_targeted._overlay_sha(tmp_path, "r1") == "b" * 40
+
+
+def test_isolated_body_exports_the_overlay_sha_when_the_record_names_one(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import landing_export as le
+
+    calls = []
+
+    def build(worktree, out_dir, paths, sha=None):
+        calls.append((list(paths), sha))
+        raise le.LandingExportError("stop")
+
+    monkeypatch.setattr(le, "build_head_export", build)
+    monkeypatch.setattr(retest_targeted, "_landing_paths", lambda *a: (["a.py"], "t"))
+    monkeypatch.setattr(retest_targeted, "_overlay_sha", lambda root, rid: "b" * 40)
+    retest_targeted._isolated_body(tmp_path, tmp_path / "r.json", tmp_path / "l.log", "r1", {}, ["a.py"], [], "", None, None, None)
+    assert calls == [([], "b" * 40)]
+    monkeypatch.setattr(retest_targeted, "_overlay_sha", lambda root, rid: None)
+    retest_targeted._isolated_body(tmp_path, tmp_path / "r.json", tmp_path / "l.log", "r1", {}, ["a.py"], [], "", None, None, None)
+    assert calls[1] == (["a.py"], None)

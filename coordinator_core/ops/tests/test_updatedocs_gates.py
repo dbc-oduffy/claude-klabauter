@@ -227,24 +227,124 @@ def test_fresh_scaffold_probe_unavailable_outside_repo_root(tmp_path):
     assert result.verdict == udg.GateVerdict.UNAVAILABLE
 
 
+def test_fresh_scaffold_probe_spawns_nothing_when_an_index_exists(tmp_path, monkeypatch):
+    (tmp_path / "CLAUDE.md").write_text("x")
+    (tmp_path / "DIRECTORY.md").write_text("x")
+    (tmp_path / "tasks").mkdir()
+    calls = []
+    monkeypatch.setattr(udg.subprocess, "run", lambda *a, **k: calls.append(a))
+    result = udg._gate_fresh_scaffold_probe(tmp_path, tmp_path, {})
+    assert result.verdict == udg.GateVerdict.CLEAN
+    assert calls == []
+
+
+def _git_repo_with_tasks(tmp_path, files, ignore_tasks=False):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    for rel in files:
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x")
+    if ignore_tasks:
+        (tmp_path / ".gitignore").write_text("tasks/\n")
+    return tmp_path / "tasks"
+
+
+def test_tasks_markdown_found_when_untracked_nested_one_spawn(tmp_path, monkeypatch):
+    tasks = _git_repo_with_tasks(tmp_path, ["tasks/a/b/note.md"])
+    calls = []
+    real = udg.subprocess.run
+
+    def counting(argv, *a, **k):
+        calls.append(argv)
+        return real(argv, *a, **k)
+
+    monkeypatch.setattr(udg.subprocess, "run", counting)
+    assert udg._tasks_holds_markdown(tmp_path, tasks) is True
+    assert len(calls) == 1 and "ls-files" in calls[0]
+
+
+def test_tasks_markdown_found_when_gitignored(tmp_path):
+    tasks = _git_repo_with_tasks(tmp_path, ["tasks/note.md"], ignore_tasks=True)
+    assert udg._tasks_holds_markdown(tmp_path, tasks) is True
+
+
+def test_tasks_markdown_absent_when_only_other_files(tmp_path):
+    tasks = _git_repo_with_tasks(tmp_path, ["tasks/a/log.txt", "tasks/b/data.json"])
+    assert udg._tasks_holds_markdown(tmp_path, tasks) is False
+
+
+def test_tasks_markdown_falls_back_to_disk_walk_outside_git(tmp_path):
+    (tmp_path / "tasks" / "x").mkdir(parents=True)
+    (tmp_path / "tasks" / "x" / "n.md").write_text("x")
+    assert udg._tasks_holds_markdown(tmp_path, tmp_path / "tasks") is True
+    (tmp_path / "tasks" / "x" / "n.md").unlink()
+    assert udg._tasks_holds_markdown(tmp_path, tmp_path / "tasks") is False
+
+
 # ---------------------------------------------------------------------------
 # (g) distill-threshold arithmetic
 # ---------------------------------------------------------------------------
 
 
+def _implemented_plans(root, n, *, status="implemented"):
+    plans = root / "docs" / "plans"
+    plans.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        (plans / f"2026-11-01-p{i}.md").write_text(f"---\nstatus: {status}\n---\nbody\n", encoding="utf-8")
+
+
+def _empty_log(root):
+    log = root / "state" / "distillation-log.md"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("# Columns: run | path | disposition | fate\n", encoding="utf-8")
+
+
 def test_distill_threshold_fires_at_50_plus(tmp_path):
-    plans = tmp_path / "docs" / "plans"
-    plans.mkdir(parents=True)
-    for i in range(50):
-        (plans / f"p{i}.md").write_text("x")
+    _empty_log(tmp_path)
+    _implemented_plans(tmp_path, 50)
     result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
     assert result.verdict == udg.GateVerdict.FINDING
     assert result.detail["total"] == 50
 
 
 def test_distill_threshold_clean_below_threshold(tmp_path):
+    _empty_log(tmp_path)
     result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
     assert result.verdict == udg.GateVerdict.CLEAN
+
+
+def test_distill_threshold_does_not_count_unripe_plans(tmp_path):
+    """The old glob counted every docs/plans/*.md; only implemented plans are scannable."""
+    _empty_log(tmp_path)
+    _implemented_plans(tmp_path, 60, status="draft")
+    result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
+    assert result.detail["total"] == 0
+    assert result.verdict == udg.GateVerdict.CLEAN
+
+
+def test_distill_threshold_missing_log_is_unavailable_not_a_count(tmp_path):
+    """distill.scope refuses an absent log, so the gate reports UNAVAILABLE rather than a debt-free count."""
+    _implemented_plans(tmp_path, 60)
+    result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
+    assert result.verdict == udg.GateVerdict.UNAVAILABLE
+    assert "distillation log" in result.summary
+
+
+def test_distill_threshold_total_equals_compute_scope_scannable(tmp_path):
+    from coordinator_core.ops.distill_scope import PM_RULING_2026_08_06_COHORT_SPECS, compute_scope
+
+    _empty_log(tmp_path)
+    _implemented_plans(tmp_path, 7)
+    specs = tmp_path / "archive" / "specs"
+    specs.mkdir(parents=True)
+    (specs / "2026-07-01-alpha.md").write_text("---\nstatus: implemented\n---\nbody\n", encoding="utf-8")
+    (specs / "2026-07-02-beta.md").write_text("---\nstatus: draft\n---\nbody\n", encoding="utf-8")
+
+    result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
+    scope = compute_scope(tmp_path, run_id="t", cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS))
+    assert result.detail["total"] == scope.counts["scannable"] == 8
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +355,7 @@ def test_distill_threshold_clean_below_threshold(tmp_path):
 def test_op_end_to_end_runs_requested_subset(tmp_path):
     (tmp_path / "CLAUDE.md").write_text("x")
     (tmp_path / "DIRECTORY.md").write_text("x")
+    _empty_log(tmp_path)
     reply = _run(
         udg._updatedocs_gates(
             {"repo_root": str(tmp_path), "gates": ["fresh-scaffold-probe", "distill-threshold"]},
@@ -659,10 +760,8 @@ def test_gates_resolve_corpora_under_the_worktree_not_the_git_dir(tmp_path):
     """
     worktree = tmp_path / "repo"
     (worktree / ".git").mkdir(parents=True)
-    plans = worktree / "docs" / "plans"
-    plans.mkdir(parents=True)
-    for i in range(3):
-        (plans / f"plan-{i}.md").write_text("# plan\n", encoding="utf-8")
+    _empty_log(worktree)
+    _implemented_plans(worktree, 3)
 
     # Dispatch injects the COMMON DIR, exactly as the live engine does.
     out = udg._updatedocs_gates({"gates": ["distill-threshold"]}, repo_root=worktree / ".git")

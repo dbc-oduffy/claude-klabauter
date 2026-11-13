@@ -2274,6 +2274,16 @@ def _bt_probe_cwd(
     return _bt_probe_cwd_unexpanded(seg_tokens, payload, cmd)
 
 
+_PATH_SAMPLE_LIMIT = 5
+
+
+def _bounded_path_sample(paths) -> str:
+    """Join at most `_PATH_SAMPLE_LIMIT` paths; a longer set reads `N paths (a, b, ...)`."""
+    if len(paths) <= _PATH_SAMPLE_LIMIT:
+        return ", ".join(paths)
+    return "%d paths (%s, ...)" % (len(paths), ", ".join(paths[:_PATH_SAMPLE_LIMIT]))
+
+
 def _bt_index_only_removals(
     seg_tokens: List[str], payload: Optional[Dict[str, Any]], staged: List[str]
 ) -> List[str]:
@@ -2853,15 +2863,16 @@ def check_git_commit_safe_commit_advise(
                 _unnamed = unnamed_staged_paths(_solo_staged, _carrier)
                 if not _unnamed:
                     return None
+                _unnamed_text = _bounded_path_sample(_unnamed)
                 return _gc("deny", "Deny: ", (
                     "staged but not named: %s — this commit would sweep "
                     "them under your subject.\n\n"
                     "Use instead:\n"
                     "  add a -c coordinator.staged operand for your own path, "
                     "or unstage the foreign one"
-                    % ", ".join(_unnamed),
+                    % _unnamed_text,
                     "staged but not named: %s — this commit would sweep "
-                    "them under your subject." % ", ".join(_unnamed),
+                    "them under your subject." % _unnamed_text,
                     (_offer("add a -c coordinator.staged operand for your own path, "
                             "or unstage the foreign one", "your path"),),
                 ))

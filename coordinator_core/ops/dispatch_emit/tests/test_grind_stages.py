@@ -575,6 +575,12 @@ def test_triage_stage_model_is_haiku():
     assert "model: 'haiku'" in triage_call
 
 
+def test_refute_close_stage_model_is_haiku_and_the_fix_stage_stays_sonnet():
+    assert grind_stages.STAGE_MODELS["refute-close"] == "haiku"
+    assert grind_stages.STAGE_MODELS["fix"] == "sonnet"
+    assert "model: 'haiku'" in _calls_by_stage()["refute-close"]
+
+
 def test_models_override_changes_only_its_stage():
     calls = _calls_by_stage(models={"triage": "opus"})
     for key, call_text in calls.items():

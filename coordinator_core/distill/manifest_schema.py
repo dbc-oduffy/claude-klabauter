@@ -49,6 +49,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "STAMP_FIELDS",
     "VALID_VERDICTS",
+    "VALID_MECHANICAL_FATES",
     "ManifestSchemaError",
     "make_scope_manifest",
     "validate_scope_manifest",
@@ -82,6 +83,10 @@ STAMP_FIELDS: tuple[str, ...] = (
 )
 
 VALID_VERDICTS: frozenset[str] = frozenset({"pass", "block"})
+
+#: Fates distill.scope may decide from frontmatter alone, taking the row out of the scan
+#: batches. "ephemeral" = the artifact's own distill_fate declares nothing is owed.
+VALID_MECHANICAL_FATES: frozenset[str] = frozenset({"ephemeral"})
 
 _SCOPE_REQUIRED: tuple[str, ...] = (
     "schema_version",
@@ -150,8 +155,20 @@ def make_scope_manifest(
     wiki_dirs: list[str],
     wiki_slugs: list[str],
     cohorts: dict[str, list[str]] | None = None,
+    mechanical: list[dict[str, str]] | None = None,
+    progress: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    """``mechanical`` ({path, cohort, mechanical_fate} rows) names artifacts triaged out of
+    ``batches`` by frontmatter alone; the key is emitted only when supplied. Triage only:
+    delete guards still run at apply_disposal. No in-repo consumer reads ``mechanical`` yet
+    (speculative: the disposal step that will take these rows is unnamed).
+
+    ``progress`` is the bounded-run ledger ({remaining, unscanned, scan_complete, decided_by_op}):
+    ``batches`` hold one slice of what is owed, ``remaining`` counts the rest, ``unscanned`` the
+    artifacts a cold-cache read budget deferred, ``decided_by_op`` the per-reason counts of
+    artifacts the engine settled without a reading agent. Emitted only when supplied.
+    Speculative: no in-repo producer passes ``progress`` yet (``distill.scope`` does not)."""
+    manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
         "batches": [list(batch) for batch in batches],
@@ -159,6 +176,11 @@ def make_scope_manifest(
         "wiki_slugs": list(wiki_slugs),
         "cohorts": dict(cohorts) if cohorts is not None else {},
     }
+    if mechanical is not None:
+        manifest["mechanical"] = [dict(row) for row in mechanical]
+    if progress is not None:
+        manifest["progress"] = dict(progress)
+    return manifest
 
 
 def validate_scope_manifest(manifest: dict[str, Any]) -> list[str]:
@@ -186,6 +208,46 @@ def validate_scope_manifest(manifest: dict[str, Any]) -> list[str]:
         errors.append("wiki_slugs must be a list")
     if not isinstance(manifest["cohorts"], dict):
         errors.append("cohorts must be a dict")
+    if "mechanical" in manifest:
+        errors.extend(_validate_mechanical(manifest["mechanical"]))
+    if "progress" in manifest:
+        errors.extend(_validate_progress(manifest["progress"]))
+    return errors
+
+
+def _validate_progress(progress: Any) -> list[str]:
+    if not isinstance(progress, dict):
+        return ["progress must be a dict"]
+    errors: list[str] = []
+    for key in ("remaining", "unscanned"):
+        value = progress.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            errors.append(f"progress.{key} must be a non-negative int")
+    if not isinstance(progress.get("scan_complete"), bool):
+        errors.append("progress.scan_complete must be a bool")
+    decided = progress.get("decided_by_op")
+    if not isinstance(decided, dict) or not all(
+        isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool) for k, v in decided.items()
+    ):
+        errors.append("progress.decided_by_op must be a dict of str -> int")
+    return errors
+
+
+def _validate_mechanical(rows: Any) -> list[str]:
+    if not isinstance(rows, list):
+        return ["mechanical must be a list"]
+    errors: list[str] = []
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            errors.append(f"mechanical[{idx}] must be a dict")
+            continue
+        if not isinstance(row.get("path"), str) or not row["path"]:
+            errors.append(f"mechanical[{idx}].path must be a non-empty string")
+        if row.get("mechanical_fate") not in VALID_MECHANICAL_FATES:
+            errors.append(
+                f"mechanical[{idx}].mechanical_fate must be one of "
+                f"{sorted(VALID_MECHANICAL_FATES)}; got {row.get('mechanical_fate')!r}"
+            )
     return errors
 
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 import ast
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Collection, Mapping, Optional, Sequence
 
@@ -53,6 +53,29 @@ def tests_failed_finding(path: str, detail: str) -> Finding:
     from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
 
     return remedy_or_halt(TARGETED_TESTS_FAILED, _in_leg_attempt, lambda _f: Finding(path, TARGETED_TESTS_FAILED, detail), attempts=1)
+
+
+def peer_hunk_owners(measured: Optional[Mapping]) -> dict[str, str]:
+    """`{declared path: owning run id}` for the paths the measured-rev record found carrying a peer run's
+    uncommitted hunks (`peer_hunks`), split out or not. Empty for no record or no peer hunks. Consumer: `landing_integrity._landing_test_gate`."""
+    peers = measured.get("peer_hunks") if isinstance(measured, Mapping) else None
+    if not isinstance(peers, Mapping):
+        return {}
+    return {str(p): str(v.get("owner")) for p, v in peers.items() if isinstance(v, Mapping) and v.get("owner")}
+
+
+def tag_findings_with_peer_owners(findings: Sequence[Finding], owners: Mapping[str, str]) -> list[Finding]:
+    """`findings` with each ``targeted-tests-failed`` finding tagged by the peer runs whose uncommitted hunks
+    sit in the run's declared paths (`peer_hunk_owners`), so a red measured over a file a peer also edited
+    names that run and does not read as caused by this one. Other findings pass through unchanged."""
+    if not owners:
+        return list(findings)
+    who = "; ".join(f"{p} (run {o})" for p, o in sorted(owners.items()))
+    note = f"declared paths carry another run's uncommitted hunks: {who}; the red may be the peer's, not caused by this run"
+    return [
+        replace(f, detail=f"{f.detail}; {note}" if f.detail else note) if f.reason == TARGETED_TESTS_FAILED else f
+        for f in findings
+    ]
 
 
 def unmeasured_finding(path: str, detail: str) -> Finding:

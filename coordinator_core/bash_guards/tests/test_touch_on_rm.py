@@ -101,6 +101,120 @@ def test_git_rm_of_clean_tracked_file_records_a_touch(tmp_path, monkeypatch):
     )
 
 
+def _seed_tree(root: str) -> None:
+    os.makedirs(os.path.join(root, "d", "sub"))
+    os.makedirs(os.path.join(root, "keep"))
+    for rel in ("d/a.md", "d/b.md", "d/c.txt", "d/sub/e.md", "keep/k.md"):
+        with open(os.path.join(root, rel), "w", encoding="utf-8") as fh:
+            fh.write(rel + "\n")
+    _git("add", ".", cwd=root)
+    _git("commit", "-qm", "seed", cwd=root)
+
+
+def test_git_rm_of_directory_records_a_touch_per_tracked_file(tmp_path, monkeypatch):
+    root = _init_repo(tmp_path)
+    _seed_tree(root)
+    monkeypatch.chdir(root)
+    verdict = _enveloped(dc.check_destructive_rm)(
+        "git rm -r d", session_id=_SESSION_ID, payload={}
+    )
+    assert verdict is None
+    touched = _touched_paths(root)
+    assert {"d/a.md", "d/b.md", "d/c.txt", "d/sub/e.md"} <= touched
+    assert "d" not in touched, "the directory token itself must not be recorded"
+    assert "keep/k.md" not in touched
+
+
+def test_git_rm_of_glob_records_a_touch_per_matched_file(tmp_path, monkeypatch):
+    root = _init_repo(tmp_path)
+    _seed_tree(root)
+    monkeypatch.chdir(root)
+    verdict = _enveloped(dc.check_destructive_rm)(
+        "git rm d/*.md", session_id=_SESSION_ID, payload={}
+    )
+    assert verdict is None
+    touched = _touched_paths(root)
+    assert {"d/a.md", "d/b.md"} <= touched
+    assert "d/c.txt" not in touched
+    assert "d/sub/e.md" not in touched, "a shell `*` does not cross `/`"
+    assert "keep/k.md" not in touched
+
+
+def test_git_rm_cached_directory_records_nothing(tmp_path, monkeypatch):
+    root = _init_repo(tmp_path)
+    _seed_tree(root)
+    monkeypatch.chdir(root)
+    verdict = _enveloped(dc.check_destructive_rm)(
+        "git rm -r --cached d", session_id=_SESSION_ID, payload={}
+    )
+    assert verdict is None
+    assert _touched_paths(root) == set()
+
+
+def test_scope_names_no_unknown_owner_for_own_git_rm_of_directory(tmp_path, monkeypatch):
+    from coordinator_core.session.scope import compute_scope
+
+    root = _init_repo(tmp_path)
+    _seed_tree(root)
+    monkeypatch.chdir(root)
+    verdict = _enveloped(dc.check_destructive_rm)(
+        "git rm -r d", session_id=_SESSION_ID, payload={}
+    )
+    assert verdict is None
+    _git("rm", "-rq", "d", cwd=root)
+    result = compute_scope(_SESSION_ID, cwd=root)
+    deleted = {"d/a.md", "d/b.md", "d/c.txt", "d/sub/e.md"}
+    assert deleted <= set(result.my_scope)
+    assert not deleted & set(result.orphans)
+
+
+def test_git_rm_pathspec_from_file_records_a_touch_per_tracked_file(tmp_path, monkeypatch):
+    root = _init_repo(tmp_path)
+    _seed_tree(root)
+    with open(os.path.join(root, "list.txt"), "w", encoding="utf-8") as fh:
+        fh.write("d/a.md\nd/sub\n")
+    monkeypatch.chdir(root)
+    verdict = _enveloped(dc.check_destructive_rm)(
+        "git rm -r --pathspec-from-file=list.txt", session_id=_SESSION_ID, payload={}
+    )
+    assert verdict is None
+    touched = _touched_paths(root)
+    assert {"d/a.md", "d/sub/e.md"} <= touched
+    assert not {"d/b.md", "d/c.txt", "keep/k.md", "list.txt"} & touched
+
+
+def test_git_rm_pathspec_from_file_nul_separated_and_spaced_flag(tmp_path, monkeypatch):
+    root = _init_repo(tmp_path)
+    _seed_tree(root)
+    with open(os.path.join(root, "list.bin"), "w", encoding="utf-8", newline="") as fh:
+        fh.write("d/b.md\0d/c.txt\0")
+    monkeypatch.chdir(root)
+    verdict = _enveloped(dc.check_destructive_rm)(
+        "git rm --pathspec-from-file list.bin --pathspec-file-nul",
+        session_id=_SESSION_ID,
+        payload={},
+    )
+    assert verdict is None
+    touched = _touched_paths(root)
+    assert {"d/b.md", "d/c.txt"} <= touched
+    assert not {"d/a.md", "keep/k.md", "list.bin"} & touched
+
+
+def test_git_rm_cached_pathspec_from_file_records_nothing(tmp_path, monkeypatch):
+    root = _init_repo(tmp_path)
+    _seed_tree(root)
+    with open(os.path.join(root, "list.txt"), "w", encoding="utf-8") as fh:
+        fh.write("d/a.md\n")
+    monkeypatch.chdir(root)
+    verdict = _enveloped(dc.check_destructive_rm)(
+        "git rm --cached --pathspec-from-file=list.txt",
+        session_id=_SESSION_ID,
+        payload={},
+    )
+    assert verdict is None
+    assert _touched_paths(root) == set()
+
+
 def test_git_rm_cached_does_not_touch_the_working_tree_copy(tmp_path, monkeypatch):
     root = _init_repo(tmp_path)
     target = os.path.join(root, "cached.txt")

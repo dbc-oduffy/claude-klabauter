@@ -886,6 +886,19 @@ def _isolated_child(
             signal.signal(s, handler)
 
 
+def _overlay_sha(root: Path, run_id: str) -> Optional[str]:
+    """The run's measured-rev ``overlay_sha`` (declared paths carrying a peer's hunks split down to the run's
+    own), or None when the record is absent, unreadable or names none; the export then overlays worktree bytes."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+
+    try:
+        data = json.loads(measured_rev_record_path(root, run_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    sha = data.get("overlay_sha") if isinstance(data, dict) else None
+    return sha if isinstance(sha, str) and sha else None
+
+
 def _isolated_body(
     root: Path, path: Path, log_path: Path, run_id: str, params: dict, tests: list[str],
     dropped: list[str], drop_note: str, run, dirty, head_sha,
@@ -923,7 +936,12 @@ def _isolated_body(
         export_root = le.run_export_root(root, run_id)
         meta = {"root": export_root.as_posix(), "write_set": write_set, "files": write_set,
                 "write_set_source": source}
-        meta["head"] = le.build_head_export(root, export_root, write_set).head_sha
+        overlay = _overlay_sha(root, run_id)
+        if overlay:
+            meta["overlay_sha"] = overlay
+            meta["head"] = le.build_head_export(root, export_root, [], overlay).head_sha
+        else:
+            meta["head"] = le.build_head_export(root, export_root, write_set).head_sha
     except RuntimeError as exc:
         return _fail(str(exc), meta)
     except le.LandingExportError as exc:

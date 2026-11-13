@@ -67,6 +67,22 @@ def test_implemented_plan_needs_harvest(tmp_path):
     assert _verdict(tmp_path, _SPEC) == ("plan", [])
 
 
+def test_harvested_implemented_docs_plans_row_clears(tmp_path):
+    plan = "docs/plans/2026-11/2026-11-01-thing.md"
+    _write(tmp_path, plan, f"---\nstatus: implemented\n---\nself: {plan}\n")
+    assert _verdict(tmp_path, plan) == ("plan", ["harvest-provenance"])
+    _write(tmp_path, _THING, f"<!-- PROVENANCE: {plan} -->\n")
+    assert _verdict(tmp_path, plan) == ("plan", [])
+
+
+def test_harvested_docs_plans_row_still_blocked_by_a_live_plan_citing_it(tmp_path):
+    plan = "docs/plans/2026-11-01-thing.md"
+    _write(tmp_path, plan, "---\nstatus: implemented\n---\nbody\n")
+    _write(tmp_path, _THING, f"source: {plan}\n")
+    _write(tmp_path, "docs/plans/next.md", f"builds on {plan}\n")
+    assert _verdict(tmp_path, plan) == ("plan", ["active-reference"])
+
+
 def test_never_delivered_plan_clears_without_harvest(tmp_path):
     for status in ("superseded", "abandoned", "cancelled"):
         _write(tmp_path, _SPEC, f"---\nstatus: {status}\n---\nbody\n")

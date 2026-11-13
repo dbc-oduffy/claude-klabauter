@@ -22,9 +22,10 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from coordinator_core.git.literal_pathspec import git_pathspec, is_magic_pathspec
-from coordinator_core.git.run import run_git
+from coordinator_core.git.run import LOCAL_PLUMBING_BUDGET_SECS, run_git
 
-_GIT_TIMEOUT_SECS = 5.0
+# run_git adds its own wall-clock scheduling headroom on top of this process-time bound.
+_GIT_TIMEOUT_SECS = LOCAL_PLUMBING_BUDGET_SECS
 _COMMIT_MARK = "\x1e"
 _FIELD_SEP = "\x1f"
 _FORMAT = (
@@ -73,6 +74,7 @@ class PeerBases(Dict[str, str]):
     range touched (own commits included), from the same log, so a caller needing that set spawns nothing."""
 
     changed: frozenset = frozenset()
+    degraded: Optional[str] = None
 
 
 def peer_path_bases(
@@ -87,7 +89,8 @@ def peer_path_bases(
     the path, only for paths where no own commit precedes it. One ``git log`` spawn; none when
     ``paths`` is empty. Declared paths are matched in Python, so git's cost is independent of
     their count; a glob or ``:`` magic entry falls back to git pathspecs. A git failure returns
-    ``{}`` (every path keeps the run base)."""
+    an empty ``PeerBases`` whose ``degraded`` names the cause, ``"timeout"`` or ``"git-failed"``
+    (every path keeps the run base)."""
     if not paths or not _has_object_store(repo_root):
         return {}
     in_python = not any(is_magic_pathspec(p) for p in paths)
@@ -99,7 +102,9 @@ def peer_path_bases(
         argv += ["--", *map(git_pathspec, paths)]
     proc = run_git(argv, timeout=_GIT_TIMEOUT_SECS)
     if proc.returncode != 0:
-        return {}
+        failed = PeerBases()
+        failed.degraded = "timeout" if proc.timed_out else "git-failed"
+        return failed
     matches = _declared_matcher(paths) if in_python else (lambda _name: True)
     bases: Dict[str, str] = {}
     own_seen: Dict[str, int] = {}

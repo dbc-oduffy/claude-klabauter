@@ -4608,6 +4608,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 if measured_run and safe_id(measured_run)
                 else clean_overlay_verify.OverlayVerdict("missing", "the landing has no measured run id")
             )
+            if overlay.verdict == "mismatch":
+                overlay = clean_overlay_verify.reverify_on_mismatch(root, measured_run, measured, overlay)
             reach_dirt_overlay = {"verdict": overlay.verdict, "seeds": list(overlay.seeds)}
             if overlay.verdict in ("inconclusive", "missing"):
                 reach_dirt_overlay["advisory"] = f"clean-overlay verdict {overlay.verdict}: {overlay.detail}"

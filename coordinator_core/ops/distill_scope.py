@@ -83,7 +83,7 @@ import re
 import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from coordinator_core.distill import harvest_debt as _harvest_debt
 from coordinator_core.distill import manifest_schema as _schema
@@ -109,6 +109,8 @@ __all__ = [
     "VALID_COHORT_MODES",
     "PM_RULING_2026_08_06_COHORT_SPECS",
     "compute_scope",
+    "scannable_count",
+    "PLANS_COHORT",
     "pack_batches",
     "attach_digests",
     "SCAN_BATCH_BYTE_BUDGET",
@@ -214,6 +216,36 @@ def _memo_distill_fate_promote(text: str) -> bool:
         return False
     fate = read_fm_field_unquoted(split.fm_text, "distill_fate")
     return fate in _MEMO_FATE_PROMOTE
+
+
+#: Frontmatter fates settled without a reading agent (``manifest_schema.VALID_MECHANICAL_FATES``).
+_MECHANICAL_FATE_VALUES = frozenset(_schema.VALID_MECHANICAL_FATES)
+
+#: Bytes read per scannable file to decide a mechanical fate; a frontmatter block that
+#: does not close inside the head parses as None and the row stays batched.
+_FATE_HEAD_BYTES = 2048
+
+
+def mechanical_fate(text: str) -> str | None:
+    """Fate decidable from frontmatter alone, or None when an agent must read the prose.
+
+    Pure: ``distill_fate: ephemeral`` (the artifact declares nothing is owed) is the one
+    class today. A missing, unparseable or unknown fate is None, never a fate. Triage only:
+    delete guards still re-run at apply_disposal."""
+    split = split_frontmatter(text)
+    if split is None:
+        return None
+    fate = read_fm_field_unquoted(split.fm_text, "distill_fate")
+    return fate if fate in _MECHANICAL_FATE_VALUES else None
+
+
+def _head_mechanical_fate(worktree_root: Path, rel_path: str) -> str | None:
+    try:
+        with open(worktree_root / rel_path, "rb") as fh:
+            head = fh.read(_FATE_HEAD_BYTES)
+    except OSError:
+        return None
+    return mechanical_fate(head.decode("utf-8", errors="replace"))
 
 
 #: Named per-cohort eligibility filters a CohortSpec row may reference by
@@ -322,19 +354,22 @@ def _rebase_memo_glob(spec: CohortSpec, memo_archive: str) -> CohortSpec:
     return replace(spec, glob=f"{memo_archive}/{spec.glob[len(legacy_prefix):]}")
 
 
-def _scan_cohort(worktree_root: Path, spec: CohortSpec) -> list[str]:
-    """Glob+filter one CohortSpec row; returns sorted worktree-relative paths."""
+def _iter_cohort(worktree_root: Path, spec: CohortSpec) -> Iterator[str]:
+    """Glob+filter one CohortSpec row lazily; yields worktree-relative paths."""
     filter_fn = _COHORT_FILTERS[spec.filter] if spec.filter is not None else None
-    matches: list[str] = []
-    for candidate in sorted(worktree_root.glob(spec.glob)):
+    for candidate in worktree_root.glob(spec.glob):
         if not candidate.is_file():
             continue
         if filter_fn is not None:
             text = candidate.read_text(encoding="utf-8")
             if not filter_fn(text):
                 continue
-        matches.append(rel_id(candidate, worktree_root))
-    return sorted(matches)
+        yield rel_id(candidate, worktree_root)
+
+
+def _scan_cohort(worktree_root: Path, spec: CohortSpec) -> list[str]:
+    """Glob+filter one CohortSpec row; returns sorted worktree-relative paths."""
+    return sorted(_iter_cohort(worktree_root, spec))
 
 
 def _date_sort_key(rel_path: str) -> tuple[str, str]:
@@ -425,11 +460,198 @@ class ScopeResult:
     digests: dict[str, str] = field(default_factory=dict)
 
 
+#: Manifest cohort label for implemented, not-yet-harvested ``docs/plans`` plans.
+PLANS_COHORT = "plans"
+
+
+def _plans_harvest_cohort(worktree_root: Path, plans_dir: str, log_full_path: Path) -> list[str]:
+    """Worktree-relative implemented plans under ``plans_dir`` with no harvested log row.
+
+    Same ripe-and-undebted core as the specs cohort. ``sidecars/`` and ``__pycache__``
+    subtrees never enter; ripe_filter's SKIP records for non-implemented plans are dropped."""
+    plans_path = worktree_root / plans_dir
+    if not plans_path.is_dir():
+        return []
+    ripe_result = _ripe_filter.scan_spec_dir(plans_path)
+    debt = set(_harvest_debt.compute_harvest_debt(plans_path, log_full_path).harvest_debt)
+    plans_dir_posix = Path(plans_dir).as_posix()
+    return sorted(
+        f"{plans_dir_posix}/{p}"
+        for p in ripe_result.harvest
+        if p in debt and not ({"sidecars", "__pycache__"} & set(p.split("/")[:-1]))
+    )
+
+
+@dataclass(frozen=True)
+class _Cohorts:
+    harvest: list[str]
+    skip: list[str]
+    plans: list[str]
+    resolved_cohort_specs: list[CohortSpec]
+    data_driven: dict[str, list[str]]
+    debt_result: _harvest_debt.HarvestDebtResult
+
+    @property
+    def harvest_mode_names(self) -> list[str]:
+        return [s.name for s in self.resolved_cohort_specs if s.mode == "harvest"]
+
+
+def _gather_cohorts(
+    worktree_root: Path,
+    *,
+    specs_dir: str,
+    plans_dir: str,
+    handoffs_dir: str,
+    memos_dir: str | None,
+    log_path: str,
+    cohort_specs: list[CohortSpec] | None,
+) -> _Cohorts:
+    """The cohort scans shared by compute_scope and scannable_count (no sidecar sweep,
+    wiki walk, digests or batching)."""
+    specs_path = worktree_root / specs_dir
+    log_full_path = worktree_root / log_path
+
+    ripe_result = _ripe_filter.scan_spec_dir(specs_path) if specs_path.is_dir() else _ripe_filter.RipeFilterResult(harvest=[], skip=[])
+    debt_result = _harvest_debt.compute_harvest_debt(specs_path, log_full_path)
+
+    # ripe_filter and harvest_debt both key their output specs_dir-relative
+    # (their own documented convention); every OTHER cohort here (sidecars,
+    # handoffs, memos) is worktree-relative via rel_id. Re-key to
+    # worktree-relative here so every path in the emitted manifest shares one
+    # convention — a consumer must not have to know which cohort uses which base.
+    specs_dir_posix = Path(specs_dir).as_posix()
+    harvest_cohort = sorted(
+        f"{specs_dir_posix}/{p}"
+        for p in (set(ripe_result.harvest) & set(debt_result.harvest_debt))
+    )
+    skip_cohort = sorted(f"{specs_dir_posix}/{r.path}" for r in ripe_result.skip)
+    plans_cohort = _plans_harvest_cohort(worktree_root, plans_dir, log_full_path)
+
+    memo_archive = _memo_archive_reldir(worktree_root)
+    resolved = (
+        [_rebase_memo_glob(spec, memo_archive) for spec in cohort_specs]
+        if cohort_specs is not None
+        else _default_cohort_specs(handoffs_dir, memos_dir if memos_dir is not None else memo_archive)
+    )
+    data_driven = {spec.name: _scan_cohort(worktree_root, spec) for spec in resolved}
+    return _Cohorts(
+        harvest=harvest_cohort,
+        skip=skip_cohort,
+        plans=plans_cohort,
+        resolved_cohort_specs=resolved,
+        data_driven=data_driven,
+        debt_result=debt_result,
+    )
+
+
+def _split_scannable(
+    worktree_root: Path, gathered: _Cohorts
+) -> tuple[set[str], list[dict[str, str]]]:
+    """(scannable paths, mechanical rows): the harvest-mode cohort union, minus the rows
+    whose fate frontmatter settles without a reading agent."""
+    scannable_set = set(gathered.harvest) | set(gathered.plans)
+    cohort_of: dict[str, str] = {p: "harvest" for p in gathered.harvest}
+    for p in gathered.plans:
+        cohort_of.setdefault(p, PLANS_COHORT)
+    for name in gathered.harvest_mode_names:
+        scannable_set |= set(gathered.data_driven[name])
+        for p in gathered.data_driven[name]:
+            cohort_of.setdefault(p, name)
+    mechanical: list[dict[str, str]] = []
+    for rel in sorted(scannable_set):
+        fate = _head_mechanical_fate(worktree_root, rel)
+        if fate is not None:
+            mechanical.append({"path": rel, "cohort": cohort_of[rel], "mechanical_fate": fate})
+            scannable_set.discard(rel)
+    return scannable_set, mechanical
+
+
+def _iter_ripe_undebted(root: Path, debt: set[str], *, skip_subtrees: bool) -> Iterator[str]:
+    """Root-relative implemented ``.md`` files under ``root`` with harvest debt, lazily.
+
+    Debt membership is tested before a file is read, so only debted files cost a read.
+    Same ripeness rule as ``ripe_filter.scan_spec_dir``; ``skip_subtrees`` drops
+    ``sidecars/`` and ``__pycache__`` subtrees (the plans cohort)."""
+    for path in root.rglob("*.md"):
+        rel = path.relative_to(root).as_posix()
+        if rel not in debt or _ripe_filter.is_sidecar_filename(path.name):
+            continue
+        if skip_subtrees and {"sidecars", "__pycache__"} & set(rel.split("/")[:-1]):
+            continue
+        if not path.is_file():
+            continue
+        try:
+            is_ripe = _ripe_filter._classify_one(path)[0]
+        except (OSError, UnicodeDecodeError):
+            continue
+        if is_ripe:
+            yield rel
+
+
+def scannable_count(
+    worktree_root: Path,
+    *,
+    specs_dir: str = "archive/specs",
+    plans_dir: str = "docs/plans",
+    handoffs_dir: str = "archive/handoffs",
+    memos_dir: str | None = None,
+    log_path: str = "state/distillation-log.md",
+    cohort_specs: list[CohortSpec] | None = None,
+    cap: int | None = None,
+) -> int:
+    """How many files a distill.scope run would scan, without digests, batching or wiki walk.
+
+    ``cohort_specs`` omitted means PM_RULING_2026_08_06_COHORT_SPECS (the cohort set a
+    /distill run passes), so this equals ``compute_scope(..., cohort_specs=<same>).counts["scannable"]``.
+    With ``cap`` the walk stops reading files once ``cap`` are counted and returns ``cap``:
+    a threshold caller pays for the files it needs, not the whole corpus.
+    Raises DistillationLogMissingError when ``log_path`` is absent, as compute_scope does."""
+    log_full_path = worktree_root / log_path
+    specs_path = worktree_root / specs_dir
+    plans_path = worktree_root / plans_dir
+    specs_debt = set(_harvest_debt.compute_harvest_debt(specs_path, log_full_path).harvest_debt)
+    plans_debt = (
+        set(_harvest_debt.compute_harvest_debt(plans_path, log_full_path).harvest_debt)
+        if plans_path.is_dir()
+        else set()
+    )
+
+    memo_archive = _memo_archive_reldir(worktree_root)
+    specs = list(PM_RULING_2026_08_06_COHORT_SPECS) if cohort_specs is None else cohort_specs
+    resolved = [_rebase_memo_glob(spec, memo_archive) for spec in specs]
+
+    def candidates() -> Iterator[str]:
+        if specs_path.is_dir():
+            specs_dir_posix = Path(specs_dir).as_posix()
+            for rel in _iter_ripe_undebted(specs_path, specs_debt, skip_subtrees=False):
+                yield f"{specs_dir_posix}/{rel}"
+        if plans_path.is_dir():
+            plans_dir_posix = Path(plans_dir).as_posix()
+            for rel in _iter_ripe_undebted(plans_path, plans_debt, skip_subtrees=True):
+                yield f"{plans_dir_posix}/{rel}"
+        for spec in resolved:
+            if spec.mode == "harvest":
+                yield from _iter_cohort(worktree_root, spec)
+
+    seen: set[str] = set()
+    count = 0
+    for rel in candidates():
+        if rel in seen:
+            continue
+        seen.add(rel)
+        if _head_mechanical_fate(worktree_root, rel) is None:
+            count += 1
+            if cap is not None and count >= cap:
+                return cap
+    return count
+
+
 def compute_scope(
     worktree_root: Path,
     *,
     run_id: str,
     specs_dir: str = "archive/specs",
+    plans_dir: str = "docs/plans",
     handoffs_dir: str = "archive/handoffs",
     memos_dir: str | None = None,
     log_path: str = "state/distillation-log.md",
@@ -470,37 +692,23 @@ def compute_scope(
     silently treated as "harvest everything."
     """
     specs_path = worktree_root / specs_dir
-    log_full_path = worktree_root / log_path
-
-    ripe_result = _ripe_filter.scan_spec_dir(specs_path) if specs_path.is_dir() else _ripe_filter.RipeFilterResult(harvest=[], skip=[])
-    debt_result = _harvest_debt.compute_harvest_debt(specs_path, log_full_path)
-
-    # ripe_filter and harvest_debt both key their output specs_dir-relative
-    # (their own documented convention); every OTHER cohort here (sidecars,
-    # handoffs, memos) is worktree-relative via rel_id. Re-key to
-    # worktree-relative here so every path in the emitted manifest shares one
-    # convention — a consumer must not have to know which cohort uses which base.
-    specs_dir_posix = Path(specs_dir).as_posix()
-    harvest_cohort = sorted(
-        f"{specs_dir_posix}/{p}"
-        for p in (set(ripe_result.harvest) & set(debt_result.harvest_debt))
+    gathered = _gather_cohorts(
+        worktree_root,
+        specs_dir=specs_dir,
+        plans_dir=plans_dir,
+        handoffs_dir=handoffs_dir,
+        memos_dir=memos_dir,
+        log_path=log_path,
+        cohort_specs=cohort_specs,
     )
-    skip_cohort = sorted(f"{specs_dir_posix}/{r.path}" for r in ripe_result.skip)
+    harvest_cohort = gathered.harvest
+    skip_cohort = gathered.skip
+    plans_cohort = gathered.plans
+    debt_result = gathered.debt_result
+    resolved_cohort_specs = gathered.resolved_cohort_specs
+    data_driven_cohorts = gathered.data_driven
 
     sidecar_cohort = sorted(sidecar_candidate_ids(specs_path, worktree_root))
-
-    memo_archive = _memo_archive_reldir(worktree_root)
-    resolved_cohort_specs = (
-        [_rebase_memo_glob(spec, memo_archive) for spec in cohort_specs]
-        if cohort_specs is not None
-        else _default_cohort_specs(handoffs_dir, memos_dir if memos_dir is not None else memo_archive)
-    )
-    data_driven_cohorts: dict[str, list[str]] = {}
-    harvest_mode_names: list[str] = []
-    for spec in resolved_cohort_specs:
-        data_driven_cohorts[spec.name] = _scan_cohort(worktree_root, spec)
-        if spec.mode == "harvest":
-            harvest_mode_names.append(spec.name)
 
     resolved_wiki_dirs = list(wiki_dirs) if wiki_dirs is not None else _default_wiki_dirs(worktree_root)
     wiki_slugs_map: dict[str, str] = {}
@@ -522,9 +730,7 @@ def compute_scope(
     # reconstructs the mapping for any in-process consumer.
     wiki_slugs = [{"slug": slug, "path": path} for slug, path in wiki_slugs_map.items()]
 
-    scannable_set = set(harvest_cohort)
-    for name in harvest_mode_names:
-        scannable_set |= set(data_driven_cohorts[name])
+    scannable_set, mechanical = _split_scannable(worktree_root, gathered)
     scannable = sorted(scannable_set, key=_date_sort_key)
     digests: dict[str, str] = {}
     digest_bytes: dict[str, int] = {}
@@ -547,9 +753,15 @@ def compute_scope(
         "harvest": harvest_cohort,
         "skip": skip_cohort,
         "sidecars": sidecar_cohort,
+        PLANS_COHORT: plans_cohort,
         **data_driven_cohorts,
     }
-    cohort_modes = {"harvest": "harvest", "skip": "check-only", "sidecars": "check-only"}
+    cohort_modes = {
+        "harvest": "harvest",
+        "skip": "check-only",
+        "sidecars": "check-only",
+        PLANS_COHORT: "harvest",
+    }
     cohort_modes.update({spec.name: spec.mode for spec in resolved_cohort_specs})
 
     manifest = _schema.make_scope_manifest(
@@ -558,6 +770,7 @@ def compute_scope(
         wiki_dirs=resolved_wiki_dirs,
         wiki_slugs=wiki_slugs,
         cohorts=cohorts,
+        mechanical=mechanical,
     )
     # cohort_modes is NOT part of manifest_schema's required scope-manifest
     # shape (that schema is C9's, not this chunk's surface to redefine) — an
@@ -571,8 +784,10 @@ def compute_scope(
         "harvest": len(harvest_cohort),
         "skip": len(skip_cohort),
         "sidecars": len(sidecar_cohort),
+        PLANS_COHORT: len(plans_cohort),
         "scannable": len(scannable),
         "batches": len(batches),
+        "mechanical": len(mechanical),
         "harvest_debt_total": debt_result.total_specs,
         "harvest_debt_warn": int(debt_result.warn),
     }
@@ -684,7 +899,7 @@ def _write_run_file(worktree_root: Path, run_id: str, name: str, obj: dict[str, 
 #: Fixed counts keys compute_scope always emits regardless of cohort_specs —
 #: everything else in `counts` is a data-driven cohort name (see CohortSpec).
 _FIXED_COUNT_KEYS = frozenset(
-    {"harvest", "skip", "sidecars", "scannable", "batches", "harvest_debt_total", "harvest_debt_warn"}
+    {"harvest", "skip", "sidecars", "scannable", "batches", "mechanical", "harvest_debt_total", "harvest_debt_warn"}
 )
 
 
@@ -706,7 +921,8 @@ def render_summary(manifest: dict[str, Any], counts: dict[str, int]) -> str:
     dynamic_part = " ".join(f"{name}={counts[name]}" for name in dynamic_names)
     lines = [
         f"distill.scope run {manifest['run_id']}: "
-        f"{counts['scannable']} scannable across {counts['batches']} batch(es)",
+        f"{counts['scannable']} scannable across {counts['batches']} batch(es), "
+        f"{counts.get('mechanical', 0)} mechanical",
         f"  harvest={counts['harvest']} skip={counts['skip']} "
         f"sidecars={counts['sidecars']}" + (f" {dynamic_part}" if dynamic_part else ""),
         f"  harvest_debt_total={counts['harvest_debt_total']} "
@@ -759,7 +975,7 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
 
     worktree_root = main_worktree_root(repo_root)
     kwargs: dict[str, Any] = {"run_id": run_id}
-    for key in ("specs_dir", "handoffs_dir", "memos_dir", "log_path", "wiki_dirs", "batch_size"):
+    for key in ("specs_dir", "plans_dir", "handoffs_dir", "memos_dir", "log_path", "wiki_dirs", "batch_size"):
         if key in params:
             kwargs[key] = params[key]
 

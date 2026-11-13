@@ -322,10 +322,17 @@ def test_queue_prune_sweep_yaml_leg_missing_wrapper_cli_fails_loud(tmp_path):
 def _touch_md_files(dir_path: Path, n: int) -> None:
     dir_path.mkdir(parents=True, exist_ok=True)
     for i in range(n):
-        (dir_path / f"f{i}.md").write_text("x", encoding="utf-8")
+        (dir_path / f"2026-11-01-f{i}.md").write_text("---\nstatus: implemented\n---\nbody\n", encoding="utf-8")
+
+
+def _write_dateless_log(root: Path) -> None:
+    log = root / "state" / "distillation-log.md"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("# Columns: run | path | disposition | fate\n", encoding="utf-8")
 
 
 def test_distill_threshold_under_threshold_no_fire(tmp_path, capsys):
+    _write_dateless_log(tmp_path)
     _touch_md_files(tmp_path / "docs" / "plans", 3)
     args = _ns(repo_root=str(tmp_path), log_path=None)
     rc = _mod._cmd_distill_threshold(args)
@@ -334,6 +341,7 @@ def test_distill_threshold_under_threshold_no_fire(tmp_path, capsys):
 
 
 def test_distill_threshold_count_fires(tmp_path, capsys):
+    _write_dateless_log(tmp_path)
     _touch_md_files(tmp_path / "docs" / "plans", 50)
     args = _ns(repo_root=str(tmp_path), log_path=None)
     rc = _mod._cmd_distill_threshold(args)
@@ -341,17 +349,40 @@ def test_distill_threshold_count_fires(tmp_path, capsys):
     assert "harvest threshold met — total count 50 >= 50" in capsys.readouterr().out
 
 
-def test_distill_threshold_no_log_count_20_fires(tmp_path):
+def test_distill_threshold_dateless_log_count_20_fires(tmp_path):
+    _write_dateless_log(tmp_path)
     _touch_md_files(tmp_path / "docs" / "plans", 20)
     args = _ns(repo_root=str(tmp_path), log_path=None)
     assert _mod._cmd_distill_threshold(args) == 1
+
+
+def test_distill_threshold_missing_log_reports_unavailable_and_does_not_fire(tmp_path, capsys):
+    _touch_md_files(tmp_path / "docs" / "plans", 60)
+    args = _ns(repo_root=str(tmp_path), log_path=None)
+    assert _mod._cmd_distill_threshold(args) == 0
+    out = capsys.readouterr().out
+    assert "distill.scope cannot count" in out
+    assert "harvest threshold" not in out
+
+
+def test_distill_threshold_total_matches_distill_scope_scannable(tmp_path, capsys):
+    from coordinator_core.ops.distill_scope import PM_RULING_2026_08_06_COHORT_SPECS, compute_scope
+
+    _write_dateless_log(tmp_path)
+    _touch_md_files(tmp_path / "docs" / "plans", 21)
+    (tmp_path / "docs" / "plans" / "2026-11-02-draft.md").write_text("---\nstatus: draft\n---\nbody\n", encoding="utf-8")
+    args = _ns(repo_root=str(tmp_path), log_path=None)
+    assert _mod._cmd_distill_threshold(args) == 1
+    scannable = compute_scope(tmp_path, run_id="t", cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS)).counts["scannable"]
+    assert f"total count {scannable} >= 20" in capsys.readouterr().out
+    assert scannable == 21
 
 
 def test_distill_threshold_stale_log_fires(tmp_path):
     _touch_md_files(tmp_path / "docs" / "plans", 1)
     log = tmp_path / "state" / "distillation-log.md"
     log.parent.mkdir(parents=True)
-    log.write_text("# Columns: run | path | disposition | fate\n\n## Run 2020-01-01 — old run\n", encoding="utf-8")
+    log.write_text("# Columns: run | path | disposition | fate\n\n## Run 2020-01-01-00h00\n- archive/specs/x.md -> DISTILLED, promoted (run: 2020-01-01-00h00)\n", encoding="utf-8")
     args = _ns(repo_root=str(tmp_path), log_path=None)
     assert _mod._cmd_distill_threshold(args) == 1
 
@@ -363,7 +394,7 @@ def test_distill_threshold_recent_log_no_fire(tmp_path):
     log = tmp_path / "state" / "distillation-log.md"
     log.parent.mkdir(parents=True)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    log.write_text(f"# Columns: run | path | disposition | fate\n\n## Run {today} — recent\n", encoding="utf-8")
+    log.write_text(f"# Columns: run | path | disposition | fate\n\n## Run {today}-00h00\n- archive/specs/x.md -> DISTILLED, promoted (run: {today}-00h00)\n", encoding="utf-8")
     args = _ns(repo_root=str(tmp_path), log_path=None)
     assert _mod._cmd_distill_threshold(args) == 0
 

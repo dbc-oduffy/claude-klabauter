@@ -188,6 +188,51 @@ def landable_under_hold(
     return keep
 
 
+def peer_split(
+    root: Path, run_id: str, paths: Sequence[str], *, own_plan: Optional[str] = None,
+) -> tuple:
+    """`(split, unsettled)` over `paths` the run declares. `split[path] = {"blob", "owner", "lines"}`: the sha
+    of HEAD plus only the run's own hunks, for a path whose worktree bytes also carry hunks outside the run's
+    `write_baseline` delta (a peer's), whatever the peer's liveness. `unsettled[path] = {"owner", "lines"}`:
+    a path carrying a peer's hunks (or whose provenance is unreadable while a peer co-declares it) that cannot
+    be split, naming the probable owner run. A path with no peer evidence appears in neither. Zero spawn;
+    never raises."""
+    root = Path(root)
+    split: dict = {}
+    unsettled: dict = {}
+    for raw in paths:
+        path = str(raw or "").replace("\\", "/")
+        if not path:
+            continue
+        try:
+            bad, own, head_bytes = _unproduced(root, run_id, path)
+        except Exception:  # noqa: BLE001 -- unreadable provenance names a peer only when one co-declares the path
+            owner = _peer_owner(root, run_id, own_plan, path)
+            if owner is not None:
+                unsettled[path] = {"owner": owner, "lines": UNATTRIBUTABLE_LINES}
+            continue
+        if not bad:
+            continue
+        owner = _peer_owner(root, run_id, own_plan, path) or UNKNOWN_OWNER
+        blob = None
+        if head_bytes is not None:
+            try:
+                blob = _settled_blob(root, path, head_bytes, own)
+            except Exception:  # noqa: BLE001 -- an unsettleable path is named, not split
+                blob = None
+        if blob is not None:
+            split[path] = {"blob": blob, "owner": owner, "lines": bad}
+        else:
+            unsettled[path] = {"owner": owner, "lines": bad}
+    return split, unsettled
+
+
+def _peer_owner(root: Path, run_id: str, own_plan: Optional[str], path: str) -> Optional[str]:
+    """First co-declaring peer run holding `path` against `run_id`, else the halted run withholding it, else None."""
+    owners = _owners(root, run_id, path, own_plan)
+    return owners[0] if owners else _halted_holder(root, run_id, own_plan, path)
+
+
 def _owners(root: Path, run_id: str, path: str, own_plan: Optional[str]) -> list:
     """Every run co-declaring `path` that holds it against `run_id`, in hold order; [] when none or
     unreadable (owner naming is best effort)."""

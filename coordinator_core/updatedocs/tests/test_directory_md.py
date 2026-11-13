@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from datetime import date
 from pathlib import Path
 
@@ -110,6 +111,31 @@ def test_count_claim_mismatch_is_reported_not_hidden(tmp_path):
     assert claim.actual == 1
     assert claim.matches is False
     assert drift.has_drift is True
+
+
+def _git(root, *args):
+    subprocess.run(
+        ["git", "-C", str(root), *args], check=True, capture_output=True
+    )
+
+
+def test_count_claim_counts_tracked_files_not_untracked_or_node_modules(tmp_path):
+    _git(tmp_path, "init", "-q")
+    (tmp_path / "a.py").write_text("", encoding="utf-8")
+    (tmp_path / "b.py").write_text("", encoding="utf-8")
+    (tmp_path / "untracked.py").write_text("", encoding="utf-8")
+    nm = tmp_path / "node_modules" / "pkg"
+    nm.mkdir(parents=True)
+    (nm / "x.py").write_text("", encoding="utf-8")
+    _git(tmp_path, "add", "a.py", "b.py")
+
+    tracked_doc = _write(tmp_path, "DIRECTORY.md", "2 `*.py` files\n")
+    claim = compute_directory_md_drift(tracked_doc).count_claims[0]
+    assert (claim.asserted, claim.actual, claim.matches) == (2, 2, True)
+
+    disk_doc = _write(tmp_path, "DIRECTORY.md", "4 `*.py` files\n")
+    claim = compute_directory_md_drift(disk_doc).count_claims[0]
+    assert (claim.asserted, claim.actual, claim.matches) == (4, 2, False)
 
 
 def test_no_count_assertions_yields_empty_list(tmp_path):

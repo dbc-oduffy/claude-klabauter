@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
@@ -180,6 +181,36 @@ def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) ->
     return OverlayVerdict("inconclusive", f"pytest exit {ran.returncode}: {tail}", seeds)
 
 
+def overlay_candidate(measured: dict) -> Optional[str]:
+    """The commit the overlay checks out: `overlay_sha` (declared paths carrying a peer's hunks split down to
+    the run's own) when `measured_rev` recorded one, else the whole-file candidate `sha`."""
+    sha = measured.get("overlay_sha") or measured.get("sha")
+    return sha if isinstance(sha, str) else None
+
+
+def name_peer_owners(outcome: OverlayVerdict, measured: dict) -> OverlayVerdict:
+    """`outcome` with the peer hunks of the measured record named. A path whose peer hunks were split out is
+    noted on any verdict; a path whose peer hunks could not be split turns a red into "inconclusive" (the
+    red may be the peer's, so it is never a caused red) naming the owning run."""
+    peers = measured.get("peer_hunks")
+    if not isinstance(peers, dict) or not peers:
+        return outcome
+    kept = {p: v for p, v in peers.items() if isinstance(v, dict) and v.get("split")}
+    left = {p: v for p, v in peers.items() if isinstance(v, dict) and not v.get("split")}
+    def _named(group: dict) -> str:
+        return "; ".join(f"{p} (run {v.get('owner')}, lines {v.get('lines')})" for p, v in sorted(group.items()))
+    notes = []
+    if kept:
+        notes.append(f"peer hunks split out of the overlay candidate: {_named(kept)}")
+    verdict = outcome.verdict
+    if left:
+        notes.append(f"peer hunks that could not be split out stay in the candidate: {_named(left)}")
+        if outcome.red:
+            verdict = "inconclusive"
+            notes.append("the red may belong to that run's hunks, not this run: re-run once the owner lands or releases them")
+    return OverlayVerdict(verdict, f"{'; '.join(notes)}: {outcome.detail}", outcome.seeds)
+
+
 def landing_key(measured: dict) -> str:
     """Digest of what the overlay verified: the landing set's blob shas plus the base (HEAD) sha and the
     candidate sha, as recorded by `measured_rev`. A change to any of them changes the key."""
@@ -236,6 +267,37 @@ def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
     return OverlayVerdict(verdict, str(data.get("detail", "")), seeds)
 
 
+REVERIFY_WAIT_S = SETUP_TIMEOUT_S + TEST_TIMEOUT_S
+_REVERIFY_POLL_S = 1.0
+
+
+def reverify_on_mismatch(
+    root: Path, run_id: str, measured: dict, stale: OverlayVerdict, *,
+    spawn=None, wait_s: float = REVERIFY_WAIT_S, sleep=time.sleep, clock=time.monotonic,
+) -> OverlayVerdict:
+    """Re-run the overlay for a "mismatch" `stale` verdict over the current `measured` candidate: this
+    module's CLI is launched detached (the overlay's git and pytest children never run inside the engine
+    op) and its verdict file is polled for at most `wait_s`. Returns the fresh verdict when it is green or
+    red; any other `stale`, no recorded seeds, no candidate, a failed launch, a timeout or an inconclusive
+    re-verify returns `stale` unchanged (the child still writes its verdict for the refire)."""
+    if stale.verdict != "mismatch" or not stale.seeds or overlay_candidate(measured) is None:
+        return stale
+    if spawn is None:
+        from coordinator_core.ops.ceremony.detached_spawn import spawn_detached as spawn
+    engine = Path(__file__).resolve().parents[3]
+    argv = ["--run-id", run_id, "--repo-root", str(root)]
+    if not spawn(str(engine), str(Path(__file__).resolve()), argv):
+        return stale
+    deadline = clock() + wait_s
+    while True:
+        sleep(_REVERIFY_POLL_S)
+        fresh = check_verdict(root, run_id, measured)
+        if fresh.verdict not in ("mismatch", "missing"):
+            return fresh if fresh.verdict in ("green", "red") else stale
+        if clock() >= deadline:
+            return stale
+
+
 def remedy_call(run_id: Optional[str], root: Optional[Path] = None) -> str:
     py = engine_python_command(root) if root is not None else Path(sys.executable).as_posix()
     return f"{py} -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --run-id {run_id or '<run_id>'} --repo-root <repo_root>"
@@ -258,11 +320,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except (OSError, ValueError) as exc:
         print(f"no readable measured-rev record for {args.run_id}: {exc}", file=sys.stderr)
         return 2
-    sha = measured.get("sha")
-    if not isinstance(sha, str):
+    sha = overlay_candidate(measured)
+    if sha is None:
         print("measured-rev record carries no candidate sha", file=sys.stderr)
         return 2
-    outcome = verify(root, args.run_id, sha, seeds_for_landing(root, measured.get("paths") or []))
+    outcome = name_peer_owners(
+        verify(root, args.run_id, sha, seeds_for_landing(root, measured.get("paths") or [])), measured,
+    )
     write_verdict(root, args.run_id, measured, outcome)
     print(f"overlay verdict: {outcome.verdict}")
     return {"green": 0, "red": 1}.get(outcome.verdict, 2)

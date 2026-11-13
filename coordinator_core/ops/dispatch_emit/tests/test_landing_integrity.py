@@ -981,3 +981,35 @@ def test_since_base_findings_readable_pack_index_has_no_such_finding(tmp_path):
     root = _packed_repo(tmp_path)
 
     assert li.since_base_findings(root, ["a.txt"], "0" * 40, run_id=None) == []
+
+
+def _measured_with_peer(root: Path, run_id: str, record: dict) -> None:
+    from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+
+    path = measured_rev_record_path(root, run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+
+def _red_body(monkeypatch):
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+
+    monkeypatch.setattr(
+        li, "_landing_test_gate_body",
+        lambda *a, **k: ([ltt.Finding("a.py", ltt.TARGETED_TESTS_FAILED, "boom")], "failed"),
+    )
+
+
+def test_gate_names_the_peer_owner_of_a_declared_path_in_a_red_finding(tmp_path, monkeypatch):
+    _red_body(monkeypatch)
+    _measured_with_peer(tmp_path, "r1", {"peer_hunks": {"a.py": {"owner": "peer-run", "lines": "1-2", "split": False}}})
+    findings, check = li._landing_test_gate(tmp_path, {}, "r1")
+    assert check == "failed" and "peer-run" in findings[0].detail and "a.py" in findings[0].detail
+
+
+def test_gate_leaves_the_red_finding_unnamed_without_peer_hunks(tmp_path, monkeypatch):
+    _red_body(monkeypatch)
+    _measured_with_peer(tmp_path, "r1", {"sha": "x"})
+    findings, _ = li._landing_test_gate(tmp_path, {}, "r1")
+    assert findings[0].detail == "boom"
+    assert li._landing_test_gate(tmp_path, {}, None)[0][0].detail == "boom"

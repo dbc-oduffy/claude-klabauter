@@ -132,6 +132,51 @@ def _linked_names_for_section(docs_dir: Path, corpus_dir: Path, body: str) -> se
     return linked
 
 
+#: Sections the README keeps as pointer + stated count + recent links, not a full index.
+_POINTER_COUNT_RECENT_SECTIONS = frozenset({"Plans"})
+RECENT_LINK_COUNT = 5
+_DATED_NAME_RE = re.compile(r"\d{4}-\d{2}-\d{2}-")
+_STATED_COUNT_RE = re.compile(r"(\d[\d,]*)\s+plan\s+docs", re.IGNORECASE)
+
+
+def _pointer_count_recent_drift(
+    docs_dir: Path,
+    corpus_dir: Path,
+    body: str,
+    on_disk_names: set[str],
+    linked_names: set[str],
+) -> tuple[list[str], list[str]]:
+    """Drift for a pointer + count + recent section as `(missing, dead)`.
+
+    Pointer, count and recent-link findings are encoded as labelled entries so
+    the gate (which reads only `missing`/`dead`) surfaces them; an older
+    unlinked doc is never drift. Reads link targets and one count phrase only.
+    """
+    missing: list[str] = []
+    dead: list[str] = []
+
+    corpus_resolved = corpus_dir.resolve()
+    pointer_ok = any(
+        _resolve_link_target(docs_dir, m.group(1)) == corpus_resolved
+        for m in _LINK_RE.finditer(body)
+    )
+    if not pointer_ok:
+        missing.append(f"pointer link to {corpus_dir.name}/")
+
+    stated = _STATED_COUNT_RE.search(body)
+    if stated is None:
+        missing.append("stated count")
+    # Count is every `.md` in the corpus dir (README/undated included), not only dated plans.
+    elif int(stated.group(1).replace(",", "")) != len(on_disk_names):
+        dead.append(f"stated count {stated.group(1)} != {len(on_disk_names)} on disk")
+
+    dated = (name for name in on_disk_names if _DATED_NAME_RE.match(name))
+    recent = sorted(dated, reverse=True)[:RECENT_LINK_COUNT]
+    missing.extend(sorted(name for name in recent if name not in linked_names))
+    dead.extend(sorted(linked_names - on_disk_names))
+    return missing, dead
+
+
 def compute_readme_index_drift(repo_root: Path) -> ReadmeIndexDrift:
     """Compare `docs/README.md`'s links against the on-disk corpus for each
     indexed section, per `SECTION_CORPORA`.
@@ -170,11 +215,18 @@ def compute_readme_index_drift(repo_root: Path) -> ReadmeIndexDrift:
         body = bodies.get(section_name, "")
         linked_names = _linked_names_for_section(docs_dir, corpus_dir.resolve(), body)
 
-        missing = sorted(on_disk_names - linked_names)
-        dead = sorted(linked_names - on_disk_names)
+        if section_name in _POINTER_COUNT_RECENT_SECTIONS:
+            missing, dead = _pointer_count_recent_drift(
+                docs_dir, corpus_dir, body, on_disk_names, linked_names
+            )
+        else:
+            missing = sorted(on_disk_names - linked_names)
+            dead = sorted(linked_names - on_disk_names)
 
         missing_titles = {}
         for name in missing:
+            if name not in stamps:  # a drift label, not a file
+                continue
             key = f"{subdir}/{name}"
             live_keys.add(key)
             stamp = stamps[name]

@@ -588,7 +588,41 @@ def _landing_test_gate_core(
     return out, check
 
 
+def _measured_record(worktree_root: Path, run_id: Optional[str]) -> Optional[dict]:
+    """The run's ``measured-rev.json`` record, or None when absent, unreadable or not an object."""
+    if not run_id:
+        return None
+    from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+
+    try:
+        data = json.loads(measured_rev_record_path(worktree_root, run_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _landing_test_gate(
+    worktree_root: Path, params: Mapping, run_id: Optional[str]
+) -> tuple[list[Finding], str]:
+    """``_landing_test_gate_body`` with each ``targeted-tests-failed`` finding naming the peer runs whose
+    uncommitted hunks sit in the run's declared paths (the measured-rev record's ``peer_hunks``)."""
+    findings, check = _landing_test_gate_body(worktree_root, params, run_id)
+    if not findings:
+        return findings, check
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+
+    owners = ltt.peer_hunk_owners(_measured_record(worktree_root, run_id))
+    if not owners:
+        return findings, check
+    named = ltt.tag_findings_with_peer_owners(findings, owners)
+    if isinstance(findings, GateFindings):
+        out = GateFindings(named)
+        out.deleted_note, out.foreign_evidence = findings.deleted_note, findings.foreign_evidence
+        return out, check
+    return named, check
+
+
+def _landing_test_gate_body(
     worktree_root: Path, params: Mapping, run_id: Optional[str]
 ) -> tuple[list[Finding], str]:
     """``(findings, check)`` for a landing path: a valid fresh verdict replaces the recorded one.

@@ -5,10 +5,11 @@ fired: no fix, verify or close is repeated. Rows come from the first source that
 `--rows-file`, the run's persisted terminal-commit params file, then reconstruction from evidence.
 
 Reconstruction trusts a row only when its `<id>.done.md` evidence exists and its archive
-destination is on disk; its paths are its triage `declared_files` plus that destination, and its
-deletion is the source row under the named queue. A fixer's undeclared file is left out;
-`--dry-run` prints it under `unclaimed_dirty` so an operator can supply the corrected set through
-`--rows-file`. Unclaimed dirt is never staged.
+destination is on disk; its paths are its triage `declared_files`, the files its fix-paths record
+(`<run_dir>/fix-paths/<id>.json`) names as touched or created, and that destination; its deletions
+are the source row under the named queue plus the record's removed paths. A fixer's file named by
+neither is left out; `--dry-run` prints it under `unclaimed_dirty` so an operator can supply the
+corrected set through `--rows-file`. Unclaimed dirt is never staged.
 
 Exit codes: 0 ok, 1 refusal (profile, commit or malformed rows), 2 usage.
 """
@@ -90,6 +91,16 @@ def _triage_declared_files(run_dir: Path) -> dict[str, list[str]]:
     return declared
 
 
+def _fix_paths(run_dir: Path, row_id: str) -> dict[str, list[str]]:
+    """The row's recorded fix paths; a corrupt record reads as none so reconstruction still lands."""
+    from coordinator_core.backlog_grind_assemble import grind_fix_paths
+
+    try:
+        return grind_fix_paths.read(run_dir, row_id)
+    except ValueError:
+        return {k: [] for k in grind_fix_paths.KEYS}
+
+
 def _queue_rel(queue: str, repo_root: Path) -> Optional[str]:
     rel = os.path.relpath(os.path.join(repo_root, queue), repo_root).replace("\\", "/")
     return None if rel == ".." or rel.startswith("../") else rel.rstrip("/")
@@ -108,12 +119,17 @@ def reconstruct_rows(
         archived = grind_rows.archive_destination(profile.archive_path, run_id, f"{row_id}.yaml")
         if not (repo_root / archived).is_file():
             continue
+        fix = _fix_paths(run_dir, row_id)
+        removed = fix["removed"]
+        paths = [*declared.get(row_id, []), *fix["touched"], *fix["created"], archived]
         rows.append(
             {
                 "row_id": row_id,
                 "outcome": RECONSTRUCTED_OUTCOME,
-                "paths": list(dict.fromkeys([*declared.get(row_id, []), archived])),
-                "deleted_paths": [f"{q}/{row_id}.yaml" for q in queue_rels],
+                "paths": [p for p in dict.fromkeys(paths) if p not in removed],
+                "deleted_paths": list(
+                    dict.fromkeys([*(f"{q}/{row_id}.yaml" for q in queue_rels), *removed])
+                ),
             }
         )
     return rows

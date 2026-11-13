@@ -203,7 +203,7 @@ def pull_membership(roster, remote, key, run=subprocess.run):
 
     A refused snapshot is logged and notified by the library's adopt, then the error propagates."""
     mem = _membership()
-    cmd = ["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+    cmd = ["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "AddressFamily=inet",
            "-o", f"ConnectTimeout={PROBE_CONNECT_SECONDS}", remote, "membership", "get"]
     r = run(cmd, capture_output=True, timeout=PROBE_TIMEOUT_SECONDS, creationflags=roster.no_window())
     lines = (r.stdout or b"").decode("utf-8", "replace").splitlines()
@@ -302,7 +302,7 @@ def probe(roster, alias, key, run=subprocess.run, remote=None):
 
     `remote` overrides the dialled name (a stable-name fallback for a stale `alias`)."""
     remote = remote or roster.pick_remote(alias, roster.default_tunnel())
-    cmd = ["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+    cmd = ["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "AddressFamily=inet",
            "-o", f"ConnectTimeout={PROBE_CONNECT_SECONDS}", remote, "roster"]
     try:
         r = run(cmd, capture_output=True, timeout=PROBE_TIMEOUT_SECONDS, creationflags=roster.no_window())
@@ -434,6 +434,46 @@ def resolve_key(roster, alias, local_fn=None, ssh_fn=None):
         roster.refuse_real("key_path", key)
         return key
     return roster.default_key()
+
+
+def _host_key(name):
+    # Same normalisation as unimatrix-pair.py and unimatrix-doctor.py :: _host_key; change all together.
+    low = str(name).strip().lower().rstrip(".")
+    return low[:-len(".local")] if low.endswith(".local") else low
+
+
+def ssh_hostname(roster, alias, run=subprocess.run):
+    """The HostName `ssh -G` gives `alias`, else None."""
+    try:
+        r = run(["ssh", "-G", "--", alias], capture_output=True, text=True, timeout=PROBE_CONNECT_SECONDS,
+                creationflags=roster.no_window())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode:
+        return None
+    out = r.stdout.decode("utf-8", "replace") if isinstance(r.stdout, bytes) else (r.stdout or "")
+    for line in out.splitlines():
+        name, _, val = line.partition(" ")
+        if name.lower() == "hostname" and val.strip():
+            return val.strip()
+    return None
+
+
+def member_alias(roster, box, host, aliases, hosts=None, run=subprocess.run):
+    """The ssh alias this box's links use for member `box` at `host`, else `box`.
+
+    An alias in `aliases` qualifies when its own name or its `ssh -G` HostName equals `host` (case-insensitive,
+    `.local` ignored). `hosts` caches alias -> normalised HostName across calls."""
+    if not host:
+        return box
+    hosts = {} if hosts is None else hosts
+    want = _host_key(host)
+    for alias in aliases:
+        if alias not in hosts:
+            hosts[alias] = _host_key(ssh_hostname(roster, alias, run=run) or "")
+        if _host_key(alias) == want or hosts[alias] == want:
+            return alias
+    return box
 
 
 def router_lock_held(sdir):
@@ -647,6 +687,8 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
         pull_fn = None
     clock = time.time() if now is None else now
 
+    lookup = {}
+
     def link_all(aliases):
         for alias in aliases:
             try:
@@ -655,7 +697,13 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
                     continue
                 if liveness.backoff_until(sdir, alias) > clock:
                     continue
-                key = key_fn(roster, names.get(alias, alias))
+                target = names.get(alias, alias)
+                if snapshot_mode:
+                    if "aliases" not in lookup:
+                        lookup["aliases"] = far_boxes_status(roster)[0]
+                    target = member_alias(roster, target, alias.rpartition("@")[2], lookup["aliases"],
+                                          lookup.setdefault("hosts", {}))
+                key = key_fn(roster, target)
                 if not Path(key).is_file():
                     # A configured alias with no key is a misconfiguration worth one line, not silence.
                     say(f"far box {alias}: no Unimatrix-Zero key (looked for {key}); not linked")

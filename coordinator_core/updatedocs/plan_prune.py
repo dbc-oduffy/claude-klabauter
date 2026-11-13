@@ -9,7 +9,10 @@ and registers no op.
 
 Three legs, ALL must hold for `prunable`:
   1. age         -- mtime older than `age_days` (a parameter, default 14)
-  2. status      -- frontmatter `status:` is one of TERMINAL_PLAN_STATUSES
+  2. status      -- frontmatter `status:` is one of TERMINAL_PLAN_STATUSES AND
+                     ripe: `status:` is in ABANDONED_PLAN_STATUSES, or a same-basename
+                     copy exists under `archive/specs/**` (already harvested). A
+                     delivered plan with no such copy is ripe-unharvested: retained.
   3. unreferenced -- plan's basename/plan_id not found in REFERENCE_FIELDS
                      across `state/handoffs/` and `tasks/`
 
@@ -37,6 +40,7 @@ Spec backlink: pln-bucket-2-extraction-four-deter-e121fa (chunk C3)
 
 from __future__ import annotations
 
+import functools
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,6 +52,8 @@ from coordinator_core.updatedocs._common import UpdatedocsTargetMissing, read_he
 from coordinator_core.updatedocs._stamp_cache import MISS, StampCache
 
 TERMINAL_PLAN_STATUSES = frozenset({"implemented", "deferred", "abandoned", "superseded", "closed"})
+
+ABANDONED_PLAN_STATUSES = frozenset({"superseded", "closed", "abandoned", "cancelled"})
 
 DEFAULT_AGE_FLOOR_DAYS = 14
 
@@ -107,6 +113,15 @@ def _collect_reference_values(repo_root: Path, cache: StampCache) -> list[str]:
     return values
 
 
+def _archived_spec_basenames(repo_root: Path) -> set[str]:
+    """Basenames under ``archive/specs/**``: a plan with a counterpart there was already
+    knowledge-archived by `/distill`."""
+    base = repo_root / "archive" / "specs"
+    if not base.is_dir():
+        return set()
+    return {Path(p).name for p, _ in _stamp_cache.walk_md(base)}
+
+
 def compute_plan_prune_candidates(
     repo_root: str | Path,
     age_days: float = DEFAULT_AGE_FLOOR_DAYS,
@@ -127,6 +142,7 @@ def compute_plan_prune_candidates(
     )
     reference_values = _collect_reference_values(root, cache)
     now = time.time()
+    archived_specs = functools.cache(lambda: _archived_spec_basenames(root))
 
     try:
         listing = sorted(_stamp_cache.list_md(plans_dir))
@@ -158,13 +174,14 @@ def compute_plan_prune_candidates(
             continue
 
         basename = plan_path.name
-        is_terminal = status in TERMINAL_PLAN_STATUSES
+        # ABANDONED adds `cancelled`, which TERMINAL lacks.
+        is_terminal = status in TERMINAL_PLAN_STATUSES or status in ABANDONED_PLAN_STATUSES
 
         # The reference scan only decides a plan that is already old and terminal.
         if age >= age_days and is_terminal and not any(
             (plan_id and v == plan_id) or v.endswith(basename) or v == rel
             for v in reference_values
-        ):
+        ) and (status in ABANDONED_PLAN_STATUSES or basename in archived_specs()):
             prunable.append(rel)
         else:
             retained.append(rel)

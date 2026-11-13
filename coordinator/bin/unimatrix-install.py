@@ -508,32 +508,39 @@ def pair_key(alias, run=subprocess.run, unencrypted=False, remint=False, on_mint
     return priv, _pub_body(pub)
 
 
-def recorded_pair_keys(run=subprocess.run):
-    """{alias: (private key path, public key body)} for every machine-local `unimatrix.keys.<alias>` record whose
-    private and public key files exist. One reader process; never mints or writes a record. RuntimeError when the
-    reader is missing or its output is not a JSON object."""
+def recorded_pair_keys(run=subprocess.run, peers=None):
+    """{peer alias: (private key path, public key body)} for each peer in the machine-local `unimatrix.far_boxes`
+    registry plus `peers` (member box names the caller asks about), keyed as the box's links key them: the
+    `unimatrix.keys.<alias>` record, else the ssh-config IdentityFile `ssh -G <alias>` gives, whose private and
+    public key files exist. A record for an alias in neither set (a stray) is never listed. Never mints or
+    writes a record. RuntimeError when the reader is missing or the registry read fails, or when a requested
+    peer's key file has no `.pub` beside it (a registry-only peer in that state is skipped)."""
     autolink, roster = _sibling(AUTOLINK_SCRIPT), _sibling("unimatrix-roster.py")
     reader = roster.settings_home() / "bin" / "_machine_local.py"
     if not reader.is_file():
         raise RuntimeError(f"{reader} is missing; recorded pair keys cannot be listed")
-    r = run([sys.executable, str(reader), "dump", "--prefix", autolink.KEYS_PREFIX.rstrip(".")],
+    r = run([sys.executable, str(reader), "get", autolink.REGISTRY_KEY],
             capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
-    try:
-        records = json.loads(r.stdout or "")
-    except ValueError:
-        records = None
-    if not isinstance(records, dict):
-        raise RuntimeError(f"listing {autolink.KEYS_PREFIX}* failed: {(r.stderr or r.stdout or '').strip()[:200]}")
+    if r.returncode not in (0, 1):
+        raise RuntimeError(f"reading {autolink.REGISTRY_KEY} failed: {(r.stderr or r.stdout or '').strip()[:200]}")
+    asked = {t for t in (peers or ()) if autolink.ALIAS_RE.fullmatch(t)}
+    aliases = sorted({t for t in re.split(r"[,\s]+", (r.stdout or "") if not r.returncode else "")
+                      if t and autolink.ALIAS_RE.fullmatch(t)} | asked)
     out = {}
-    for key, value in sorted(records.items()):
-        alias = key[len(autolink.KEYS_PREFIX):] if key.startswith(autolink.KEYS_PREFIX) else ""
-        if not alias or not isinstance(value, str) or not value:
-            continue
-        priv = Path(os.path.expanduser(value))
-        roster.refuse_real("key_path", str(priv))
+    for alias in aliases:
+        found = autolink.resolve_key(
+            roster, alias,
+            local_fn=lambda ro, a: autolink.machine_local_key(ro, a, run=run),
+            ssh_fn=lambda ro, a: autolink.ssh_identity_file(ro, a, run=run))
+        priv = Path(found)
         pub = Path(str(priv) + ".pub")
-        if priv.is_file() and pub.is_file():
-            out[alias] = (priv, _pub_body(pub))
+        if found == roster.default_key() or not priv.is_file():
+            continue
+        if not pub.is_file():
+            if alias in asked:
+                raise RuntimeError(f"pair key for {alias}: {priv} has no public key {pub}; nothing is minted")
+            continue
+        out[alias] = (priv, _pub_body(pub))
     return out
 
 

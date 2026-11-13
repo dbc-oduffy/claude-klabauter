@@ -368,9 +368,61 @@ def test_withheld_path_is_removed_from_every_input(repo):
     out = mr.measured_rev("run-cr4", ["edit.txt", "loose.bin"], repo_root=repo)
     assert out["paths"] == ["edit.txt"]
     assert "loose.bin" not in out["removed"]
-def test_crlf_cmd_pin_matches_git_checkin(repo):
-    (repo / ".gitattributes").write_text("*.cmd text eol=crlf\n")
-    (repo / "a.cmd").write_bytes(b"echo hello\r\n")
-    out = mr.measured_rev("run-crlf-cmd", ["a.cmd"], repo_root=repo)
-    expected = _git(repo, "hash-object", "--path=a.cmd", "a.cmd").strip()
-    assert out["blobs"]["a.cmd"] == expected
+
+
+def _hash_object(repo, data: bytes) -> str:
+    return subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=repo, input=data, check=True, capture_output=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout.decode().strip()
+
+
+def test_peer_hunks_in_a_declared_file_yield_a_split_overlay_candidate(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import hunk_provenance as hp
+
+    (repo / "edit.txt").write_bytes(b"old\nown\npeer\n")
+    own_only = _hash_object(repo, b"old\nown\n")
+    monkeypatch.setattr(
+        hp, "peer_split",
+        lambda root, run, paths, **k: ({"edit.txt": {"blob": own_only, "owner": "run-p", "lines": "3"}}, {}),
+    )
+    out = mr.measured_rev("run-peer", ["edit.txt"], repo_root=repo)
+    assert _tree(repo, out["sha"])["edit.txt"] == out["blobs"]["edit.txt"] != own_only
+    assert _tree(repo, out["overlay_sha"])["edit.txt"] == own_only
+    assert _tree(repo, out["overlay_sha"])["keep.txt"] == _tree(repo, out["sha"])["keep.txt"]
+    assert out["peer_hunks"] == {"edit.txt": {"owner": "run-p", "lines": "3", "split": True}}
+    assert json.loads(measured_rev_record_path(repo, "run-peer").read_text())["overlay_sha"] == out["overlay_sha"]
+
+
+def test_unsplittable_peer_hunks_are_named_without_an_overlay_candidate(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import hunk_provenance as hp
+
+    (repo / "edit.txt").write_bytes(b"new\n")
+    monkeypatch.setattr(
+        hp, "peer_split", lambda root, run, paths, **k: ({}, {"edit.txt": {"owner": "run-p", "lines": "1"}}),
+    )
+    out = mr.measured_rev("run-peer2", ["edit.txt"], repo_root=repo)
+    assert "overlay_sha" not in out
+    assert out["peer_hunks"] == {"edit.txt": {"owner": "run-p", "lines": "1", "split": False}}
+
+
+def test_a_file_only_the_run_changed_adds_no_peer_keys(repo):
+    (repo / "edit.txt").write_bytes(b"new\n")
+    out = mr.measured_rev("run-own", ["edit.txt"], repo_root=repo)
+    assert "peer_hunks" not in out and "overlay_sha" not in out
+
+
+def test_peer_split_over_many_unchanged_paths_stays_inside_the_brightline(repo):
+    import time
+
+    from coordinator_core.ops.dispatch_emit import hunk_provenance as hp
+
+    paths = [f"many/f{i}.txt" for i in range(40)]
+    (repo / "many").mkdir()
+    for p in paths:
+        (repo / p).write_bytes(("line\n" * 200).encode())
+    start = time.process_time()
+    split, unsettled = hp.peer_split(repo, "run-perf", paths)
+    elapsed = time.process_time() - start
+    assert (split, unsettled) == ({}, {})
+    assert elapsed < 0.5

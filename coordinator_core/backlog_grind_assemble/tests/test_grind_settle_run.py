@@ -116,6 +116,34 @@ def test_reconstruction_picks_only_rows_with_done_evidence_and_on_disk_archive(r
     assert rows[0]["deleted_paths"] == [f"{QUEUE}/r1.yaml"]
 
 
+def test_fix_paths_record_lands_undeclared_fix_and_removal_with_the_archive(repo, tmp_path, capsys):
+    from coordinator_core.backlog_grind_assemble import grind_fix_paths
+
+    _write(repo, "gone.py", "y = 1\n")
+    _git(["add", "gone.py"], repo)
+    _git(["commit", "-q", "-m", "gone"], repo)
+    (repo / "gone.py").unlink()
+    _finish_row(repo, "r1")
+    run_dir = _triage(repo, {"r1": ["a.py"]})
+    grind_fix_paths.write(run_dir, "r1", ["b.py"], ["new.py"], ["gone.py"])
+    _write(repo, "new.py")
+    code, reply = _run(capsys, _argv(tmp_path, repo))
+    assert code == 0 and reply["committed"] is True
+    status = _status(repo)
+    assert not {"a.py", "b.py", "new.py", "gone.py"} & set(status)
+    assert "other.py" in status
+
+
+def test_a_corrupt_fix_paths_record_reads_as_none(repo, tmp_path):
+    _finish_row(repo, "r1")
+    run_dir = _triage(repo, {"r1": ["a.py"]})
+    _write(run_dir, "fix-paths/r1.json", "{not json")
+    rows = grind_settle_run.reconstruct_rows(
+        repo, grind_settle_run.grind_profile.load_profile(PROFILE, tmp_path / "profiles"), RUN, [QUEUE], run_dir
+    )
+    assert rows[0]["paths"] == ["a.py", f"{ARCHIVE}/r1.yaml"]
+
+
 def test_params_file_source_lands_its_rows(repo, tmp_path, capsys):
     from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import params_path
 

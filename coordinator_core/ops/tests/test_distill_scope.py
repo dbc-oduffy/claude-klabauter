@@ -55,8 +55,10 @@ from coordinator_core.ops.distill_scope import (
     STEM_PREFIX_LEN,
     CohortSpec,
     _date_sort_key,
+    _default_cohort_specs,
     _handler,
     compute_scope,
+    scannable_count,
     dr146_normalize,
     empty_wiki_warning,
     pack_batches,
@@ -663,3 +665,175 @@ def test_memo_cohorts_follow_a_state_rooted_corpus(fixture_repo):
         cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS),
     )
     assert ruling.manifest["cohorts"]["memos"] == ["state/cross-repo/archive/2026-07-01-memo-one.md"]
+
+
+# ---------------------------------------------------------------------------
+# mechanical_fate triage: frontmatter-decided rows leave the scan batches
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("---\ndistill_fate: ephemeral\n---\nbody\n", "ephemeral"),
+        ('---\ndistill_fate: "ephemeral"\n---\nbody\n', "ephemeral"),
+        ("---\ndistill_fate: ratification\n---\nbody\n", None),
+        ("---\nstatus: consumed\n---\nbody\n", None),
+        ("no frontmatter\ndistill_fate: ephemeral\n", None),
+        ("---\ndistill_fate: ephemeral\n", None),
+    ],
+)
+def test_mechanical_fate_decides_from_frontmatter_alone(text, expected):
+    from coordinator_core.ops.distill_scope import mechanical_fate
+
+    assert mechanical_fate(text) == expected
+
+
+def _add_fate_rows(root: Path) -> None:
+    _write(root / "cross-repo" / "archive" / "2026-07-03-memo-eph.md", "---\ndistill_fate: ephemeral\n---\nm\n")
+    _write(root / "cross-repo" / "archive" / "2026-07-04-memo-promote.md", "---\ndistill_fate: commitment\n---\nm\n")
+    _write(
+        root / "archive" / "handoffs" / "2026-07-06-eph-handoff.md",
+        "---\nstatus: consumed\nshipped_in: abc1234\ndistill_fate: ephemeral\n---\nh\n",
+    )
+
+
+def test_compute_scope_tags_ephemeral_rows_out_of_batches(fixture_repo):
+    _add_fate_rows(fixture_repo)
+    result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
+    mech = {r["path"]: r for r in result.manifest["mechanical"]}
+    assert set(mech) == {
+        "cross-repo/archive/2026-07-03-memo-eph.md",
+        "archive/handoffs/2026-07-06-eph-handoff.md",
+    }
+    assert mech["cross-repo/archive/2026-07-03-memo-eph.md"] == {
+        "path": "cross-repo/archive/2026-07-03-memo-eph.md",
+        "cohort": "memos",
+        "mechanical_fate": "ephemeral",
+    }
+    assert mech["archive/handoffs/2026-07-06-eph-handoff.md"]["cohort"] == "handoffs"
+    batched = {p for batch in result.manifest["batches"] for p in batch}
+    assert batched.isdisjoint(mech)
+    assert "cross-repo/archive/2026-07-04-memo-promote.md" in batched
+    assert result.counts["mechanical"] == 2
+    assert result.counts["scannable"] == len(batched)
+    # the cohort listing is unchanged: tagging removes batch rows, not cohort membership
+    assert "cross-repo/archive/2026-07-03-memo-eph.md" in result.manifest["cohorts"]["memos"]
+
+
+def test_compute_scope_without_fate_rows_emits_empty_mechanical(fixture_repo):
+    result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
+    assert result.manifest["mechanical"] == []
+    assert result.counts["mechanical"] == 0
+
+
+def test_handler_workflow_input_excludes_mechanical_rows(fixture_repo):
+    before = _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo / ".git")
+    before_total = json.loads((fixture_repo / before["workflow_input_path"]).read_text(encoding="utf-8"))[
+        "total_file_count"
+    ]
+    _add_fate_rows(fixture_repo)
+    after = _handler({"run_id": "2026-07-23-02h00"}, repo_root=fixture_repo / ".git")
+    payload = json.loads((fixture_repo / after["workflow_input_path"]).read_text(encoding="utf-8"))
+    assert after["counts"]["mechanical"] == 2
+    # +1 promote memo batched; the two ephemeral rows are not
+    assert payload["total_file_count"] == before_total + 1
+    assert "mechanical" in after["summary"]
+
+
+def _add_plans(root: Path) -> None:
+    _write(root / "docs" / "plans" / "2026-11-01-a.md", "---\nstatus: implemented\n---\nbody\n")
+    _write(root / "docs" / "plans" / "2026-11-02-b.md", "---\nstatus: draft\n---\nbody\n")
+    _write(root / "docs" / "plans" / "2026-11-03-c.md", "---\nstatus: implemented\n---\nbody\n")
+    _write(root / "docs" / "plans" / "2026-11" / "2026-11-04-d.md", "---\nstatus: implemented\n---\nbody\n")
+    _write(root / "docs" / "plans" / "sidecars" / "x" / "run.md", "---\nstatus: implemented\n---\nbody\n")
+    _write(root / "docs" / "plans" / "2026-11-05-e.review.md", "---\nstatus: implemented\n---\nbody\n")
+
+
+def test_plans_cohort_holds_implemented_undebted_plans_only(fixture_repo):
+    _add_plans(fixture_repo)
+    log = fixture_repo / "state" / "distillation-log.md"
+    log.write_text(
+        log.read_text(encoding="utf-8")
+        + "- docs/plans/2026-11-03-c.md -> DISTILLED, promoted (run: 2026-07-05-00h00)\n",
+        encoding="utf-8",
+    )
+    result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
+    assert result.manifest["cohorts"]["plans"] == [
+        "docs/plans/2026-11-01-a.md",
+        "docs/plans/2026-11/2026-11-04-d.md",
+    ]
+    assert result.manifest["cohort_modes"]["plans"] == "harvest"
+    assert result.counts["plans"] == 2
+    batched = {p for batch in result.manifest["batches"] for p in batch}
+    assert {"docs/plans/2026-11-01-a.md", "docs/plans/2026-11/2026-11-04-d.md"} <= batched
+    assert not any(p.startswith("docs/plans/sidecars/") or p.endswith(".review.md") for p in batched)
+    assert "docs/plans/2026-11-02-b.md" not in batched
+    assert "docs/plans/2026-11-03-c.md" not in batched
+    # the specs cohort stays specs-only, and plans' non-ripe rows never reach `skip`
+    assert result.manifest["cohorts"]["harvest"] == ["archive/specs/2026-07-01-alpha.md"]
+    assert not any(p.startswith("docs/plans/") for p in result.manifest["cohorts"]["skip"])
+
+
+def test_plans_cohort_a_nested_log_row_credits_the_dated_subdir_plan(fixture_repo):
+    _add_plans(fixture_repo)
+    log = fixture_repo / "state" / "distillation-log.md"
+    log.write_text(
+        log.read_text(encoding="utf-8")
+        + "- docs/plans/2026-11/2026-11-04-d.md -> DISTILLED, promoted (run: 2026-07-05-00h00)\n",
+        encoding="utf-8",
+    )
+    cohort = compute_scope(fixture_repo, run_id="r").manifest["cohorts"]["plans"]
+    assert "docs/plans/2026-11/2026-11-04-d.md" not in cohort
+    assert "docs/plans/2026-11-01-a.md" in cohort
+
+
+def test_plans_cohort_an_ephemeral_log_row_is_not_a_harvest(fixture_repo):
+    _add_plans(fixture_repo)
+    log = fixture_repo / "state" / "distillation-log.md"
+    log.write_text(
+        log.read_text(encoding="utf-8") + "- docs/plans/2026-11-01-a.md -> EPHEMERAL, no durable knowledge\n",
+        encoding="utf-8",
+    )
+    assert "docs/plans/2026-11-01-a.md" in compute_scope(fixture_repo, run_id="r").manifest["cohorts"]["plans"]
+
+
+def test_plans_cohort_is_empty_without_a_plans_dir(fixture_repo):
+    result = compute_scope(fixture_repo, run_id="r")
+    assert result.manifest["cohorts"]["plans"] == []
+    assert result.counts["plans"] == 0
+
+
+def test_scannable_count_equals_compute_scope_scannable_at_pm_ruling(fixture_repo):
+    _add_plans(fixture_repo)
+    _add_fate_rows(fixture_repo)
+    _write(
+        fixture_repo / "docs" / "plans" / "2026-11-06-eph.md",
+        "---\nstatus: implemented\ndistill_fate: ephemeral\n---\nbody\n",
+    )
+    scope = compute_scope(
+        fixture_repo, run_id="r", cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS)
+    )
+    assert scannable_count(fixture_repo) == scope.counts["scannable"]
+    assert scope.counts["plans"] == 4
+    assert scope.counts["mechanical"] == 1  # the ephemeral plan; the ephemeral memo/handoff are not in this cohort set
+    assert "docs/plans/2026-11-06-eph.md" not in {p for b in scope.manifest["batches"] for p in b}
+    default_scope = compute_scope(fixture_repo, run_id="r")
+    assert scannable_count(fixture_repo, cohort_specs=_default_cohort_specs("archive/handoffs", "cross-repo/archive")) == default_scope.counts["scannable"]
+
+
+def test_scannable_count_fails_loud_on_a_missing_log(fixture_repo):
+    (fixture_repo / "state" / "distillation-log.md").unlink()
+    from coordinator_core.distill.harvest_debt import DistillationLogMissingError
+
+    with pytest.raises(DistillationLogMissingError):
+        scannable_count(fixture_repo)
+
+
+def test_scannable_count_cap_stops_at_cap_and_is_exact_below_it(fixture_repo):
+    _add_plans(fixture_repo)
+    full = scannable_count(fixture_repo)
+    assert full > 2
+    assert scannable_count(fixture_repo, cap=2) == 2
+    assert scannable_count(fixture_repo, cap=full) == full
+    assert scannable_count(fixture_repo, cap=full + 10) == full

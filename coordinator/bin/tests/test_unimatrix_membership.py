@@ -290,3 +290,20 @@ def test_file_pub_is_optional_must_be_a_distinct_ed25519_key_and_gets_its_own_li
     for bad in ({**plain, "file_pub": "ssh-rsa AAAA"}, {**plain, "file_pub": plain["relay_pub"]}, {**plain, "extra": "x"}):
         with pytest.raises(M.MembershipError):
             M._validate_member(bad)
+
+
+def test_verify_runs_from_an_installed_copy_with_no_lib_dir(keys, tmp_path, monkeypatch):
+    import sys
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    shutil.copy(BIN / "unimatrix-membership.py", installed / "unimatrix-membership.py")
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if Path(p or ".").resolve() != BIN / "lib"])
+    monkeypatch.delitem(sys.modules, "cli_shared", raising=False)
+    spec = importlib.util.spec_from_file_location("unimatrix_membership_installed", installed / "unimatrix-membership.py")
+    inst = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(inst)
+    snap, sig = signed(keys, None, {"op": "join", "member": member(keys)})
+    assert [m["box"] for m in inst.verify_snapshot(snap, sig, keys["signer"][1])] == ["alpha"]
+    assert not (installed / "lib").exists() and "cli_shared" not in sys.modules
+    with pytest.raises(inst.MembershipError, match="does not verify"):
+        inst.verify_snapshot(snap, sig, keys["other"][1])

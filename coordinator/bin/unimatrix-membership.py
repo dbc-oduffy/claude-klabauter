@@ -253,12 +253,7 @@ def _check_chain(snap, held):
 
 def _ssh_verify(canon, sig, pin_text, run):
     kind, body, _ = _pin_fields(pin_text)
-    lib_dir = str(Path(__file__).resolve().parent / "lib")
-    if lib_dir not in sys.path:
-        sys.path.insert(0, lib_dir)
-    import cli_shared
-
-    tmp = tempfile.mkdtemp(prefix="unimatrix-verify-", dir=cli_shared.managed_temp_root())
+    tmp = tempfile.mkdtemp(prefix="unimatrix-verify-")
     try:
         allowed = Path(tmp) / "allowed_signers"
         sigfile = Path(tmp) / "snapshot.sig"

@@ -89,7 +89,7 @@ def test_a_relayed_compose_never_labels_the_ask_text_as_the_pms():
 
 
 def test_the_assemble_command_passes_the_relayed_ask_file_only_for_a_relayed_run():
-    flag = f"--relayed-ask-file {RECORD_DIR_ROOT}/{_RUN_ID}/relayed-ask.md"
+    flag = f"--relayed-ask-file REPO/{RECORD_DIR_ROOT}/{_RUN_ID}/relayed-ask.md"
     assert flag in _compose(prompt="do it", ask_source="relayed")
     assert "--relayed-ask-file" not in _compose(prompt="do it")
 

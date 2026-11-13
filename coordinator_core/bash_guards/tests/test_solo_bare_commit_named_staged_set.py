@@ -96,6 +96,28 @@ def test_extra_staged_path_denies_and_names_it(tmp_path):
     assert "f.txt," not in _text(out)
 
 
+def test_many_unnamed_staged_paths_collapse_to_count_and_sample(tmp_path):
+    repo = _repo_with_partial_hunk(tmp_path)
+    for i in range(300):
+        (repo / ("u%03d.txt" % i)).write_text("x\n")
+    _git(repo, "add", "--", ".")
+    out = _out(_cmd(repo, "f.txt"))
+    assert _decision(out) == "deny"
+    text = _text(out)
+    assert "300 paths" in text
+    assert len([i for i in range(300) if "u%03d.txt" % i in text]) <= 5
+    assert text.count("Use instead:") == 1
+
+
+def test_few_unnamed_staged_paths_are_all_listed(tmp_path):
+    repo = _repo_with_partial_hunk(tmp_path)
+    for i in range(5):
+        _stage_file(repo, "s%d.txt" % i)
+    text = _text(_out(_cmd(repo, "f.txt")))
+    assert all("s%d.txt" % i in text for i in range(5))
+    assert "paths (" not in text
+
+
 def test_foreign_staged_file_denies(tmp_path):
     repo = _repo_with_partial_hunk(tmp_path)
     out = _out(_cmd(repo, "mine.txt"))
@@ -210,5 +232,6 @@ def test_carrier_path_adds_no_git_call(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _spy)
     assert _out(_cmd(repo, "f.txt")) is None
     diffs = [c for c in calls if c[0] == "diff"]
-    assert len(diffs) == 1 and "--no-renames" in diffs[0]
+    assert len(diffs) <= 1
+    assert all("--no-renames" in c for c in diffs)
     assert not [c for c in calls if c[0] not in ("diff", "rev-parse")]

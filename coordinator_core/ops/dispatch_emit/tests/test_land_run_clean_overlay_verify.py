@@ -399,14 +399,95 @@ def test_land_run_refuses_a_verdict_keyed_to_another_landing_set_or_head(halted,
 
 
 @pytest.mark.parametrize("field", ["blobs", "base_sha"])
-def test_land_run_refuses_a_mismatched_verdict_at_land(halted, monkeypatch, field):  # noqa: F811
-    _no_spawn(monkeypatch)
+def test_land_run_refuses_a_mismatched_verdict_when_the_reverify_is_inconclusive(halted, monkeypatch, field):  # noqa: F811
+    calls = _reverify_spy(monkeypatch, None)
     other = {"blobs": {"x": "0" * 40}} if field == "blobs" else {"base_sha": "1" * 40}
 
     _, result = _dirty_land(halted, "green", mutate=other)
 
     assert result["committed"] is False
     assert result["refused"] == "verify-overlay-unverified", result
+    assert len(calls) == 1
+
+
+def _reverify_spy(monkeypatch, verdict):
+    """Stand in for the detached re-verify land_run reaches through `reverify_on_mismatch`; `verdict`
+    None models a re-verify that never produced a green/red verdict (the stale mismatch comes back)."""
+    calls = []
+
+    def fake(root, run, measured, stale, **_):
+        calls.append((run, cov.overlay_candidate(measured), tuple(stale.seeds)))
+        return stale if verdict is None else cov.OverlayVerdict(verdict, "reverified", tuple(stale.seeds))
+
+    monkeypatch.setattr(cov, "reverify_on_mismatch", fake)
+    monkeypatch.setattr(cov, "verify", lambda *a, **k: (_ for _ in ()).throw(AssertionError("land_run must not verify in-process")))
+    return calls
+
+
+@pytest.mark.parametrize("field", ["blobs", "base_sha"])
+def test_land_run_reverifies_a_mismatched_verdict_and_lands_when_green(halted, monkeypatch, field):  # noqa: F811
+    calls = _reverify_spy(monkeypatch, "green")
+    other = {"blobs": {"x": "0" * 40}} if field == "blobs" else {"base_sha": "1" * 40}
+
+    measured, result = _dirty_land(halted, "green", mutate=other)
+
+    assert result["committed"] is True, result
+    assert not result.get("refused")
+    assert result["clean_overlay_verify"]["verdict"] == "green"
+    assert calls == [(RUN2, cov.overlay_candidate(measured), ("t/x.py",))]
+
+
+def test_land_run_reverifies_a_mismatched_verdict_and_refuses_red(halted, monkeypatch):  # noqa: F811
+    calls = _reverify_spy(monkeypatch, "red")
+
+    _, result = _dirty_land(halted, "green", mutate={"blobs": {"x": "0" * 40}})
+
+    assert result["committed"] is False
+    assert result["refused"] == "verify-overlay-red", result
+    assert len(calls) == 1
+    assert _git(halted, "log", "-1", "--format=%s").strip() == "fixture"
+
+
+def test_a_mismatch_with_no_recorded_seeds_is_not_reverified(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(cov, "verify", lambda *a, **k: calls.append(a))
+    stale = cov.OverlayVerdict("mismatch", "keyed to a different landing set blobs", ())
+
+    out = cov.reverify_on_mismatch(tmp_path, "run1", {"sha": "a" * 40}, stale)
+
+    assert out is stale and calls == []
+
+
+@pytest.mark.parametrize("fresh,expect", [("green", "green"), ("red", "red"), ("inconclusive", "mismatch")])
+def test_reverify_spawns_detached_and_polls_the_verdict_file(tmp_path, fresh, expect):
+    measured = {"sha": "a" * 40, "base_sha": "b" * 40, "blobs": {"x": "1" * 40}}
+    stale = cov.OverlayVerdict("mismatch", "keyed to a different landing set blobs", ("t/x.py",))
+    spawned = []
+
+    def spawn(engine, script, argv):
+        spawned.append(argv)
+        cov.write_verdict(tmp_path, "run1", measured, cov.OverlayVerdict(fresh, "d", ("t/x.py",)))
+        return True
+
+    out = cov.reverify_on_mismatch(tmp_path, "run1", measured, stale, spawn=spawn, sleep=lambda s: None)
+
+    assert out.verdict == expect
+    assert len(spawned) == 1 and spawned[0][:2] == ["--run-id", "run1"]
+
+
+def test_reverify_gives_up_at_the_wait_bound_and_returns_the_stale_verdict(tmp_path):
+    measured = {"sha": "a" * 40, "base_sha": "b" * 40, "blobs": {"x": "1" * 40}}
+    stale = cov.OverlayVerdict("mismatch", "keyed to a different landing set blobs", ("t/x.py",))
+    now = [0.0]
+
+    def sleep(s):
+        now[0] += s
+
+    out = cov.reverify_on_mismatch(
+        tmp_path, "run1", measured, stale, spawn=lambda *a: True, wait_s=3.0, sleep=sleep, clock=lambda: now[0],
+    )
+
+    assert out is stale and now[0] >= 3.0
 
 
 def test_no_foreign_dirt_needs_no_verdict_and_runs_no_overlay(halted, monkeypatch):  # noqa: F811
@@ -442,3 +523,50 @@ def test_reading_the_verdict_stays_inside_the_brightline(tmp_path):
     for _ in range(20):
         assert cov.check_verdict(tmp_path, RUN2, measured).verdict == "green"
     assert (time.process_time() - start) / 20 < 0.05
+
+
+def _peer_dirty(tmp_path, monkeypatch, *, splittable: bool):
+    """READER passes at HEAD ('ok'); the worktree data.txt carries a peer's hunk that breaks it."""
+    from coordinator_core.ops.dispatch_emit import hunk_provenance as hp
+
+    root, head = _repo(tmp_path)
+    _write(root, "t/data.txt", "peer dirt\n")
+    ok = _git(root, "rev-parse", f"{head}:t/data.txt").strip()
+    if splittable:
+        found = ({"t/data.txt": {"blob": ok, "owner": "run-peer", "lines": "1"}}, {})
+    else:
+        found = ({}, {"t/data.txt": {"owner": "run-peer", "lines": "1"}})
+    monkeypatch.setattr(hp, "peer_split", lambda root, run, paths, **k: found)
+    run = "warp-2026-11-12-peer-abc123"
+    measured = mr.measured_rev(run, ["t/data.txt", READER], repo_root=root)
+    return root, run, measured
+
+
+def test_overlay_over_the_split_candidate_is_green_where_the_whole_file_candidate_is_red(tmp_path, monkeypatch):
+    root, run, measured = _peer_dirty(tmp_path, monkeypatch, splittable=True)
+
+    assert cov.verify(root, run, measured["sha"], [READER]).red
+    assert cov.main(["--run-id", run, "--repo-root", str(root)]) == 0
+
+    verdict = cov.check_verdict(root, run, measured)
+    assert verdict.verdict == "green"
+    assert "run-peer" in verdict.detail and "split out" in verdict.detail
+
+
+def test_an_unsplittable_peer_hunk_turns_the_red_into_an_owner_naming_inconclusive(tmp_path, monkeypatch):
+    root, run, measured = _peer_dirty(tmp_path, monkeypatch, splittable=False)
+
+    assert cov.main(["--run-id", run, "--repo-root", str(root)]) == 2
+
+    verdict = cov.check_verdict(root, run, measured)
+    assert verdict.verdict == "inconclusive" and not verdict.red
+    assert "run-peer" in verdict.detail and "t/data.txt" in verdict.detail
+
+
+def test_a_red_with_no_peer_hunk_recorded_stays_red(tmp_path):
+    root, head = _repo(tmp_path, data="bad\n")
+    measured = {"sha": head, "base_sha": head, "paths": [READER], "blobs": {}}
+
+    out = cov.name_peer_owners(cov.verify(root, "run1", head, [READER]), measured)
+
+    assert out.red and "peer" not in out.detail

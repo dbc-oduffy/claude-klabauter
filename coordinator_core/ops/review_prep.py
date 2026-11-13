@@ -773,6 +773,9 @@ def _prepare(
     manifest = _manifest_path(share, slice_prefix)
     if not reply.get("error") and "pre_review_manifest" not in reply and manifest.exists():
         reply = {**reply, "pre_review_manifest": _rel(manifest, repo_root)}
+    degraded = getattr(fresh_bases[0], "degraded", None) if fresh_bases else None
+    if degraded and not reply.get("error"):
+        reply = {**reply, "peer_bases_degraded": degraded}
     return _for_group(reply, group_index, group_count)
 
 

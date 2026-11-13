@@ -139,6 +139,26 @@ def test_walk_md_excludes_node_modules_git_archive_recurses_others(tmp_path):
     assert found == {os.path.join("sub", "nested.md"), "top.md"}
 
 
+def test_default_walk_leaves_scratch_fixture_tree_byte_identical(tmp_path):
+    fixture = tmp_path / "naked-vs-coordinator" / "scratch-c2" / "tree" / "roadmap" / "x"
+    fixture.mkdir(parents=True)
+    body = (
+        "# Index\n\n<!-- BEGIN query: handoff where=roadmap_id=nonexistent-marker-xyz -->\n"
+        "stale\n<!-- END query -->\n"
+    )
+    stub = fixture / "STUB-INDEX.md"
+    stub.write_text(body, encoding="utf-8")
+    real = tmp_path / "real.md"
+    real.write_text(body, encoding="utf-8")
+
+    found = {os.path.relpath(p, tmp_path) for p in walk_md(str(tmp_path))}
+    assert found == {"real.md"}
+
+    main(["--root", str(tmp_path)])
+    assert stub.read_text(encoding="utf-8") == body
+    assert real.read_text(encoding="utf-8") != body
+
+
 def test_walk_md_never_leaves_the_repo(tmp_path):
     repo = tmp_path / "repo"
     outside = tmp_path / "outside"
@@ -631,3 +651,71 @@ def test_main_self_claim_failure_leaves_exit_status_unchanged(tmp_path, monkeypa
     rc = main(["--root", str(tmp_path)])
 
     assert rc == 0  # write-mode success is unaffected by an advisory-only failure
+
+
+def _git_init(root: Path) -> None:
+    import subprocess
+
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+
+
+def test_walk_md_in_a_git_worktree_is_one_ls_files_spawn(tmp_path, monkeypatch):
+    import coordinator_core.git.run as git_run
+
+    _git_init(tmp_path)
+    for d in ("sub", "node_modules", "scratch-x", "archive"):
+        (tmp_path / d).mkdir()
+    _write(tmp_path / "top.md", "x")
+    _write(tmp_path / "sub" / "a.md", "x")
+    _write(tmp_path / "sub" / "t.txt", "x")
+    _write(tmp_path / "node_modules" / "n.md", "x")
+    _write(tmp_path / "scratch-x" / "s.md", "x")
+    _write(tmp_path / "archive" / "z.md", "x")
+    _write(tmp_path / "ignored.md", "x")
+    _write(tmp_path / ".gitignore", "ignored.md\n")
+
+    calls = []
+    real = git_run.run_git
+
+    def _counting(args, **kw):
+        calls.append(list(args))
+        return real(args, **kw)
+
+    monkeypatch.setattr(git_run, "run_git", _counting)
+    stamps: dict = {}
+    found = {os.path.relpath(p, tmp_path) for p in walk_md(str(tmp_path), stamps=stamps)}
+
+    assert found == {"top.md", os.path.join("sub", "a.md")}
+    assert len(stamps) == 2
+    assert len(calls) == 1 and "ls-files" in calls[0]
+
+
+def test_walk_md_falls_back_to_scan_when_not_a_git_worktree(tmp_path):
+    (tmp_path / "sub").mkdir()
+    _write(tmp_path / "sub" / "a.md", "x")
+    found = {os.path.relpath(p, tmp_path) for p in walk_md(str(tmp_path))}
+    assert found == {os.path.join("sub", "a.md")}
+
+
+def test_main_transport_failure_reports_the_files_already_rewritten(tmp_path, monkeypatch, capsys):
+    good = _write(
+        tmp_path / "a-good.md",
+        "# A\n\n<!-- BEGIN query: handoff where=roadmap_id=nonexistent-marker-xyz -->\n"
+        "old\n<!-- END query -->\n",
+    )
+    _write(tmp_path / "b-boom.md", "# B\n\n<!-- BEGIN query: handoff -->\nold\n<!-- END query -->\n")
+    real = _rq_mod._run_query_records_native
+
+    def _selective(opts, root, *a, **kw):
+        if opts["where"] is None:
+            raise QueryRecordsTransportError("simulated")
+        return real(opts, root, *a, **kw)
+
+    monkeypatch.setattr(_rq_mod, "_run_query_records_native", _selective)
+    rc = main(["--root", str(tmp_path)])
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "1 file(s) rewritten before the failure" in err
+    assert "a-good.md" in err
+    assert "old" not in good.read_text(encoding="utf-8").split("-->")[1]

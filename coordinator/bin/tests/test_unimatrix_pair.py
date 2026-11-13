@@ -221,7 +221,8 @@ def test_bad_request_changes_nothing(rig):
     rig.seed([rig.me, rig.beta])
     before = rig.state()
     ip_host = {**_member("gamma", rig.tmp), "host": "10.1.2.3"}
-    for text in (json.dumps(ip_host), json.dumps(rig.beta), "not json", json.dumps({"box": "x"})):
+    altered = {**rig.beta, "user": "other"}
+    for text in (json.dumps(ip_host), json.dumps(altered), "not json", json.dumps({"box": "x"})):
         signer = Counting(rig.fake)
         rc, _, _ = rig.call(["approve", "-"], signer=signer, stdin=text)
         assert rc == 1 and signer.calls == 0
@@ -307,8 +308,9 @@ def _no_mint(tmp_path):
 
 def test_local_member_adopts_every_recorded_key_for_member_boxes_deterministically(tmp_path):
     rec = _recorded(tmp_path, "alpha", "beta", "zeta")
-    one = up.local_member("alpha", ["10.0.0.0/24"], _no_mint(tmp_path), lambda: rec, {"alpha", "beta"})
-    two = up.local_member("alpha", ["10.0.0.0/24"], _no_mint(tmp_path), lambda: dict(reversed(list(rec.items()))), {"alpha", "beta"})
+    one = up.local_member("alpha", ["10.0.0.0/24"], _no_mint(tmp_path), lambda peers=None: rec, {"alpha", "beta"})
+    two = up.local_member("alpha", ["10.0.0.0/24"], _no_mint(tmp_path),
+                          lambda peers=None: dict(reversed(list(rec.items()))), {"alpha", "beta"})
     assert json.dumps(one, sort_keys=True) == json.dumps(two, sort_keys=True)
     assert one["relay_pub"] == f"ssh-ed25519 {rec['alpha'][1]}"
     assert one["relay_pubs"] == {"alpha": f"ssh-ed25519 {rec['alpha'][1]}", "beta": f"ssh-ed25519 {rec['beta'][1]}"}
@@ -317,13 +319,23 @@ def test_local_member_adopts_every_recorded_key_for_member_boxes_deterministical
 
 def test_local_member_without_own_record_uses_smallest_alias(tmp_path):
     rec = _recorded(tmp_path, "mini", "example-fleet")
-    m = up.local_member("alpha", [], _no_mint(tmp_path), lambda: rec)
+    m = up.local_member("alpha", [], _no_mint(tmp_path), lambda peers=None: rec)
     assert m["relay_pub"] == f"ssh-ed25519 {rec['example-fleet'][1]}" and set(m["relay_pubs"]) == {"mini", "example-fleet"}
+
+
+def test_local_member_passes_member_boxes_to_the_lister_and_matches_aliases_case_insensitively(tmp_path):
+    rec = _recorded(tmp_path, "machine-b", "machine-a")
+    asked = []
+    m = up.local_member("macmini", [], _no_mint(tmp_path), lambda peers=None: asked.append(peers) or rec,
+                        {"macmini", "Machine-b"})
+    assert asked == [{"macmini", "Machine-b"}]
+    assert set(m["relay_pubs"]) == {"Machine-b"}
+    mem._validate_member(m)
 
 
 def test_local_member_with_no_recorded_key_refuses(tmp_path):
     with pytest.raises(RuntimeError, match="no recorded pair key for alpha"):
-        up.local_member("alpha", [], _no_mint(tmp_path), lambda: {})
+        up.local_member("alpha", [], _no_mint(tmp_path), lambda peers=None: {})
 
 
 def test_first_approve_builds_member_from_two_recorded_keys_and_never_mints(rig):
@@ -331,7 +343,7 @@ def test_first_approve_builds_member_from_two_recorded_keys_and_never_mints(rig)
     rig.me = None
     out, err = io.StringIO(), io.StringIO()
     rc = up.main(["approve", "-"], out=out, err=err, stdin=io.StringIO(json.dumps(rig.beta)), home=rig.home, environ={},
-                 run=rig.run, signer=rig.fake, notifier=rig.notifier, own_key_fn=lambda b: rec[b], recorded_fn=lambda: rec,
+                 run=rig.run, signer=rig.fake, notifier=rig.notifier, own_key_fn=lambda b: rec[b], recorded_fn=lambda peers=None: rec,
                  authorized_keys=rig.ak, is_admin=lambda: False, box="alpha", self_names={"alpha"})
     assert rc == 0, err.getvalue()
     snap, _ = mem.load_snapshot(rig.home)
@@ -345,7 +357,7 @@ def test_approve_with_no_recorded_key_exits_1_naming_record(rig):
     out, err = io.StringIO(), io.StringIO()
     signer = Counting(rig.fake)
     rc = up.main(["approve", "-"], out=out, err=err, stdin=io.StringIO(json.dumps(rig.beta)), home=rig.home, environ={},
-                 run=rig.run, signer=signer, notifier=rig.notifier, own_key_fn=missing, recorded_fn=lambda: {},
+                 run=rig.run, signer=signer, notifier=rig.notifier, own_key_fn=missing, recorded_fn=lambda peers=None: {},
                  authorized_keys=rig.ak, is_admin=lambda: False, box="alpha", self_names={"alpha"})
     assert rc == 1 and "no recorded pair key" in err.getvalue() and signer.calls == 0
 
@@ -395,8 +407,145 @@ def test_fetch_uses_adopt_only_key_for_fetched_box_and_refuses_when_unrecorded(r
     assert rc == 1 and "no recorded pair key for example-fleet" in err.getvalue() and asked == ["example-fleet"] and rig.pushes == []
 
 
+def _alias_main(rig, argv, stdin, keys, alias_fn, own_key_fn=None):
+    def recorded(b):
+        if b not in keys:
+            raise RuntimeError(f"no recorded pair key for {b}")
+        return keys[b], "x"
+
+    out, err = io.StringIO(), io.StringIO()
+    rc = up.main(argv, out=out, err=err, stdin=io.StringIO(stdin), home=rig.home, environ={}, run=rig.run,
+                 signer=rig.fake, notifier=rig.notifier, own_key_fn=own_key_fn or recorded,
+                 alias_fn=alias_fn, authorized_keys=rig.ak, is_admin=lambda: False, box="alpha", self_names={"alpha"})
+    return rc, out.getvalue(), err.getvalue()
+
+
+def test_push_uses_the_alias_key_whose_hostname_matches_the_member_host(rig):
+    member = {**_member("Mac-mini", rig.tmp), "host": "Mac-mini.local"}
+    rig.seed([rig.me, rig.beta])
+    keys = {"macmini-lan": rig.tmp / "k-lan"}
+    rc, out, err = _alias_main(rig, ["approve", "-"], json.dumps(member), keys,
+                               lambda host: "macmini-lan" if host.lower() == "mac-mini.local" else None)
+    assert rc == 0, err
+    by_host = {next(a for a in c[0] if "@" in a): c for c in rig.pushes}
+    cmd, _ = by_host["u@Mac-mini.local"]
+    assert cmd[cmd.index("-i") + 1] == str(keys["macmini-lan"])
+    assert "Mac-mini: pushed" in out and "Mac-mini: refused" not in out
+
+
+def test_push_falls_back_to_the_box_name_when_no_alias_matches_and_refuses_when_neither_is_recorded(rig):
+    rig.seed([rig.me, rig.beta])
+    keys = {"gamma": rig.tmp / "k-gamma"}
+    rc, out, _ = _alias_main(rig, ["approve", "-"], json.dumps(_member("gamma", rig.tmp)), keys, lambda host: None,
+                             own_key_fn=lambda b: (keys[b], "x") if b == "gamma" else (_ for _ in ()).throw(
+                                 RuntimeError(f"no recorded pair key for {b}")))
+    assert rc == 0 and "gamma: pushed" in out and "beta: refused: no recorded pair key for beta" in out
+
+
+def test_fetch_resolves_the_key_through_the_host_alias(rig):
+    asked = []
+
+    def own(name):
+        asked.append(name)
+        raise RuntimeError(f"no recorded pair key for {name}")
+
+    out, err = io.StringIO(), io.StringIO()
+    rc = up.main(["fetch", "u@Mac-mini.local"], out=out, err=err, home=rig.home, run=rig.run, own_key_fn=own,
+                 alias_fn=lambda host: "macmini-lan", authorized_keys=rig.ak, is_admin=lambda: False, box="alpha")
+    assert rc == 1 and asked == ["macmini-lan", "Mac-mini"] and rig.pushes == []
+
+
+def test_host_alias_matches_ssh_hostname_case_insensitively_ignoring_dot_local(monkeypatch):
+    def fake_run(cmd, **kw):
+        host = {"macmini-lan": "mac-mini.local", "macmini": "100.64.0.9"}[cmd[-1]]
+        return subprocess.CompletedProcess(cmd, 0, f"user x\nhostname {host}\n", "")
+
+    monkeypatch.setattr(up.subprocess, "run", fake_run)
+    alias_fn = up.make_host_alias_fn(lambda: {"macmini": ("p", "b"), "macmini-lan": ("p2", "b2")})
+    assert alias_fn("Mac-mini.local") == "macmini-lan"
+    assert alias_fn("100.64.0.9") == "macmini"
+    assert alias_fn("elsewhere.local") is None
+
+
 def test_default_own_key_is_adopt_only(monkeypatch):
     seen = {}
     fake = type("I", (), {"pair_key": staticmethod(lambda alias, **kw: seen.update(alias=alias, **kw) or ("p", "b"))})
     monkeypatch.setitem(up._MODS, "unimatrix-install.py", fake)
     assert up._default_own_key("x") == ("p", "b") and seen == {"alias": "x", "adopt_only": True}
+
+
+def test_pair_key_for_host_refusal_names_the_matched_alias_and_falls_back_to_the_box_key():
+    def own(name):
+        if name == "Mac-mini":
+            return ("p", "boxbody")
+        raise RuntimeError(f"no recorded pair key for {name}")
+
+    assert up.pair_key_for_host("Mac-mini", "Mac-mini.local", own, lambda h: None) == ("p", "boxbody")
+
+    def none(name):
+        raise RuntimeError(f"no recorded pair key for {name}")
+
+    with pytest.raises(RuntimeError, match=r"Mac-mini.*alias macmini-lan matched Mac-mini.local"):
+        up.pair_key_for_host("Mac-mini", "Mac-mini.local", none, lambda h: "macmini-lan")
+
+
+def test_approve_of_existing_member_repushes_held_snapshot_without_signing(rig):
+    rig.seed([rig.me, rig.beta])
+    before = rig.state()
+    signer = Counting(rig.fake)
+    rc, out, err = rig.call(["approve", "-"], signer=signer, stdin=json.dumps(rig.beta))
+    assert rc == 0, err
+    assert signer.calls == 0 and rig.state() == before
+    assert "already a member" in out and "beta: pushed" in out
+    assert json.loads(rig.pushes[0][1].decode().splitlines()[0])["epoch"] == 1
+
+
+def test_approve_of_new_member_still_signs_next_epoch(rig):
+    rig.seed([rig.me, rig.beta])
+    signer = Counting(rig.fake)
+    rc, _, err = rig.call(["approve", "-"], signer=signer, stdin=json.dumps(_member("gamma", rig.tmp)))
+    assert rc == 0, err
+    assert signer.calls == 1 and mem.load_snapshot(rig.home)[0]["epoch"] == 2
+
+
+def test_push_and_fetch_dial_ipv4_only(rig):
+    rig.seed([rig.me, rig.beta])
+    rc, _, err = rig.call(["approve", "-"], signer=rig.fake, stdin=json.dumps(_member("gamma", rig.tmp)))
+    assert rc == 0, err
+    assert rig.pushes and all("AddressFamily=inet" in c for c, _ in rig.pushes)
+    rig.pushes.clear()
+    rig.call(["fetch", "u@alpha.local"])
+    assert rig.pushes and all("AddressFamily=inet" in c for c, _ in rig.pushes)
+
+
+def _approve_with_recorded(rig, rec, member):
+    out, err = io.StringIO(), io.StringIO()
+    rc = up.main(["approve", "-"], out=out, err=err, stdin=io.StringIO(json.dumps(member)), home=rig.home, environ={},
+                 run=rig.run, signer=rig.fake, notifier=rig.notifier, own_key_fn=lambda b: rec[b],
+                 recorded_fn=lambda peers=None: rec, authorized_keys=rig.ak, is_admin=lambda: False, box="alpha",
+                 self_names={"alpha"})
+    return rc, err.getvalue()
+
+
+def test_approve_reissues_own_record_with_relay_pubs_when_held_record_has_none(rig):
+    rec = _recorded(rig.tmp, "alpha", "beta", "gamma")
+    rig.seed([rig.me, rig.beta])
+    rc, err = _approve_with_recorded(rig, rec, _member("gamma", rig.tmp))
+    assert rc == 0, err
+    snap, sig = mem.load_snapshot(rig.home)
+    mem.verify_snapshot(snap, sig, mem.load_pin(rig.home))
+    me = next(m for m in snap["members"] if m["box"] == "alpha")
+    assert snap["epoch"] == 2 and set(me["relay_pubs"]) == {"alpha", "beta", "gamma"}
+    assert me["relay_pub"] == rig.me["relay_pub"]
+
+
+def test_approve_keeps_own_record_when_it_already_has_relay_pubs_or_nothing_is_recorded(rig):
+    rec = _recorded(rig.tmp, "alpha", "beta", "gamma")
+    rig.me = {**rig.me, "relay_pubs": {"beta": rig.me["relay_pub"]}}
+    rig.seed([rig.me, rig.beta])
+    rc, err = _approve_with_recorded(rig, rec, _member("gamma", rig.tmp))
+    assert rc == 0, err
+    snap, _ = mem.load_snapshot(rig.home)
+    assert next(m for m in snap["members"] if m["box"] == "alpha")["relay_pubs"] == rig.me["relay_pubs"]
+    bare = mem.next_snapshot(None, {"op": "join", "member": _member("solo", rig.tmp)})
+    assert up._reissue_own(mem, bare, "solo", None, lambda peers=None: {}) is bare

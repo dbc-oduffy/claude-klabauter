@@ -149,6 +149,7 @@ import io
 import json
 import os
 import re
+import stat
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, TypedDict
@@ -181,6 +182,15 @@ END_MARKER = "<!-- END query -->"
 _ROADMAP_ID_WHERE_RE = re.compile(r"(?:^|[\s(])roadmap_id=")
 
 EXCLUDED_DIRS = frozenset({"node_modules", ".git", "archive", "scratch", "scratch-hold"})
+
+_SCRATCH_PREFIX = "scratch-"
+
+
+def _is_excluded_dir(name: str) -> bool:
+    """A named exclusion, or any ``scratch-*`` directory (``scratch-c2``, ``scratch-hold``):
+    scratch trees hold fixture copies of real docs, and refresh WRITES into whatever it walks."""
+    return name in EXCLUDED_DIRS or name.startswith(_SCRATCH_PREFIX)
+
 
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 
@@ -302,6 +312,46 @@ def parse_query_spec(begin_marker: str) -> QuerySpec:
     return opts
 
 
+def _git_listed_md(root: str) -> Optional[List[str]]:
+    """Root-relative ``.md`` paths from ONE ``git ls-files`` (tracked + untracked,
+    ignore rules applied, so gitignored ``.md`` files are skipped, unlike the scandir
+    fallback); None when ``root`` is not a git worktree or git fails, so the
+    caller falls back to the directory walk."""
+    if not os.path.exists(os.path.join(root, ".git")):
+        return None
+    from coordinator_core.git.run import run_git
+
+    result = run_git(
+        ["-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard",
+         "--", "*.md"]
+    )
+    if not result.ok:
+        return None
+    return sorted({p for p in result.stdout.split("\x00") if p})
+
+
+def _walk_md_via_git(root: str, stamps: Optional[Dict[str, Tuple[int, int]]]) -> Optional[List[str]]:
+    listed = _git_listed_md(root)
+    if listed is None:
+        return None
+    results: List[str] = []
+    for rel in listed:
+        parts = rel.split("/")
+        if any(_is_excluded_dir(d) for d in parts[:-1]):
+            continue
+        path = os.path.join(root, *parts)
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        results.append(path)
+        if stamps is not None:
+            stamps[path] = (st.st_size, st.st_mtime_ns)
+    return results
+
+
 def walk_md(
     dir_: str,
     results: Optional[List[str]] = None,
@@ -311,9 +361,15 @@ def walk_md(
     """``stamps``, when given, receives ``path -> (size, mtime_ns)`` for each file
     found, taken from the directory listing rather than a stat per file. A directory
     holding a ``.git`` entry is a nested checkout and contributes nothing (``_nested``
-    is set for every directory below the walk root)."""
+    is set for every directory below the walk root). A git worktree root is enumerated
+    by one ``git ls-files`` instead of a recursive scan."""
     if results is None:
         results = []
+    if not _nested:
+        via_git = _walk_md_via_git(dir_, stamps)
+        if via_git is not None:
+            results.extend(via_git)
+            return results
     try:
         entries = list(os.scandir(dir_))
     except OSError:
@@ -325,7 +381,7 @@ def walk_md(
     for e in entries:
         try:
             if e.is_dir(follow_symlinks=False):
-                if e.name not in EXCLUDED_DIRS and not _leaves_this_repo(e):
+                if not _is_excluded_dir(e.name) and not _leaves_this_repo(e):
                     walk_md(e.path, results, stamps, True)
             elif e.name.endswith(".md") and e.is_file(follow_symlinks=False):
                 results.append(e.path)
@@ -610,6 +666,7 @@ def main(argv: List[str]) -> int:
     total_changed = 0
     total_errors = 0
     marker_free: set = set()
+    rewritten: List[str] = []
     _RUN_ENUMERATION = {}
 
     try:
@@ -624,10 +681,15 @@ def main(argv: List[str]) -> int:
                 rel = os.path.relpath(f, root)
                 label = "[would change]" if opts["check"] else "[updated]"
                 print(f"{label} {rel} ({result['changedCount']} callout(s))")
+                rewritten.append(rel)
                 total_changed += 1
             total_errors += result["errorCount"]
     except QueryRecordsTransportError as exc:
         sys.stderr.write(f"refresh-queries: transport failure: {exc}\n")
+        verb = "would be rewritten" if opts["check"] else "rewritten before the failure"
+        sys.stderr.write(f"refresh-queries: {len(rewritten)} file(s) {verb}\n")
+        for rel in rewritten:
+            sys.stderr.write(f"  {rel}\n")
         return 3
     finally:
         _RUN_ENUMERATION = None

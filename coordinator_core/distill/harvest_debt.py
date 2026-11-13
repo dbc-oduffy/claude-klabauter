@@ -265,7 +265,8 @@ def _has_content_beyond_run_headers(log_text: str) -> bool:
     """True if `log_text` has non-blank content other than bare `## Run ...`
     header lines or the canonical never-distilled header (see
     `_is_log_header_line`) — a log carrying only those (a run that opened but
-    logged no rows yet, or a freshly initialised log) is a legitimate zero-row state, not evidence of an
+    logged no rows yet, or a freshly initialised log) is a legitimate zero-row
+    state, not evidence of an
     unparseable log; a log with anything else left over that still parses
     to zero rows is the ambiguous state DistillationLogUnparseableError
     exists to catch."""
@@ -286,7 +287,7 @@ def _is_log_header_line(stripped: str) -> bool:
     """True for the canonical never-distilled header: a single-`#` title or
     `# Columns:` line, or a markdown table header/separator row naming the
     path and disposition/action columns."""
-    if re.match(r"^#\s", stripped):
+    if re.match(r"^#\s+(Distillation Log|Columns:)", stripped):
         return True
     if _TABLE_SEPARATOR_RE.match(stripped):
         return True

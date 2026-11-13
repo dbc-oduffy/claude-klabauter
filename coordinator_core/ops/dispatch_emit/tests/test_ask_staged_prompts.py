@@ -91,10 +91,11 @@ def test_a_composed_bare_ask_names_every_staged_pointer(monkeypatch):
     assert len(_compose().encode()) > len(script.encode())
 
 
-def test_the_pointer_spells_the_record_dir_as_the_script_spells_the_ask_text_path():
+def test_the_pointer_and_the_ask_text_path_are_anchored_to_the_repo_root():
     script = _compose(staged_out={})
-    assert f"{RECORD_DIR_ROOT}/{_RUN}/pm-intent.md" in script
-    assert f"Read {RECORD_DIR_ROOT}/{_RUN}/prompts/verify.md" in script
+    assert f"REPO/{RECORD_DIR_ROOT}/{_RUN}/pm-intent.md" in script
+    assert f"Read REPO/{RECORD_DIR_ROOT}/{_RUN}/prompts/verify.md" in script
+    assert f"Read {RECORD_DIR_ROOT}/{_RUN}/prompts/" not in script
 
 
 def test_without_staged_out_every_body_stays_inline():
@@ -110,7 +111,7 @@ def test_pointer_replaced_text_equals_the_inline_script(monkeypatch):
     inline = _compose()
     for name, text in sink.items():
         pointer = _js_string_literal(
-            f"Read {RECORD_DIR_ROOT}/{_RUN}/prompts/{name}.md in full and follow it as the rest of this brief.\n"
+            f"Read REPO/{RECORD_DIR_ROOT}/{_RUN}/prompts/{name}.md in full and follow it as the rest of this brief.\n"
         )
         assert pointer in staged
         staged = staged.replace(pointer, _js_string_literal(text))

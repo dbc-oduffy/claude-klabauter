@@ -78,6 +78,35 @@ def _fail_on_live_registry_write(request, _isolate_settings_home):
     yield from fail_on_live_registry_write_fixture(request)
 
 
+_REAL_SETTINGS_HOME = Path.home() / ".coordinator-claude-settings"  # fixed at import: a test may re-point HOME
+
+
+def _live_unimatrix_pair_state():
+    """The real home's `unimatrix.keys.*` registry lines and `.secrets/ssh` file names."""
+    live = _REAL_SETTINGS_HOME
+    reg = live / "machine-local" / "registry.local.toml"
+    try:
+        lines = sorted(l for l in reg.read_text(encoding="utf-8").splitlines() if l.lstrip().startswith("unimatrix.keys."))
+    except OSError:
+        lines = []
+    ssh = live / ".secrets" / "ssh"
+    return lines, sorted(p.name for p in ssh.iterdir()) if ssh.is_dir() else []
+
+
+@pytest.fixture(autouse=True)
+def _unimatrix_tests_never_write_a_real_pair_key(request, _isolate_settings_home):
+    """A test that records a `unimatrix.keys.*` entry or mints under the real settings home
+    leaves a stray key every later `request` could adopt; fail the test that did it.
+    A concurrent real-box writer during the test also trips this; rerun before suspecting the test."""
+    if request.node.get_closest_marker("real_home"):
+        yield
+        return
+    before = _live_unimatrix_pair_state()
+    yield
+    after = _live_unimatrix_pair_state()
+    assert after == before, f"{request.node.nodeid} changed the real unimatrix pair-key state: {before} -> {after}"
+
+
 _DESKTOP_NOTIFIERS = frozenset({"osascript", "notify-send"})
 
 

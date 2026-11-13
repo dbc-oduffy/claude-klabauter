@@ -1911,25 +1911,91 @@ def test_pair_key_adopt_only_with_remint_is_refused(monkeypatch, tmp_path):
         ui.pair_key("far-1", run=_PairBox(), adopt_only=True, remint=True)
 
 
-def test_recorded_pair_keys_lists_every_record_with_existing_files(monkeypatch, tmp_path):
+class _IdentityBox(_PairBox):
+    """_PairBox whose `ssh -G <alias>` reports the IdentityFile mapped to that alias (the deployed per-pair key)."""
+
+    def __init__(self, identities=None, **kw):
+        super().__init__(**kw)
+        self.identities = dict(identities or {})
+
+    def __call__(self, argv, **kw):
+        if argv[0] == "ssh" and argv[1] == "-G":
+            self.calls.append(list(argv))
+            path = self.identities.get(argv[-1])
+            out = f"hostname {argv[-1]}\nidentityfile {path}\n" if path else "hostname h\n"
+            return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+        return super().__call__(argv, **kw)
+
+
+def _ssh_key(home, name, body):
+    key = home / "dotssh" / name
+    key.parent.mkdir(parents=True, exist_ok=True)
+    key.write_text("PRIV", encoding="utf-8")
+    Path(str(key) + ".pub").write_text(f"ssh-ed25519 {body} c\n", encoding="utf-8")
+    return key
+
+
+def test_recorded_pair_keys_lists_each_registry_peer_by_record_else_ssh_identity(monkeypatch, tmp_path):
     home = _pair_home(monkeypatch, tmp_path)
-    box = _PairBox()
-    a = _recorded_key(home, box, "far-1", "BODYONE")
-    b = _recorded_key(home, box, "far-2", "BODYTWO")
-    box.store["unimatrix.keys.dangling"] = str(home / "nope")
-    box.store["unrelated.key"] = str(a)
+    a = _ssh_key(home, "zero-to-far-1", "BODYONE")
+    b = _ssh_key(home, "zero-to-far-2", "BODYTWO")
+    box = _IdentityBox({"far-1": a})
+    box.store["unimatrix.far_boxes"] = "far-1, far-2 far-3"
+    box.store["unimatrix.keys.far-2"] = str(b)
     monkeypatch.setattr(ui, "_mint", lambda *a, **k: pytest.fail("recorded_pair_keys reached _mint"))
     assert ui.recorded_pair_keys(run=box) == {"far-1": (a, "BODYONE"), "far-2": (b, "BODYTWO")}
-    assert len([c for c in box.calls if c[2:3] == ["dump"]]) == 1
     assert not [c for c in box.calls if c[0] in ("op", "ssh-keygen") or c[2:3] == ["set"]]
 
 
-def test_recorded_pair_keys_empty_when_none_recorded_and_refuses_without_reader(monkeypatch, tmp_path):
+def test_recorded_pair_keys_ignores_a_stray_record_outside_the_registry(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    real = _ssh_key(home, "zero-to-far-1", "REALBODY")
+    stray = _recorded_key(home, _PairBox(), "x", "STRAYBODY")
+    box = _IdentityBox({"far-1": real}, store={"unimatrix.keys.x": str(stray), "unimatrix.far_boxes": "far-1"})
+    assert ui.recorded_pair_keys(run=box) == {"far-1": (real, "REALBODY")}
+
+
+def test_recorded_pair_keys_lists_requested_peers_with_no_registry_and_ignores_a_stray(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    real = _ssh_key(home, "zero-macmini-to-machine-b", "REALBODY")
+    stray = _recorded_key(home, _PairBox(), "x", "STRAYBODY")
+    box = _IdentityBox({"machine-b": real}, store={"unimatrix.keys.x": str(stray)})
+    assert ui.recorded_pair_keys(run=box, peers={"machine-b", "macmini"}) == {"machine-b": (real, "REALBODY")}
+    assert not [c for c in box.calls if c[0] in ("op", "ssh-keygen") or c[2:3] == ["set"]]
+
+
+def test_recorded_pair_keys_refuses_a_requested_peer_whose_identity_has_no_pub_and_never_mints(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    key = _ssh_key(home, "zero-to-far-1", "BODY")
+    Path(str(key) + ".pub").unlink()
+    box = _IdentityBox({"far-1": key}, store={"unimatrix.far_boxes": "far-1"})
+    monkeypatch.setattr(ui, "_mint", lambda *a, **k: pytest.fail("recorded_pair_keys reached _mint"))
+    assert ui.recorded_pair_keys(run=box) == {}
+    with pytest.raises(RuntimeError, match="pair key for far-1"):
+        ui.recorded_pair_keys(run=box, peers={"far-1"})
+    assert not [c for c in box.calls if c[0] in ("op", "ssh-keygen") or c[2:3] == ["set"]]
+
+
+def test_recorded_pair_keys_skips_a_peer_whose_identity_is_missing_or_default(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    box = _IdentityBox({"far-1": home / "dotssh" / "gone"}, store={"unimatrix.far_boxes": "far-1 far-2"})
+    assert ui.recorded_pair_keys(run=box) == {}
+
+
+def test_recorded_pair_keys_empty_when_no_registry_and_refuses_without_reader(monkeypatch, tmp_path):
     _pair_home(monkeypatch, tmp_path)
     assert ui.recorded_pair_keys(run=_PairBox()) == {}
     _pair_home(monkeypatch, tmp_path / "other", reader=False)
     with pytest.raises(RuntimeError, match="_machine_local.py"):
         ui.recorded_pair_keys(run=_PairBox())
+
+
+def test_recorded_pair_keys_refuses_a_registry_read_exiting_other_than_0_or_1(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    done = lambda rc, err="": type("R", (), {"returncode": rc, "stdout": "", "stderr": err})()
+    with pytest.raises(RuntimeError, match="unimatrix.far_boxes failed: boom"):
+        ui.recorded_pair_keys(run=lambda argv, **kw: done(2, "boom"))
+    assert ui.recorded_pair_keys(run=lambda argv, **kw: done(1)) == {}
 
 
 def test_pair_sanitizes_alias_and_refuses_empty(monkeypatch, tmp_path):

@@ -1,8 +1,9 @@
 """
 coordinator_core.updatedocs.directory_md — DIRECTORY.md count/refresh-date drift.
 
-Purpose: pure detector for the audit's A8 row — whether a `DIRECTORY.md`'s asserted
-per-directory file counts and "Last refreshed" date still match disk. Only the
+Purpose: read-only detector for the audit's A8 row — whether a `DIRECTORY.md`'s asserted
+per-directory file counts and "Last refreshed" date still match the corpus. Counts are
+tracked files from one `git ls-files`; a non-git corpus falls back to the disk walk. Only the
 mechanical half: per-directory counts the document explicitly states, and the refresh
 date. The per-directory prose summaries are judgment and stay with a model — this
 module never generates or rewrites any part of `DIRECTORY.md`.
@@ -19,10 +20,12 @@ Spec backlink: pln-bucket-2-extraction-four-deter-e121fa (chunk C2)
 
 from __future__ import annotations
 
+import fnmatch
 import re
+import subprocess
 from dataclasses import dataclass, field
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
 
@@ -83,15 +86,48 @@ def _parse_refreshed_on(text: str) -> date | None:
         return None
 
 
+def _tracked_names(corpus_root: Path) -> list[str] | None:
+    """Basenames of files `git ls-files` tracks under `corpus_root`, one spawn.
+
+    Returns None when `corpus_root` is not inside a git work tree (or git is
+    unavailable), so the caller falls back to the disk walk.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(corpus_root), "ls-files", "-z"],
+            capture_output=True,
+            check=False,
+            timeout=0.5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return [
+        PurePosixPath(entry.decode("utf-8", "surrogateescape")).name
+        for entry in proc.stdout.split(b"\0")
+        if entry
+    ]
+
+
 def _parse_count_claims(text: str, corpus_root: Path) -> list[CountClaim]:
     claims: list[CountClaim] = []
+    tracked: list[str] | None = None
+    tracked_loaded = False
     for match in _COUNT_ASSERTION_RE.finditer(text):
         asserted = int(match.group(1).replace(",", ""))
         filename = match.group(2) or match.group(3)
         if filename.startswith("."):
             filename = "*" + filename
         claim_site = match.group(0).strip()
-        actual = sum(1 for _ in corpus_root.rglob(filename))
+        if not tracked_loaded:
+            tracked = _tracked_names(corpus_root)
+            tracked_loaded = True
+        if tracked is not None:
+            actual = sum(1 for name in tracked if fnmatch.fnmatchcase(name, filename))
+        else:
+            actual = sum(1 for _ in corpus_root.rglob(filename))
         claims.append(
             CountClaim(
                 claim_site=claim_site,

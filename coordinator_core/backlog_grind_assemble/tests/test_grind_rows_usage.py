@@ -87,3 +87,9 @@ def test_caller_supplied_usage_is_kept(tmp_path, monkeypatch):
     _patch_session(monkeypatch, SID)
     out = _run(tmp_path, monkeypatch, {**_record(), "usage": {"mine": 1}})
     assert out["usage"] == {"mine": 1}
+
+
+def test_prewrite_commit_params_is_in_the_verb_usage_and_requires_its_flags(capsys):
+    assert grind_rows.main([]) == grind_rows.EXIT_USAGE
+    assert "prewrite-commit-params" in capsys.readouterr().err
+    assert grind_rows.main(["prewrite-commit-params", "--repo-root", "r"]) == grind_rows.EXIT_USAGE

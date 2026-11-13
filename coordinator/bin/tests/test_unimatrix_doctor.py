@@ -620,6 +620,16 @@ def test_replaced_code_is_judged_against_the_installed_copy_not_the_checkout(box
     assert "relay session" not in box.main(platform="linux", relay_ps=lambda: newer)[1]
 
 
+def test_stale_relay_session_remedy_names_the_checkout_install_command(box):
+    box.sdir.mkdir(parents=True, exist_ok=True)
+    installed = box.sdir / "unimatrix-relay.py"
+    installed.write_text("x")
+    box.live.add(100)
+    older = _ps(box, (301, 100, installed.stat().st_ctime - 90_000))
+    line = next(p for p in _problems(box.main(platform="linux", relay_ps=lambda: older)[1]) if "pid 301" in p)
+    assert "<checkout>/coordinator/bin/unimatrix-install.py --install" in line
+
+
 MIRROR = "machine-b-em-on-machine-a"
 SID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 DIGEST = "ab" * 32
@@ -761,3 +771,56 @@ def test_no_pin_is_a_problem_naming_the_pin_command_and_a_held_pin_still_prints_
     box.seed_live("kim@machine-a.local")
     rc, out = box.main()
     assert "info: pin SHA256:" in out and not any("no signer pin" in p for p in _problems(out))
+
+
+def _far_boxes(box, *aliases):
+    reg = "import sys\nk = sys.argv[-1]\nprint(' '.join(%r) if k == 'unimatrix.far_boxes' else '')\nsys.exit(0 if k == 'unimatrix.far_boxes' else 1)\n"
+    (box.home / "bin" / "_machine_local.py").write_text(reg % (list(aliases),))
+
+
+def _ctx(box):
+    return {"autolink": box.al, "roster": box.al._roster(), "run": box.net.run}
+
+
+def test_relay_key_toward_a_member_uses_the_ssh_alias_whose_hostname_matches_its_host(box, monkeypatch):
+    _far_boxes(box, "macmini-lan", "macmini")
+    box.net.alias_host = {"macmini-lan": "mac-mini.local", "macmini": "100.64.0.9"}
+    asked = []
+    monkeypatch.setattr(box.al, "resolve_key", lambda roster, alias, **kw: asked.append(alias) or f"/k/{alias}")
+    ctx = _ctx(box)
+    assert box.dr.relay_key(ctx, "Mac-mini", "Mac-mini.local") == "/k/macmini-lan"
+    assert box.dr.relay_key(ctx, "Mac-mini") == "/k/Mac-mini"
+    assert box.dr.relay_key(ctx, "bishop", "bishop.local") == "/k/bishop"
+    assert asked == ["macmini-lan", "Mac-mini", "bishop"]
+
+
+def test_doctor_dials_a_member_with_the_alias_key_not_the_box_name_key(box, monkeypatch):
+    snap = box.adopt("me", "Mac-mini")
+    _far_boxes(box, "macmini-lan")
+    box.net.alias_host = {"macmini-lan": "mac-mini.local"}
+    box.ak.write_text(box.relay_line(box.relay[1]) + "\n")
+    box.net.peer_snapshot = {"kim@Mac-mini.local": peer_blob(box, snap)}
+    box.seed_live("kim@Mac-mini.local")
+    seen = []
+    monkeypatch.setattr(box.al, "resolve_key", lambda roster, alias, **kw: seen.append(alias) or box.relay[0])
+    rc, out = box.main()
+    assert seen == ["macmini-lan"] and rc == 0, out
+
+
+def test_unsigned_forced_key_names_its_owner_and_the_approve_or_revoke_remedy_and_is_never_pruned(box):
+    snap = box.adopt("me", "machine-a")
+    body = box.other[1].split()[1]
+    box.ak.write_text(f'restrict,command="python3 /x/unimatrix/unimatrix-relay.py --peer a" ssh-ed25519 {body} machine-c-lan\n')
+    box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
+    box.seed_live("kim@machine-a.local")
+    before = box.ak.read_text()
+    rc, out = box.main()
+    line = next(p for p in _problems(out) if "no signed membership record" in p)
+    assert "owner: machine-c-lan" in line and "unimatrix-pair.py approve" in line and "unimatrix-pair.py revoke" in line
+    assert box.ak.read_text() == before
+
+
+def test_every_keyed_doctor_dial_forces_ipv4(box):
+    _, cmds = _drift_problems(box, {"entry": {}, "relay_sha": box.dr.local_relay_sha()})
+    dials = [c for c in cmds if c[:1] == ["ssh"] and "-G" not in c]
+    assert dials and all("AddressFamily=inet" in c for c in dials)

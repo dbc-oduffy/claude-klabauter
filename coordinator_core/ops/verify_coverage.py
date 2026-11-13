@@ -99,9 +99,11 @@ import json
 import os
 import re
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Set, Tuple
 from coordinator_core.content_root import read_pointer_files
+from coordinator_core.session.record_homes import home_dir
 
 
 _USAGE = (
@@ -168,7 +170,10 @@ def discover_artifacts(root: str) -> dict:
     top_plugins = sorted(
         entry.name
         for entry in os.scandir(root)
-        if entry.is_dir() and not entry.name.startswith(".") and entry.name != "docs"
+        if entry.is_dir()
+        and not entry.name.startswith(".")
+        and entry.name != "docs"
+        and os.path.isfile(os.path.join(entry.path, ".claude-plugin", "plugin.json"))
     )
 
     plugin_pairs: List[Tuple[str, str]] = [(p, os.path.join(root, p)) for p in top_plugins]
@@ -263,9 +268,42 @@ def gitignored_dirs(root: str) -> Set[str]:
     }
 
 
-EXCLUDED_SUBPATHS: Set[Tuple[str, str]] = {("docs", "research"), ("naked-vs-coordinator", "runs")}
-"""(parent, child) directory pairs the walk skips: point-in-time research records whose
-bare `research` basename would over-match live trees if excluded by name alone."""
+EXCLUDED_SUBPATHS: Set[Tuple[str, str]] = {
+    ("docs", "research"),
+    ("naked-vs-coordinator", "runs"),
+} | {os.path.split(home_dir("", kind)) for kind in ("roadmap", "review-findings")}
+"""(parent, child) directory pairs the walk skips: point-in-time records (research,
+run deliveries, roadmap and review-finding records) whose bare basename would
+over-match live trees if excluded by name alone."""
+
+HISTORICAL_PLAN_STATUSES = frozenset({"implemented", "landed", "complete", "superseded", "abandoned"})
+HISTORICAL_PLAN_AGE_DAYS = 90
+_FM_KEY_RE = re.compile(r"^(status|created):\s*['\"]?([^\s'\"#]+)", re.MULTILINE)
+
+
+def is_historical_plan(file: str, sweep_root: str, content: str, today: Optional[date] = None) -> bool:
+    """True when `file` is a plan under a `docs/plans` tree that is a point-in-time record.
+
+    Rule, read from the file's own frontmatter head only: `status` is terminal
+    (HISTORICAL_PLAN_STATUSES), or `created` is more than HISTORICAL_PLAN_AGE_DAYS days
+    old (an unfinished plan that old is a stale record, not a live doctrine surface).
+    A file without frontmatter, or outside a docs/plans tree, is never historical.
+    """
+    parts = [os.path.normcase(p) for p in os.path.relpath(file, sweep_root).split(os.sep)]
+    if not any(a == "docs" and b == "plans" for a, b in zip(parts, parts[1:])):
+        return False
+    if not content.startswith("---"):
+        return False
+    end = content.find("\n---", 3)
+    head = content[3:end] if end != -1 else ""
+    fm = {m.group(1): m.group(2) for m in _FM_KEY_RE.finditer(head)}
+    if fm.get("status", "").lower() in HISTORICAL_PLAN_STATUSES:
+        return True
+    try:
+        created = date.fromisoformat(fm.get("created", "")[:10])
+    except ValueError:
+        return False
+    return ((today or date.today()) - created).days > HISTORICAL_PLAN_AGE_DAYS
 
 
 def walk_markdown(
@@ -635,6 +673,8 @@ def main(argv: List[str]) -> int:
                 content = fh.read()
         except (OSError, UnicodeDecodeError) as exc:
             scan_errors.append(f"{file}: {exc}")
+            continue
+        if is_historical_plan(file, sweep_root, content):
             continue
         files_scanned += 1
         refs = extract_references(content, plugins)

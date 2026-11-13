@@ -126,12 +126,21 @@ def _md_files(session_dir: str) -> list:
     return out
 
 
-def classify_sidecars(share_dirs: list, session_live: Callable, *, repo_root: str, now: float, age_floor_days: int):
+def classify_sidecars(
+    share_dirs: list,
+    session_live: Callable,
+    *,
+    repo_root: str,
+    now: float,
+    age_floor_days: int,
+    limit: Optional[int] = None,
+):
     """The reap decision: `(to_reap, preserved_live, preserved_status, preserved_too_young)`.
 
     Pure over the filesystem and the injected `session_live` predicate — no git, no
     mutation. Age is tested before status so a young file is never opened; a young
     blocked/thrashing sidecar is therefore counted as too-young, not as status-retained.
+    `limit` stops classifying once that many are queued for reaping (counts then undercount).
     """
     to_reap: list = []
     preserved_live_session = 0
@@ -158,8 +167,88 @@ def classify_sidecars(share_dirs: list, session_live: Callable, *, repo_root: st
                     preserved_status += 1
                     continue
                 to_reap.append(f)
+                if limit is not None and len(to_reap) >= limit:
+                    return to_reap, preserved_live_session, preserved_status, preserved_too_young
 
     return to_reap, preserved_live_session, preserved_status, preserved_too_young
+
+
+#: Minimum seconds between two cadence reaps; the stamp's mtime is the clock.
+REAP_INTERVAL_S = 6 * 3600
+
+#: Removals per cadence reap — keeps one hot-path call inside the process budget.
+REAP_BATCH_CAP = 500
+
+_STAMP_LEAF = "sidecar-reap.stamp"
+
+
+def _stamp_path(repo_root: str) -> str:
+    from coordinator_core.session.machinery_paths import machinery_root
+
+    return os.path.join(machinery_root(repo_root), _STAMP_LEAF)
+
+
+def reap_is_due(repo_root: str, *, now: Optional[float] = None, interval_s: float = REAP_INTERVAL_S) -> bool:
+    """One `stat`: True when no cadence reap has stamped within `interval_s`. Never raises."""
+    now = time.time() if now is None else now
+    try:
+        return now - os.stat(_stamp_path(repo_root)).st_mtime >= interval_s
+    except FileNotFoundError:
+        return True
+    except Exception:
+        return False
+
+
+def reap_untracked_if_due(
+    repo_root: str,
+    session_live: Callable,
+    *,
+    now: Optional[float] = None,
+    interval_s: float = REAP_INTERVAL_S,
+    batch_cap: int = REAP_BATCH_CAP,
+    age_floor_days: int = DEFAULT_AGE_FLOOR_DAYS,
+) -> int:
+    """Throttled, spawn-free reap of the gitignored share root; returns the count removed.
+
+    Rides the SubagentStart sidecar-provisioning hook (`cater_subagent_start._handler`),
+    so the not-due case is one `stat`. Only the machinery share root is touched: it is
+    gitignored, so every file there is untracked by construction and plain
+    `os.remove` is correct with no git call. The tracked legacy root stays with
+    `reap_stale_sidecars`. The stamp is claimed before the scan, so a racing
+    peer skips rather than double-scans; any failure returns 0 and never raises.
+    A backlog beyond `batch_cap` drains one batch per `interval_s`.
+    """
+    from coordinator_core.session.machinery_paths import share_root
+
+    now = time.time() if now is None else now
+    if not reap_is_due(repo_root, now=now, interval_s=interval_s):
+        return 0
+    stamp = _stamp_path(repo_root)
+    root = share_root(repo_root)
+    if not os.path.isdir(root):
+        return 0
+    try:
+        with open(stamp, "a"):
+            pass
+        os.utime(stamp, (now, now))
+        to_reap = classify_sidecars(
+            [root], session_live, repo_root=repo_root, now=now, age_floor_days=age_floor_days, limit=batch_cap,
+        )[0]
+    except OSError:
+        return 0
+
+    from coordinator_core.review_trail.sweep_tombstone import record_swept
+
+    by_session: dict = {}
+    for f in to_reap:
+        try:
+            os.remove(f)
+        except OSError:
+            continue
+        by_session.setdefault(os.path.basename(os.path.dirname(f)), []).append(os.path.relpath(f, repo_root))
+    for sid, rels in by_session.items():
+        record_swept(repo_root, sid, rels, "sidecar_reap", now)
+    return sum(len(rels) for rels in by_session.values())
 
 
 def reap_stale_sidecars(

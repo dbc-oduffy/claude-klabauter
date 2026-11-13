@@ -838,6 +838,31 @@ def test_snapshot_member_key_is_resolved_by_box_name_and_no_stable_name_is_tried
 
 
 @needs_keygen
+def test_snapshot_member_key_is_resolved_by_the_ssh_alias_whose_hostname_matches_the_member_host(env, snap, monkeypatch):
+    add_key(env)
+    snap.adopt("Mac-mini")
+    (env.home / "bin" / "_machine_local.py").write_text(
+        "import sys\nk = sys.argv[-1]\nprint('macmini-lan other' if k == 'unimatrix.far_boxes' else '')\n"
+        "sys.exit(0 if k == 'unimatrix.far_boxes' else 1)\n")
+    hosts = {"macmini-lan": "mac-mini.local", "other": "100.64.0.9"}
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, alias, run=None: hosts.get(alias))
+    seen = []
+
+    def key_fn(r, name):
+        seen.append(name)
+        return str(env.key)
+
+    env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok, key_fn=key_fn, self_names=set(),
+               pull_fn=lambda *a: False)
+    assert seen == ["macmini-lan"]
+
+
+def test_member_alias_falls_back_to_the_box_name_when_no_alias_matches_the_host(env):
+    assert env.al.member_alias(env.roster, "Mac-mini", "Mac-mini.local", [], {}) == "Mac-mini"
+    assert env.al.member_alias(env.roster, "Mac-mini", "", ["macmini-lan"], {}) == "Mac-mini"
+
+
+@needs_keygen
 def test_unverifiable_snapshot_links_nothing_logs_one_line_and_ignores_far_boxes(env, snap, tmp_path, capsys):
     add_key(env)
     snap.adopt("machine-a")
@@ -1248,3 +1273,15 @@ def test_main_help_flag_prints_usage_and_runs_no_link_pass(flag, monkeypatch, ca
     monkeypatch.setattr(al, "run", boom)
     assert al.main([flag]) == 0
     assert "unimatrix-autolink.py" in capsys.readouterr().out
+
+
+def test_probe_and_pull_dial_ipv4_only(env):
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    env.al.probe(env.roster, "machine-a", "/k/relay", run=fake_run)
+    env.al.pull_membership(env.roster, "kim@x", "/k/relay", run=fake_run)
+    assert len(seen) == 2 and all("AddressFamily=inet" in c for c in seen)

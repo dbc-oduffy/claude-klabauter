@@ -34,7 +34,8 @@ def test_retired_agent_ids_quoted_in_doctrine_are_not_flagged_orphaned(tmp_path)
     # Minimal plugin root: a "coordinator" plugin dir with no agents/skills/
     # commands at all, so coordinator:sid / coordinator:hook-doctor resolve to
     # nothing except via REF_ALLOWLIST.
-    os.makedirs(root / "coordinator", exist_ok=True)
+    os.makedirs(root / "coordinator" / ".claude-plugin", exist_ok=True)
+    _write(str(root / "coordinator" / ".claude-plugin" / "plugin.json"), "{}\n")
 
     fixture = sweep_root / "doctrine" / "retired-agents-postmortem.md"
     _write(
@@ -61,7 +62,8 @@ def test_retired_agent_ids_absent_from_allowlist_would_be_flagged_orphaned(tmp_p
 
     root = tmp_path / "plugin-root"
     sweep_root = tmp_path / "sweep-root"
-    os.makedirs(root / "coordinator", exist_ok=True)
+    os.makedirs(root / "coordinator" / ".claude-plugin", exist_ok=True)
+    _write(str(root / "coordinator" / ".claude-plugin" / "plugin.json"), "{}\n")
 
     fixture = sweep_root / "doctrine" / "retired-agents-postmortem.md"
     _write(

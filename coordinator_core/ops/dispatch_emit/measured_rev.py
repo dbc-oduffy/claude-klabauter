@@ -23,7 +23,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     MEASURED_REV_RECORD,
     measured_rev_record_path,
 )
-from coordinator_core.ops.dispatch_emit.test_reach import foreign_dirt, reach_paths, seeds_for_landing
+from coordinator_core.ops.dispatch_emit.landing_reach import foreign_dirt, reach_paths, seeds_for_landing
 
 _GLOB_CHARS = frozenset("*?[")
 _TREE_MODE = 0o40000
@@ -116,8 +116,10 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
     """Params `run_id`, `paths`; returns a dict keyed by `MEASURED_REV_KEYS`
     (`sha`, `base_sha`, `paths`, `removed`, `blobs`, `tree`) plus `reach_dirt`: tracked
     paths the landing set's tests can read, outside the set, that differ from HEAD. Moves no ref, writes no index,
-    spawns nothing. The record is replaced per run_id and measures `paths` unioned with the run's own
-    recorded write set (`_run_landing_paths`), so a re-run re-measures the current landing set; a
+    spawns nothing. When a measured path also carries hunks outside the run's write_baseline delta (a peer's,
+    `hunk_provenance.peer_split`) the record adds `peer_hunks` `{path: {owner, lines, split}}`, and `overlay_sha`:
+    a second candidate whose split paths hold only HEAD plus the run's own hunks. The record is replaced per
+    run_id and measures `paths` unioned with the run's own recorded write set (`_run_landing_paths`), so a re-run re-measures the current landing set; a
     path outside both stays unmeasured. A withheld path and an untracked gitignored path are dropped from
     that union and never read. Raises `MeasuredRevRefused` for no HEAD, an unmeasurable test reach, a
     path outside the repo, a directory, glob or submodule path in `paths`, or an unsupported checkin filter.
@@ -139,6 +141,7 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
     gitdir = resolve_git_dir(root)
     assembled: Dict[str, object] = {}
     written: list[str] = []
+    changed: list[str] = []
     removed: list[str] = []
     blobs: Dict[str, str] = {}
     broken = []
@@ -179,6 +182,8 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
             mode = head_entry[0] if head_entry is not None else commit._mode_for(target)
             assembled[rel] = (mode, sha)
             written.append(rel)
+            if head_entry is None or head_entry[1] != sha:
+                changed.append(rel)
             blobs[rel] = sha
 
         if broken:
@@ -196,6 +201,17 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
         who = f"{name} <{email}> {commit._stamp()}"
         body = f"tree {root_tree}\nparent {base}\nauthor {who}\ncommitter {who}\n\nmeasured-rev {run_id}\n"
         cand = write_object(gitdir, b"commit", body.encode("utf-8", "surrogateescape"))
+        from coordinator_core.ops.dispatch_emit.hunk_provenance import peer_split
+
+        split, unsettled = peer_split(root, run_id, changed)
+        overlay_sha = None
+        if split:
+            tree = _rewrite_head_spine(
+                gitdir, filled, {**assembled, **{p: (assembled[p][0], e["blob"]) for p, e in split.items()}},
+            )
+            if tree is not None:
+                obody = f"tree {tree}\nparent {base}\nauthor {who}\ncommitter {who}\n\nmeasured-rev {run_id} peer-free overlay\n"
+                overlay_sha = write_object(gitdir, b"commit", obody.encode("utf-8", "surrogateescape"))
         flush_object_batch()
 
     result = {
@@ -205,6 +221,13 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
         result["reach_dirt"] = foreign_dirt(root, reach_paths(root, seeds_for_landing(root, rels)), rels)
     except Exception as exc:  # noqa: BLE001 -- an unmeasurable reach is a typed refusal, never a record without it
         raise MeasuredRevRefused(f"the landing set's test reach could not be measured: {exc}") from exc
+    if split or unsettled:
+        result["peer_hunks"] = {
+            **{p: {"owner": e["owner"], "lines": e["lines"], "split": False} for p, e in unsettled.items()},
+            **{p: {"owner": e["owner"], "lines": e["lines"], "split": True} for p, e in split.items()},
+        }
+    if overlay_sha:
+        result["overlay_sha"] = overlay_sha
     record.parent.mkdir(parents=True, exist_ok=True)
     record.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
     return result

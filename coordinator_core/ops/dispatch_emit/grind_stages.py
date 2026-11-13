@@ -156,7 +156,7 @@ _SIZE_RETRY_NOTE = (
 #: agent-type table.
 STAGE_MODELS: dict[str, str] = {
     "triage": "haiku",
-    "refute-close": "sonnet",
+    "refute-close": "haiku",
     "fix": "sonnet",
     "adjudicate": "sonnet",
     # The drain runs `backlog-grind-assemble`, which the op-runner's spec refuses (it runs
@@ -1459,31 +1459,44 @@ def compose_grind_terminal_commit_call(
     params_js: str,
     agent_type_host: Optional[str] = None,
     run_key: str = DEFAULT_RUN_KEY,
+    run_id_js: str = "RUN_ID",
+    repo_root_js: str = "REPO_ROOT",
 ) -> str:
     """The grind's one terminal `commit` (`coordinator:git-commit-agent`, haiku, low): runs
-    `dispatch.land_run --params-file <path>` and returns its reply verbatim.
+    `grind-row prewrite-commit-params`, then `dispatch.land_run --params-file <path>`, and returns
+    the land_run reply verbatim.
 
-    Trap: the command stays one bare `coordinator-invoke` segment, which is all the
-    `block_subagent_commit` run-token leg admits. The params ride in the prompt's fenced block,
-    which that leg reads back from the spawn transcript and writes to the file; the agent types
-    only the forward-slash file path, never JSON. ``params_file_js`` and ``params_js`` name JS
+    Trap: the land_run command stays one bare `coordinator-invoke` segment, which is all the
+    `block_subagent_commit` run-token leg admits. The params ride in the prompt's fenced block;
+    the prewrite verb and that leg each read it back from the spawn transcript and write the same
+    file, so the commit never rests on the hook leg alone. The agent types only the
+    forward-slash file path, never JSON. ``params_file_js`` and ``params_js`` name JS
     expressions evaluated at RUN time."""
     parts: list[tuple[str, str]] = [
         *_REPO_ANCHOR_PARTS,
         (
             "lit",
-            "This is a queue grind's one terminal commit stage. Run exactly this one command as its "
-            "own Bash call: no `cd &&`, no wrapper, no env prefix, no edit to it. "
-            f"`{OP_NAME}` derives the paths from the grind's finished rows, so no "
+            "This is a queue grind's one terminal commit stage. Run exactly these two commands, in "
+            "order, each as its own Bash call: no `cd &&`, no wrapper, no env prefix, no edit to "
+            f"either. `{OP_NAME}` derives the paths from the grind's finished rows, so no "
             "`paths` array is owed.\n\n"
-            f"coordinator-invoke {OP_NAME} --params-file ",
+            "Command 1, which pre-writes the params file and the rows' fix-path records:\n```\n"
+            f"{ASSEMBLE_CMD} grind-row prewrite-commit-params --repo-root ",
+        ),
+        _shq_part(repo_root_js),
+        ("lit", " --run-id "),
+        ("expr", run_id_js),
+        (
+            "lit",
+            "\n```\nIf command 1 exits non-zero, still run command 2.\n\n"
+            f"Command 2:\ncoordinator-invoke {OP_NAME} --params-file ",
         ),
         ("expr", params_file_js),
         ("lit", "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n"),
         ("expr", f"_terminalCommitParamsBlock({params_js})"),
         (
             "lit",
-            "\n\nReturn from its JSON reply committed, sha, rows, dropped, error, refused, "
+            "\n\nReturn from command 2's JSON reply committed, sha, rows, dropped, error, refused, "
             f"{ALREADY_LANDED_KEY} and {UNLANDED_KEY}, verbatim (null where absent). "
             + RECONCILE_CLAUSE
             + " Run nothing else.",

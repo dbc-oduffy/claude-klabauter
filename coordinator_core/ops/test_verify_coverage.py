@@ -40,6 +40,7 @@ def _scaffold(tmp_path: Path, spec: dict, files: dict | None = None) -> Path:
     root = tmp_path / "root"
     root.mkdir(parents=True, exist_ok=True)
     for plugin, kinds in spec.items():
+        _write(root / plugin / ".claude-plugin" / "plugin.json", "{}\n")
         for skill in kinds.get("skills", []):
             _write(root / plugin / "skills" / skill / "SKILL.md", f"# {skill}\n")
         for agent in kinds.get("agents", []):
@@ -888,3 +889,22 @@ def test_explicit_sweep_root_outranks_repo(tmp_path, monkeypatch):
     r = _run(root, clean, extra=["--repo", str(tmp_path / "missing")])
     assert r["exit"] == 0, r["json"]
     assert r["json"]["sweepRoot"] == str(clean)
+
+
+def test_plugins_line_lists_only_manifest_bearing_dirs(tmp_path, capsys):
+    root = _scaffold(tmp_path, {"coordinator": {"skills": ["plan"]}})
+    for name in ("scratch", "state", "tasks", "archive"):
+        _write(root / name / "notes.md", "# not a plugin\n")
+    _write(root / "nomanifest" / "skills" / "x" / "SKILL.md", "# x\n")
+    sweep = tmp_path / "sweep"
+    sweep.mkdir()
+
+    code = vc.main(["--root", str(root), "--sweep-root", str(sweep)])
+
+    assert code == 0
+    plugins_line = next(
+        ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("Plugins:")
+    )
+    assert plugins_line == "Plugins: coordinator"
+    assert "coordinator:plan" in vc.discover_artifacts(str(root))["skills"]
+    assert "nomanifest:x" not in vc.discover_artifacts(str(root))["skills"]

@@ -104,6 +104,28 @@ def forced_key_bodies(path):
     return out
 
 
+def key_owner(ctx, path, line_no, body):
+    """The box a forced key belongs to, else None: the ssh alias whose IdentityFile `.pub` carries `body`
+    (candidates: `unimatrix.far_boxes`), else the key's comment on its authorized_keys line."""
+    if not body:
+        return None
+    al, roster, run = ctx["autolink"], ctx["roster"], ctx["run"]
+    try:
+        for alias in al.far_boxes_status(roster)[0]:
+            ident = al.ssh_identity_file(roster, alias, run=run)
+            pub = Path(f"{ident}.pub") if ident else None
+            if pub and pub.is_file() and body in pub.read_text(encoding="utf-8", errors="replace"):
+                return alias
+    except (OSError, AttributeError, TypeError):
+        pass
+    try:
+        line = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()[line_no - 1]
+    except (OSError, IndexError):
+        return None
+    tail = line.partition(body)[2].split()
+    return tail[0] if tail else None
+
+
 def asymmetric(frm, to):
     return f"asymmetric: {frm} -> {to} missing"
 
@@ -146,7 +168,7 @@ REMEDY_ONE = "remedy: another source reaches it; check this box's network link a
 
 def source_reaches(run, src, host, no_window=0):
     """True when `src` (another box we can ssh to) gets an ssh banner from `host` port 22."""
-    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", src, "ssh-keyscan", "-T", "5", "-p", "22", host]
+    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "AddressFamily=inet", "-o", "ConnectTimeout=5", src, "ssh-keyscan", "-T", "5", "-p", "22", host]
     try:
         r = run(cmd, capture_output=True, timeout=15, creationflags=no_window)
     except (OSError, subprocess.SubprocessError):
@@ -166,7 +188,7 @@ def default_far_sshd_log(run, no_window=0, routes=()):
     relay key, a refusal or empty output on every route reads as None."""
     def read(remote, host):
         for target in dict.fromkeys([*routes, remote]):
-            cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", target, FAR_LOG_CMD]
+            cmd = ["ssh", "-o", "BatchMode=yes", "-o", "AddressFamily=inet", "-o", "ConnectTimeout=5", target, FAR_LOG_CMD]
             try:
                 r = run(cmd, capture_output=True, timeout=15, creationflags=no_window)
             except (OSError, subprocess.SubprocessError):
@@ -231,7 +253,8 @@ def relay_drift(name, roster_out):
 
 
 AUTOLINK_LABELS = ("com.unimatrix.autolink", "com.coordinator.unimatrix-autolink")  # unimatrix-install.py LOGIN_AGENT_LABEL, then LEGACY_LOGIN_AGENT_LABELS
-REMEDY_INSTALL = "remedy: run unimatrix-install.py --install from the published checkout"
+REMEDY_INSTALL = ("remedy: run unimatrix-install.py --install from the published checkout "
+                  "(python <checkout>/coordinator/bin/unimatrix-install.py --install; the installed copy lacks lib/ and cannot reap)")
 
 
 def run_launchctl_list():
@@ -366,9 +389,38 @@ def check_target(remote, name, host, key, ctx, peer_epoch_check, outbound=None):
     return probs
 
 
-def relay_key(ctx, name):
-    """The relay key autolink would use for `name`, with every lookup spawn routed through the injected run."""
+def _host_key(name):
+    # Same normalisation as unimatrix-pair.py :: _host_key; change both together.
+    low = str(name).strip().lower().rstrip(".")
+    return low[:-len(".local")] if low.endswith(".local") else low
+
+
+def member_alias(ctx, name, host=None):
+    """The ssh alias this box's links use for member `name` at `host`, else `name`.
+
+    An alias qualifies when its own name or its `ssh -G` HostName equals `host` (case-insensitive, `.local`
+    ignored); the candidates are the machine-local `unimatrix.far_boxes` aliases. The listing and each
+    HostName are read once per run."""
+    if not host:
+        return name
     al, roster, run = ctx["autolink"], ctx["roster"], ctx["run"]
+    if "_aliases" not in ctx:
+        ctx["_aliases"] = al.far_boxes_status(roster)[0]
+    hosts = ctx.setdefault("_alias_hosts", {})
+    want = _host_key(host)
+    for alias in ctx["_aliases"]:
+        if alias not in hosts:
+            hosts[alias] = _host_key(ssh_hostname(alias, run, roster.no_window()) or "")
+        if _host_key(alias) == want or hosts[alias] == want:
+            return alias
+    return name
+
+
+def relay_key(ctx, name, host=None):
+    """The relay key autolink would use toward `name` at `host` (resolved by `member_alias`), with every lookup
+    spawn routed through the injected run."""
+    al, roster, run = ctx["autolink"], ctx["roster"], ctx["run"]
+    name = member_alias(ctx, name, host)
     return al.resolve_key(roster, name, local_fn=lambda r, a: al.machine_local_key(r, a, run=run),
                           ssh_fn=lambda r, a: al.ssh_identity_file(r, a, run=run))
 
@@ -383,7 +435,7 @@ def peer_lists_us(ctx, mine, self_names):
             return [f"{name}: waiting: 1Password locked; encrypted key not loaded"]
         if verdict == "missing":
             return [f"{name}: passphrase_source_missing: encrypted key {key} cannot be loaded"]
-        cmd = ["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+        cmd = ["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "AddressFamily=inet", "-o", "ConnectTimeout=5",
                remote, "membership", "get"]
         try:
             r = run(cmd, capture_output=True, timeout=15, creationflags=roster.no_window())
@@ -433,8 +485,10 @@ def diagnose(ctx):
         probs.extend(inbound_asymmetric_problems(ctx, verified, ctx["self_label"], ctx["platform"] != "win32"))
     ak = ctx["authorized_keys"]
     for n, body in unsigned_authorized_lines(ak, signed):
+        owner = key_owner(ctx, ak, n, body)
         probs.append(f"{ak} line {n}: forced unimatrix-relay.py key {_short(body) if body else '(unparsable)'} "
-                     "is in no signed membership record")
+                     f"is in no signed membership record{f' (owner: {owner})' if owner else ''}; remedy: "
+                     f"run unimatrix-pair.py approve for the owning box, or unimatrix-pair.py revoke <box> to drop the key")
     admin = ctx["admin_file"]
     if admin is not None and admin.exists():
         notes.append(f"{admin} exists and is not inspected here")
@@ -457,7 +511,7 @@ def diagnose(ctx):
     for remote, box in sorted(targets.items()):
         seen.add(remote)
         host = remote.rpartition("@")[2]
-        probs.extend(check_target(remote, box, host, relay_key(ctx, box), ctx, checker, outbound=ctx.get("self_label")))
+        probs.extend(check_target(remote, box, host, relay_key(ctx, box, host), ctx, checker, outbound=ctx.get("self_label")))
         rec = al.read_record(al.state_dir(roster) / f"autolink-{al.slug(remote)}.json")
         if not all(al.supervisor_live(roster, rec.get(role) or {}) for role, _ in al.SUPERVISORS):
             probs.append(f"{box}: no live link path: this box holds no live link to a signed member")
@@ -534,7 +588,7 @@ def confirm(name, ctx, out, sessions_dir=None, deliveries=None, channel=None):
         return 1
     mux = _load("unimatrix_box_mux", "lib/unimatrix_box_mux.py")
     remote = entry["unimatrixRemote"]
-    key = relay_key(ctx, mux.resolve_remote(remote)[1])
+    key = relay_key(ctx, mux.resolve_remote(remote)[1], remote.rpartition("@")[2])
     if channel is None:
         channel = lambda r, k: mux.for_remote(r, key=k, extra=["-o", "ConnectTimeout=10"])
     since = max(0, int((row.get("at") or 0) - CONFIRM_SKEW_SECONDS))

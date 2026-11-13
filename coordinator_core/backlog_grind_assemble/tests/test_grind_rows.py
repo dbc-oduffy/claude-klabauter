@@ -1934,3 +1934,85 @@ class TestSplitVerb:
     def test_split_is_listed_in_the_verb_usage(self, capsys):
         assert grind_rows.main([]) == grind_rows.EXIT_USAGE
         assert "split" in capsys.readouterr().err
+
+
+class TestPrewriteCommitParams:
+    """`prewrite-commit-params` writes the params file from the spawn's own block, only for an admitted token."""
+
+    RUN = "20261113T010101Z"
+    SCRIPT = "scratch/warp/g.workflow.mjs"
+    SESSION = "sess-prewrite"
+
+    def _spawn(self, tmp_path, monkeypatch, params):
+        from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+        home = tmp_path / "claude-home"
+        wf = home / "projects" / "p" / self.SESSION / "subagents" / "workflows" / "wf_1"
+        wf.mkdir(parents=True)
+        prompt = "\n".join("  " + ln for ln in ["Commit.", *chan.render_params_block(params).split("\n")])
+        (wf / "agent-a1.jsonl").write_text(
+            json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n", encoding="utf-8"
+        )
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", self.SESSION)
+
+    def _params(self, repo, token=None):
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        return {
+            "run_id": self.RUN,
+            "run_token": token or run_token.mint(repo, self.RUN, self.SCRIPT),
+            "script_path": self.SCRIPT,
+            "grind": {
+                "profile": "lessons",
+                "halted": None,
+                "rows": [
+                    {"row_id": "r1", "outcome": "settled", "paths": ["a.md", "docs/x.md"], "deleted_paths": ["gone.md"]},
+                ],
+            },
+        }
+
+    def _argv(self, repo):
+        return ["prewrite-commit-params", "--repo-root", str(repo), "--run-id", self.RUN]
+
+    def test_admitted_token_writes_params_and_the_rows_fix_paths(self, tmp_path, monkeypatch, capsys):
+        from coordinator_core.backlog_grind_assemble import grind_fix_paths
+        from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        params = self._params(repo)
+        self._spawn(tmp_path, monkeypatch, params)
+        assert grind_rows.main(self._argv(repo)) == grind_rows.EXIT_OK
+        path = chan.params_path(repo, self.RUN)
+        assert json.loads(path.read_text(encoding="utf-8")) == params
+        assert json.loads(capsys.readouterr().out)["fix_paths"] == ["r1"]
+        record = grind_fix_paths.read(path.parent, "r1")
+        assert record == {"touched": ["a.md", "docs/x.md"], "created": [], "removed": ["gone.md"]}
+
+    def test_bad_token_is_refused_naming_the_leg_and_writes_nothing(self, tmp_path, monkeypatch, capsys):
+        from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        self._params(repo)
+        self._spawn(tmp_path, monkeypatch, self._params(repo, token="not-the-minted-token"))
+        assert grind_rows.main(self._argv(repo)) == grind_rows.EXIT_REFUSAL
+        assert "params-token" in capsys.readouterr().err
+        assert not chan.params_path(repo, self.RUN).exists()
+        assert not (chan.params_path(repo, self.RUN).parent / "fix-paths").exists()
+
+    def test_no_params_block_in_any_spawn_is_refused(self, tmp_path, monkeypatch, capsys):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "empty-home"))
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", self.SESSION)
+        assert grind_rows.main(self._argv(repo)) == grind_rows.EXIT_REFUSAL
+        assert "no-params-block" in capsys.readouterr().err
+
+    def test_a_block_for_another_run_is_not_taken(self, tmp_path, monkeypatch, capsys):
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        self._spawn(tmp_path, monkeypatch, {**self._params(repo), "run_id": "20261113T020202Z"})
+        assert grind_rows.main(self._argv(repo)) == grind_rows.EXIT_REFUSAL
+        assert "no-params-block" in capsys.readouterr().err

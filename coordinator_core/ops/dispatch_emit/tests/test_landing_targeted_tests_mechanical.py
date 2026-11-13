@@ -135,6 +135,26 @@ def test_in_op_export_helpers_are_gone():
     assert (ltt.HEAD_RED_KEY, ltt.OWED_CLEARED_KEY) == ("head_red", "owed_cleared")
 
 
+def test_peer_hunk_owners_reads_the_measured_record_and_is_empty_without_peers():
+    measured = {"peer_hunks": {"a.py": {"owner": "run-p", "lines": "2", "split": True}, "b.py": {"lines": "1"}}}
+    assert ltt.peer_hunk_owners(measured) == {"a.py": "run-p"}
+    assert ltt.peer_hunk_owners({}) == {} and ltt.peer_hunk_owners(None) == {}
+
+
+def test_a_failed_targeted_finding_names_the_peer_run_and_other_findings_pass_through():
+    failed = ltt.Finding("t.py", ltt.TARGETED_TESTS_FAILED, "t.py::a")
+    other = ltt.Finding("x.py", ltt.INVARIANT_UNMEASURED, "no test ran")
+    out = ltt.tag_findings_with_peer_owners([failed, other], {"a.py": "run-p"})
+    assert "a.py (run run-p)" in out[0].detail and out[0].detail.startswith("t.py::a; ")
+    assert "not caused by this run" in out[0].detail
+    assert out[1] == other
+
+
+def test_no_peer_owners_leaves_findings_untouched():
+    failed = ltt.Finding("t.py", ltt.TARGETED_TESTS_FAILED, "t.py::a")
+    assert ltt.tag_findings_with_peer_owners([failed], {}) == [failed]
+
+
 def test_scope_clause_carries_the_tier_markers_only_when_it_runs_tests():
     clause = rd._scope_clause(["coordinator_core/tests/test_a.py"], "", "abc")
     assert '-m "not pending_fix and not designed_red"' in clause

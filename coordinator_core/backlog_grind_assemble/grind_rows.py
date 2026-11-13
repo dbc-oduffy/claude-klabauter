@@ -69,6 +69,13 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
   coordinator-doc-new and the ledger mark; any failing step writes
   `<item>.size.md` and appends a `size`/`fail` ledger line.
 
+- `record-fix-paths --run-dir D --row-id R --paths-json J`: implemented in `grind_fix_paths.py`;
+  writes `<D>/fix-paths/<R>.json` atomically from `{"touched","created","removed"}` path lists.
+
+- `prewrite-commit-params --repo-root R --run-id ID`: the grind commit stage's first command; writes
+  the run's terminal_commit params file through `terminal_commit_params_channel` from the calling
+  spawn's own params block (token-checked) and each queued row's fix-paths record; one spawn.
+
 - `size-fail --profile P --row-id R --digest D --run-stamp T --repo-root D --reason TEXT`:
   the same fail record for a size stage that ran no chain.
 
@@ -1106,6 +1113,28 @@ def _marker_texts(path: Path, marker: str) -> list[str]:
     return out
 
 
+def _session_id() -> Optional[str]:
+    """`CLAUDE_CODE_SESSION_ID`, or None when unset or path-shaped (it is spliced into a glob)."""
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if not session or "/" in session or "\\" in session or session in (".", ".."):
+        return None
+    return session
+
+
+def _claude_home() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+
+
+def _newest_first(paths) -> list[Path]:
+    def _mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    return sorted(paths, key=_mtime, reverse=True)
+
+
 def _record_token_from_transcript(open_marker: str) -> tuple[Optional[str], str]:
     """``(urlenc token, "")`` read from this session's newest agent transcript carrying ``open_marker``
     whose segment (``<len> <sha256>\\n<token>``) passes the ``check_relay`` gate against the digest the
@@ -1115,23 +1144,15 @@ def _record_token_from_transcript(open_marker: str) -> tuple[Optional[str], str]
     close_marker = contract.record_close_marker(open_marker)
     if close_marker is None:
         return None, f"--{contract.RECORD_FROM_TRANSCRIPT_FLAG} is not a run-record open marker: {open_marker!r}"
-    session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
-    if not session or "/" in session or "\\" in session or session in (".", ".."):
+    session = _session_id()
+    if session is None:
         return None, f"--{contract.RECORD_FROM_TRANSCRIPT_FLAG} needs CLAUDE_CODE_SESSION_ID in the environment"
-    claude_home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
-
-    def _mtime(p: Path) -> float:
-        try:
-            return p.stat().st_mtime
-        except OSError:
-            return 0.0
+    claude_home = _claude_home()
 
     # Agent transcripts carry the marker in their first user line; the firing session's own main
     # transcript (projects/<any>/<session>.jsonl) carries it in a later message, so it is scanned whole.
-    agent_files = sorted(
-        claude_home.glob(f"projects/*/{session}/subagents/**/agent-*.jsonl"), key=_mtime, reverse=True
-    )
-    main_files = sorted(claude_home.glob(f"projects/*/{session}.jsonl"), key=_mtime, reverse=True)
+    agent_files = _newest_first(claude_home.glob(f"projects/*/{session}/subagents/**/agent-*.jsonl"))
+    main_files = _newest_first(claude_home.glob(f"projects/*/{session}.jsonl"))
     candidates: list[tuple[Path, list[str]]] = []
     for transcript in agent_files:
         first = _first_user_text(transcript)
@@ -1460,6 +1481,96 @@ def _cmd_size_chain(rest: list[str]) -> int:
     return cmd_size_chain(rest)
 
 
+def _cmd_record_fix_paths(rest: list[str]) -> int:
+    """`record-fix-paths --run-dir D --row-id R --paths-json J`: J is `{"touched":[..],"created":[..],"removed":[..]}`."""
+    from coordinator_core.backlog_grind_assemble import grind_fix_paths
+
+    flags = _parse_flags(rest, ("run-dir", "row-id", "paths-json"))
+    if flags is None:
+        return _usage("record-fix-paths: requires --run-dir --row-id --paths-json")
+    try:
+        data = json.loads(flags["paths-json"])
+        if not isinstance(data, dict):
+            raise ValueError("--paths-json must be a JSON object")
+        lists = {k: data.get(k) or [] for k in grind_fix_paths.KEYS}
+        if not all(isinstance(v, list) for v in lists.values()):
+            raise ValueError("--paths-json values must be lists")
+        target = grind_fix_paths.write(Path(flags["run-dir"]), flags["row-id"], **lists)
+    except ValueError as exc:
+        print(f"grind-row: record-fix-paths: {exc}", file=sys.stderr)
+        return EXIT_REFUSAL
+    print(json.dumps({"record": str(target)}, sort_keys=True))
+    return EXIT_OK
+
+
+_PREWRITE_TRANSCRIPT_CAP = 16
+
+
+def _prewrite_prompt(run_id: str) -> Optional[str]:
+    """The spawn prompt, from this session's newest workflow-spawn transcript, whose params block is `run_id`'s; else None.
+
+    Reads `<claude home>/projects/*/<session>/subagents/workflows/*/agent-*.jsonl`, newest first,
+    through the channel's own prompt reader, so the verb and the hook leg see the same block.
+    """
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    session = _session_id()
+    if session is None:
+        return None
+    found = _newest_first(_claude_home().glob(f"projects/*/{session}/subagents/workflows/*/agent-*.jsonl"))
+    for transcript in found[:_PREWRITE_TRANSCRIPT_CAP]:
+        prompt = chan.read_spawn_prompt(str(transcript))
+        params = chan.prompt_params(prompt)
+        if params is not None and params["run_id"] == run_id:
+            return prompt
+    return None
+
+
+def _cmd_prewrite_commit_params(rest: list[str]) -> int:
+    """`prewrite-commit-params --repo-root R --run-id ID`: write the run's terminal_commit params file
+    and every queued row's fix-paths record before the commit stage's land op runs.
+
+    Trap: the params come only from the calling spawn's own prompt block, never from an argument
+    (`materialize_from_prompt`), and its run token must be admitted, so an agent-typed payload never
+    authorizes a commit. The hook leg stays and still validates. Exit 1 names the refusing leg.
+    """
+    from coordinator_core.backlog_grind_assemble import grind_fix_paths
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    flags = _parse_flags(rest, ("repo-root", "run-id"))
+    if flags is None:
+        return _usage("prewrite-commit-params: requires --repo-root --run-id")
+    run_id = flags["run-id"]
+    if chan.params_path(flags["repo-root"], run_id) is None:
+        print(f"grind-row: prewrite-commit-params: params-path: not a run id: {run_id!r}", file=sys.stderr)
+        return EXIT_REFUSAL
+    prompt = _prewrite_prompt(run_id)
+    if prompt is None:
+        print("grind-row: prewrite-commit-params: no-params-block: no spawn transcript of this session carries "
+              f"the params block for run {run_id}", file=sys.stderr)
+        return EXIT_REFUSAL
+    params = chan.prompt_params(prompt) or {}
+    path, leg = chan.materialize_from_prompt(flags["repo-root"], prompt)
+    if leg is not None:
+        print(f"grind-row: prewrite-commit-params: {leg}", file=sys.stderr)
+        return EXIT_REFUSAL
+    grind = params.get("grind")
+    rows = grind.get("rows") if isinstance(grind, dict) else None
+    recorded: list[str] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not isinstance(row.get("row_id"), str):
+            continue
+        try:
+            grind_fix_paths.write(
+                path.parent, row["row_id"], row.get("paths") or [], [], row.get("deleted_paths") or []
+            )
+        except ValueError:
+            continue
+        recorded.append(row["row_id"])
+    print(json.dumps({"params": str(path), "fix_paths": recorded}, sort_keys=True))
+    return EXIT_OK
+
+
 def cmd_image(rest: list[str]) -> int:
     """`image --run-id R --row-id I --phase pre|post --repo-root D (--paths-urlenc E | --path P ...)`.
 
@@ -1545,12 +1656,14 @@ _VERBS = {
     "settle-run": _cmd_settle_run,
     "size-chain": _cmd_size_chain,
     "size-fail": _cmd_size_fail,
+    "record-fix-paths": _cmd_record_fix_paths,
+    "prewrite-commit-params": _cmd_prewrite_commit_params,
 }
 
 
 def main(argv: list[str]) -> int:
     if not argv:
-        return _usage("usage: grind-row image|check|append|close|settle|split|sweep|run-record|undo|settle-run|size-chain|size-fail [...]")
+        return _usage("usage: grind-row image|check|append|close|settle|split|sweep|run-record|undo|settle-run|size-chain|size-fail|record-fix-paths|prewrite-commit-params [...]")
     verb, rest = argv[0], argv[1:]
     handler = _VERBS.get(verb)
     if handler is None:

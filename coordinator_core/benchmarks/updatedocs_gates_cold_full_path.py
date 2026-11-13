@@ -10,7 +10,13 @@ the files the op wrote. A child-side wrapper times each gate's own process time 
 Prints one JSON object: op, op_class, envelope_code, process_ms (child user+sys CPU, whole
 interpreter), wall_ms, spawns (audit-hook count), files_written, files_removed, per_gate.
 
-    python -m coordinator_core.benchmarks.updatedocs_gates_cold_full_path <dir> [--op NAME]
+    python -m coordinator_core.benchmarks.updatedocs_gates_cold_full_path <dir> [--op NAME] [--plans N] [--handoffs N]
+
+`--op refresh-queries` drives `refresh_queries.main([])` in-process from the fixture root (the CLI
+has no registered op). The CLI default fixture is a large repo (DEFAULT_PLANS plans under
+docs/plans, DEFAULT_HANDOFFS handoffs under archive/handoffs, and as many tasks/ notes as handoffs,
+so the fresh-scaffold probe's tasks/ leg runs); `ensure_fixture` itself defaults to the small shape.
+`ls_files_spawns` counts child spawns whose argv holds `ls-files`.
 """
 
 from __future__ import annotations
@@ -28,6 +34,9 @@ from typing import Optional
 from coordinator_core.git.run import run_git
 
 DEFAULT_OP = "updatedocs.gates"
+REFRESH_OP = "refresh-queries"
+DEFAULT_PLANS = 1000
+DEFAULT_HANDOFFS = 300
 SIDECAR_AGE_DAYS = 60  # above sidecar_reap.DEFAULT_AGE_FLOOR_DAYS (14)
 DEAD_SESSION = "00000000-0000-4000-8000-000000000000"
 QUEUE_REL = "state/bug-backlog.md"
@@ -53,8 +62,21 @@ def _git(repo: Path, *args: str) -> None:
         raise RuntimeError(f"git {' '.join(args)} failed rc={result.returncode}: {result.stderr.strip()}")
 
 
-def ensure_fixture(parent: Path) -> Path:
-    """Build a fresh fixture repo under `parent` (replacing any earlier one) and return it."""
+def _write_notes(repo: Path, rel_dir: str, stem: str, count: int, per_dir: int = 100) -> None:
+    """`count` small tracked-to-be .md notes, spread `per_dir` to a subdirectory."""
+    for i in range(count):
+        d = repo / rel_dir / f"{i // per_dir:03d}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{stem}-{i:04d}.md").write_text(f"# {stem} {i}\n\nbody\n", encoding="utf-8")
+
+
+def ensure_fixture(parent: Path, plans: int = 0, handoffs: int = 0) -> Path:
+    """Build a fresh fixture repo under `parent` (replacing any earlier one) and return it.
+
+    `plans` and `handoffs` add that many committed .md files under docs/plans and archive/handoffs,
+    plus `handoffs` tasks/ notes and a root DIRECTORY.md with one count claim (so the
+    directory-index staleness gate runs its check); 0 keeps the small shape.
+    """
     import shutil
 
     repo = parent.resolve() / "fixture"
@@ -71,7 +93,17 @@ def ensure_fixture(parent: Path) -> Path:
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "t")
-    _git(repo, "add", "README.md", "state")
+    tracked = ["README.md", "state"]
+    if plans or handoffs:
+        _write_notes(repo, "docs/plans", "plan", plans)
+        _write_notes(repo, "archive/handoffs", "handoff", handoffs)
+        _write_notes(repo, "tasks", "task", handoffs)
+        (repo / "DIRECTORY.md").write_text(
+            f"# Directory\n\nLast refreshed: 2026-01-01\n\n- docs/plans: {plans} `*.md` files\n",
+            encoding="utf-8",
+        )
+        tracked += ["docs", "archive", "tasks", "DIRECTORY.md"]
+    _git(repo, "add", *tracked)
     _git(repo, "commit", "-q", "-m", "seed")
     return repo
 
@@ -100,10 +132,56 @@ def _op_module(op: str):
     return importlib.import_module(OP_MODULE_MAP[op])
 
 
+def _watch_ls_files() -> list[int]:
+    """Install an audit hook counting child spawns whose argv holds `ls-files`; return the cell."""
+    cell = [0]
+
+    def hook(event: str, args: tuple) -> None:
+        if event == "subprocess.Popen":
+            try:
+                argv = args[1]
+                if "ls-files" in (argv if isinstance(argv, (list, tuple)) else [argv]):
+                    cell[0] += 1
+            except (IndexError, TypeError):
+                pass
+
+    sys.addaudithook(hook)
+    return cell
+
+
+def _child_refresh(repo: Path) -> int:
+    """Run `refresh_queries.main([])` (default args) from the fixture root; print metrics."""
+    import contextlib
+    import io
+
+    from coordinator_core.telemetry.spawn_counter import spawn_count
+    from coordinator_core.text import refresh_queries
+
+    ls_files = _watch_ls_files()
+    os.chdir(repo)
+    out, err = io.StringIO(), io.StringIO()
+    s0 = spawn_count()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = refresh_queries.main([])
+    print(json.dumps({
+        "exit": code,
+        "envelope_code": None,
+        "has_result": code == 0,
+        "spawns": spawn_count() - s0,
+        "ls_files_spawns": ls_files[0],
+        "per_gate": {},
+        "stderr_tail": err.getvalue()[-300:],
+    }))
+    return 0
+
+
 def _child(op: str, repo: Path, settings_home: Path) -> int:
     """Runs in the fresh interpreter: dispatch `op` once, print a metrics JSON line."""
+    if op == REFRESH_OP:
+        return _child_refresh(repo)
     from coordinator_core.telemetry.spawn_counter import spawn_count
 
+    ls_files = _watch_ls_files()
     per_gate: dict[str, dict] = {}
     module = _op_module(op)
     table = getattr(module, "_GATES", None)
@@ -137,6 +215,7 @@ def _child(op: str, repo: Path, settings_home: Path) -> int:
         "envelope_code": error.get("code") if isinstance(error, dict) else None,
         "has_result": isinstance(envelope, dict) and "result" in envelope,
         "spawns": spawns,
+        "ls_files_spawns": ls_files[0],
         "per_gate": per_gate,
         "stderr_tail": (stderr or "")[-300:],
     }))
@@ -153,11 +232,15 @@ def _children_cpu_ms() -> float:
         return float("nan")
 
 
-def measure(op: str, parent: Path) -> dict:
-    """One cold run of `op` against a fresh fixture; the report dict."""
+def _op_class(op: str) -> str:
     from coordinator_core.authz.classification import classify
 
-    repo = ensure_fixture(parent)
+    return classify(op).name
+
+
+def measure(op: str, parent: Path, plans: int = 0, handoffs: int = 0) -> dict:
+    """One cold run of `op` against a fresh fixture; the report dict."""
+    repo = ensure_fixture(parent, plans, handoffs)
     settings_home = parent.resolve() / "settings-home"
     (settings_home / "bin").mkdir(parents=True, exist_ok=True)
     before = snapshot(repo)
@@ -175,12 +258,15 @@ def measure(op: str, parent: Path) -> dict:
     written, removed = diff_snapshots(before, snapshot(repo))
     return {
         "op": op,
-        "op_class": classify(op).name,
+        "op_class": "cli" if op == REFRESH_OP else _op_class(op),
+        "plans": plans,
+        "handoffs": handoffs,
         "envelope_code": child.get("envelope_code"),
         "has_result": child.get("has_result", False),
         "process_ms": round(process_ms, 1),
         "wall_ms": round(wall_ms, 1),
         "spawns": child.get("spawns"),
+        "ls_files_spawns": child.get("ls_files_spawns"),
         "files_written": written,
         "files_removed": removed,
         "per_gate": child.get("per_gate", {}),
@@ -192,22 +278,32 @@ def measure(op: str, parent: Path) -> dict:
 def main(argv: list[str]) -> int:
     if argv and argv[0] == _CHILD_FLAG:
         return _child(argv[1], Path(argv[2]), Path(argv[3]))
+    usage = "usage: updatedocs_gates_cold_full_path <dir> [--op NAME] [--plans N] [--handoffs N]"
     op = DEFAULT_OP
+    counts = {"--plans": DEFAULT_PLANS, "--handoffs": DEFAULT_HANDOFFS}
     args = list(argv)
-    if "--op" in args:
-        i = args.index("--op")
-        if i + 1 >= len(args):
-            print("usage: updatedocs_gates_cold_full_path <dir> [--op NAME]", file=sys.stderr)
-            return 2
-        op = args[i + 1]
-        del args[i:i + 2]
+    for flag in ("--op", "--plans", "--handoffs"):
+        if flag in args:
+            i = args.index(flag)
+            if i + 1 >= len(args):
+                print(usage, file=sys.stderr)
+                return 2
+            value = args[i + 1]
+            del args[i:i + 2]
+            if flag == "--op":
+                op = value
+            elif value.isdigit():
+                counts[flag] = int(value)
+            else:
+                print(usage, file=sys.stderr)
+                return 2
     if len(args) != 1:
-        print("usage: updatedocs_gates_cold_full_path <dir> [--op NAME]", file=sys.stderr)
+        print(usage, file=sys.stderr)
         return 2
     from coordinator_core.benchmarks import declare_benchmark_origin
 
     declare_benchmark_origin()
-    report = measure(op, Path(args[0]))
+    report = measure(op, Path(args[0]), counts["--plans"], counts["--handoffs"])
     print(json.dumps(report, indent=2))
     return 0 if report["has_result"] or report["envelope_code"] is not None else 1
 

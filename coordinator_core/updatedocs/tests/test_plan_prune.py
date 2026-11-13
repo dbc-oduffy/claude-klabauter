@@ -144,6 +144,38 @@ def test_referenced_via_origin_plan_id_in_tasks(tmp_path):
     assert result.retained == [f"docs/plans/{name}"]
 
 
+def test_implemented_plan_without_archived_spec_is_ripe_unharvested_and_retained(tmp_path):
+    name = "2026-01-01-implemented-unharvested.md"
+    _write_plan(tmp_path, name, ["status: implemented"], age_days=OLD_MTIME_DAYS)
+
+    result = compute_plan_prune_candidates(tmp_path)
+
+    assert result.prunable == []
+    assert result.retained == [f"docs/plans/{name}"]
+
+
+def test_implemented_plan_with_archived_spec_counterpart_is_prunable(tmp_path):
+    name = "2026-01-01-implemented-harvested.md"
+    _write_plan(tmp_path, name, ["status: implemented"], age_days=OLD_MTIME_DAYS)
+    specs = tmp_path / "archive" / "specs" / "2026-01"
+    specs.mkdir(parents=True)
+    (specs / name).write_text("trimmed\n", encoding="utf-8")
+
+    result = compute_plan_prune_candidates(tmp_path)
+
+    assert result.prunable == [f"docs/plans/{name}"]
+
+
+def test_abandoned_status_family_is_prunable_without_archived_spec(tmp_path):
+    for status in ("superseded", "closed", "abandoned", "cancelled"):
+        _write_plan(tmp_path, f"2026-01-01-{status}.md", [f"status: {status}"], age_days=OLD_MTIME_DAYS)
+
+    result = compute_plan_prune_candidates(tmp_path)
+
+    assert len(result.prunable) == 4
+    assert result.retained == []
+
+
 def test_age_floor_is_a_parameter_not_a_hardcoded_literal(tmp_path):
     status = sorted(TERMINAL_PLAN_STATUSES)[0]
     _write_plan(
@@ -198,7 +230,7 @@ def test_cached_verdict_follows_an_edit_and_a_corrupt_cache_reads_as_empty(tmp_p
     plans = tmp_path / "docs" / "plans"
     plans.mkdir(parents=True)
     plan = plans / "2026-01-01-p.md"
-    plan.write_text("---\nstatus: implemented\n---\n", encoding="utf-8")
+    plan.write_text("---\nstatus: closed\n---\n", encoding="utf-8")
     old = 1_600_000_000
     os.utime(plan, (old, old))
 
@@ -206,7 +238,7 @@ def test_cached_verdict_follows_an_edit_and_a_corrupt_cache_reads_as_empty(tmp_p
     assert first.prunable == ["docs/plans/2026-01-01-p.md"]
     assert compute_plan_prune_candidates(tmp_path) == first
 
-    plan.write_text("---\nstatus: active\n---\n", encoding="utf-8")
+    plan.write_text("---\nstatus: in-progress\n---\n", encoding="utf-8")
     os.utime(plan, (old, old))
     assert compute_plan_prune_candidates(tmp_path).retained == ["docs/plans/2026-01-01-p.md"]
 
