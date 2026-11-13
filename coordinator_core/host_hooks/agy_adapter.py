@@ -91,4 +91,20 @@ class AgyAdapter:
             return {"decision": "deny", "reason": reason or "denied by coordinator guard"}
         if decision in _ASK_DECISIONS:
             return {"decision": decision, "reason": reason or "coordinator: confirm"}
+        advisory = _advisory_text(verdict)
+        if advisory:
+            return {"decision": "ask", "reason": advisory}
         return {"decision": "allow"}
+
+
+def _advisory_text(verdict: Optional[Mapping[str, Any]]) -> str:
+    """The `additionalContext` of a flat or `hookSpecificOutput`-nested non-deny verdict, or "".
+
+    agy has no advisory field, so an allow carrying one renders as an `ask` whose reason is the text: the
+    nag surfaces and the answer never widens to allow.
+    """
+    if not isinstance(verdict, Mapping):
+        return ""
+    nested = verdict.get("hookSpecificOutput")
+    context = (nested.get("additionalContext") if isinstance(nested, Mapping) else None) or verdict.get("additionalContext")
+    return context.strip() if isinstance(context, str) else ""

@@ -134,6 +134,18 @@ def test_allow_and_empty_verdict_render_explicit_allow_never_empty_object():
         assert out == {"decision": "allow"}
 
 
+def test_allow_with_additional_context_renders_ask_carrying_the_text_never_allow():
+    adapter = AgyAdapter()
+    ev = adapter.adapt_event(PAYLOAD)
+    nested = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "heads up"}}
+    for verdict in ({"decision": "allow", "additionalContext": "heads up"}, nested,
+                    {"additionalContext": "heads up"}):
+        assert adapter.render(ev, verdict) == {"decision": "ask", "reason": "heads up"}
+    assert adapter.render(ev, {"decision": "allow", "additionalContext": "  "}) == {"decision": "allow"}
+    deny = adapter.render(ev, {"decision": "deny", "reason": "no", "additionalContext": "heads up"})
+    assert deny == {"decision": "deny", "reason": "no"}
+
+
 def test_ask_is_passed_through():
     adapter = AgyAdapter()
     out = adapter.render(adapter.adapt_event(PAYLOAD), {"decision": "ask", "reason": "confirm"})

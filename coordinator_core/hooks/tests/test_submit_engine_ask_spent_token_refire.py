@@ -238,6 +238,7 @@ def test_an_unmarked_run_with_an_unspent_token_is_still_the_resume_target(tmp_pa
     rd.mkdir(parents=True)
     (rd / "run.json").write_text(json.dumps({"sizing_rel": SIZING}), encoding="utf-8")
     (rd / "run-stage.json").write_text(json.dumps({"stage": "staged"}), encoding="utf-8")
+    run_token.mint(root, WARP_RUN, f"scratch/warp/{WARP_RUN}.workflow.mjs", sizing_rel=SIZING)
 
     assert mod._unmarked_emitted_run(root, SIZING) == WARP_RUN
     (rd / TOKEN_SPENT_FILE).write_text("{}\n", encoding="utf-8")

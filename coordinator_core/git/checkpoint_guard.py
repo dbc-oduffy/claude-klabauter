@@ -79,11 +79,28 @@ def _drop_repo_key(path: str) -> str:
     return tail if sep and len(head) > 1 and "/" not in head else path
 
 
+def _canonical_plan_spelling(path: str) -> str:
+    """A flat `docs/plans/<dated name>` as its month-shard spelling; any other path unchanged.
+    Pure string: no stat, so both sides of a compare canonicalise identically."""
+    if path.startswith("docs/plans/") and "/" not in path[len("docs/plans/"):]:
+        from coordinator_core.session.output_tree_layout import shard_path
+
+        try:
+            return shard_path("docs/plans", path)
+        except ValueError:
+            return path
+    return path
+
+
 def checkpoint_plan_matches(trailer_value: str, plan: str) -> bool:
-    """True when a `Checkpoint-Plan:` value names `plan`; a `repo_key:` prefix on either side is ignored."""
+    """True when a `Checkpoint-Plan:` value names `plan`; a `repo_key:` prefix on either side is
+    ignored, and a flat `docs/plans/<name>` equals its month-shard spelling."""
     a = trailer_value.strip().replace("\\", "/")
     b = plan.strip().replace("\\", "/")
-    return a == b or _drop_repo_key(a) == _drop_repo_key(b)
+    if a == b:
+        return True
+    a, b = _drop_repo_key(a), _drop_repo_key(b)
+    return a == b or _canonical_plan_spelling(a) == _canonical_plan_spelling(b)
 
 
 def checkpoint_refusal(

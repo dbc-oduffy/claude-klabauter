@@ -396,6 +396,22 @@ def test_backlog_dir_target_allows_through_the_real_emit(repo):
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
 
 
+def test_backlog_submission_without_a_reap_record_declines_every_tf_row(repo):
+    (repo / "live.py").write_text("X = 1\n", encoding="utf-8")
+    (repo / "state" / "bug-backlog" / "tf-a.yaml").write_text(
+        "created: 2026-11-12\ntitle: TF a\nbody: b\nstatus: open\nsurface: live.py\nseverity: P1\n"
+        "tags:\n  - tf\n",
+        encoding="utf-8",
+    )
+    env = _call(repo, {"targets": "backlog"})
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    receipt = json.loads(script.with_name(script.name + ".emitted.json").read_text(encoding="utf-8"))
+    # Only the receipt's decline reason names bug-backlog-reap; submit_bug_blitz.py emits no not-run line for `targets: backlog`.
+    reasons = [d["reason"] for d in receipt["declined"]]
+    assert reasons == ["reap record absent; run bug-backlog-reap"]
+
+
 def test_decisions_record_the_fire_time_claim_baseline(repo, monkeypatch):
     from coordinator_core.session import scope
 

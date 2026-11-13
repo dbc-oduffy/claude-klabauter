@@ -207,8 +207,8 @@ _RETIRE_VERIFY_CLAUSE = (
     "Judge the retire verdict only: does the artifact the triage evidence cites exist at HEAD and state what "
     "the row claims? Read the row and that artifact. Report pass if it does; report fail, with the reason, "
     "only if the artifact is missing or does not cover the claim. If the evidence cites no artifact, judge "
-    "whether the stated reason for retiring the row holds instead. Do not ask whether a fix landed and do not "
-    "require any change on disk. You are read-only: do not edit any file. "
+    "whether the stated reason for retiring the row holds instead. Do not require any change on disk. "
+    "You are read-only: do not edit any file. "
     + _NO_STAGING_CLAUSE
 )
 
@@ -242,6 +242,15 @@ _COVERED_BY_HEAD_CLAUSE = (
 
 _ROUTING_VERIFY_RUNNER_CLAUSE = (
     " Run no tests: return `tests_record` as an empty string and `tests_outcome` as `nothing-to-run`."
+)
+
+_RETIRE_RERUN_CLAUSE = (
+    " A row that names failing node ids is retired only while those tests pass at committed HEAD: run them "
+    "only through "
+)
+_RETIRE_RERUN_TAIL = (
+    " and return the record path as `tests_record`, its `outcome` as `tests_outcome` and its `failing_ids` as "
+    "`tests_failing_ids`; any outcome but `passed` or `nothing-to-run` keeps the row open."
 )
 
 _JUDGE_AGAINST_HEAD_CLAUSE = (
@@ -1228,7 +1237,19 @@ def compose_verify_agent_call(
                 ),
             ),
         ]
-        if targeted_runner:
+        if targeted_runner and retire:
+            parts.append(("lit", _RETIRE_RERUN_CLAUSE))
+            parts.extend(_runner_invocation_parts(
+                profile=profile,
+                row_path_part=("expr", row_path_js) if row_path_js else ("lit", "<row path>"),
+                touched_parts=[("lit", "<the row's surface>")],
+                run_id_part=("expr", run_id_js) if run_id_js else ("lit", "<run-id>"),
+                row_id_part=row_id_part,
+                repo_root_js=repo_root_js,
+                committed_head=True,
+            ))
+            parts.append(("lit", _RETIRE_RERUN_TAIL))
+        elif targeted_runner:
             parts.append(("lit", _ROUTING_VERIFY_RUNNER_CLAUSE))
     else:
         parts.append(("lit", _COVERED_BY_CLAUSE + _COVERED_BY_HEAD_CLAUSE))

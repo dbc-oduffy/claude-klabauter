@@ -37,11 +37,24 @@ def test_file_level_target_nodeid_is_the_bare_file():
     assert [a.to_json()["nodeid"] for a in out] == ["a/test_x.py", "a/test_y.py::t1"]
 
 
-def test_length_mismatch_drops_all_and_does_not_raise():
-    tests = (_t("a.py", "t1"), _t("b.py", "t2"))
+def test_short_mint_keeps_paired_nodes_and_names_the_unpaired_drop():
+    tests = (_t("a.py", "t1"), _t("a.py", "t2"), _t("b.py", "t3"))
     out = account_targets(tests, ["only"], ["only"], [], [])
+    assert [a.disposition for a in out] == ["row", "row", "dropped"]
+    assert [a.row_id for a in out] == ["only", "only", None]
+    assert out[2].reason == "mint returned 1 ids for 2 files"
+
+
+def test_empty_mint_drops_every_node_by_name_and_never_raises():
+    out = account_targets((_t("a.py", "t1"), _t("b.py", "t2")), [], [], [], [])
     assert [a.disposition for a in out] == ["dropped", "dropped"]
-    assert all(a.reason == "mint returned 1 ids for 2 files" and a.row_id is None for a in out)
+    assert all(a.reason == "mint returned 0 ids for 2 files" for a in out)
+
+
+def test_every_node_of_a_shared_file_is_its_own_account():
+    tests = tuple(_t("a.py", f"t{i}") for i in range(4))
+    out = account_targets(tests, ["r"], ["r"], [], [])
+    assert [a.nodeid for a in out] == [f"a.py::t{i}" for i in range(4)]
 
 
 def test_unselected_id_is_dropped():

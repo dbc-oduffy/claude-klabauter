@@ -30,6 +30,18 @@ hg = load()
 NEUTRAL = {"agy": {"decision": "ask"}, "codex": {}}
 
 
+@pytest.fixture(autouse=True)
+def settings_home(tmp_path, monkeypatch):
+    home = tmp_path / "settings-home"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    return home
+
+
+def degrade_records(home):
+    log = home / "host-hooks" / hg.DEGRADE_LOG_NAME
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
 def make_engine(tmp_path, shim_src):
     root = tmp_path / "engine"
     pkg = root / "coordinator_core" / "host_hooks"
@@ -218,3 +230,55 @@ def test_agy_engine_non_deny_never_passes_allow_through(tmp_path, decision):
     root = make_engine(tmp_path, shim(f"print(json.dumps({{'decision': '{decision}'}}))"))
     answer, state = hg.guard("agy", AGY_PAYLOAD, root)
     assert answer == {"decision": "ask"} and state != "engine"
+
+
+def test_agy_ask_with_advisory_reason_reaches_output_intact_never_allow(tmp_path):
+    from coordinator_core.host_hooks.agy_adapter import AgyAdapter
+    rendered = AgyAdapter().render(
+        AgyAdapter().adapt_event({"toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}}),
+        {"decision": "allow", "additionalContext": "advisory nag"})
+    root = make_engine(tmp_path, shim(f"print({json.dumps(json.dumps(rendered))})"))
+    answer, state = hg.guard("agy", AGY_PAYLOAD, root)
+    assert answer == {"decision": "ask", "reason": "advisory nag"} and state == hg.NEUTRAL_UNKNOWN
+
+
+def test_timeout_degrade_records_cause_and_child_cpu(tmp_path, settings_home):
+    root = make_engine(tmp_path, shim("import time; time.sleep(60)"))
+    assert hg.guard("codex", CODEX_PAYLOAD, root, budget_secs=0.3) == ({}, "degraded")
+    (rec,) = degrade_records(settings_home)
+    assert rec["cause"] == "timeout" and rec["host"] == "codex" and rec["budget_secs"] == 0.3
+    assert rec["child_cpu_secs"] is None or rec["child_cpu_secs"] >= 0
+
+
+def test_other_degrade_causes_are_distinguishable(tmp_path, settings_home):
+    hg.guard("codex", CODEX_PAYLOAD, None)
+    hg.guard("codex", "not json", make_engine(tmp_path, shim("print('{}')")))
+    hg.guard("codex", CODEX_PAYLOAD, make_engine(tmp_path / "a", "raise RuntimeError('boom')\n"))
+    hg.guard("codex", CODEX_PAYLOAD, make_engine(tmp_path / "b", shim("print('[1]')")))
+    assert [r["cause"] for r in degrade_records(settings_home)] == [
+        "no_engine_root", "bad_stdin", "nonzero_exit", "invalid_answer"]
+
+
+def test_engine_answer_and_neutral_unknown_record_nothing(tmp_path, settings_home):
+    hg.guard("codex", CODEX_PAYLOAD, make_engine(tmp_path, shim("print('{}')")))
+    assert degrade_records(settings_home) == []
+
+
+def test_unwritable_record_never_fails_the_guard(tmp_path, monkeypatch):
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(blocker))
+    assert hg.guard("codex", CODEX_PAYLOAD, None) == ({}, "degraded")
+
+
+def test_default_budget_is_half_a_second():
+    assert hg.DEFAULT_BUDGET_SECS == 0.5
+
+
+def test_cli_timeout_at_default_budget_records_and_stays_exit_zero(tmp_path, settings_home):
+    root = make_engine(tmp_path, shim("import time; time.sleep(60)"))
+    r = subprocess.run([sys.executable, str(SCRIPT), "--host", "codex", "--engine-root", root],
+                       input=CODEX_PAYLOAD, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0 and json.loads(r.stdout) == {} and r.stderr.strip() == "degraded"
+    (rec,) = degrade_records(settings_home)
+    assert rec["cause"] == "timeout" and rec["budget_secs"] == 0.5

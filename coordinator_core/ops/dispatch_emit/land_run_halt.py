@@ -453,10 +453,14 @@ def land(worktree_root: Path, repo_root: Path, params: dict) -> dict:
     siblings = sibling_release(worktree_root, run_id, None)
     token = params.get("run_token")
     script_path = params.get("script_path")
-    if token is not None and not run_token.admits(worktree_root, run_id, token, script_path):
+    if token is not None and not (
+        run_token.admits(worktree_root, run_id, token, script_path)
+        or run_token.halt_admits(worktree_root, run_id, token, script_path)
+        or run_token.spent_receipt(worktree_root, run_id, token, script_path) is not None
+    ):
         refusal = _error(
-            "params.run_token does not match a live, unspent token minted for params.run_id and "
-            "this script (a token admits one landed commit)",
+            "params.run_token does not match a live, claimed, retired or spent token minted for "
+            "params.run_id and this script",
             refused="run-token",
         )
         if siblings is not None:

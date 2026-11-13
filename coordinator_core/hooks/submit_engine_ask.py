@@ -570,19 +570,20 @@ _SPENT_WINDOW_MINT_JOIN_S = 0.1
 _CALL: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar("submit_call", default=None)  # {"t0", "wall0", "roots", "minted", "gate", "gates", "answered", "session"}
 
 
-def _owned(call: Optional[dict], root: Path, ids: Sequence[str], session: Optional[str] = None) -> list:
-    """The `ids` this call may name as its own: those it reported minting, plus those whose run-token record
-    names its session (`session`, else the call's). Trap: every session on the box mints under the same `state/warp`, so a run that
-    appeared in the window is a peer's until its record says otherwise; naming one starts it here."""
-    reported = set(call["minted"]) if call else set()
+def _own_run_ids(call: Optional[dict], root: Path, session: Optional[str] = None) -> set:
+    """The run ids this call may name as its own, found by key: those it reported minting, plus those a live
+    run-token record attributes to its session (`session`, else the call's). Never lists `state/warp`.
+    Trap: every session on the box mints under the same `state/warp`, so a run that appeared in the window
+    is a peer's until its record says otherwise; naming one starts it here."""
+    from coordinator_core.ops._path_guard import safe_id
+
+    ids = set(call["minted"]) if call else set()
     session = session or (call.get("session") if call else None)
-    rest =[i for i in ids if i not in reported]
-    owners: dict = {}
-    if rest and session:
+    if session:
         from coordinator_core.ops.dispatch_emit.run_token import live_records
 
-        owners = {r["run_id"]: r.get("session_id") for r in live_records(root)}
-    return sorted({i for i in ids if i in reported or (session and owners.get(i) == session)})
+        ids.update(r["run_id"] for r in live_records(root) if r.get("session_id") == session)
+    return {i for i in ids if safe_id(i)}
 
 
 def _emit_join_s() -> float:
@@ -618,27 +619,25 @@ def _note_minted(run_id: Any) -> None:
 
 
 def _minted_since_start(call: dict) -> Optional[list]:
-    """Runs this call minted: those it reported plus any run dir under its roots created since it began.
-    None when the directory read stalled past `_SCAN_GRACE_S`."""
+    """Runs this call minted: those it reported plus any run its session's token records name whose run dir
+    under its roots was staged since it began. Reads only those runs' own paths, never a `state/warp` listing.
+    None when the read stalled past `_SCAN_GRACE_S`."""
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
 
     found: list = list(call["minted"])
 
     def scan() -> None:
         for root in list(call["roots"]):
-            fresh: list = []
             try:
-                with os.scandir(root / RECORD_DIR_ROOT) as it:
-                    for e in it:
-                        stage = os.path.join(e.path, RUN_STAGE_FILE)
-                        try:
-                            if e.is_dir() and os.stat(stage).st_mtime >= call["wall0"] - 1.0 and e.name not in found:
-                                fresh.append(e.name)
-                        except OSError:
-                            continue
+                ids = sorted(_own_run_ids(call, root).difference(found))
             except OSError:
                 continue
-            found.extend(i for i in _owned(call, root, fresh) if i not in found)
+            for run_id in ids:
+                try:
+                    if os.stat(os.path.join(root, RECORD_DIR_ROOT, run_id, RUN_STAGE_FILE)).st_mtime >= call["wall0"] - 1.0:
+                        found.append(run_id)
+                except OSError:
+                    continue
 
     thread = threading.Thread(target=scan, daemon=True)
     thread.start()
@@ -945,14 +944,11 @@ def _runner_less_run(root: Path, sizing_rel: str, live: Optional[str]) -> Option
     return None
 
 
-def _run_dirs(root: Path) -> set:
+def _run_dirs(root: Path, ids: Sequence[str]) -> set:
+    """The `ids` whose run dir under `state/warp` holds a run-stage file: one stat each, never a listing of `state/warp`."""
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
 
-    try:
-        with os.scandir(root / RECORD_DIR_ROOT) as it:
-            return {e.name for e in it if e.is_dir() and os.path.exists(os.path.join(e.path, RUN_STAGE_FILE))}
-    except OSError:
-        return set()
+    return {i for i in ids if os.path.exists(os.path.join(root, RECORD_DIR_ROOT, i, RUN_STAGE_FILE))}
 
 
 def _emit_gate(call: Optional[dict]) -> Any:
@@ -1010,7 +1006,13 @@ def _emit_within_budget(
 
     call = _CALL.get()
     gate = _emit_gate(call)
-    before = _run_dirs(root) if scan else set()
+    session = params.get("session_id") or None
+
+    def appeared() -> list:
+        """Runs this call owns whose run dir stands now and did not before the emit began."""
+        return sorted(_run_dirs(root, _own_run_ids(call, root, session)) - before)
+
+    before = _run_dirs(root, _own_run_ids(call, root, session)) if scan else set()
     wall0 = time.time()
     box: dict = {}
 
@@ -1032,7 +1034,7 @@ def _emit_within_budget(
     thread.start()
     thread.join(_emit_join_s() if budget_s is None else budget_s)
     if thread.is_alive():
-        minted = _owned(call, root, sorted(_run_dirs(root) - before), params.get("session_id") or None) if scan else []
+        minted = appeared() if scan else []
         if minted:
             names = ", ".join(minted)
             raise _EmitOverran(
@@ -1046,8 +1048,7 @@ def _emit_within_budget(
         if cancelled_in == "writing":
             raise _EmitOverran(_STALLED_RECORD_WRITE, stalled=True)
         if cancelled_in == "committed":  # the record published between the scan above and the cancel
-            session = params.get("session_id") or None
-            late = _owned(call, root, sorted(_run_dirs(root) - before), session) if scan else []
+            late = appeared() if scan else []
             if scan and not late:  # the emit writes its token before its run dir: the token alone names the run
                 late = _session_tokens_since(root, session or (call or {}).get("session"), wall0)
             if late:
@@ -2779,11 +2780,14 @@ def _stored_refusal(record: dict) -> Optional[str]:
 
 def _unmarked_emitted_run(root: Path, sizing_rel: str) -> Optional[str]:
     """The newest `warp-<stem>-*` run bound to `sizing_rel` that stopped between stages without a halt
-    marker (run.json bound, run-stage `staged` or `halted`, no halted.json), else None. One scandir and
-    three small reads, no git spawn; a landed, minted-only, marked or token-retired run is not one."""
+    marker (run.json bound, run-stage `staged` or `halted`, no halted.json), else None. Candidates come
+    from the live run-token records and the live-run index, never a listing of `state/warp`; a run in
+    neither (token expired and index entry gone) is not found. No git spawn; a landed, minted-only,
+    marked or token-retired run is not one."""
     import json
 
     from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit import live_run_index, run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
     from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE, _norm
     from coordinator_core.ops.dispatch_emit.requirements_ledger import read_run
@@ -2791,11 +2795,14 @@ def _unmarked_emitted_run(root: Path, sizing_rel: str) -> Optional[str]:
     norm = _norm(sizing_rel)
     prefix = f"warp-{Path(norm).stem}-"
     base = root / RECORD_DIR_ROOT
-    with os.scandir(base) as it:
-        names = sorted((e.name for e in it if e.name.startswith(prefix) and e.is_dir()), reverse=True)
+    held = {r["run_id"] for r in run_token.live_records(root)}
+    indexed = live_run_index.read(root, _READ_DEADLINE_MS)
+    if isinstance(indexed, dict):
+        held.update(indexed)
+    names = sorted((n for n in held if n.startswith(prefix) and safe_id(n)), reverse=True)
     for name in names:
         rd = base / name
-        if not safe_id(name) or (rd / HALTED_FILE).exists():
+        if (rd / HALTED_FILE).exists():
             return None
         try:
             stage = json.loads((rd / RUN_STAGE_FILE).read_text(encoding="utf-8"))

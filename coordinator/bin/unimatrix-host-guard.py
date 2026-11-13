@@ -10,6 +10,10 @@ yet tell a real neutral verdict from a warm miss or caught error. Only a verifie
 answer) is "engine"; "degraded" and "neutral-unknown" never satisfy an enforcement check.
 The timeout bounds communicate(), not Popen setup; a timed-out child's kill-and-reap adds up to 2s.
 
+Every degrade appends one record {ts, host, cause, budget_secs, child_cpu_secs} to degrade_log_path(); cause
+"timeout" carries the child's CPU seconds (None without psutil), so a timed-out guard is distinguishable from an
+absent nag. A write failure never alters the answer. The log is append-only and unrotated; the A7 reader owns truncation.
+
 CLI: unimatrix-host-guard.py --host codex|agy [--engine-root PATH]
   stdin: one hook payload. stdout: exactly one JSON line. stderr: `state`. Exit 0 always.
 """
@@ -17,11 +21,13 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 NEUTRAL = {"agy": {"decision": "ask"}, "codex": {}}
 NEUTRAL_UNKNOWN = "neutral-unknown"
 DEFAULT_BUDGET_SECS = 0.5
+DEGRADE_LOG_NAME = "host-guard-degrades.jsonl"
 SHIM_MODULE = "coordinator_core.host_hooks.shim"
 
 
@@ -65,17 +71,51 @@ def _parse_single_object(text):
         return None
 
 
+def degrade_log_path():
+    """<settings home>/host-hooks/host-guard-degrades.jsonl; COORDINATOR_SETTINGS_HOME overrides the home."""
+    env = os.environ.get("COORDINATOR_SETTINGS_HOME")
+    home = Path(env) if env else Path.home() / ".coordinator-claude-settings"
+    return home / "host-hooks" / DEGRADE_LOG_NAME
+
+
+def _child_cpu_secs(pid):
+    """User+system CPU seconds the still-live child has used, or None; read before the kill. Process time, not wall."""
+    try:
+        import psutil
+        t = psutil.Process(pid).cpu_times()
+        return round(t.user + t.system, 4)
+    except Exception:
+        return None
+
+
+def _record_degrade(host, cause, budget_secs, child_cpu_secs):
+    """Append one JSON line naming why the guard degraded; never raises."""
+    try:
+        path = degrade_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rec = {"ts": round(time.time(), 3), "host": host, "cause": cause, "budget_secs": budget_secs,
+               "child_cpu_secs": child_cpu_secs}
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
+
+
+def _degrade(host, cause, budget_secs, child_cpu_secs=None):
+    _record_degrade(host, cause, budget_secs, child_cpu_secs)
+    return _neutral(host), "degraded"
+
+
 def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS):
     """Return (answer, state): "engine" for a Codex nested deny or a valid agy answer; "neutral-unknown" for a
     Codex bare {} (the shim emits it for a real neutral verdict, a warm miss and a caught internal error alike);
     else "degraded" with the host's neutral answer. Only "engine" may count as governance evidence."""
     if host not in NEUTRAL:
         return {}, "degraded"
-    degraded = (_neutral(host), "degraded")
     if not engine_root or not Path(engine_root).is_dir():
-        return degraded
+        return _degrade(host, "no_engine_root", budget_secs)
     if not isinstance(_parse_single_object(stdin_text or ""), dict):
-        return degraded
+        return _degrade(host, "bad_stdin", budget_secs)
     env = dict(os.environ)
     prior = env.get("PYTHONPATH")
     env["PYTHONPATH"] = str(engine_root) + (os.pathsep + prior if prior else "")
@@ -89,21 +129,25 @@ def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS):
         try:
             out, _ = proc.communicate(stdin_text.encode("utf-8"), timeout=budget_secs)
         except subprocess.TimeoutExpired:
-            return degraded
+            return _degrade(host, "timeout", budget_secs, _child_cpu_secs(proc.pid))
         if proc.returncode != 0:
-            return degraded
+            return _degrade(host, "nonzero_exit", budget_secs)
         answer = _parse_single_object(out.decode("utf-8", "replace"))
         if not _valid_answer(host, answer):
-            return degraded
+            return _degrade(host, "invalid_answer", budget_secs)
         if host == "codex" and answer == {}:
             return answer, NEUTRAL_UNKNOWN
         # Trap: the warm engine answers a neutral agy command with "allow"; the guard's contract is
         # never-allow, so anything but a deny becomes the ask fallback and never counts as governance.
+        # An ask carrying a reason (the agy adapter renders an advisory that way) keeps its text.
         if host == "agy" and answer["decision"] != "deny":
+            reason = answer.get("reason")
+            if answer["decision"] == "ask" and isinstance(reason, str) and reason:
+                return {"decision": "ask", "reason": reason}, NEUTRAL_UNKNOWN
             return _neutral(host), NEUTRAL_UNKNOWN
         return answer, "engine"
     except Exception:
-        return degraded
+        return _degrade(host, "launch_error", budget_secs)
     finally:
         if proc is not None and proc.poll() is None:
             try:
@@ -144,4 +188,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    if any(_a in ("-h", "--help") for _a in sys.argv[1:]):
+        print("usage: unimatrix-host-guard [-h]\nunimatrix host guard hook body; reads hook JSON on stdin, emits JSON")
+        raise SystemExit(0)
     sys.exit(main())

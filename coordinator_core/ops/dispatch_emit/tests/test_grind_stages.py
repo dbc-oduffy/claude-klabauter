@@ -1433,6 +1433,32 @@ def test_the_ledger_sweep_relay_stays_on_the_haiku_floor():
     assert "model: 'haiku'" in _sweep_call()
 
 
+def _retire_verify(**kw):
+    return grind_stages.compose_verify_agent_call(
+        label="v", phase_title="Grind", row_id_js="row.rowId", row_path_js="row.path",
+        touched_files_js="row.touchedFiles", evidence_js="row.evidence", fix_plan_js="row.fixPlan",
+        profile="bug", run_id_js="RUN_ID", digest_js="row.digest", routing=True, retire=True, **kw,
+    )
+
+
+def test_a_targeted_retire_verify_reruns_the_row_at_committed_head_and_returns_the_outcome():
+    call = _retire_verify(targeted_runner=True)
+    assert " --committed-head`" in call
+    assert "retired only while those tests pass at committed HEAD" in call
+    assert "Run no tests" not in call
+    assert "tests_outcome" in call and "tests_failing_ids" in call
+
+
+def test_an_untargeted_retire_verify_and_a_fix_bound_routing_verify_stay_runnerless():
+    assert "--committed-head" not in _retire_verify(targeted_runner=False)
+    fix_bound = grind_stages.compose_verify_agent_call(
+        label="v", phase_title="Grind", profile="bug", routing=True, targeted_runner=True,
+        run_id_js="RUN_ID", digest_js="row.digest",
+    )
+    assert "--committed-head" not in fix_bound
+    assert "Run no tests" in fix_bound
+
+
 def test_triage_schema_admits_optional_items_and_does_not_require_them():
     call = grind_stages.compose_triage_call(label="t", phase_title="T", run_dir="r")
     assert '"items"' in call

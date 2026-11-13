@@ -362,7 +362,7 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.module_load_lock import held_during_load
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.session import record_homes
+from coordinator_core.session import output_tree_layout, record_homes
 from coordinator_core.wire_paths import rel_id
 
 
@@ -381,10 +381,38 @@ class _PathNotContained(Exception):
     pass
 
 
-def _resolve_path(plan_path: str, worktree: Path, *, extra_roots: tuple = ()) -> Path:
+def _canonical_plan_path(plan_path: str, worktree: Path) -> tuple[Path, Optional[str]]:
+    """The plan path a mutate acts on, plus the flat duplicate rel path when both spellings exist.
+
+    A flat `docs/plans/<name>.md` redirects to its month shard when the shard file exists (the
+    manifest's spelling); `output_tree_layout.locate` alone keeps the flat path whenever a flat file
+    exists. A path outside docs/plans, or carrying `..`, comes back unchanged for containment.
+    """
     p = Path(plan_path)
     if not p.is_absolute():
         p = worktree / p
+    try:
+        rel = p.relative_to(worktree).as_posix()
+    except ValueError:
+        return p, None
+    if ".." in Path(rel).parts or not rel.startswith("docs/plans/"):
+        return p, None
+    located = output_tree_layout.locate(str(worktree), rel)
+    flat_dup: Optional[str] = None
+    if "/" not in rel[len("docs/plans/"):]:
+        try:
+            shard = output_tree_layout.shard_path("docs/plans", rel)
+        except ValueError:
+            shard = None
+        if shard is not None and (worktree / shard).is_file():
+            if (worktree / rel).is_file():
+                flat_dup = rel
+            located = shard
+    return worktree / located, flat_dup
+
+
+def _resolve_path(plan_path: str, worktree: Path, *, extra_roots: tuple = ()) -> Path:
+    p, _ = _canonical_plan_path(plan_path, worktree)
     allowed_roots = [worktree / "docs" / "plans", *(worktree / r for r in extra_roots)]
     resolved = contained_path(p, allowed_roots)
     if resolved is None:
@@ -2849,6 +2877,30 @@ def _resolution_entry(src: dict) -> dict:
 
 @register_op("plan.tasks.mutate")
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """plan.tasks.mutate: `_handler_core` plus `plan_path`/`advisory` naming the canonical path written."""
+    result = await _handler_core(params, repo_root)
+    plan_path = (params.get("plan_path") or "").strip()
+    if repo_root is None or not plan_path or result.get("exit_code") != 0:
+        return result
+    worktree = main_worktree_root(repo_root)
+    target, flat_dup = _canonical_plan_path(plan_path, worktree)
+    try:
+        rel = target.relative_to(worktree).as_posix()
+    except ValueError:
+        return result
+    cited = Path(plan_path)
+    cited_rel = (cited.relative_to(worktree) if cited.is_absolute() and worktree in cited.parents else cited).as_posix()
+    if rel != cited_rel:
+        result["plan_path"] = rel
+    if flat_dup:
+        result["plan_path"] = rel
+        result["advisory"] = (
+            f"flat duplicate {flat_dup} also exists; wrote the canonical shard {rel}"
+        )
+    return result
+
+
+async def _handler_core(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'plan.tasks.mutate' handler — plan '## Tasks' task-spine mutations.
 
     MUTATING: writes to a docs/plans/*.md file's '## Tasks' fenced body block
