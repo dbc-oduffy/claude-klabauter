@@ -136,6 +136,107 @@ def test_exactly_one_git_spawn(repo, monkeypatch):
     assert len(calls) == 1
 
 
+def _capture_log(monkeypatch):
+    """Record each run_git argv and its stdout size."""
+    seen = []
+    real = rpb.run_git
+
+    def wrapper(args, **kw):
+        proc = real(args, **kw)
+        seen.append((list(args), len(proc.stdout)))
+        return proc
+
+    monkeypatch.setattr(rpb, "run_git", wrapper)
+    return seen
+
+
+def test_git_is_scoped_to_the_declared_paths_and_output_ignores_unrelated_files(repo, monkeypatch):
+    base = _git(repo, "rev-parse", "HEAD")
+    peer = _commit(repo, "a.py", "a = 1\n", "sess-peer")
+    seen = _capture_log(monkeypatch)
+    small = _run(repo, base, ["a.py"])
+    for i in range(60):
+        (repo / f"noise{i}.txt").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "noise")
+    large = _run(repo, base, ["a.py"])
+    assert dict(small) == dict(large) == {"a.py": peer}
+    (small_argv, small_out), (large_argv, large_out) = seen
+    assert small_argv[small_argv.index("--") + 1:] == ["a.py"] == large_argv[large_argv.index("--") + 1:]
+    assert large_out == small_out
+
+
+def test_pathspec_count_is_capped_by_climbing_to_ancestor_directories():
+    paths = [f"src/d{i % 4}/m{i}.py" for i in range(1900)]
+    specs = rpb._scope_pathspecs(paths)
+    assert 0 < len(specs) <= rpb._MAX_PATHSPECS and specs == [f"src/d{i}" for i in range(4)]
+    assert rpb._scope_pathspecs([f"d{i}/f.py" for i in range(1900)]) == []
+    assert rpb._scope_pathspecs(["."]) == [] and rpb._scope_pathspecs(["a.py"]) == ["a.py"]
+
+
+def test_many_declared_files_still_one_scoped_spawn_with_exact_matching(repo, monkeypatch):
+    (repo / "src").mkdir()
+    names = [f"src/m{i}.py" for i in range(50)]
+    for n in names:
+        (repo / n).write_text("v = 0\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "seed")
+    base = _git(repo, "rev-parse", "HEAD")
+    peer = _commit(repo, "src/other.py", "o = 1\n", "sess-peer")
+    for n in names[:3]:
+        _commit(repo, n, "v = 1\n", "sess-peer")
+    seen = _capture_log(monkeypatch)
+    got = _run(repo, base, names[:3] + names[3:])
+    assert len(seen) == 1 and len(seen[0][0][seen[0][0].index("--") + 1:]) <= rpb._MAX_PATHSPECS
+    assert set(got) == set(names[:3]) and "src/other.py" not in got.changed
+    assert peer not in got.values()
+
+
+def test_peer_shas_still_collapse_across_commits_outside_the_pathspec(repo):
+    (repo / "b.py").write_text("b = 0\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "b base")
+    base = _git(repo, "rev-parse", "HEAD")
+    _commit(repo, "a.py", "a = 1\n", "sess-p1")
+    _commit(repo, "unrelated.txt", "u\n", "sess-p3")
+    _commit(repo, "b.py", "b = 1\n", "sess-p2")
+    _commit(repo, "a.py", "a = 2\n", SESSION, DELIVERABLE)
+    got = _run(repo, base, ["a.py", "b.py"])
+    assert set(got) == {"a.py", "b.py"} and len(set(got.values())) == 1
+
+
+def test_a_hung_git_child_is_killed_and_degrades_as_timeout(repo, monkeypatch):
+    import subprocess as sp
+    import sys
+    import time
+
+    from coordinator_core.git import run as git_run
+
+    base = _git(repo, "rev-parse", "HEAD")
+    _commit(repo, "a.py", "a = 1\n", "sess-peer")
+    children = []
+    real_popen = sp.Popen
+
+    class Recording(real_popen):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            children.append(self)
+
+    real_run_git = git_run.run_git
+    monkeypatch.setattr(git_run, "_git_exe", lambda: sys.executable)
+    monkeypatch.setattr(git_run, "_SPAWN_SCHEDULING_HEADROOM_SECS", 0.5)
+    monkeypatch.setattr(sp, "Popen", Recording)
+    monkeypatch.setattr(
+        rpb, "run_git",
+        lambda args, **kw: real_run_git(["-c", "import time; time.sleep(120)"], timeout=0.5),
+    )
+    started = time.monotonic()
+    got = _run(repo, base, ["a.py"])
+    assert time.monotonic() - started < 15
+    assert dict(got) == {} and got.degraded == "timeout"
+    assert len(children) == 1 and children[0].poll() is not None
+
+
 def _timed_out(args, **kw):
     from coordinator_core.git.run import GitResult
 

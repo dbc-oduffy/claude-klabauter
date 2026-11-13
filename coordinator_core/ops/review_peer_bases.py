@@ -26,6 +26,7 @@ from coordinator_core.git.run import LOCAL_PLUMBING_BUDGET_SECS, run_git
 
 # run_git adds its own wall-clock scheduling headroom on top of this process-time bound.
 _GIT_TIMEOUT_SECS = LOCAL_PLUMBING_BUDGET_SECS
+_MAX_PATHSPECS = 32
 _COMMIT_MARK = "\x1e"
 _FIELD_SEP = "\x1f"
 _FORMAT = (
@@ -51,22 +52,40 @@ def _has_object_store(repo_root: Path) -> bool:
     return dot_git.is_file() or (dot_git / "objects").is_dir()
 
 
+def _normalize(raw: str) -> str:
+    p = raw.strip().replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p.rstrip("/")
+
+
 def _declared_matcher(paths: List[str]) -> Callable[[str], bool]:
     """Predicate: a changed file name is a declared file or sits under a declared directory.
-    Replaces git's per-commit pathspec matching, which costs commits x pathspecs."""
+    The exact filter on top of ``_scope_pathspecs``' bounded superset."""
     exact = set()
     prefixes = []
     for raw in paths:
-        p = raw.strip().replace("\\", "/")
-        while p.startswith("./"):
-            p = p[2:]
-        p = p.rstrip("/")
+        p = _normalize(raw)
         if p in ("", "."):
             return lambda _name: True
         exact.add(p)
         prefixes.append(p + "/")
     under = tuple(prefixes)
     return lambda name: name in exact or name.startswith(under)
+
+
+def _scope_pathspecs(paths: List[str]) -> List[str]:
+    """At most ``_MAX_PATHSPECS`` literal pathspecs covering every declared path, so git prunes
+    each commit's tree walk to them: the declared set itself, else its ancestor directories
+    (a superset the exact matcher narrows). Empty when only the whole tree covers them."""
+    specs = sorted({_normalize(p) for p in paths})
+    if "" in specs or "." in specs:
+        return []
+    while len(specs) > _MAX_PATHSPECS:
+        specs = sorted({s.rpartition("/")[0] for s in specs})
+        if "" in specs:
+            return []
+    return specs
 
 
 class PeerBases(Dict[str, str]):
@@ -86,9 +105,10 @@ def peer_path_bases(
     own_deliverable: Optional[str] = None,
 ) -> Dict[str, str]:
     """Declared ``paths`` -> sha of the newest peer commit in ``base..(head or HEAD)`` touching
-    the path, only for paths where no own commit precedes it. One ``git log`` spawn; none when
-    ``paths`` is empty. Declared paths are matched in Python, so git's cost is independent of
-    their count; a glob or ``:`` magic entry falls back to git pathspecs. A git failure returns
+    the path, only for paths where no own commit precedes it. One ``git log`` spawn, pathspec-scoped
+    to at most ``_MAX_PATHSPECS`` entries (so cost is independent of unrelated paths in the range
+    and of the declared count), exact matching in Python; none when ``paths`` is empty. A glob or
+    ``:`` magic entry passes every entry to git as a pathspec. A git failure returns
     an empty ``PeerBases`` whose ``degraded`` names the cause, ``"timeout"`` or ``"git-failed"``
     (every path keeps the run base)."""
     if not paths or not _has_object_store(repo_root):
@@ -98,8 +118,11 @@ def peer_path_bases(
         "-C", str(repo_root), "log", "--reverse", "--name-only", "--no-renames", _FORMAT,
         f"{base}..{head or 'HEAD'}",
     ]
-    if not in_python:
-        argv += ["--", *map(git_pathspec, paths)]
+    scoped = _scope_pathspecs(paths) if in_python else [git_pathspec(p) for p in paths]
+    if scoped:
+        # --full-history keeps side-branch commits a merge would otherwise simplify away.
+        argv.insert(argv.index(_FORMAT), "--full-history")
+        argv += ["--", *scoped]
     proc = run_git(argv, timeout=_GIT_TIMEOUT_SECS)
     if proc.returncode != 0:
         failed = PeerBases()
@@ -112,13 +135,23 @@ def peer_path_bases(
     changed: set = set()
     order: List[str] = []
     linear = in_python
+    forks: set = set()
+    listed: set = set()
     for chunk in proc.stdout.split(_COMMIT_MARK):
         header, _, files = chunk.partition("\n")
         parts = header.split(_FIELD_SEP)
         if len(parts) != 4 or not parts[0].strip():
             continue
         sha = parts[0].strip()
-        if order and parts[3].split() != [order[-1]]:
+        parents = parts[3].split()
+        if scoped and in_python:
+            # Commits outside the pathspec are absent from the log: linear means one parent, no
+            # fork (a parent seen twice), and a listed parent being the previous listed commit.
+            if len(parents) > 1 or (parents and (parents[0] in forks or (parents[0] in listed and parents[0] != order[-1]))):
+                linear = False
+            forks.update(parents)
+            listed.add(sha)
+        elif order and parents != [order[-1]]:
             linear = False
         order.append(sha)
         peer = _is_peer(_values(parts[1]), _values(parts[2]), own_session, own_deliverable)

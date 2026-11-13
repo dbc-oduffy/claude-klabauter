@@ -49,7 +49,7 @@ DERIVING FROM A CALLER'S BUDGET. A call site on a budgeted path passes its
 caller's end-to-end budget through rather than naming a number:
 `run_git(args, timeout=CEREMONY_BUDGET_SECS)`, exactly the shape
 `ops/ceremony/branch_resolution.py`, `ops/ceremony/resolver.py` and
-`ops/ceremony/update_docs_scan.py` already use. `timeout=` is NARROW-ONLY
+`ops/ceremony/update_docs_worklist.py` already use. `timeout=` is NARROW-ONLY
 here -- it is folded through `min()` against the ceiling for its lane (see
 `_resolve_budget`), so a caller can always ask for less time and can
 never buy more. That is DR-349 § 3's shape, and it is why this parameter is
