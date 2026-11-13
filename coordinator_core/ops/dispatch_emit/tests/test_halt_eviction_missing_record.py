@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 
 from coordinator_core.ops.dispatch_emit import halt_tree_check, halt_tree_evict, live_write_guard
@@ -17,11 +18,27 @@ def _plan(tmp_path, monkeypatch):
     (root / "mod.py").write_bytes(BAD)
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     monkeypatch.setattr(halt_tree_check, "broken_paths", lambda r, own, ws: {p: "x" for p in own})
+    _stage_run(root, "r1", {"mod.py": None})
     paths: list = ["other.txt"]
     ev = plan_tree_eviction(
         root, REC, ["mod.py"], {"mod.py"}, ["mod.py"], {}, paths, run_id="r1",
     )
     return root, ev, paths
+
+
+def _stage_run(root, run_id, baseline):
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    shas = {
+        p: None if b is None else git_objects.write_object(resolve_git_common_dir(root), b"blob", b)
+        for p, b in baseline.items()
+    }
+    rdir = root / "state" / "warp" / run_id
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / "manifest.json").write_text(
+        json.dumps({"rows": [], "doc_writes": [], "write_baseline": shas}), encoding="utf-8"
+    )
 
 
 def test_every_target_refused_drops_unwritten_record_paths(tmp_path, monkeypatch):

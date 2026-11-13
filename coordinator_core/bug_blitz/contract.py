@@ -138,6 +138,47 @@ def run_tag(run_id: str) -> str:
     return f"{RUN_TAG_PREFIX}{run_id}"
 
 
+REAP_CLOSED_BY = "bug-backlog-reap"
+REAP_RECORD_REL = "state/scratch/bug-blitz/reap/latest.json"
+
+
+@dataclass(frozen=True)
+class ReapRecord:
+    """Result of the pre-dispatch reap: row ids by test verdict at `head_sha`."""
+
+    head_sha: str
+    ran_at: str
+    red: tuple[str, ...] = ()
+    green: tuple[str, ...] = ()
+    unrun: dict[str, str] | None = None
+
+    def to_json(self) -> dict:
+        """JSON-ready dict; `unrun` maps row id to the reason it was not run."""
+        return {
+            "head_sha": self.head_sha,
+            "ran_at": self.ran_at,
+            "red": list(self.red),
+            "green": list(self.green),
+            "unrun": dict(self.unrun or {}),
+        }
+
+    @classmethod
+    def from_json(cls, data: dict) -> "ReapRecord":
+        """Inverse of `to_json`; absent lists/maps read as empty."""
+        return cls(
+            head_sha=data["head_sha"],
+            ran_at=data["ran_at"],
+            red=tuple(data.get("red") or ()),
+            green=tuple(data.get("green") or ()),
+            unrun=dict(data.get("unrun") or {}),
+        )
+
+
+def reap_record_rel() -> str:
+    """Repo-relative POSIX path of the latest reap record."""
+    return REAP_RECORD_REL
+
+
 def tests_record_rel(profile: str, run_id: str, row_id: str) -> str:
     """Repo-relative POSIX path of a row's runner record."""
     home = Path(home_dir("", "queue-grind")).as_posix()

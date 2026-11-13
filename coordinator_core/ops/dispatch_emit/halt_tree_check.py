@@ -7,6 +7,7 @@ run's write set; the caller evicts what this reports (`halt_tree_evict`).
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -30,6 +31,18 @@ def _importers(root: Path, own: Sequence[str], write_set: Sequence[str]) -> list
         if text is not None and any(s in text for s in stems):
             out.append(rel)
     return out
+
+
+_OWNER_SUFFIX = re.compile(r"; owned by live run \S+$")
+
+
+def _foreign_uncommitted_target(detail: str, own: Sequence[str]) -> bool:
+    """True when a finding's miss is a worktree-only module or edit that is not the run's: the
+    missing import is a peer's uncommitted work, not a defect of the run's own bytes."""
+    from coordinator_core.authoring_leaks import import_closure
+
+    m = import_closure._UNCOMMITTED_TARGET.search(_OWNER_SUFFIX.sub("", detail or ""))
+    return bool(m) and m.group(1) not in own
 
 
 def broken_paths(
@@ -77,6 +90,8 @@ def broken_paths(
             return {**broken, "": f"import-closure detector failed: {type(exc).__name__}: {exc}"}
         grew = False
         for f in found:
+            if _foreign_uncommitted_target(f.detail, own):
+                continue
             broken.setdefault(f.path, f"{f.line}: {f.detail}")
             if f.path in own and f.path not in evicted:
                 evicted.add(f.path)

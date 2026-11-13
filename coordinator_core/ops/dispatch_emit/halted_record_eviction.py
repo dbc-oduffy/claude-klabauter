@@ -106,11 +106,13 @@ class TreeEviction:
 
     def __init__(
         self, root: Path, record_dir_rel: str, head_blobs: dict, origin: dict, unowned: dict,
-        run_id: Optional[str] = None,
+        run_id: Optional[str] = None, withheld: Optional[dict] = None, blob_shas: Optional[dict] = None,
     ) -> None:
         self.root, self.record_dir_rel = root, record_dir_rel
         self.head_blobs, self.origin, self.unowned = head_blobs, origin, unowned
         self.run_id = run_id
+        self.withheld = withheld
+        self.blob_shas = blob_shas or {}
         self.refused: dict = {}
         self.record_paths: list = []
         self.paths: Optional[list] = None
@@ -131,7 +133,17 @@ class TreeEviction:
             run_id=self.run_id, refused=self.refused,
         )
         self.unowned = {**self.unowned, **self.refused}
+        if self.withheld is not None:
+            for rel in self.refused:
+                if rel in self.origin:
+                    self.withheld[rel] = self.origin[rel]
+                else:
+                    self.withheld.pop(rel, None)
         if self.paths is not None:
+            for rel in self.refused:
+                blob = f"{self.record_dir_rel}/{halt_tree_evict.BLOBS_DIR}/{self.blob_shas.get(rel)}"
+                if blob in self.record_paths and blob in self.paths:
+                    self.paths.remove(blob)
             for rel in self.record_paths:
                 if not (self.root / rel).exists() and rel in self.paths:
                     self.paths.remove(rel)
@@ -179,6 +191,6 @@ def plan_tree_eviction(
         if rel not in paths:
             paths.append(rel)
             appended.append(rel)
-    eviction = TreeEviction(root, record_dir_rel, head_blobs, origin, unowned, run_id)
+    eviction = TreeEviction(root, record_dir_rel, head_blobs, origin, unowned, run_id, withheld, prints)
     eviction.record_paths, eviction.paths = appended, paths
     return eviction

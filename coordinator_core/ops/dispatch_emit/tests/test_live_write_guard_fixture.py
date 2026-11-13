@@ -50,8 +50,21 @@ def _world(tmp_path: Path) -> tuple[Path, Path, str]:
     return root, tmp_path / "rec", peer
 
 
-def test_run_rebuilding_from_head_is_refused_and_peer_hunks_survive(tmp_path):
+def _stage_own(root: Path, baseline: bytes) -> None:
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    sha = git_objects.write_object(resolve_git_common_dir(root), b"blob", baseline)
+    rdir = root / "state" / "warp" / OWN
+    rdir.mkdir(parents=True)
+    (rdir / "manifest.json").write_text(
+        json.dumps({"rows": [], "doc_writes": [], "write_baseline": {PATH: sha}}), encoding="utf-8"
+    )
+
+
+def test_a_reset_that_would_drop_peer_hunks_is_refused_and_peer_hunks_survive(tmp_path, monkeypatch):
     root, rec, peer = _world(tmp_path)
+    monkeypatch.setattr(halt_tree_evict, "_reset_plan", lambda *a: (HEAD, None))
     refused: dict = {}
     index = halt_tree_evict.evict(root, rec, [PATH], {PATH: HEAD}, run_id=OWN, refused=refused)
     assert peer in refused[PATH]
@@ -60,10 +73,13 @@ def test_run_rebuilding_from_head_is_refused_and_peer_hunks_survive(tmp_path):
     assert not (rec / halt_tree_evict.EVICTED_FILE).exists()
 
 
-def test_write_that_keeps_the_peer_hunks_is_not_refused(tmp_path):
+def test_evict_over_a_hunk_the_peer_delta_also_covers_is_refused_and_tree_kept(tmp_path):
     root, rec, _peer = _world(tmp_path)
     mine = PEER_LIVE + b"mine = 1\n"
+    (root / PATH).write_bytes(mine)
+    _stage_own(root, PEER_LIVE)
     refused: dict = {}
-    halt_tree_evict.evict(root, rec, [PATH], {PATH: mine}, run_id=OWN, refused=refused)
-    assert refused == {}
+    index = halt_tree_evict.evict(root, rec, [PATH], {PATH: HEAD}, run_id=OWN, refused=refused)
+    assert PATH in refused
+    assert index == {}
     assert (root / PATH).read_bytes() == mine

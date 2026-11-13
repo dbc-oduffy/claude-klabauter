@@ -42,6 +42,41 @@ def _read(root: Path, rel: str) -> bytes | None:
         return None
 
 
+def _reset_plan(
+    root: Path, run_id: str | None, rel: str, data: bytes, head: bytes | None
+) -> tuple[bytes | None, str | None]:
+    """`(bytes to leave in the tree, None)`, or `(None, refusal)` when the run's hunks cannot be
+    separated from foreign ones. Bytes None with no refusal means remove the file.
+
+    Hunks are taken over raw bytes (never check-in normalised, or a CRLF tree is one whole-file
+    hunk). Foreign hunks (unattributed or off the run's write print) are kept byte-identical."""
+    from coordinator_core.ops.dispatch_emit import own_hunk_stage, run_hunk_claims
+
+    if run_id is None:
+        return None, "run unknown: hunks unattributable"
+    head_lines = [] if head is None else head.splitlines(keepends=True)
+    tree_lines = data.splitlines(keepends=True)
+    hunks = own_hunk_stage._hunks_of(rel, head_lines, tree_lines)
+    split = run_hunk_claims.own_hunks(root, run_id, rel, hunks, {})
+    if not split.own:
+        return None, "no hunk attributable to this run"
+    own = set(split.own)
+    foreign = [h for h in hunks if h not in own]
+    if not foreign:
+        return head, None
+    if any(o.overlaps(f) for o in split.own for f in foreign):
+        return None, "run hunk overlaps a foreign hunk"
+    if run_hunk_claims.exceeds_match_bound(head_lines, tree_lines):
+        return None, "diff too coarse to separate run hunks from foreign ones"
+    try:
+        spliced = own_hunk_stage.splice_hunks(
+            rel, head_lines, tree_lines, [(h.old_start, h.old_len, h.new_start, h.new_len) for h in foreign]
+        )
+    except own_hunk_stage.OwnHunkRefused as exc:
+        return None, str(exc)
+    return spliced, None
+
+
 def evict(
     root: Path,
     record_dir: Path,
@@ -50,11 +85,15 @@ def evict(
     run_id: str | None = None,
     refused: dict | None = None,
 ) -> dict:
-    """Copy each path's tree bytes into `record_dir`, write `evicted.json`, reset the tree path.
+    """Copy each path's tree bytes into `record_dir`, write `evicted.json`, and reset only the run's
+    own hunks of the tree path to HEAD.
 
     `head_blobs` maps path to its HEAD bytes, or None when HEAD does not track it (the tree path is
-    then removed). Returns the `evicted.json` mapping. Never touches a path outside `paths`.
-    With `run_id`, a path whose reset would drop a peer's unlanded hunk (`live_write_guard`) is left
+    then removed when wholly the run's). Returns the `evicted.json` mapping. Never touches a path
+    outside `paths`. A path whose run hunks cannot be split from foreign ones (or any path when
+    `run_id` is None) is left untouched and recorded in `refused`; a whole-file write over foreign
+    hunks never happens. `index[path]["head"]` is the sha of the bytes actually left in the tree.
+    With `run_id`, a path whose reset bytes would drop a peer's unlanded hunk (`live_write_guard`) is left
     untouched and recorded in `refused` as `{path: holder-naming message}`.
     """
     root, record_dir = Path(root), Path(record_dir)
@@ -65,28 +104,33 @@ def evict(
         if data is None:
             continue
         head = head_blobs.get(rel)
-        if run_id is not None:
-            from coordinator_core.ops.dispatch_emit import live_write_guard
-
-            refusal = live_write_guard.check_live_write(root, run_id, rel, head or b"")
-            if refusal:
-                if refused is not None:
-                    refused[rel] = refusal
-                continue
         sha = blob_sha(data)
         if rel in index and index[rel]["blob"] != sha:
             # Already evicted once: the tree holds HEAD bytes now, so differing bytes are not ours to drop.
             continue
+        reset, refusal = _reset_plan(root, run_id, rel, data, head)
+        if refusal:
+            if refused is not None:
+                refused[rel] = f"evict refused, tree kept: {refusal}"
+            continue
+        if run_id is not None:
+            from coordinator_core.ops.dispatch_emit import live_write_guard
+
+            refusal = live_write_guard.check_live_write(root, run_id, rel, reset or b"")
+            if refusal:
+                if refused is not None:
+                    refused[rel] = refusal
+                continue
         blobs.mkdir(parents=True, exist_ok=True)
         blob_path = blobs / sha
         blob_path.write_bytes(data)
         declare_write(blob_path)
-        index[rel] = {"blob": sha, "head": None if head is None else blob_sha(head)}
+        index[rel] = {"blob": sha, "head": None if reset is None else blob_sha(reset)}
         target = root / rel
-        if head is None:
+        if reset is None:
             target.unlink()
         else:
-            target.write_bytes(head)
+            target.write_bytes(reset)
     if index:
         record_dir.mkdir(parents=True, exist_ok=True)
         index_path = record_dir / EVICTED_FILE

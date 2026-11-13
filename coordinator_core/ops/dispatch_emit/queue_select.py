@@ -144,6 +144,56 @@ _SENTINEL_ABSENT = object()
 #: to grow here.
 _LIVENESS_GATED_PROFILES = frozenset({"bug"})
 
+_TF_TAG = "tf"
+
+
+@dataclass(frozen=True)
+class _ReapGate:
+    """The `bug-backlog-reap` record, read once per `select_rows` call, as the `tf`-row admission gate.
+
+    Trap: admission never compares the record's `head_sha` to HEAD -- the branch moves faster than a
+    reap, so equality would decline every `tf` row; `head_sha` is provenance only.
+    """
+
+    record: Optional[Any]
+    exempt_tags: frozenset
+
+    @classmethod
+    def load(cls, repo_root: Path, where: Optional[Sequence[Sequence[Sequence[Any]]]]) -> "_ReapGate":
+        from coordinator_core.bug_blitz.contract import RUN_TAG_PREFIX, ReapRecord, reap_record_rel
+
+        try:
+            record = ReapRecord.from_json(
+                json.loads((repo_root / reap_record_rel()).read_text(encoding="utf-8"))
+            )
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            record = None
+        exempt = frozenset(
+            str(term[2])
+            for clause in (where or ())
+            for term in clause
+            if len(term) == 3
+            and term[0] == "tags"
+            and term[1] == "contains"
+            and str(term[2]).startswith(RUN_TAG_PREFIX)
+        )
+        return cls(record, exempt)
+
+    def decline_reason(self, row_path: Path, tags: Any) -> Optional[str]:
+        """Why a `tf` row is not admitted, or None (non-`tf` rows and rows minted by this submission pass)."""
+        row_tags = tags if isinstance(tags, list) else []
+        if _TF_TAG not in row_tags or self.exempt_tags.intersection(row_tags):
+            return None
+        if self.record is None:
+            return "reap record absent; run bug-backlog-reap"
+        row_id = Path(row_path).stem
+        if row_id in self.record.red:
+            return None
+        reason = (self.record.unrun or {}).get(row_id)
+        if reason is not None:
+            return f"reap: {reason}"
+        return "reap: not red (run bug-backlog-reap)"
+
 
 @dataclass(frozen=True)
 class RowSchemaGate:
@@ -191,7 +241,10 @@ def _closed_status_decline_reason(parsed: Mapping[str, Any], gate: RowSchemaGate
 
 
 def _row_schema_decline_reason(parsed: Mapping[str, Any], gate: RowSchemaGate) -> Optional[str]:
-    result = schema_validate.validate_frontmatter_obj(dict(parsed), dict(gate.schema))
+    from coordinator_core.backlog_grind_assemble.legacy_row_normalize import normalize_legacy_row
+
+    normalized = normalize_legacy_row(parsed, gate.schema)
+    result = schema_validate.validate_frontmatter_obj(normalized.row, dict(gate.schema))
     if isinstance(result, dict) and result.get("ok"):
         return None
     errors = [
@@ -203,6 +256,8 @@ def _row_schema_decline_reason(parsed: Mapping[str, Any], gate: RowSchemaGate) -
     detail = "; ".join(
         f"{e.get('field')}: {e.get('error')}" if isinstance(e, dict) else str(e) for e in errors
     ) or "schema validation failed"
+    if normalized.handback:
+        detail = f"{normalized.handback}; {detail}"
     return f"admission: row fails its schema and cannot be closed ({detail})"
 
 
@@ -841,6 +896,7 @@ def select_rows(
     entries: list[ManifestEntry] = []
     declined: list[DeclinedEntry] = []
     resolved_dirs: dict = {}
+    reap_gate: Optional[_ReapGate] = None
     for row_id, row_path, digest, normalised, pm_ruling, raw_row in filtered:
         rel_path = _repo_relative(row_path, repo_root, resolved_dirs)
         mark = handback_marks.get(row_id, "")
@@ -872,6 +928,12 @@ def select_rows(
                         ),
                     )
                 )
+                continue
+            if reap_gate is None:
+                reap_gate = _ReapGate.load(repo_root, where)
+            reap_reason = reap_gate.decline_reason(row_path, normalised.get("tags"))
+            if reap_reason is not None:
+                declined.append(DeclinedEntry(row_id=row_id, path=rel_path, reason=reap_reason))
                 continue
         if row_schema_gate is not None:
             # The raw row: sentinel normalisation must not make a present field look missing.

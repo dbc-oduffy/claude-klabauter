@@ -2016,3 +2016,52 @@ class TestPrewriteCommitParams:
         self._spawn(tmp_path, monkeypatch, {**self._params(repo), "run_id": "20261113T020202Z"})
         assert grind_rows.main(self._argv(repo)) == grind_rows.EXIT_REFUSAL
         assert "no-params-block" in capsys.readouterr().err
+
+
+class TestCloseAdmitsLegacyLessonRows:
+    """Close validates the same normalized row admission admitted; the row text on disk is untouched."""
+
+    _BASE = 'created: "2026-08-21"\ntitle: "t"\nbody: "b"\nstatus: "open"\n'
+
+    def _close(self, tmp_path, monkeypatch, row_text):
+        import coordinator_core.frontmatter.schema_validate as sv
+
+        monkeypatch.chdir(tmp_path)
+        schema_src = Path(sv.__file__).resolve().parent / "schemas" / "lesson-entry.schema.json"
+        schema_dst = tmp_path / "schema" / "lesson.schema.json"
+        schema_dst.parent.mkdir(parents=True)
+        schema_dst.write_text(schema_src.read_text(encoding="utf-8"), encoding="utf-8")
+        profile_dir = tmp_path / "queue-profiles"
+        _write_profile(profile_dir, archive_path="archive/lessons", schema_rel="schema/lesson.schema.json")
+        profile_file = profile_dir / "bug.yaml"
+        profile_file.write_text(profile_file.read_text(encoding="utf-8").replace("closed-fixed", "closed"), encoding="utf-8")
+        row_path = tmp_path / "state" / "lessons" / "l-1.yaml"
+        row_path.parent.mkdir(parents=True)
+        row_path.write_text(row_text, encoding="utf-8", newline="\n")
+        evidence = tmp_path / "evidence.txt"
+        evidence.write_text("folded.", encoding="utf-8")
+        code = grind_rows.main(
+            [
+                "close", "--profile-dir", str(profile_dir), "--profile", "bug",
+                "--row", "state/lessons/l-1.yaml", "--digest", _sha256(row_text),
+                "--verdict", "fix", "--evidence-file", str(evidence),
+                "--closed-by", "test-session", "--run-stamp", "2026-09-21T00:00:00Z",
+                "--repo-root", str(tmp_path),
+            ]
+        )
+        return code, tmp_path / "archive" / "lessons"
+
+    def test_partial_provenance_and_missing_scope_close(self, tmp_path, monkeypatch):
+        row = self._BASE + 'repo: "example-store-repo"\nsystem:\n  provenance_completeness: "partial"\n'
+        code, archive = self._close(tmp_path, monkeypatch, row)
+        assert code == grind_rows.EXIT_OK
+        (closed,) = archive.rglob("l-1.yaml")
+        text = closed.read_text(encoding="utf-8")
+        assert 'provenance_completeness: "partial"' in text and "from_repo" not in text
+
+    def test_underivable_row_is_refused_with_the_named_reason(self, tmp_path, monkeypatch, capsys):
+        code, archive = self._close(tmp_path, monkeypatch, self._BASE)
+        assert code == grind_rows.EXIT_REFUSAL
+        err = capsys.readouterr().err
+        assert "hand-back" in err and "from_repo" in err and not archive.exists()
+        assert (tmp_path / "state" / "lessons" / "l-1.yaml").exists()

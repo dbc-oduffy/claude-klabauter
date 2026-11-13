@@ -98,9 +98,19 @@ def own_blob(root: Path, path: str, head_bytes: bytes, hunks: Iterable[Hunk]) ->
     for h in chosen:
         if h not in actual:
             raise OwnHunkRefused(f"{path}: hunk {h} is not a current difference from HEAD")
+    data = splice_hunks(path, head_lines, new_lines, chosen)
+    return git_objects.write_object(resolve_git_common_dir(root), b"blob", data)
+
+
+def splice_hunks(
+    path: str, head_lines: list[bytes], new_lines: list[bytes], chosen: Iterable[tuple[int, int, int, int]]
+) -> bytes:
+    """`head_lines` with each `(old_start, old_len, new_start, new_len)` of `chosen` (HEAD
+    coordinates, ascending) replaced by its `new_lines` side; every other line stays HEAD's. Pure;
+    line endings are kept as read. `OwnHunkRefused` on overlapping hunks."""
     out: list[bytes] = []
     pos = 0
-    for old_start, old_len, new_start, new_len in chosen:
+    for old_start, old_len, new_start, new_len in sorted(chosen):
         i1 = old_start if old_len == 0 else old_start - 1
         if i1 < pos:
             raise OwnHunkRefused(f"{path}: overlapping hunks")
@@ -110,7 +120,7 @@ def own_blob(root: Path, path: str, head_bytes: bytes, hunks: Iterable[Hunk]) ->
             out.extend(new_lines[j1 : j1 + new_len])
         pos = i1 + old_len
     out.extend(head_lines[pos:])
-    return git_objects.write_object(resolve_git_common_dir(root), b"blob", b"".join(out))
+    return b"".join(out)
 
 
 def check_head_unchanged(root: Path, diffs: dict[str, PathDiff]) -> Optional[str]:

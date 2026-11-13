@@ -1338,6 +1338,71 @@ def test_failed_real_run_verdict_block_carries_one_line_cause(tmp_path, monkeypa
     assert "downstream fallout" not in verdict
 
 
+def _round_with_publish_stub(tmp_path, monkeypatch, publish_stub):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(), real_stdout=_real_stdout(), parse2_stdout=_parse2_stdout(),
+    )
+    _install_manifest_stub(monkeypatch, spy)
+
+    def _run(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if "publish.py" in joined and "--dry-run" not in cmd:
+            return publish_stub(cmd, kwargs)
+        return spy(cmd, **kwargs)
+
+    monkeypatch.setattr(_mod.subprocess, "run", _run)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+    args = _mod._build_parser().parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _mod._cmd_round(args)
+    return rc, buf.getvalue()
+
+
+def test_dirty_publisher_refusal_retries_from_clean_export(tmp_path, monkeypatch):
+    refusal = (
+        "publish: refused -- publisher code differs from aa24a0395993: "
+        "coordinator/bin/lib/x.py; commit them, or run from a clean export\n"
+    )
+    calls = []
+
+    def _publish(cmd, kwargs):
+        calls.append(list(cmd))
+        if len(calls) == 1:
+            return _completed(1, "", refusal)
+        return _completed(1, "", "  Error: export run reached publish\n")
+
+    rc, out = _round_with_publish_stub(tmp_path, monkeypatch, _publish)
+    assert rc == _mod._EXIT_FAIL
+    assert len(calls) == 2
+    retry = calls[1]
+    assert str(_mod._BASELINE_EXPORT) in retry and "--sha" in retry and "--" in retry
+    assert retry[retry.index("--") + 2] == "coordinator/bin/publish.py"
+    assert "--no-commit" in retry and "--percolate-root" in retry
+    assert "cause:     Error: export run reached publish" in out
+
+
+def test_non_publisher_refusal_does_not_retry_from_export(tmp_path, monkeypatch):
+    calls = []
+
+    def _publish(cmd, kwargs):
+        calls.append(list(cmd))
+        return _completed(1, "", "publish: refused -- fold bar: red\n")
+
+    rc, out = _round_with_publish_stub(tmp_path, monkeypatch, _publish)
+    assert rc == _mod._EXIT_FAIL
+    assert len(calls) == 1
+    assert "cause:     publish: refused -- fold bar: red" in out
+
+
 def test_extract_failure_cause_fallbacks():
     assert _mod._extract_failure_cause("", "") is None
     refused = "  [timing]   row-a: REFUSED: pre-sync gate declined: 0.000s wall / 0.000s cpu (d)\n"
@@ -1355,6 +1420,18 @@ def test_extract_failure_cause_fatal_prefixed():
     assert _mod._extract_failure_cause(refused, "") == "row-a: REFUSED: x"
     mixed = "  Error: first\n" + line + "\n"
     assert _mod._extract_failure_cause(mixed, "") == "Error: first"
+
+
+def test_extract_failure_cause_publish_refused_line_verbatim():
+    refusal = (
+        "publish: refused -- publisher code differs from aa24a0395993: "
+        "coordinator/bin/lib/box_memory_host.py; commit them, or run from a clean export"
+    )
+    assert _mod._extract_failure_cause("", "noise\n" + refusal + "\n") == refusal
+    long_refusal = refusal + " " + "x" * 500
+    assert _mod._extract_failure_cause("", long_refusal) == long_refusal
+    # Not a refusal prefix: still no cause.
+    assert _mod._extract_failure_cause("", "publish: advisory, proceeding: x") is None
 
 
 def test_generic_commit_failure_returns_fail(tmp_path, monkeypatch):

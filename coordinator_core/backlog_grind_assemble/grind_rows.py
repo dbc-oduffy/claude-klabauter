@@ -132,6 +132,7 @@ from typing import Any, Optional
 import yaml
 
 from coordinator_core.backlog_grind_assemble.grind_undo import cmd_undo
+from coordinator_core.backlog_grind_assemble.legacy_row_normalize import normalize_legacy_row
 from coordinator_core.contract.grind_vocab import (
     CLOSURE_CLOSING_BRANCHES,
     LEDGER_LINE_FIELDS,
@@ -662,9 +663,11 @@ def cmd_close(rest: list[str]) -> int:
         )
 
     fm_dict = schema_validate.parse_yaml(fm_text)
-    result = schema_validate.validate_frontmatter_obj(fm_dict, schema_obj)
+    normalized = normalize_legacy_row(fm_dict, schema_obj) if isinstance(fm_dict, dict) else None
+    result = schema_validate.validate_frontmatter_obj(normalized.row if normalized else fm_dict, schema_obj)
     if not (isinstance(result, dict) and result.get("ok")):
-        print(f"grind-row close: schema validation failed: {result}", file=sys.stderr)
+        hand_back = f" ({normalized.handback})" if normalized and normalized.handback else ""
+        print(f"grind-row close: schema validation failed{hand_back}: {result}", file=sys.stderr)
         return EXIT_REFUSAL
 
     new_path = repo_root / archive_destination(profile.archive_path, flags["run-stamp"], row_path.name)

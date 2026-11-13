@@ -629,6 +629,46 @@ def test_admission_declines_a_row_that_fails_its_schema_with_the_reason(tmp_path
     assert declined.reason.startswith("admission:") and "scope" in declined.reason and "from_repo" in declined.reason
 
 
+_LEGACY = dict(created="2026-08-21", title="t", body="b", status="open")
+
+
+def _write_legacy(row_path, **extra):
+    fields = {**_LEGACY, **extra}
+    row_path.write_text("".join(f"{k}: {json.dumps(v)}\n" for k, v in fields.items()), encoding="utf-8")
+
+
+def test_admission_admits_a_row_missing_scope_and_from_repo_when_derivable(tmp_path):
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    _write_legacy(queue_dir / "viarepo.yaml", repo="example-store-repo")
+    _write_legacy(queue_dir / "viapath.yaml", path="example-store-repo/docs/x.md")
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path, row_schema_gate=_lesson_gate())
+    assert sorted(e.row_id for e in manifest.entries) == ["viapath", "viarepo"] and manifest.declined == ()
+
+
+def test_admission_names_the_reason_when_scope_and_from_repo_are_underivable(tmp_path):
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    _write_legacy(queue_dir / "bare.yaml", path="/abs/x.md")
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path, row_schema_gate=_lesson_gate())
+    (declined,) = manifest.declined
+    assert "hand-back" in declined.reason and "not derivable" in declined.reason
+
+
+def test_admission_admits_legacy_provenance_completeness_partial_but_not_a_bad_scope(tmp_path):
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    ok = dict(_LEGACY, scope="project", from_repo="x")
+    (queue_dir / "partial.yaml").write_text(
+        "\n".join(f'{k}: "{v}"' for k, v in ok.items()) + '\nsystem:\n  provenance_completeness: "partial"\n',
+        encoding="utf-8",
+    )
+    _write_row(queue_dir / "badscope.yaml", **dict(ok, scope="galaxy"))
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path, row_schema_gate=_lesson_gate())
+    assert [e.row_id for e in manifest.entries] == ["partial"]
+    assert [d.row_id for d in manifest.declined] == ["badscope"] and "scope" in manifest.declined[0].reason
+
+
 def test_admission_ignores_schema_errors_on_fields_close_stamps(tmp_path):
     queue_dir = tmp_path / "state" / "lessons"
     queue_dir.mkdir(parents=True)
@@ -750,3 +790,92 @@ def test_unaccounted_row_raises_named_error_not_silent_drop():
     _assert_every_row_accounted(["a"], (), (), ("a",), ())
     with pytest.raises(RowDroppedError, match="'ghost'"):
         _assert_every_row_accounted(["a", "ghost"], (), (), ("a",), ())
+
+
+@pytest.fixture
+def reap_env(tmp_path):
+    from coordinator_core.bug_blitz.contract import reap_record_rel
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "live.py").write_text("X = 1\n", encoding="utf-8")
+    queue_dir = tmp_path / "state" / "bug-backlog"
+    queue_dir.mkdir(parents=True)
+
+    class Env:
+        root = tmp_path
+        queue = queue_dir
+
+        @staticmethod
+        def row(stem, tags):
+            _write_row(queue_dir / f"{stem}.yaml", **_base_row(surface="live.py", tags=tags))
+
+        @staticmethod
+        def record(head_sha="f" * 40, **fields):
+            path = tmp_path / reap_record_rel()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({"head_sha": head_sha, "ran_at": "2026-11-12T00:00:00+00:00", **fields}),
+                encoding="utf-8",
+            )
+
+        @staticmethod
+        def select(**kw):
+            kw.setdefault("profile", "bug")
+            return _select(queue=[queue_dir], repo_root=tmp_path, **kw)
+
+    return Env
+
+
+def _declined(manifest):
+    return {d.row_id: d.reason for d in manifest.declined}
+
+
+def test_bug_profile_declines_every_tf_row_when_no_reap_record_exists(reap_env):
+    reap_env.row("t1", ["tf"])
+    reap_env.row("prose", ["misc"])
+    m = reap_env.select()
+    assert [e.row_id for e in m.entries] == ["prose"]
+    assert _declined(m) == {"t1": "reap record absent; run bug-backlog-reap"}
+
+
+def test_bug_profile_admits_a_tf_row_only_when_the_record_lists_it_red(reap_env):
+    for stem in ("red", "green", "never"):
+        reap_env.row(stem, ["tf"])
+    reap_env.record(red=["red"], green=["green"], unrun={"never": "collection error"})
+    m = reap_env.select()
+    assert [e.row_id for e in m.entries] == ["red"]
+    assert _declined(m) == {
+        "green": "reap: not red (run bug-backlog-reap)",
+        "never": "reap: collection error",
+    }
+
+
+def test_a_record_for_another_head_still_gates_by_its_red_list(reap_env):
+    reap_env.row("red", ["tf"])
+    reap_env.row("other", ["tf"])
+    reap_env.record(head_sha="0" * 40, red=["red"])
+    m = reap_env.select()
+    assert [e.row_id for e in m.entries] == ["red"]
+    assert list(_declined(m)) == ["other"]
+
+
+def test_an_unreadable_record_reads_as_absent(reap_env):
+    reap_env.row("t1", ["tf"])
+    (reap_env.root / "state" / "scratch" / "bug-blitz" / "reap").mkdir(parents=True)
+    (reap_env.root / "state" / "scratch" / "bug-blitz" / "reap" / "latest.json").write_text("{not json")
+    assert _declined(reap_env.select()) == {"t1": "reap record absent; run bug-backlog-reap"}
+
+
+def test_rows_with_the_submissions_mint_tag_skip_the_reap_gate(reap_env):
+    reap_env.row("minted", ["tf", "bug-blitz-RUN1"])
+    reap_env.row("older", ["tf", "bug-blitz-RUN0"])
+    where = [[["status", "==", "open"], ["tags", "contains", "bug-blitz-RUN1"]]]
+    assert [e.row_id for e in reap_env.select(where=where).entries] == ["minted"]
+    # without the where term naming the run tag, the same tag grants no exemption
+    m = reap_env.select()
+    assert m.entries == () and set(_declined(m)) == {"minted", "older"}
+
+
+def test_other_profiles_ignore_the_reap_record(reap_env):
+    reap_env.row("t1", ["tf"])
+    assert [e.row_id for e in reap_env.select(profile="fixture").entries] == ["t1"]

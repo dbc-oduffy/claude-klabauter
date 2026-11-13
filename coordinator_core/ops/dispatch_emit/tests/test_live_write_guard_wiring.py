@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from coordinator_core.ops.dispatch_emit import halt_tree_evict as hte
 from coordinator_core.ops.dispatch_emit import live_write_guard
 
@@ -9,10 +11,27 @@ BAD = b"peer hunk\n"
 HEAD = b"ok = 1\n"
 
 
-def _world(tmp_path):
+def _stage(root, run_id, baseline):
+    """Stage `run_id` against `baseline` ({path: bytes | None}) so its hunks are attributable."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    shas = {
+        p: None if b is None else git_objects.write_object(resolve_git_common_dir(root), b"blob", b)
+        for p, b in baseline.items()
+    }
+    rdir = root / "state" / "warp" / run_id
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / "manifest.json").write_text(
+        json.dumps({"rows": [], "doc_writes": [], "write_baseline": shas}), encoding="utf-8"
+    )
+
+
+def _world(tmp_path, baseline=HEAD):
     root, rec = tmp_path / "root", tmp_path / "rec"
     root.mkdir()
     (root / "a.py").write_bytes(BAD)
+    _stage(root, "me", {"a.py": baseline})
     return root, rec
 
 
@@ -45,7 +64,7 @@ def test_no_refusal_still_evicts(tmp_path, monkeypatch):
 
 
 def test_untracked_path_is_checked_as_removal(tmp_path, monkeypatch):
-    root, rec = _world(tmp_path)
+    root, rec = _world(tmp_path, baseline=None)
     seen = []
     monkeypatch.setattr(live_write_guard, "check_live_write", lambda r, i, p, b: seen.append(b))
     hte.evict(root, rec, ["a.py"], {"a.py": None}, run_id="me")
@@ -60,8 +79,11 @@ def test_without_run_id_guard_is_not_consulted(tmp_path, monkeypatch):
         raise AssertionError("guard consulted without run_id")
 
     monkeypatch.setattr(live_write_guard, "check_live_write", boom)
-    hte.evict(root, rec, ["a.py"], {"a.py": HEAD})
-    assert (root / "a.py").read_bytes() == HEAD
+    refused: dict = {}
+    idx = hte.evict(root, rec, ["a.py"], {"a.py": HEAD}, refused=refused)
+    assert idx == {}
+    assert "run unknown" in refused["a.py"]
+    assert (root / "a.py").read_bytes() == BAD
 
 
 def test_tree_eviction_apply_surfaces_refusal_as_unowned(tmp_path, monkeypatch):
