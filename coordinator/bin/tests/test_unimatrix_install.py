@@ -19,6 +19,7 @@ _spec.loader.exec_module(ui)
 
 PLATFORMS = ["win32", "darwin", "linux"]
 _REAL_RESOLVE = ui.resolve_engine_root
+_REAL_AGY_PROBE = ui.agy_resolves_bare_invoke
 
 
 @pytest.fixture(autouse=True)
@@ -66,6 +67,11 @@ def _no_real_scheduler(monkeypatch):
     monkeypatch.setattr(ui, "run_schtasks", lambda *a: None)
     fake = _FakeWinreg()
     monkeypatch.setattr(ui, "_winreg", lambda: fake)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_agy_login_shell_probe(monkeypatch):
+    monkeypatch.setattr(ui, "agy_resolves_bare_invoke", lambda: True)
 
 
 @pytest.fixture(autouse=True)
@@ -2775,6 +2781,108 @@ def test_agy_allow_rule_uninstall_after_edit_removes_only_our_entry(monkeypatch,
     rc, out = _tui_main(tmp_path, "--uninstall")
     assert rc == 0 and "agy allow rule restored" in out
     assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine]
+
+
+def test_agy_allow_rule_reinstall_migrates_legacy_wildcard_and_uninstall_removes_both(monkeypatch, tmp_path):
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
+    agy.parent.mkdir(parents=True)
+    mine = "command(keep me)"
+    legacy = "command(coordinator-invoke *)"
+    before = json.dumps({"permissions": {"allow": [mine]}}).encode("utf-8")
+    agy.write_bytes(before)
+    _tui_main(tmp_path, "--install")
+    data = json.loads(agy.read_text(encoding="utf-8"))
+    data["permissions"]["allow"] = [mine, legacy]
+    agy.write_text(json.dumps(data), encoding="utf-8")
+    rc, out = _tui_main(tmp_path, "--install")
+    assert rc == 0 and "agy allow rule updated" in out
+    allow = json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
+    assert allow == [mine, ui.AGY_ALLOW_RULE]
+    once = agy.read_bytes()
+    rc, out = _tui_main(tmp_path, "--install")
+    assert "agy allow rule present" in out and agy.read_bytes() == once
+    rc, out = _tui_main(tmp_path, "--uninstall")
+    assert rc == 0 and agy.read_bytes() == before
+
+    agy.write_bytes(json.dumps({"permissions": {"allow": [mine, legacy]}}).encode("utf-8"))
+    _tui_main(tmp_path, "--install")
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, legacy, ui.AGY_ALLOW_RULE]
+    _tui_main(tmp_path, "--uninstall")
+
+    _tui_main(tmp_path, "--install")
+    data = json.loads(agy.read_text(encoding="utf-8"))
+    data["permissions"]["allow"] = [mine, legacy, ui.AGY_ALLOW_RULE]
+    agy.write_text(json.dumps(data), encoding="utf-8")
+    _tui_main(tmp_path, "--install")
+    data = json.loads(agy.read_text(encoding="utf-8"))
+    data["permissions"]["allow"].append(legacy)
+    agy.write_text(json.dumps(data), encoding="utf-8")
+    rc, out = _tui_main(tmp_path, "--uninstall")
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine]
+
+
+def test_agy_allow_rule_bare_resolves_grants_bare_line_and_reports_it(monkeypatch, tmp_path):
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
+    agy.parent.mkdir(parents=True)
+    rc, out = _tui_main(tmp_path, "--install")
+    assert rc == 0 and f"agy allow rule granted: {ui.AGY_ALLOW_RULE}" in out
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [ui.AGY_ALLOW_RULE]
+
+
+def test_agy_allow_rule_bare_unresolved_grants_absolute_line_migrates_and_uninstalls(monkeypatch, tmp_path):
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(ui, "agy_resolves_bare_invoke", lambda: False)
+    agy.parent.mkdir(parents=True)
+    mine = "command(keep me)"
+    legacy = "command(coordinator-invoke *)"
+    before = json.dumps({"permissions": {"allow": [mine]}}).encode("utf-8")
+    agy.write_bytes(before)
+    absolute = ui.agy_absolute_allow_rule()
+    assert absolute != ui.AGY_ALLOW_RULE and str(ui.settings_home() / "bin" / "coordinator-invoke") in absolute
+    rc, out = _tui_main(tmp_path, "--install")
+    assert rc == 0 and f"agy allow rule granted: {absolute}" in out
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, absolute]
+    data = json.loads(agy.read_text(encoding="utf-8"))
+    data["permissions"]["allow"] = [mine, legacy, ui.AGY_ALLOW_RULE]
+    agy.write_text(json.dumps(data), encoding="utf-8")
+    _tui_main(tmp_path, "--install")
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, absolute]
+    monkeypatch.setattr(ui, "agy_resolves_bare_invoke", lambda: True)
+    _tui_main(tmp_path, "--install")
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, ui.AGY_ALLOW_RULE]
+    monkeypatch.setattr(ui, "agy_resolves_bare_invoke", lambda: False)
+    _tui_main(tmp_path, "--install")
+    rc, _ = _tui_main(tmp_path, "--uninstall")
+    assert rc == 0 and agy.read_bytes() == before
+
+
+def test_agy_resolves_bare_invoke_reads_login_shell_probe(monkeypatch):
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, fake_run.rc, stdout=fake_run.out, stderr="")
+
+    monkeypatch.setattr(ui, "agy_resolves_bare_invoke", _REAL_AGY_PROBE)
+    monkeypatch.setattr(ui.subprocess, "run", fake_run)
+    monkeypatch.setattr(ui.sys, "platform", "linux")
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    fake_run.rc, fake_run.out = 0, "/usr/local/bin/coordinator-invoke\n"
+    assert ui.agy_resolves_bare_invoke() is True
+    assert calls == [["/bin/zsh", "-lc", "command -v coordinator-invoke"]]
+    fake_run.rc, fake_run.out = 1, ""
+    assert ui.agy_resolves_bare_invoke() is False
+
+    def boom(argv, **kw):
+        raise OSError("no shell")
+
+    monkeypatch.setattr(ui.subprocess, "run", boom)
+    assert ui.agy_resolves_bare_invoke() is False
+    monkeypatch.setattr(ui.sys, "platform", "win32")
+    monkeypatch.setattr(ui.shutil, "which", lambda name: "C:/x/coordinator-invoke.cmd")
+    assert ui.agy_resolves_bare_invoke() is True
+    monkeypatch.setattr(ui.shutil, "which", lambda name: None)
+    assert ui.agy_resolves_bare_invoke() is False
 
 
 def test_agy_allow_rule_refuses_a_non_list_allow_without_writing(monkeypatch, tmp_path):

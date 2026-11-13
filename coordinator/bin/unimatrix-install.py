@@ -1398,14 +1398,48 @@ def seed_host_status_line(config_path, host, *, uninstall=False):
 
 
 AGY_ALLOW_RULE = "command(coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json)"
+AGY_LEGACY_ALLOW_RULE = "command(coordinator-invoke *)"
 
 
-def seed_agy_allow_rule(config_path, *, uninstall=False):
+def agy_absolute_allow_rule():
+    """The submit grant naming coordinator-invoke by its settings-home path, for hosts where the bare name does not resolve."""
+    exe = str(settings_home() / "bin" / "coordinator-invoke")
+    return AGY_ALLOW_RULE.replace("command(coordinator-invoke ", f"command({exe} ", 1)
+
+
+def agy_resolves_bare_invoke():
+    """True when a bare `coordinator-invoke` resolves in agy's login-shell environment; probed once, at install.
+
+    Windows has no login-shell probe, so it reads this process's PATH.
+    """
+    if sys.platform == "win32":
+        return shutil.which("coordinator-invoke") is not None
+    shell = os.environ.get("SHELL") or "/bin/sh"
+    try:
+        out = subprocess.run([shell, "-lc", "command -v coordinator-invoke"], capture_output=True, text=True,
+                             timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == 0 and bool(out.stdout.strip())
+
+
+def agy_allow_rule(bare_resolves=None):
+    """The exact grant to write: the bare line when `coordinator-invoke` resolves for agy, else the absolute-path line."""
+    if bare_resolves is None:
+        bare_resolves = agy_resolves_bare_invoke()
+    return AGY_ALLOW_RULE if bare_resolves else agy_absolute_allow_rule()
+
+
+def seed_agy_allow_rule(config_path, *, uninstall=False, rule=None):
     """Own one entry in agy's `permissions.allow`, so a headless `agy --print` can run the coordinator door.
 
-    Operator entries are never touched. The ownership record keeps the pre-install text: an untouched
-    file returns byte for byte; a file edited since is repaired structurally.
+    `rule` is the grant to write (default: the bare line). Every form this installer has written, the
+    legacy wildcard included, is owned and migrated or removed; operator entries are never touched.
+    The ownership record keeps the pre-install text: an untouched file returns byte for byte; a file
+    edited since is repaired structurally.
     """
+    rule = rule or AGY_ALLOW_RULE
+    owned = (AGY_ALLOW_RULE, agy_absolute_allow_rule(), AGY_LEGACY_ALLOW_RULE)
     path = Path(config_path)
     state_path = path.with_name(".coordinator-allow-rule-agy.json")
     text = path.read_bytes().decode("utf-8") if path.exists() else None
@@ -1425,10 +1459,10 @@ def seed_agy_allow_rule(config_path, *, uninstall=False):
             data = json.loads(text)
             perms = data.get("permissions") if isinstance(data, dict) else None
             allow = perms.get("allow") if isinstance(perms, dict) else None
-            if not isinstance(allow, list) or AGY_ALLOW_RULE not in allow:
+            if not isinstance(allow, list) or not any(r in allow for r in owned):
                 state_path.unlink()
                 return "absent"
-            allow.remove(AGY_ALLOW_RULE)
+            allow[:] = [r for r in allow if r not in owned]
             if not allow:
                 del perms["allow"]
             if not perms:
@@ -1445,13 +1479,20 @@ def seed_agy_allow_rule(config_path, *, uninstall=False):
     allow = perms.setdefault("allow", [])
     if not isinstance(allow, list):
         raise ValueError("agy settings permissions.allow must be a list")
-    if AGY_ALLOW_RULE in allow:
+    stale = state_path.exists() and any(r in allow for r in owned if r != rule)
+    if rule in allow and not stale:
         return "present"
-    allow.append(AGY_ALLOW_RULE)
+    if stale:
+        allow[:] = [r for r in allow if r not in owned or r == rule]
+    if rule not in allow:
+        allow.append(rule)
     replacement = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {"version": 1, "host": "agy", "existed": text is not None, "before": text or "",
-              "after": replacement, "managed": {"allow": AGY_ALLOW_RULE}}
+              "after": replacement, "managed": {"allow": rule}}
+    if stale:
+        prior = _host_status_state(state_path)
+        record["existed"], record["before"] = prior["existed"], prior["before"]
     _footer_write(state_path, json.dumps(record, ensure_ascii=False) + "\n")
     _footer_write(path, replacement)
     return "updated" if text is not None else "created"
@@ -2375,7 +2416,9 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             print(f"WARN: {label} status line not installed: {exc}", file=out)
     if want_agy:
         try:
-            print(f"agy allow rule {seed_agy_allow_rule(agy_status)} in {agy_status}", file=out)
+            agy_rule = agy_allow_rule()
+            print(f"agy allow rule {seed_agy_allow_rule(agy_status, rule=agy_rule)} in {agy_status}", file=out)
+            print(f"agy allow rule granted: {agy_rule}", file=out)
         except (OSError, ValueError) as exc:
             missing.append("agy allow rule")
             print(f"WARN: agy allow rule not installed: {exc}", file=out)

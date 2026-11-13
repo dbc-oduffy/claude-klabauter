@@ -509,6 +509,13 @@ _DECLARED_PRODUCT_WRITE_JS = (
     "!/\\.md$/.test(String(p))))"
 )
 
+#: Rows the run's committed settlements closed (archived). Composers that bind no `_settled`/`_rows`
+#: (the plan route) read 0. A closure-only run committed, so it is not a no-op.
+_CLOSED_ROWS_JS = (
+    "((typeof _settled !== 'undefined' && typeof _rows !== 'undefined' && Array.isArray(_settled)) "
+    "? _settled.filter(s => s && s.outcome === 'committed' && (_rows[s.row] || {}).closeResult).length : 0)"
+)
+
 _PREP_GUARDS_JS = (
     # A single-reviewer-ok verdict over product files is one slice of the
     # whole diff; prep that omitted it is synthesised here, never refused.
@@ -537,8 +544,13 @@ _PREP_GUARDS_JS = (
     "(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
     f"!{_DECLARED_PRODUCT_WRITE_JS} && "
     "!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).some(s => (s?.files ?? []).length)) { "
+    "{ const _closedN = " + _CLOSED_ROWS_JS + "; "
     "return { halted: 'no-op', reason: 'the run changed no product file; nothing to review or commit', "
-    "prep: _reviewPrep, wave: null, integration: null }; }\n"
+    "...(_closedN > 0 ? { halted: 'landed: ' + _closedN + (_closedN === 1 ? ' row' : ' rows') + "
+    "' closed, no product file changed', "
+    "reason: 'the run committed ' + _closedN + (_closedN === 1 ? ' row closure' : ' row closures') + "
+    "' and changed no product file; nothing to review' } : {}), "
+    "prep: _reviewPrep, wave: null, integration: null }; } }\n"
     # Rows landed but changed no product file (a verification-only row):
     # the clean empty-diff prep is the one case with nothing to review.
     # The slice reviewers, other whole-diff reviewers and integration
