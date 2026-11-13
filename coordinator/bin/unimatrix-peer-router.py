@@ -953,7 +953,7 @@ class Router:
 
     async def _spawn_face(self, name):
         ep = self.endpoint_of(name)
-        proc = _roster().spawn([sys.executable, str(Path(__file__).resolve()), "face",
+        proc = _roster().spawn([_roster().console_python(), str(Path(__file__).resolve()), "face",
                                 "--name", name, "--endpoint", ep, "--forward", self.ctl,
                                 "--sessions-dir", self.sessions_dir,
                                 "--vendor", self.peers.get(name, {}).get("vendor") or "transport",

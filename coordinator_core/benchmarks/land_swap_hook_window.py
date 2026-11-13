@@ -20,6 +20,14 @@ real endpoint, resolving the token from the stamp each request as the client doe
 fake-pair arm above. `--spike` answers one question: does the OLD pair keep answering guards while
 its tree is replaced, and can a client still reach it once the stamp flips?
 
+Arm `publish-round` boots a default-root and a synced-root warm server (listener included) in a tmp
+runtime base and runs `publish.py::_quiesced_engine_roots([synced])` in a child publisher around a
+modelled non-engine-root landing (`--body-secs`) plus the synced root's copy, while a 0.1s pinger
+dials each root's hook listener and pair pipe. Each unanswered hook dial is attributed to a round
+phase; `closed_after_delivery_outside_cut` is the count outside the swap cut (`--assert-budget`
+exits 1 when nonzero). `--hold-scope auto` reads the shape of `publish.py::_run_round`;
+`--source-root` runs the servers from a clean export (`baseline-export`).
+
 Usage: python coordinator_core/benchmarks/land_swap_hook_window.py [--arm model] [--respawn
 pre-release] [--hook-path bounded] [--spike] [--assert-budget]. Exit 1 only under --assert-budget
 when the window, the slow count or the unevaluated count exceeds the budget.
@@ -594,12 +602,506 @@ def _poison_tree(engine_root: Path) -> int:
     return count
 
 
+ARM_PUBLISH_ROUND = "publish-round"
+SCOPE_WHOLE_LANDING = "whole-landing"
+SCOPE_PER_ROOT = "per-root"
+SCOPE_AUTO = "auto"
+DEFAULT_BODY_SECS = 30.0
+DEFAULT_ROUND_TAIL_SECS = 3.0
+PUBLISHER_LINGER_SECS = 1.0
+#: The drain and probe that precede a root's copy belong to its swap cut.
+CUT_ENTRY_SLACK_SECS = 1.0
+#: `publish.py::_run_round`'s landing hold wraps the whole per-repo landing loop exactly when this
+#: text sits in its source (plan anchor AP2).
+WHOLE_LANDING_ANCHOR = "), _quiesced_engine_roots("
+
+OUTCOME_ANSWERED = "answered"
+OUTCOME_TIMEOUT = "timeout"
+OUTCOME_CLOSED = "closed"
+OUTCOME_NO_LISTENER = "no_listener"
+OUTCOME_REFUSED = "refused"
+TRANSPORT_HTTP = "http"
+TRANSPORT_PIPE = "pipe"
+#: Outcomes of the hook's HTTP dial that the door reads as connection closed after delivery.
+_CLOSED_AFTER_DELIVERY = frozenset({OUTCOME_TIMEOUT, OUTCOME_CLOSED})
+
+PHASES = ("pre_round", "landing", "cut", "post_cut", "post_exit")
+LISTENER_READY_MAX_SECS = 60.0
+
+
+@dataclass(frozen=True)
+class RoundSample:
+    """One ping of one root over one transport; `started` is wall-clock epoch seconds."""
+
+    started: float
+    elapsed: float
+    root: str
+    transport: str
+    outcome: str
+
+    @property
+    def answered(self) -> bool:
+        return self.outcome == OUTCOME_ANSWERED
+
+
+@dataclass(frozen=True)
+class PublishRoundReport:
+    """The publish-round arm's verdict. `closed_after_delivery_outside_cut` counts hook dials
+    (HTTP, the guard transport) of either root that went unanswered outside the cut."""
+
+    hold_scope: str
+    body_secs: float
+    cut_secs: float
+    closed_after_delivery_outside_cut: int
+    closed_after_delivery_inside_cut: int
+    max_unanswered_secs_outside_cut: float
+    default_root_parks: bool
+    default_root_is_synced: bool
+    phase_failures: dict
+    per_root: dict
+    successor: dict
+    ancestry_changes_outcome: Optional[bool]
+    swap_window_method_defined: Optional[bool] = None
+    marks: dict = field(default_factory=dict)
+
+    def within_budget(self) -> bool:
+        return self.closed_after_delivery_outside_cut == 0
+
+
+def detect_hold_scope(publish_mod) -> str:
+    """The landing-hold shape `publish_mod._run_round` carries: whole-landing while its source
+    holds the AP2 anchor, per-root once the hold was narrowed to each engine root's own swap."""
+    import inspect
+
+    source = inspect.getsource(publish_mod._run_round)
+    return SCOPE_WHOLE_LANDING if WHOLE_LANDING_ANCHOR in source else SCOPE_PER_ROOT
+
+
+def cut_window(marks: dict, hold_scope: str) -> tuple[float, float]:
+    """`(start, end)` epoch seconds of the engine-root swap cut: the synced root's copy (less the
+    drain slack) to the successor's answer, which is when the hold context exits. The cut opens
+    at `hold_begin` (the instant the hold is requested: its drain and probe park the root) when
+    the round stamped it."""
+    start = marks.get("hold_begin", marks["copy_begin"] - CUT_ENTRY_SLACK_SECS)
+    return start, marks["exit_done"]
+
+
+def phase_of(started: float, marks: dict, window: tuple[float, float]) -> str:
+    """Name the round phase an instant at `started` falls in."""
+    cut_start, cut_end = window
+    if started < marks["round_begin"]:
+        return "pre_round"
+    if started < cut_start:
+        return "landing"
+    if started <= cut_end:
+        return "cut"
+    if started <= marks.get("publisher_exit", float("inf")):
+        return "post_cut"
+    return "post_exit"
+
+
+def _max_unanswered(samples: list[RoundSample]) -> float:
+    if not samples:
+        return 0.0
+    origin = samples[0].started
+    return summarize(
+        [Sample(s.started - origin, s.elapsed, s.answered) for s in samples]
+    ).max_unanswered_secs
+
+
+def classify_round(
+    samples: list[RoundSample],
+    marks: dict,
+    *,
+    hold_scope: str,
+    body_secs: float,
+    default_root_is_synced: bool,
+    successor: dict,
+) -> PublishRoundReport:
+    """Reduce pinger samples and the publisher's phase marks to the publish-round report."""
+    window = cut_window(marks, hold_scope)
+    http = [s for s in samples if s.transport == TRANSPORT_HTTP]
+    phase_failures = {phase: 0 for phase in PHASES}
+    per_root: dict = {}
+    outside_runs: list[RoundSample] = []
+    for sample in sorted(http, key=lambda s: s.started):
+        phase = phase_of(sample.started, marks, window)
+        entry = per_root.setdefault(sample.root, {"requests": 0, "failures": {}, "kinds": {}})
+        entry["requests"] += 1
+        if sample.outcome in _CLOSED_AFTER_DELIVERY:
+            phase_failures[phase] += 1
+            entry["failures"][phase] = entry["failures"].get(phase, 0) + 1
+        if not sample.answered:
+            entry["kinds"][sample.outcome] = entry["kinds"].get(sample.outcome, 0) + 1
+            by_phase = entry.setdefault("kinds_by_phase", {}).setdefault(phase, {})
+            by_phase[sample.outcome] = by_phase.get(sample.outcome, 0) + 1
+        if phase != "cut":
+            outside_runs.append(sample)
+    for root in per_root:
+        per_root[root]["max_unanswered_secs_outside_cut"] = _max_unanswered(
+            [s for s in outside_runs if s.root == root]
+        )
+    pipe_failures = sum(1 for s in samples if s.transport == TRANSPORT_PIPE and not s.answered)
+    default_failures = per_root.get("default", {}).get("failures", {})
+    parked = bool(marks.get("default_pending_held_at_landing_done")) or any(
+        phase != "cut" for phase in default_failures
+    )
+    after_exit = [s for s in http if phase_of(s.started, marks, window) == "post_exit" and s.root == "synced"]
+    survived = successor.get("alive_after_publisher_exit")
+    ancestry_changes: Optional[bool] = None
+    if successor.get("pid") is not None:
+        ancestry_changes = survived is False or any(not s.answered for s in after_exit)
+    return PublishRoundReport(
+        hold_scope=hold_scope,
+        body_secs=body_secs,
+        cut_secs=round(window[1] - window[0], 2),
+        closed_after_delivery_outside_cut=sum(n for p, n in phase_failures.items() if p != "cut"),
+        closed_after_delivery_inside_cut=phase_failures["cut"],
+        max_unanswered_secs_outside_cut=max(
+            (r["max_unanswered_secs_outside_cut"] for r in per_root.values()), default=0.0
+        ),
+        default_root_parks=parked,
+        default_root_is_synced=default_root_is_synced,
+        phase_failures=phase_failures,
+        per_root={**per_root, "_pipe_failures": pipe_failures},
+        successor=successor,
+        ancestry_changes_outcome=ancestry_changes,
+        marks={k: round(v - marks["round_begin"], 2) for k, v in marks.items() if isinstance(v, float)},
+    )
+
+
+def _http_outcome(root: Path) -> str:
+    """One hook-shaped POST to `root`'s supervisor listener, the door's transport. A request the
+    park holds past `PING_TIMEOUT_SECS` is a timeout; a reset or refused dial is closed."""
+    import http.client
+    import socket
+
+    from coordinator_core.warm import cookie, supervisor
+
+    try:
+        record = supervisor.read_discovery(root)
+        port = (record or {}).get("port")
+        if not isinstance(port, int):
+            return OUTCOME_NO_LISTENER
+        secret = cookie.read(root) or ""
+    except Exception:  # noqa: BLE001 -- an unreadable record mid-swap is no listener
+        return OUTCOME_NO_LISTENER
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=PING_TIMEOUT_SECS)
+    try:
+        conn.request(
+            "POST",
+            supervisor.HOOK_PATH,
+            body=b"{}",
+            headers={"Content-Type": "application/json", cookie.COOKIE_HEADER: secret},
+        )
+        response = conn.getresponse()
+        response.read()
+        return OUTCOME_ANSWERED if response.status == 200 else OUTCOME_REFUSED
+    except (socket.timeout, TimeoutError):
+        return OUTCOME_TIMEOUT
+    except (OSError, http.client.HTTPException):
+        return OUTCOME_CLOSED
+    finally:
+        conn.close()
+
+
+def _round_pinger(
+    label: str, root: Path, interval: float, stop: threading.Event, out: list[RoundSample]
+) -> None:
+    pair = RealPair(root)
+    while not stop.is_set():
+        began = time.monotonic()
+        wall = time.time()
+        http_outcome = _http_outcome(root)
+        out.append(RoundSample(wall, time.monotonic() - began, label, TRANSPORT_HTTP, http_outcome))
+        began = time.monotonic()
+        wall = time.time()
+        answered = pair.answering
+        out.append(
+            RoundSample(
+                wall,
+                time.monotonic() - began,
+                label,
+                TRANSPORT_PIPE,
+                OUTCOME_ANSWERED if answered else OUTCOME_TIMEOUT,
+            )
+        )
+        stop.wait(max(0.0, interval - (time.monotonic() - began)))
+
+
+def _write_marks(path: Path, marks: dict) -> None:
+    staged = path.with_name(path.name + ".tmp")
+    staged.write_text(json.dumps(marks), encoding="utf-8")
+    os.replace(staged, path)
+
+
+def run_modelled_round(
+    publish_mod,
+    synced: Path,
+    *,
+    hold_scope: str,
+    body_secs: float,
+    copy_secs: float,
+    marks: dict,
+    on_mark: Callable[[], None] = lambda: None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """One publish round around the real `publish_mod._quiesced_engine_roots([synced])`: a
+    non-engine-root landing of `body_secs`, then the synced root's own copy. `whole-landing` puts
+    both inside the hold (the shape `_run_round` carries at baseline); `per-root` lands the
+    non-engine root first and holds only the synced root's copy and successor start. Every phase
+    instant is stamped into `marks` (epoch seconds)."""
+
+    def stamp(name: str) -> None:
+        marks[name] = time.time()
+        on_mark()
+
+    def land_non_engine() -> None:
+        stamp("landing_begin")
+        sleep(body_secs)
+        stamp("landing_done")
+
+    def land_engine() -> None:
+        stamp("copy_begin")
+        rewrite_tree(synced, copy_secs)
+        stamp("copy_done")
+
+    stamp("round_begin")
+    if hold_scope == SCOPE_WHOLE_LANDING:
+        stamp("hold_begin")
+        with publish_mod._quiesced_engine_roots([synced]):
+            stamp("hold_entered")
+            land_non_engine()
+            land_engine()
+    else:
+        land_non_engine()
+        stamp("hold_begin")
+        with publish_mod._quiesced_engine_roots([synced]):
+            stamp("hold_entered")
+            land_engine()
+    stamp("exit_done")
+
+
+def _load_publish_module():
+    import importlib.util
+
+    path = _SOURCE_ROOT / "coordinator" / "bin" / "publish.py"
+    spec = importlib.util.spec_from_file_location("publish_under_land_swap_hook_window", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_publisher_child(spec: dict) -> int:
+    """The publisher process of the arm: run the modelled round as `publish.py` would, record the
+    successor's ancestry, linger, and exit. Marks land in `spec["marks_path"]` as they happen."""
+    import psutil
+
+    synced = Path(spec["synced"])
+    default = Path(spec["default"])
+    publish_mod = _load_publish_module()
+    breadcrumb._default_engine_clone = lambda: default
+    marks: dict = {}
+    marks_path = Path(spec["marks_path"])
+    scope = spec["hold_scope"]
+    if scope == SCOPE_AUTO:
+        scope = detect_hold_scope(publish_mod)
+    marks["hold_scope"] = scope
+
+    def held_probe() -> None:
+        if "landing_done" in marks and "default_pending_held_at_landing_done" not in marks:
+            marks["default_pending_held_at_landing_done"] = breadcrumb.handover_pending_held(default)
+        _write_marks(marks_path, marks)
+
+    run_modelled_round(
+        publish_mod,
+        synced,
+        hold_scope=scope,
+        body_secs=spec["body_secs"],
+        copy_secs=spec["copy_secs"],
+        marks=marks,
+        on_mark=held_probe,
+    )
+    crumb = breadcrumb.read_breadcrumb(synced) or {}
+    pid = crumb.get("pid")
+    if isinstance(pid, int) and psutil.pid_exists(pid):
+        marks["successor_pid"] = pid
+        marks["successor_ppid"] = psutil.Process(pid).ppid()
+    marks["publisher_pid"] = os.getpid()
+    _write_marks(marks_path, marks)
+    time.sleep(PUBLISHER_LINGER_SECS)
+    marks["publisher_exit"] = time.time()
+    _write_marks(marks_path, marks)
+    return 0
+
+
+def _wait_listener(root: Path, max_secs: float = LISTENER_READY_MAX_SECS) -> bool:
+    deadline = time.monotonic() + max_secs
+    while time.monotonic() < deadline:
+        if _http_outcome(root) == OUTCOME_ANSWERED:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def _sweep_tree_processes(tmp: Path) -> None:
+    """Kill any process still running from under `tmp` (a listener the production stop left)."""
+    import psutil
+
+    needle = str(tmp)
+    for proc in psutil.process_iter(["cmdline"]):
+        try:
+            if any(needle in part for part in (proc.info["cmdline"] or [])):
+                boot.kill_tree(proc)
+        except psutil.Error:
+            continue
+
+
+def swap_window_method_defined(source: Path) -> Optional[bool]:
+    """Whether every method the server calls on its version state inside a publish swap window is
+    defined by `skew.ServerVersionState` in `source`. False means a request under a held marker
+    raises in the server and the connection closes unanswered; None when the server never calls it."""
+    warm = source / "coordinator_core" / "warm"
+    if "version_state.is_token_skewed(" not in (warm / "server.py").read_text(encoding="utf-8"):
+        return None
+    return "def is_token_skewed(" in (warm / "skew.py").read_text(encoding="utf-8")
+
+
+def _short_runtime_parent() -> Path:
+    """Parent of the runtime base. TRAP: the pair's unix socket lives under the runtime base and
+    `sun_path` caps at 100 bytes, which a repo scratch dir or macOS's per-user temp dir overruns."""
+    return Path(tempfile.gettempdir()) if sys.platform == "win32" else Path("/tmp")
+
+
+def run_publish_round(
+    *,
+    body_secs: float = DEFAULT_BODY_SECS,
+    copy_secs: float = DEFAULT_COPY_SECS,
+    hold_scope: str = SCOPE_AUTO,
+    default_is_synced: bool = False,
+    ping_interval: float = PING_INTERVAL_SECS,
+    tail_secs: float = DEFAULT_ROUND_TAIL_SECS,
+    work_dir: Optional[Path] = None,
+    source_root: Optional[Path] = None,
+) -> PublishRoundReport:
+    """Boot a default-root and a synced-root warm server (listener included) in a tmp runtime base,
+    run `publish.py::_quiesced_engine_roots([synced])` around a modelled landing in a child
+    publisher process, ping both roots over the hook's HTTP dial and the pair pipe every
+    `ping_interval`, and attribute each failure to a round phase."""
+    source = source_root if source_root is not None else _SOURCE_ROOT
+    base = work_dir if work_dir is not None else source / "scratch"
+    base.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix="land-swap-round-", dir=base))
+    runtime_saved = os.environ.get(_RUNTIME_BASE_ENV)
+    autostart_saved = os.environ.pop(boot._LISTENER_AUTOSTART_ENV, None)
+    runtime = Path(tempfile.mkdtemp(prefix="lsr-", dir=_short_runtime_parent()))
+    os.environ[_RUNTIME_BASE_ENV] = str(runtime)
+    roots: dict[str, Path] = {}
+    try:
+        synced = boot.build_engine_root(tmp / "synced", source)
+        default = synced if default_is_synced else boot.build_engine_root(tmp / "default", source)
+        roots = {"synced": synced, "default": default}
+        for root in {r: None for r in roots.values()}:
+            RealPair(root).boot()
+        for root in roots.values():
+            if not wait_until_answering(RealPair(root)) or not _wait_listener(root):
+                raise RuntimeError(f"warm server or listener under {root} never answered")
+        samples: list[RoundSample] = []
+        stop = threading.Event()
+        threads = [
+            threading.Thread(
+                target=_round_pinger, args=(label, root, ping_interval, stop, samples), daemon=True
+            )
+            for label, root in roots.items()
+        ]
+        marks_path = tmp / "marks.json"
+        spec = {
+            "synced": str(synced),
+            "default": str(default),
+            "body_secs": body_secs,
+            "copy_secs": copy_secs,
+            "hold_scope": hold_scope,
+            "marks_path": str(marks_path),
+        }
+        for thread in threads:
+            thread.start()
+        try:
+            time.sleep(DEFAULT_PRE_ROLL_SECS)
+            child = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve()), "--publisher-child", json.dumps(spec)],
+                env={**os.environ, "PYTHONPATH": str(source)},
+                capture_output=True,
+                text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                timeout=body_secs + copy_secs + PAIR_BOOT_MAX_SECS + 120.0,
+                check=False,
+            )
+            if child.returncode != 0:
+                raise RuntimeError(f"publisher child exited {child.returncode}:\n{child.stderr[-2000:]}")
+            marks = json.loads(marks_path.read_text(encoding="utf-8"))
+            exited = time.time()
+            time.sleep(tail_secs)
+            successor = _successor_report(marks, synced, exited)
+            successor["publisher_stderr_tail"] = child.stderr[-600:]
+        finally:
+            stop.set()
+            for thread in threads:
+                thread.join(timeout=BOOT_WAIT_SECS + 2.0)
+        report = classify_round(
+            list(samples),
+            marks,
+            hold_scope=marks["hold_scope"],
+            body_secs=body_secs,
+            default_root_is_synced=default_is_synced,
+            successor=successor,
+        )
+        return replace(report, swap_window_method_defined=swap_window_method_defined(source))
+    finally:
+        for root in {r: None for r in roots.values()}:
+            boot.stop_engine_root(root)
+        _sweep_tree_processes(tmp)
+        for name, saved in ((_RUNTIME_BASE_ENV, runtime_saved), (boot._LISTENER_AUTOSTART_ENV, autostart_saved)):
+            if saved is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = saved
+        rmtree_or_raise(tmp, label="land-swap-hook-window")
+        rmtree_or_raise(runtime, label="land-swap-hook-window")
+
+
+def _successor_report(marks: dict, synced: Path, exited: float) -> dict:
+    """The successor's ancestry and whether it outlived the publisher that spawned it."""
+    import psutil
+
+    pid = marks.get("successor_pid")
+    publisher = marks.get("publisher_pid")
+    alive = isinstance(pid, int) and psutil.pid_exists(pid)
+    crumb = breadcrumb.read_breadcrumb(synced) or {}
+    return {
+        "pid": pid,
+        "ppid_at_start": marks.get("successor_ppid"),
+        "ppid_is_publisher": marks.get("successor_ppid") == publisher,
+        "alive_after_publisher_exit": alive,
+        "answering_pid_is_successor": crumb.get("pid") == pid,
+    }
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     from coordinator_core.benchmarks import declare_benchmark_origin
 
     declare_benchmark_origin()
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--arm", choices=("production", "model"), default="production")
+    parser.add_argument("--arm", choices=("production", "model", ARM_PUBLISH_ROUND), default="production")
+    parser.add_argument("--publisher-child", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--body-secs", type=float, default=DEFAULT_BODY_SECS)
+    parser.add_argument(
+        "--hold-scope", choices=(SCOPE_AUTO, SCOPE_WHOLE_LANDING, SCOPE_PER_ROOT), default=SCOPE_AUTO
+    )
+    parser.add_argument("--default-is-synced", action="store_true")
+    parser.add_argument(
+        "--source-root", type=Path, default=None, help="tree the warm servers run from (a clean export)"
+    )
     parser.add_argument("--copy-secs", type=float, default=DEFAULT_COPY_SECS)
     parser.add_argument("--boot-secs", type=float, default=DEFAULT_BOOT_SECS)
     parser.add_argument(
@@ -615,6 +1117,23 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"spike_verdict={spike.verdict}")
         print(json.dumps({**asdict(spike), "verdict": spike.verdict}, sort_keys=True))
         return 0
+    if args.publisher_child is not None:
+        return run_publisher_child(json.loads(args.publisher_child))
+    if args.arm == ARM_PUBLISH_ROUND:
+        round_report = run_publish_round(
+            body_secs=args.body_secs,
+            copy_secs=args.copy_secs,
+            hold_scope=args.hold_scope,
+            default_is_synced=args.default_is_synced,
+            work_dir=args.work_dir,
+            source_root=args.source_root.resolve() if args.source_root else None,
+        )
+        print(f"closed_after_delivery_outside_cut={round_report.closed_after_delivery_outside_cut}")
+        print(f"max_unanswered_secs_outside_cut={round_report.max_unanswered_secs_outside_cut}")
+        print(f"default_root_parks={round_report.default_root_parks}")
+        print(f"ancestry_changes_outcome={round_report.ancestry_changes_outcome}")
+        print(json.dumps(asdict(round_report), sort_keys=True))
+        return 1 if args.assert_budget and not round_report.within_budget() else 0
     if args.arm == "model":
         report = run_swap(
             copy_secs=args.copy_secs,

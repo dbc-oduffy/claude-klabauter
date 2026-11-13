@@ -54,6 +54,9 @@ class _Version:
     def is_skewed(self, client_token):
         return client_token == stop_token
 
+    def is_token_skewed(self, client_token):
+        return self.is_skewed(client_token)
+
 
 def _slow_dispatch(self, msg, *, caller=None, isolated=False):
     (root / "dispatch-entered.flag").write_text("1")
@@ -165,6 +168,9 @@ def _spawn_role(engine_root: Path, script: str, body: str, *extra: str, spawned:
         creationflags=_NO_WINDOW,
     )
     spawned.append(proc)
+    # Production pairs are detached and reaped by init; a child of this process stays a zombie after
+    # it exits, and psutil still reports the zombie's birth instant, so the stop would wait out its grace.
+    threading.Thread(target=proc.wait, daemon=True).start()
     return proc
 
 

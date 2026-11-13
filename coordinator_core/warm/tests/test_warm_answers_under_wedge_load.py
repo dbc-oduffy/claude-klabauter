@@ -1,4 +1,4 @@
-"""The warm server keeps answering ping and a door guard, and decides to restart itself, while the svc-dir
+"""The warm server keeps answering ping and a door guard, and does not restart on admission-gate waits, while the svc-dir
 filesystem stalls and 8 peer clients hold heavy ops (the 2026-11-09 11:45Z wedge shape).
 
 Drives the real accept path (`_enqueue_connection` -> `_worker_loop` / `_guard_lane_loop` -> `_serve_line` ->
@@ -41,6 +41,9 @@ class _VersionState:
 
     def is_skewed(self, client_token: str) -> bool:
         return False
+
+    def is_token_skewed(self, client_token: str) -> bool:
+        return self.is_skewed(client_token)
 
 
 class _FakeIO:
@@ -139,7 +142,7 @@ class _DiskStall:
         return call
 
 
-def test_ping_and_guard_answer_and_restart_decides_while_the_svc_dir_stalls_under_peer_load(tmp_path, monkeypatch):
+def test_ping_and_guard_answer_and_gate_waits_are_not_restart_evidence_while_the_svc_dir_stalls_under_peer_load(tmp_path, monkeypatch):
     svc = tmp_path / "svc"
     stall_dir = svc / "stall-dumps"
     stall_dir.mkdir(parents=True)
@@ -207,7 +210,7 @@ def test_ping_and_guard_answer_and_restart_decides_while_the_svc_dir_stalls_unde
         assert _wait(lambda: ctx._busy_workers() >= _CLIENTS * _HEAVY_PER_CLIENT, 5.0), ctx._busy_workers()
         sampler = threading.Thread(target=_sampler, daemon=True)
         sampler.start()
-        restarted = _wait(lambda: bool(exits), _RESTART_WITHIN_SECS)
+        restarted = _wait(lambda: bool(exits), _RESTART_WITHIN_SECS)  # False: gate-phase stalls are io-wait, not hang evidence
         assert sampling_done.wait(_WINDOW_SECS + 30.0)
         rows = telemetry.request_samples()
         report = {
@@ -226,8 +229,8 @@ def test_ping_and_guard_answer_and_restart_decides_while_the_svc_dir_stalls_unde
                 failures.append(f"{op} handling over {budget}s: {slow}")
         if report["unanswered"]:
             failures.append(f"unanswered samples: {report['unanswered']}")
-        if not restarted:
-            failures.append(f"no restart decision within {_RESTART_WITHIN_SECS}s with the svc dir stalled")
+        if restarted:
+            failures.append("restart decided from requests waiting at the admission gate (io-wait, not hang evidence)")
         assert not failures, f"{failures}; {report}"
     finally:
         stall.release.set()

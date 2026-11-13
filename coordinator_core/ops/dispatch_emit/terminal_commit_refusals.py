@@ -488,12 +488,11 @@ def _tests_not_run_refusal(
     worktree_root: Path, params: dict, request: CommitRequest, inline_review: dict
 ) -> Optional[dict]:
     """The ``review-owed`` refusal (any arm) when a ``REQUIRES_CHANGES`` reviewer's findings are not
-    all in the landed tree (``terminal_commit_review.review_owed_refusal``). Else the
-    ``tests-not-run`` refusal when an XS-arm run declares a test file yet its
-    ``inline_review.tests.status`` is ``not_run`` or its ledger verdict calls an item ``met`` on
-    evidence that says the tests were not run, else None. Other arms and runs declaring no test
-    file are not gated."""
-    from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS
+    all in the landed tree or no ledger resolves a standing verdict
+    (``terminal_commit_review.review_owed_refusal``). Else the ``tests-not-run`` refusal, at every
+    arm, when the run declares a test file yet its ``inline_review.tests.status`` is ``not_run`` or
+    its ledger verdict calls an item ``met`` on evidence that says the tests were not run, else
+    None. Runs declaring no test file are not gated."""
     from coordinator_core.ops.dispatch_emit.terminal_commit_review import review_owed_refusal
 
     owed = review_owed_refusal(worktree_root, inline_review)
@@ -502,15 +501,13 @@ def _tests_not_run_refusal(
             f"{owed}; apply them or dispose each (rejected/suspended) in the reviewer's ledger, then re-fire",
             refused=REFUSED_REVIEW_OWED,
         )
-    if _run_arm(worktree_root, params, request) != ARM_XS:
-        return None
     declared = [p for c in request.chunks for p in (*c.paths, *c.prefixes) if p]
     if not any(_TEST_PATH.search(p) for p in declared):
         return None
     tests = inline_review.get("tests") if isinstance(inline_review.get("tests"), dict) else {}
     if tests.get("status") == "not_run":
         return _error(
-            "inline_review.tests.status is not_run and the XS diff declares a test file; "
+            "inline_review.tests.status is not_run and the diff declares a test file; "
             "run the scoped tests (named test files only) and re-fire with their result",
             refused=REFUSED_TESTS_NOT_RUN,
         )

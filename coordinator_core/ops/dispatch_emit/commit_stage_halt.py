@@ -12,11 +12,13 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ops.dispatch_emit import halted_run
+from coordinator_core.ops.dispatch_emit import ask_contract
 from coordinator_core.ops.dispatch_emit.ask_contract import HALT_REASON_MAX_CHARS
 from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
 from coordinator_core.workflow_watch import stall
 
 HALT_COMMIT_STAGE = "commit_stage"
+HALT_UNRECORDED_END = "run-ended-unrecorded"
 #: The run's commit-stage agent labels: the terminal `commit` and the `halt-commit` record commit.
 COMMIT_STAGE_LABELS = frozenset({"commit", "halt-commit"})
 _CLOSED_STATUSES = frozenset({halted_run.STATUS_LANDED, halted_run.STATUS_CLOSED, halted_run.STATUS_SUPERSEDED})
@@ -114,6 +116,35 @@ def halt_run_on_commit_stage_end(
             HALT_COMMIT_STAGE,
             lambda _n: halted_run.write_halt_marker(
                 Path(record_dir), halted=HALT_COMMIT_STAGE, sizing_rel=sizing_rel, reason=reason[:HALT_REASON_MAX_CHARS],
+            ),
+            lambda _failures: None,
+        )
+    except Exception:
+        return None
+
+
+def halt_run_on_unrecorded_end(
+    record_dir: Path, *, terminal_status: str, sizing_rel: Optional[str]
+) -> Optional[Path]:
+    """Write `halted: run-ended-unrecorded` into `record_dir` when the ended run left no `halted.json`.
+
+    Two reads. An existing marker of any status is never overwritten, a run that ended `completed` or is staged `landed` is not
+    halted. Returns the marker path, else None. Never raises.
+    """
+    try:
+        record_dir = Path(record_dir)
+        if terminal_status == "completed":
+            return None
+        if (record_dir / halted_run.HALTED_FILE).exists():
+            return None
+        stage = ask_contract._read_json_object(record_dir / ask_contract.RUN_STAGE_FILE)
+        if isinstance(stage, dict) and stage.get("stage") == "landed":
+            return None
+        reason = f"run ended {terminal_status} with no halt record"
+        return remedy_or_halt(
+            HALT_UNRECORDED_END,
+            lambda _n: halted_run.write_halt_marker(
+                record_dir, halted=HALT_UNRECORDED_END, sizing_rel=sizing_rel, reason=reason[:HALT_REASON_MAX_CHARS],
             ),
             lambda _failures: None,
         )

@@ -508,3 +508,104 @@ def test_mutex_owner_reads_the_harness_session_var_first(monkeypatch: pytest.Mon
     assert suite_mutex.mutex_owner("suite-mutex") == "harness-sid"
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
     assert suite_mutex.mutex_owner("suite-mutex") == "legacy-sid"
+
+
+def _queue_names() -> list:
+    qdir = suite_mutex._queue_dir(suite_mutex.lock_path())
+    return sorted(os.listdir(qdir)) if qdir.is_dir() else []
+
+
+def test_fifo_queued_waiter_beats_immediate_reacquire_by_releaser() -> None:
+    import threading
+    import time
+
+    assert suite_mutex.acquire("session-a", "pytest") is True
+    result: dict = {}
+    waiter = threading.Thread(
+        target=lambda: result.update(got=suite_mutex.acquire("session-b", "pytest", timeout=10)),
+    )
+    waiter.start()
+    deadline = time.monotonic() + 5
+    while not _queue_names() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert _queue_names(), "waiter never took a ticket"
+
+    suite_mutex.release("session-a")
+    assert suite_mutex.acquire("session-a", "pytest") is False
+    assert suite_mutex.acquire("session-a", "pytest", timeout=0.2) is False
+    waiter.join(timeout=10)
+
+    assert result.get("got") is True
+    assert suite_mutex.holder()["owner"] == "session-b"
+    assert _queue_names() == []
+
+
+def test_fifo_dead_ticket_is_skipped_and_pruned() -> None:
+    dead = suite_mutex.take_ticket("ghost", pid=_dead_pid())
+    assert dead is not None
+    assert suite_mutex.acquire("session-b", "pytest", timeout=1) is True
+    assert _queue_names() == []
+
+
+def test_fifo_live_ticket_ahead_blocks_nonblocking_acquire() -> None:
+    ticket = suite_mutex.take_ticket("session-w")
+    assert ticket is not None
+    assert suite_mutex.acquire("session-b", "pytest") is False
+    assert suite_mutex.holder() is None
+    assert _queue_names() == [ticket]
+
+
+def test_fifo_timed_out_acquire_drops_its_ticket() -> None:
+    assert suite_mutex.acquire("session-a", "pytest") is True
+    assert suite_mutex.acquire("session-b", "pytest", timeout=0.2) is False
+    assert _queue_names() == []
+
+
+def test_fifo_tickets_are_served_in_arrival_order() -> None:
+    first = suite_mutex.take_ticket("session-1")
+    second = suite_mutex.take_ticket("session-2")
+    assert first is not None and second is not None and first < second
+    assert [name for name, _ in suite_mutex._live_tickets(suite_mutex._queue_dir(suite_mutex.lock_path()))] == [
+        first,
+        second,
+    ]
+
+
+def test_fifo_reentrant_same_owner_never_queues() -> None:
+    assert suite_mutex.acquire("session-a", "pytest") is True
+    waiting = suite_mutex.take_ticket("session-w")
+    assert suite_mutex.acquire("session-a", "pytest", timeout=0.3) is True
+    assert _queue_names() == [waiting]
+
+
+def test_fifo_adoptable_ticket_is_adopted_ahead_of_later_waiters() -> None:
+    held = suite_mutex.take_ticket("session-w", adoptable=True, pid=_dead_pid())
+    later = suite_mutex.take_ticket("session-x")
+    assert held is not None and later is not None
+    assert suite_mutex.acquire("session-w", "pytest", timeout=1) is True
+    assert suite_mutex.holder()["owner"] == "session-w"
+    assert _queue_names() == [later]
+
+
+def test_fifo_unadopted_ticket_expires_after_the_grace(monkeypatch: pytest.MonkeyPatch) -> None:
+    ticket = suite_mutex.take_ticket("session-w", adoptable=True, pid=_dead_pid())
+    assert ticket is not None
+    assert suite_mutex.acquire("session-b", "pytest") is False
+
+    monkeypatch.setattr(suite_mutex, "_TICKET_ADOPT_GRACE_SECS", 0.0)
+    assert suite_mutex.acquire("session-b", "pytest") is True
+    assert _queue_names() == []
+
+
+def test_fifo_adopt_grace_runs_from_handoff_not_ticket_creation() -> None:
+    import time
+
+    ticket = suite_mutex.take_ticket("session-w", adoptable=True, pid=_dead_pid())
+    assert ticket is not None
+    qdir = suite_mutex._queue_dir(suite_mutex.lock_path())
+    meta = suite_mutex._read_ticket(qdir, ticket)
+    old = "%020d-%d" % (time.time_ns() - 600 * 10**9, os.getpid())
+    suite_mutex._write_ticket(qdir, old, dict(meta, handed_at=time.time()), replace=True)
+    suite_mutex.drop_ticket(ticket)
+    assert suite_mutex.acquire("session-b", "pytest") is False
+    assert suite_mutex.acquire("session-w", "pytest") is True

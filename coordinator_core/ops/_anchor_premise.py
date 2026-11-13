@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.ops import anchor_lane
+from coordinator_core.ops import _anchor_check, anchor_lane
 from coordinator_core.ops._research_grounding import line_hashes
 
 FIELD = "anchor_premises"
@@ -34,11 +34,13 @@ def _unchecked(label: str, reason: str) -> str:
 
 
 def parse_anchors(
-    fm: dict, repo_root: Optional[Path], spine_rows: Optional[list] = None
+    fm: dict, repo_root: Optional[Path], spine_rows: Optional[list] = None,
+    base_ref: Optional[str] = None,
 ) -> tuple[list[dict], list[str]]:
     """(well-formed anchors, defect findings) for the plan frontmatter ``fm``. When the plan's
-    ``spine_rows`` are passed, an anchor naming no ref whose checked file a row writes is refused."""
-    writes = _spine_writes(spine_rows)
+    ``spine_rows`` are passed, an anchor naming no ref whose checked file a row writes is refused,
+    unless ``base_ref`` is set: the check then reads that ref, not the tree the rows write."""
+    writes = _spine_writes(spine_rows) if base_ref is None else set()
     if FIELD not in fm:
         return [], [
             "anchor-premises-undeclared (declare each load-bearing premise as "
@@ -366,16 +368,23 @@ def _plan_fm(plan_text: str) -> dict:
         return {}
 
 
-def _evaluate(anchor: dict, fm: dict, repo_root: Path):
-    """The engine check for ``anchor``: at the ref its claim names when that ref is readable,
-    else at HEAD. An unreadable ref (typo, unfetched sha) falls back to HEAD silently."""
+def _evaluate(
+    anchor: dict, fm: dict, repo_root: Path, base_ref: Optional[str] = None, blobs=None
+):
+    """The engine check for ``anchor``. Precedence: a ``git grep ... <ref> -- path`` stage's own
+    ref, then the ref its claim names (``baseline_ref <sha>``) when readable, then ``base_ref``
+    (read from ``blobs``, never a spawn), else the working tree. An unreadable claim ref (typo,
+    unfetched sha) falls back to the tree silently; an unreadable ``base_ref`` is NOT_EVALUABLE."""
     ref = claimed_ref(anchor.get("claim"), fm)
     paths = _checked_paths(anchor) if ref else None
     if ref and paths:
         result = _evaluate_at_ref(anchor, ref, paths, repo_root)
         if result is not None:
             return result
-    return anchor_lane.evaluate(anchor, repo_root)
+    governing = None if ref else base_ref
+    if governing is None and not blobs:
+        return anchor_lane.evaluate(anchor, repo_root)
+    return anchor_lane.evaluate(anchor, repo_root, governing, blobs)
 
 
 _EXACT = re.compile(r"\d+")
@@ -432,8 +441,27 @@ def _self_falsified(anchor: dict, writes: set[str], fm: dict) -> Optional[str]:
     return None
 
 
-def anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root) -> list[dict]:
+def _blobs_for(anchors: list, fm: dict, repo_root: Path, base_ref: Optional[str]) -> dict:
+    """Every (ref, path) blob the engine checks of ``anchors`` read, from ONE cat-file spawn; no
+    spawn when no check reads a ref. An anchor whose claim names a ref reads that ref, not
+    ``base_ref``, so only its own git-grep stage refs are collected."""
+    pairs: list[tuple[str, str]] = []
+    for anchor in anchors:
+        command = str((anchor.get("check") or {}).get("command") or "")
+        governing = None if claimed_ref(anchor.get("claim"), fm) else base_ref
+        pairs += _anchor_check.blob_pairs(command, governing)
+    return _anchor_check.read_at_ref(repo_root, pairs) if pairs else {}
+
+
+def anchor_verdicts(
+    anchors, rows, carry_rows, plan_text, repo_root, base_ref: Optional[str] = None
+) -> list[dict]:
     """One {id, verdict, source, observed} per declared anchor, in declaration order.
+    ``base_ref`` (the run's base ref) is read by every engine check whose claim names no
+    ``baseline_ref``: precedence is a git-grep stage's own ref > claim ``baseline_ref`` > ``base_ref``
+    > working tree. All refs are read in one git spawn; an unreadable ``base_ref`` leaves source
+    "none" with ``observed`` naming it. Under ``base_ref`` the tree-drift remedy ``_reanchor`` is
+    skipped. No ``base_ref`` and no git-grep stage: tree read, zero spawns.
     source: "row" | "carry" | "engine-check" | "none"; verdict is None only when source is "none".
     Precedence: passed row > live carry row > engine check (MATCH -> RESOLVES,
     MISMATCH -> CONTRADICTED) > none. A row or carry verdict other than RESOLVES yields to a
@@ -444,15 +472,22 @@ def anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root) -> list[dic
     known = frozenset(a["id"] for a in anchors)
     fm = _plan_fm(plan_text) if repo_root is not None else {}
     out: list[dict] = []
+    cache: list = []
+
+    def evaluate(anchor):
+        if not cache:
+            cache.append(_blobs_for(anchors, fm, repo_root, base_ref))
+        return _evaluate(anchor, fm, repo_root, base_ref, cache[0])
+
     for anchor in anchors:
         verdict, source = _verdict_for(anchor["id"], rows or [], carry_rows or [], live, known)
         observed = ""
         if verdict not in (None, "RESOLVES") and repo_root is not None:
-            result = _evaluate(anchor, fm, repo_root)
+            result = evaluate(anchor)
             if result.outcome == "held":
                 verdict, source, observed = "RESOLVES", "engine-check", result.observed or ""
         if verdict is None and repo_root is not None:
-            result = _evaluate(anchor, fm, repo_root)
+            result = evaluate(anchor)
             observed = result.observed or ""
             engine = _ENGINE_VERDICT.get(result.outcome)
             if engine == "CONTRADICTED" and _overmatched(anchor, result):
@@ -463,7 +498,9 @@ def anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root) -> list[dic
                 )
             if engine is not None:
                 verdict, source = engine, "engine-check"
-            if engine == "CONTRADICTED":
+            if engine == "CONTRADICTED" and not (
+                base_ref and not claimed_ref(anchor.get("claim"), fm)
+            ):
                 moved = _reanchor(anchor, plan_text, repo_root)
                 if moved is not None:
                     verdict, observed = "RESOLVES", moved
@@ -483,8 +520,10 @@ def anchor_findings(
     plan_text: str,
     repo_root: Optional[Path] = None,
     verdicts: Optional[list] = None,
+    base_ref: Optional[str] = None,
 ) -> list[str]:
-    """One finding per anchor not resolved. Passed ``rows`` win over ``carry_rows``; a carry row
+    """One finding per anchor not resolved. ``base_ref`` is forwarded to ``anchor_verdicts`` (same
+    precedence: stage ref > claim ``baseline_ref`` > ``base_ref`` > tree) when ``verdicts`` is None. Passed ``rows`` win over ``carry_rows``; a carry row
     counts only while its ``line_hash`` is still a line of ``plan_text``. A none-source anchor
     whose check was NOT_EVALUABLE emits no finding in either lane: a check the in-process
     evaluator cannot run is never a blocker, and ``unevaluable_anchors`` carries it for the
@@ -501,7 +540,7 @@ def anchor_findings(
             out.append(f"anchor-premise-unknown: {named} (no declared anchor has this id)")
     claims = {a["id"]: a["claim"] for a in anchors}
     if verdicts is None:
-        verdicts = anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root)
+        verdicts = anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root, base_ref)
     for entry in verdicts:
         verdict = entry["verdict"]
         if verdict is None:

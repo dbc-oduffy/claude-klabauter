@@ -1,5 +1,5 @@
 """coordinator_core.install.klabauter_freshness_apply — probe, fetch, guarded fast-forward,
-live-run deferral, mapped installer re-run and surface-once for a klabauter checkout.
+engine-leg deferral, mapped installer re-run and surface-once for a klabauter checkout.
 
 Builds on the pure names in `klabauter_freshness`. Never discards, stashes, rebases or
 merges non-ff: a dirty or diverged tree only surfaces. Installers run in-process.
@@ -117,39 +117,31 @@ def _rev(checkout: Path, ref: str) -> str:
     return out.stdout.strip() if out.returncode == 0 else ""
 
 
-def count_live_runs(repo_roots: Mapping[str, Path] | None = None) -> int:
-    """Live (`running`|`pending`) workflow fires summed over every repo on this box.
+def engine_leg_in_flight(
+    engine_root: Path,
+    *,
+    sup_count: Callable[[Path], Optional[int]] | None = None,
+    door_count: Callable[[Path], Optional[int]] | None = None,
+    own_pid: Optional[int] = None,
+) -> int:
+    """1 when an engine leg other than this pass is in flight at `engine_root`, else 0.
 
-    A registered path that is absent or not a git work tree runs nothing and counts
-    zero; a repo whose fire registry raises, and an unreadable repo registry, count
-    live so the caller defers rather than swapping engine code under a run.
+    Staged runs between legs hold no request and never count. When this pass is served by the
+    root's own supervisor (its discovery pid is this process), its own request is subtracted from
+    both probes; an unanswerable probe (None) reads in flight.
     """
-    from coordinator_core.ops.fleet._memo_resolver import read_registry_repos
-    from coordinator_core.ops.workflow_fire.fire import count_live_fires
+    from coordinator_core.warm import front_door, supervisor
 
-    if repo_roots is None:
-        try:
-            repo_roots = {k: Path(v) for k, v in read_registry_repos().items()}
-        except Exception:
-            return 1
-    live = 0
-    seen: set = set()
-    for root in repo_roots.values():
-        root = Path(root)
-        if not (root / ".git").exists():
-            continue
-        try:
-            key = root.resolve()
-        except OSError:
-            key = root
-        if key in seen:
-            continue
-        seen.add(key)
-        try:
-            live += count_live_fires(str(root))
-        except Exception:
-            live += 1
-    return live
+    sup_count = sup_count or supervisor.in_flight_count
+    door_count = door_count or front_door.in_flight_count
+    sup, door = sup_count(engine_root), door_count(engine_root)
+    if sup is None or door is None:
+        return 1
+    record = supervisor.read_discovery(engine_root)
+    pid = own_pid if own_pid is not None else os.getpid()
+    if isinstance(record, dict) and record.get("pid") == pid:
+        sup, door = max(sup - 1, 0), max(door - 1, 0)
+    return 1 if sup > 0 or door > 0 else 0
 
 
 def _load_unimatrix_installer(checkout: Path):
@@ -253,13 +245,14 @@ def apply_freshness(
     """Compare `checkout` to its upstream and act on the verdict.
 
     Fetches (unless `do_fetch` is False), probes once, and fast-forwards only a
-    behind, clean, non-diverged tree with no live run. Dirty and diverged trees
-    surface once per `SurfacedKey`. Stale installed unimatrix copies are
+    behind, clean, non-diverged tree with no engine leg in flight (staged runs between legs
+    do not block it). Dirty and diverged trees surface once per `SurfacedKey`. Stale
+    installed unimatrix copies are
     re-installed on every verdict except `deferred_live_run`, ref moved or not.
     """
     checkout, settings_home = Path(checkout), Path(settings_home)
     installers = DEFAULT_INSTALLERS if installers is None else installers
-    live_runs = live_runs or count_live_runs
+    live_runs = live_runs or (lambda: engine_leg_in_flight(engine_root or checkout))
     result = FreshnessResult(hostname=hostname or socket.gethostname())
 
     if do_fetch:

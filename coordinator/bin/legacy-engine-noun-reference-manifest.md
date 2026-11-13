@@ -8495,8 +8495,6 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator_core/ops/ceremony/detached_spawn.py`
 - `coordinator_core/ops/ceremony/housekeeping_liveness.py`
 - `coordinator_core/ops/ceremony/tests/test_push_retry_budget_vs_p90.py`
-- `coordinator_core/ops/ceremony/tests/test_update_docs_scan.py`
-- `coordinator_core/ops/ceremony/update_docs_scan.py`
 - `coordinator_core/ops/changelog_ops.py`
 - `coordinator_core/ops/check_arch_audit_staleness.py`
 - `coordinator_core/ops/check_generator_output_staleness.py`

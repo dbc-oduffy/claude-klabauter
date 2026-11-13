@@ -160,6 +160,7 @@ _REAL_UNLINK = os.unlink
 _REAL_RMDIR = os.rmdir
 _REAL_WALK = os.walk
 _REAL_JOIN = os.path.join
+_REAL_OPEN = os.open
 
 # ---------------------------------------------------------------------------
 # Package-conftest visibility patch (2026-07-28 — bare-file-arg Package-cache
@@ -490,8 +491,19 @@ def _per_test_dir(request, tmp_path_factory, name: str) -> Path:
     # Trap: an autouse mktemp outlives its test, and a session that ends red or killed keeps
     # every one (pytest prunes only on all-pass) -- ~240 KB/test, 75 GB on C: across runs.
     path = tmp_path_factory.mktemp(name)
-    request.addfinalizer(lambda: shutil.rmtree(path, ignore_errors=True))
+    request.addfinalizer(lambda: _rmtree_with_real_open(path))
     return path
+
+
+def _rmtree_with_real_open(path: Path) -> None:
+    # Trap: finalizers run before the test's monkeypatch is undone, and rmtree calls
+    # `os.open(..., dir_fd=)`, which a test-patched `os.open` need not accept.
+    patched = os.open
+    os.open = _REAL_OPEN
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+    finally:
+        os.open = patched
 
 
 @pytest.fixture(autouse=True)

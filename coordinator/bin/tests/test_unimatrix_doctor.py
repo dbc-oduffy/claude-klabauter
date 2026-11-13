@@ -646,7 +646,7 @@ def test_pair_this_box_can_start_but_the_peer_cannot_is_asymmetric_and_exits_non
     box.ak.write_text("")  # no forced line carries machine-a's relay key: machine-a cannot start a link to us
     box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
     box.seed_live("kim@machine-a.local")
-    rc, out = box.main()
+    rc, out = box.main(platform="linux")  # win32 never judges inbound authorized_keys
     assert rc == 1
     assert _asym(out) == ["problem: asymmetric: machine-a -> me missing"]
 
@@ -691,7 +691,13 @@ def test_inbound_authorized_keys_is_not_judged_on_windows(box):
 def test_default_cli_on_a_one_sided_fixture_prints_asymmetric_and_exits_nonzero(box, tmp_path):
     box.adopt("me", "machine-a")
     box.ak.write_text("")
-    r = subprocess.run([sys.executable, str(BIN / "unimatrix-doctor.py")], capture_output=True, text=True,
+    # The doctor never judges inbound authorized_keys on win32, so the platform is pinned off it; every other default is real.
+    boot = ("import importlib.util, sys\n"
+            "s = importlib.util.spec_from_file_location('unimatrix_doctor_cli', sys.argv[1])\n"
+            "m = importlib.util.module_from_spec(s)\n"
+            "s.loader.exec_module(m)\n"
+            "sys.exit(m.main([], platform='linux'))\n")
+    r = subprocess.run([sys.executable, "-c", boot, str(BIN / "unimatrix-doctor.py")], capture_output=True, text=True,
                        env={**os.environ, "COORDINATOR_SETTINGS_HOME": str(box.home), "HOME": str(tmp_path / "h"),
                             "USERPROFILE": str(tmp_path / "h")}, cwd=str(tmp_path))
     assert r.returncode == 1 and "asymmetric: " in r.stdout
@@ -854,7 +860,7 @@ def test_a_missing_per_pair_key_is_one_inbound_problem_even_when_the_members_oth
     box.ak.write_text(box.relay_line(box.relay[1], "machine-a") + "\n")
     box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
     box.seed_live("kim@machine-a.local")
-    rc, out = box.main()
+    rc, out = box.main(platform="linux")  # win32 never judges inbound authorized_keys
     assert rc == 1
     assert [p for p in _problems(out) if "asymmetric: machine-a -> me missing" in p] != []
     assert not [p for p in _problems(out) if "no signed membership record" in p]

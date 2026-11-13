@@ -230,6 +230,56 @@ def _budget_deny(text: str) -> dict | None:
     return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", text))
 
 
+def _budget_exempt(file_path: str) -> bool:
+    return (
+        os.path.splitext(file_path)[1].lower() in _DOC_DATA_EXTENSIONS
+        or _is_bootstrap_or_out_of_repo(file_path)
+        or _is_scratch_or_tmp(file_path)
+    )
+
+
+def _patch_batch(payload: dict, file_path: str) -> tuple[bool, list]:
+    """(covered, siblings) for one event of a multi-file native patch. The first budget-eligible file of
+    `payload["patch_projections"]` leads and prices the whole patch (`siblings` are the other eligible
+    files); every other eligible file is `covered` by that one measurement. No projections: (False, [])."""
+    items = payload.get("patch_projections")
+    if not isinstance(items, list):
+        return False, []
+    eligible = [
+        (item["file_path"], item["content"], item.get("event"))
+        for item in items
+        if isinstance(item, dict)
+        and isinstance(item.get("file_path"), str)
+        and isinstance(item.get("content"), str)
+        and not _budget_exempt(item["file_path"])
+    ]
+    if not any(path == file_path for path, _, _ in eligible):
+        return False, []
+    index = payload.get("patch_event")
+    lead_event = eligible[0][2]
+    leads = index == lead_event if isinstance(index, int) and isinstance(lead_event, int) else eligible[0][0] == file_path
+    if not leads:
+        return True, []
+    return False, [(path, text) for path, text, _ in eligible[1:]]
+
+
+def _with_siblings(xlb, root, rec: dict, usage, file_path: str, siblings: list):
+    """`usage` plus the projected change of each sibling file of the same patch not already counted."""
+    seen = {xlb._norm_rel(root, p) for p in (*rec.get("paths", []), file_path)}
+    bare = {**rec, "paths": [], xlb.UNMEASURED_KEY: None}
+    files, lines = usage.files, usage.lines
+    for path, text in siblings:
+        rel = xlb._norm_rel(root, path)
+        if rel in seen:
+            continue
+        seen.add(rel)
+        extra = xlb.measure(root, bare, path, text)
+        files += extra.files
+        lines += extra.lines
+    over = usage.over or files > xlb.BUDGET_FILES or lines > xlb.BUDGET_LINES
+    return xlb.Usage(files, lines, over)
+
+
 def _post_fire_root(payload: dict) -> str:
     try:
         from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
@@ -432,8 +482,13 @@ def _budget_core(
         return True, _budget_deny(over_text(xlb.Usage(0, 0, True)))
     if xlb.deny_count(rec) >= xlb.GOLF_DENY_LIMIT:
         return True, _budget_deny(_closed_text(rec, host))
+    covered, siblings = _patch_batch(payload, file_path)
+    if covered:
+        if opened_here:
+            _discard_fresh(xlb, root, session_id)
+        return True, None
     try:
-        usage = xlb.measure(root, rec, file_path, project())
+        usage = _with_siblings(xlb, root, rec, xlb.measure(root, rec, file_path, project()), file_path, siblings)
     except Exception as exc:
         reason = str(exc) if isinstance(exc, _Unprojectable) else f"{type(exc).__name__}: {exc}"
         text = f"Budget unmeasurable ({reason}).{_trajectory(xlb, root, rec, file_path)} Size S or larger. {_fire(host=host)}"
@@ -457,7 +512,8 @@ def _budget_core(
     if _strict() and xlb.is_advised(rec):
         return True, _budget_deny(_latched_text(host))
     try:
-        xlb.add_path(root, session_id, file_path)
+        for path in (file_path, *(path for path, _ in siblings)):
+            xlb.add_path(root, session_id, path)
     except Exception:
         pass
     return True, None

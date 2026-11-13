@@ -210,6 +210,28 @@ def test_reap_still_reached_on_windows_with_marker(monkeypatch, tmp_path):
     assert [p for p, _ in k.killed] == [102, 101, 100]
 
 
+def test_reap_opens_only_records_inside_the_window(monkeypatch, tmp_path):
+    import os
+
+    now_mark = int(time.time() * 1e7) + FILETIME_UNIX_EPOCH
+    for i in range(300):
+        store.write_record(LaunchRecord(f"old{i}", "s1", "tu", "sleep 3001", now_mark))
+        old = time.time() - 3600
+        os.utime(tmp_path / "taskstop-reaper" / "launches" / f"old{i}.json", (old, old))
+    store.write_record(LaunchRecord("bg1", "s1", "tu", "sleep 3001", now_mark))
+    store.write_record(LaunchRecord("bg2", "s1", "tu", "sleep 3001", now_mark + S // 10))
+    opened = []
+    real = store._load
+    monkeypatch.setattr(store, "_load", lambda p: (opened.append(p.name), real(p))[1])
+    k = StubKill()
+    _install(monkeypatch, k, _tree(now_mark))
+    reaper._handler(_payload())
+    assert not any(n.startswith("old") for n in opened)
+    assert set(opened) == {"bg1.json", "bg2.json"}
+    row = _log(tmp_path)[0]
+    assert row["outcome"] == "ambiguous" and row["competing"] == ["bg2"] and not k.killed
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="real Windows snapshot")
 def test_cost_real_snapshot_zero_spawns(monkeypatch, tmp_path):
     monkeypatch.undo()

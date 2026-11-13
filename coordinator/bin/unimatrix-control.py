@@ -96,7 +96,7 @@ def resolve_repo_key(key):
     if not reader.is_file():
         return None
     try:
-        r = subprocess.run([sys.executable, str(reader), "get", f"repos.{key}"], capture_output=True,
+        r = subprocess.run([_console_python(), str(reader), "get", f"repos.{key}"], capture_output=True,
                            text=True, timeout=2.0, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError):
         return None
@@ -129,6 +129,14 @@ def named_session_entries(name):
     return found
 
 
+def _console_python():
+    """A real console CPython for a child argv; OSError when none resolves."""
+    found = _load_sibling("lib/python_interp.py", "unimatrix_control_python_interp").resolve_console_python()
+    if not found:
+        raise FileNotFoundError("no console Python interpreter resolvable")
+    return found
+
+
 def spawn_launch(family, repo_dir, session_id, session_name, *, spawner=None, platform=None):
     """Start `headless-em-launch <family> --session-id <id> --name <name>` detached in `repo_dir`; the reply dict."""
     launcher = HERE / "headless-em-launch.py"
@@ -137,7 +145,11 @@ def spawn_launch(family, repo_dir, session_id, session_name, *, spawner=None, pl
             return {"ok": False, "error": "session_detach not vendored beside the control command"}
         spawner = _load_sibling("lib/session_detach.py", "unimatrix_control_session_detach").spawn_detached
     log = settings_home() / "unimatrix" / "control-launch.log"
-    cmd = [sys.executable, str(launcher), family, "--session-id", session_id, "--name", session_name]
+    try:
+        interpreter = _console_python()
+    except OSError as e:
+        return {"ok": False, "error": f"spawn failed: {type(e).__name__}"}
+    cmd = [interpreter, str(launcher), family, "--session-id", session_id, "--name", session_name]
     pid = spawner(cmd, log, cwd=repo_dir, strict=True, platform=platform)
     if pid is None:
         return {"ok": False, "error": "spawn failed"}
@@ -149,8 +161,8 @@ def run_claude_launch(args, repo_dir, session_name, *, runner=None, timeout=60):
 
     The launcher prints one JSON line `{"name", "id", "session_id"}` on success; `id` is the one `claude --bg`
     printed (what `--resume` takes), `session_id` is only the grant's minted id."""
-    cmd = [sys.executable, str(HERE / "headless-em-launch.py"), "claude", *args]
     try:
+        cmd = [_console_python(), str(HERE / "headless-em-launch.py"), "claude", *args]
         r = (runner or subprocess.run)(cmd, cwd=repo_dir, capture_output=True, text=True, timeout=timeout,
                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError) as e:

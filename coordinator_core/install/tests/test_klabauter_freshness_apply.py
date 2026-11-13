@@ -189,33 +189,55 @@ def test_stale_copy_not_reinstalled_during_live_run_deferral(world):
     assert res.stale_installs == [] and spy.calls == []
 
 
-def test_count_live_runs_sums_repos_and_treats_unreadable_as_live(tmp_path, monkeypatch):
-    from coordinator_core.ops.workflow_fire import fire
+def _default_predicate_run(world, monkeypatch, in_flight):
+    seen = []
 
-    a, b, c = (tmp_path / n for n in "abc")
-    for r in (a, b, c):
-        (r / ".git").mkdir(parents=True)
-    counts = {str(a): 2, str(b): 1}
+    def fake(root):
+        seen.append(root)
+        return in_flight
 
-    def fake(cwd=None):
-        if cwd == str(c):
-            raise RuntimeError("unreadable")
-        return counts[cwd]
-
-    monkeypatch.setattr(fire, "count_live_fires", fake)
-    roots = {"a": a, "b": b, "gone": tmp_path / "gone"}
-    assert apply.count_live_runs(roots) == 3
-    assert apply.count_live_runs({**roots, "c": c}) == 4
+    monkeypatch.setattr(apply, "engine_leg_in_flight", fake)
+    _push_unimatrix_change(world)
+    res = apply.apply_freshness(
+        world["box"], world["home"], hostname="boxy", installers=_Spy().table
+    )
+    assert seen == [world["box"]]
+    return res
 
 
-def test_count_live_runs_unreadable_registry_defers(monkeypatch):
-    from coordinator_core.ops.fleet import _memo_resolver
+def test_default_gate_fast_forwards_when_no_engine_leg_in_flight(world, monkeypatch):
+    res = _default_predicate_run(world, monkeypatch, 0)
+    assert res.action == kf.ACTION_FAST_FORWARD and res.moved
 
-    def boom():
-        raise _memo_resolver.RegistryReadError("bad toml")
 
-    monkeypatch.setattr(_memo_resolver, "read_registry_repos", boom)
-    assert apply.count_live_runs() >= 1
+def test_default_gate_defers_when_engine_leg_in_flight(world, monkeypatch):
+    res = _default_predicate_run(world, monkeypatch, 1)
+    assert res.action == kf.ACTION_DEFERRED_LIVE_RUN and not res.moved
+
+
+def _legs(monkeypatch, record_pid, sup, door, own_pid=4242):
+    from coordinator_core.warm import supervisor
+
+    monkeypatch.setattr(supervisor, "read_discovery", lambda root=None: {"pid": record_pid})
+    return apply.engine_leg_in_flight(
+        Path("."), sup_count=lambda r: sup, door_count=lambda r: door, own_pid=own_pid
+    )
+
+
+def test_engine_leg_gate_discounts_own_request_when_served_by_the_supervisor(monkeypatch):
+    assert _legs(monkeypatch, 4242, 1, 1) == 0
+    assert _legs(monkeypatch, 4242, 1, 0) == 0
+    assert _legs(monkeypatch, 4242, 2, 1) == 1
+
+
+def test_engine_leg_gate_counts_every_request_when_not_served_by_the_supervisor(monkeypatch):
+    assert _legs(monkeypatch, 1, 1, 0) == 1
+    assert _legs(monkeypatch, 1, 0, 0) == 0
+
+
+def test_engine_leg_gate_unanswerable_probe_reads_in_flight(monkeypatch):
+    assert _legs(monkeypatch, 4242, None, 0) == 1
+    assert _legs(monkeypatch, 4242, 1, None) == 1
 
 
 def test_fetch_failure_is_reported_and_probe_still_runs(world):

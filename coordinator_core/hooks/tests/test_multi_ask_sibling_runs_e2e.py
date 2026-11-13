@@ -22,6 +22,7 @@ from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
 from coordinator_core.ops.dispatch_emit import requirements_ledger as ledger
 from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from coordinator_core.ops.dispatch_emit.fan_launcher import LAUNCHER_CHILD_EMIT_PARAM
 from coordinator_core.session_baton import store
 
 pytestmark = pytest.mark.complete
@@ -129,6 +130,14 @@ def _launcher_children(env: dict) -> list[dict]:
     return json.JSONDecoder().raw_decode(text[start:])[0]
 
 
+def _run_launcher_emits(root: Path, env: dict) -> None:
+    """The emit leg each launcher child runs at start: the hook defers every child's emit to it, so the run
+    record, the run's own script and `sibling-status.json` exist only after it."""
+    for child in _launcher_children(env):
+        out = mod._default_emit({**child["emit"], LAUNCHER_CHILD_EMIT_PARAM: True}, root)
+        assert out.get("run_id") == child["run_id"], out
+
+
 def _submission(root: Path, run_id: str) -> dict | None:
     path = warp_live._submission_path(root, run_id)
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
@@ -145,6 +154,11 @@ def test_a_disjoint_pair_replies_parent_and_runs_and_starts_both_under_one_launc
     assert [r.status for r in parent.runs] == ["ready", "ready"]
     assert "Fire the listed runs" not in _all_text(env)
     assert [ch["run_id"] for ch in _launcher_children(env)] == [r.run_id for r in parent.runs]
+    assert EMIT_CALLS == []
+    for run in parent.runs:
+        assert not (repo / c.status_rel(run.run_id)).exists()
+
+    _run_launcher_emits(repo, env)
     for run in parent.runs:
         assert _status(repo, run.run_id) == "running"
 
@@ -155,7 +169,9 @@ def test_a_disjoint_pair_replies_parent_and_runs_and_starts_both_under_one_launc
 
 
 def test_slice_ledgers_union_to_the_parent_register_and_seed_no_verbatim(repo):
-    reply = _reply_json(_submit(repo, {"asks": _disjoint()}))
+    env = _submit(repo, {"asks": _disjoint()})
+    reply = _reply_json(env)
+    _run_launcher_emits(repo, env)
     parent = _parent(repo, reply["parent_id"])
     seeded: list[str] = []
     for run in parent.runs:
@@ -245,8 +261,16 @@ def test_a_three_ask_submission_with_one_after_edge_launches_the_two_ready_runs_
         assert record is not None and record["script_path"] == _hso(env)["updatedInput"]["scriptPath"]
     assert _submission(repo, held[0].run_id) is None
     assert held[0].run_id not in json.dumps(children)
-    assert sorted(p.name for p in (repo / "scratch" / "warp").glob("*.workflow.mjs")) == sorted(
-        [Path(_hso(env)["updatedInput"]["scriptPath"]).name] + [f"{r.run_id}.workflow.mjs" for r in ready]
+    warp_dir = repo / "scratch" / "warp"
+    launcher = Path(_hso(env)["updatedInput"]["scriptPath"]).name
+    assert [p.name for p in warp_dir.glob("*.workflow.mjs") if not p.name.startswith("defer-")] == [launcher]
+    assert len(list(warp_dir.glob("defer-*.workflow.mjs"))) == len(ready)
+    for run in ready:
+        assert not (repo / c.status_rel(run.run_id)).exists()
+
+    _run_launcher_emits(repo, env)
+    assert sorted(p.name for p in warp_dir.glob("*.workflow.mjs") if not p.name.startswith("defer-")) == sorted(
+        [launcher] + [f"{r.run_id}.workflow.mjs" for r in ready]
     )
     for run in ready:
         assert _status(repo, run.run_id) == "running"
@@ -254,7 +278,9 @@ def test_a_three_ask_submission_with_one_after_edge_launches_the_two_ready_runs_
 
 
 def test_three_disjoint_asks_all_read_ready_and_the_launcher_leaves_all_three_running(repo):
-    reply = _reply_json(_submit(repo, {"asks": _disjoint(3)}))
+    env = _submit(repo, {"asks": _disjoint(3)})
+    reply = _reply_json(env)
+    _run_launcher_emits(repo, env)
     parent = _parent(repo, reply["parent_id"])
     assert [r.status for r in parent.runs] == ["ready", "ready", "ready"]
     assert len(reply["runs"]) == 3 and all("after" not in r for r in reply["runs"])
@@ -326,6 +352,7 @@ def test_a_mixed_relayed_and_pm_submission_records_each_slice_origin(repo):
     parent = _parent(repo, _reply_json(env)["parent_id"])
     relayed_run, pm_run = parent.runs
     assert [ch["run_id"] for ch in _launcher_children(env)] == [relayed_run.run_id, pm_run.run_id]
+    _run_launcher_emits(repo, env)
 
     relayed_dir, pm_dir = record_dir(repo, relayed_run.run_id), record_dir(repo, pm_run.run_id)
     assert (relayed_dir / "relayed-ask.md").is_file() and not (relayed_dir / "ask.md").exists()
@@ -346,6 +373,8 @@ def test_an_entry_context_reaches_only_its_own_slice_run_record_ledger_and_scrip
                                   {"ask": "second job", "source": "relayed", "writes": ["b.py"], "context": [ctx]}]})
     assert _hso(env)["permissionDecision"] == "allow", env
     first, second = _parent(repo, _reply_json(env)["parent_id"]).runs
+    assert EMIT_CALLS == []
+    _run_launcher_emits(repo, env)
 
     emit_params = {p["reserved_run_id"]: p for p in EMIT_CALLS}
     assert set(emit_params) == {first.run_id, second.run_id}

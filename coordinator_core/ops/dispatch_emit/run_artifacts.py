@@ -6,7 +6,8 @@ the sizing names its ``baton:`` and ``plan:``, the plan names its evidence and s
 superseded predecessors. The landing sites (terminal commit, halt commit, reaper) stage only the
 candidates this module returns, never a directory or the dirty tree.
 
-No subprocess and no git here: every function reads files or filters caller-supplied status sets.
+No subprocess and no git here except ``record_dir_residue``, the one status spawn: every other
+function reads files or filters caller-supplied status sets.
 """
 
 from __future__ import annotations
@@ -163,8 +164,8 @@ def _read_json(root: Path, rel: str) -> Optional[dict]:
 
 def _tree_files(root: Path, dir_rel: str) -> list[str]:
     """Every file under ``dir_rel``, recursive, sorted; ``scratch/`` paths, emitted workflow scripts
-    and their receipts (gitignored; `git.commit` refuses them, e.g. a halt-time resume script), any
-    ``prompts/`` dir (local scratch, gitignored) and symlinked dirs are skipped. A missing dir yields ``[]``."""
+    and their receipts (gitignored; `git.commit` refuses them, e.g. a halt-time resume script) and
+    symlinked dirs are skipped; ``prompts/`` files are included. A missing dir yields ``[]``."""
     out: list[str] = []
     stack = [dir_rel]
     while stack:
@@ -179,8 +180,6 @@ def _tree_files(root: Path, dir_rel: str) -> list[str]:
                         if not entry.name.endswith((".workflow.mjs", ".workflow.mjs.emitted.json")):
                             out.append(rel)
                     elif entry.is_dir(follow_symlinks=False):
-                        if entry.name == PROMPTS_DIR:
-                            continue
                         stack.append(rel)
         except OSError:
             continue
@@ -544,8 +543,8 @@ def runs_of_artifacts(worktree_root: Path, changed: Iterable[str]) -> dict[str, 
 
 
 def _prompt_files(root: Path, artifacts: RunArtifacts) -> list[str]:
-    """Every file under a ``prompts/`` dir of a record dir of ``artifacts`` (local scratch the
-    candidate walk skips by design), sorted."""
+    """Every file under a ``prompts/`` dir of a record dir of ``artifacts``, sorted; includes
+    ones ``artifacts.paths()`` already holds so an ignored one is named in ``ignored_excluded``."""
     out: list[str] = []
     for rec in artifacts.record_dirs:
         stack = [f"{rec}/{PROMPTS_DIR}"]
@@ -709,6 +708,32 @@ def landable(
         contest_unknown=contest_unknown,
         ignored_excluded=ignored_excluded,
     )
+
+
+def record_dir_residue(root: Path, run_id: str) -> list[str]:
+    """Changed and untracked, non-ignored repo-relative paths under ``run_id``'s record dir, from
+    one ``git status`` spawn. ``[]`` for an ignored or absent dir, an unsafe run id, or a git
+    failure (the caller cannot distinguish the last from clean: it never blocks on this)."""
+    if not _safe_run_id(run_id):
+        return []
+    from coordinator_core.git.run import run_git
+
+    record_dir = f"{_RECORD_ROOT}/{run_id}"
+    result = run_git(
+        [
+            "-C", str(root), "--no-optional-locks", "status", "--porcelain=v1", "-z",
+            "--no-renames", "--untracked-files=all", "--", f":(literal){record_dir}/",
+        ],
+        binary=True,
+    )
+    if not result.ok:
+        return []
+    out: list[str] = []
+    for raw in result.stdout_bytes.split(b"\0"):
+        if len(raw) < 4:
+            continue
+        out.append(raw[3:].decode("utf-8", "surrogateescape").replace("\\", "/"))
+    return sorted(out)
 
 
 def residue(

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.hooks import submit_engine_ask as mod
+from coordinator_core.ops.dispatch_emit import live_run_index
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
 
 SIZING_REL = "state/sizings/2026-11-05-staged-fixture.yaml"
@@ -30,6 +31,8 @@ def _repo(tmp_path: Path, owner: str) -> Path:
     stage = {"stage": "staged", "session_id": owner, "started_at": "2026-11-05T01:01:01Z"}
     (rd / RUN_STAGE_FILE).write_text(json.dumps(stage), encoding="utf-8")
     (rd / WAVE0).write_text('{"wave": 0}', encoding="utf-8")
+    # The refire finds an unmarked run only through the live-run index, never a `state/warp` listing.
+    assert live_run_index.add(tmp_path, RUN_ID, 0.0)
     return tmp_path
 
 

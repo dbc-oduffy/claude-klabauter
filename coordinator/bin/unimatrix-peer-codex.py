@@ -370,4 +370,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    if any(_a in ("-h", "--help") for _a in __import__("sys").argv[1:]):
+        print("usage: unimatrix-peer-codex [-h]\nunimatrix Codex peer")
+        raise SystemExit(0)
     sys.exit(main())

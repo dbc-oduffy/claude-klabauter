@@ -320,6 +320,16 @@ def _lib(name):
 
 
 _LIBS = {}
+
+
+def _console_python():
+    """A real console CPython for a child argv or a rendered command; OSError when none resolves."""
+    found = _lib("python_interp").resolve_console_python()
+    if not found:
+        raise FileNotFoundError("no console Python interpreter resolvable")
+    return found
+
+
 HOMEBREW_PYTHONS = ("/opt/homebrew/bin/python3", "/usr/local/bin/python3")  # literal: the installer must import without lib/ beside it
 _PIN_UNREAD = object()
 PYTHON_PIN_KEY = "unimatrix.python"
@@ -497,7 +507,7 @@ def pair_key(alias, run=subprocess.run, unencrypted=False, remint=False, on_mint
             raise RuntimeError(f"{reader} is missing; an unrecorded pair key would not be found next run")
         if remint or not priv.is_file():
             _mint(priv, "unimatrix", run, unencrypted, remint, on_mint)
-        rec = run([sys.executable, str(reader), "set", f"{autolink.KEYS_PREFIX}{alias}", str(priv)],
+        rec = run([_console_python(), str(reader), "set", f"{autolink.KEYS_PREFIX}{alias}", str(priv)],
                   capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
         if rec.returncode:
             raise RuntimeError(f"recording {autolink.KEYS_PREFIX}{alias} failed: "
@@ -519,7 +529,7 @@ def recorded_pair_keys(run=subprocess.run, peers=None):
     reader = roster.settings_home() / "bin" / "_machine_local.py"
     if not reader.is_file():
         raise RuntimeError(f"{reader} is missing; recorded pair keys cannot be listed")
-    r = run([sys.executable, str(reader), "get", autolink.REGISTRY_KEY],
+    r = run([_console_python(), str(reader), "get", autolink.REGISTRY_KEY],
             capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
     if r.returncode not in (0, 1):
         raise RuntimeError(f"reading {autolink.REGISTRY_KEY} failed: {(r.stderr or r.stdout or '').strip()[:200]}")
@@ -881,7 +891,7 @@ def codex_hooks_path():
 
 
 def _hook_command(dest_dir, script_name, *args):
-    argv = [sys.executable, str(Path(dest_dir) / script_name), *args]
+    argv = [_console_python(), str(Path(dest_dir) / script_name), *args]
     return subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(shlex.quote(a) for a in argv)
 
 
@@ -1387,7 +1397,7 @@ def unseed_grok_hook(hooks_path):
 
 
 def _tui_status_command(host):
-    argv = [sys.executable, "-m", "coordinator_core.tui_status", host]
+    argv = [_console_python(), "-m", "coordinator_core.tui_status", host]
     return subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(shlex.quote(a) for a in argv)
 
 
@@ -1602,7 +1612,7 @@ def codex_exec_rule_path():
 
 def render_codex_exec_rule(dest_dir):
     """An allow rule for the send command alone, so a Codex reply to a peer needs no approval prompt."""
-    argv = [sys.executable, str(Path(dest_dir) / SEND_SCRIPT)]
+    argv = [_console_python(), str(Path(dest_dir) / SEND_SCRIPT)]
     return ("# unimatrix: lets Codex answer a peer agent with the send command, without an approval prompt.\n"
             "# Only this one script. Written by unimatrix-install.py --install, removed by --uninstall.\n"
             f"prefix_rule(pattern={json.dumps(argv)}, decision=\"allow\")\n")
@@ -1669,7 +1679,7 @@ def _write_pin(interp):
     if not reader.is_file():
         return False
     try:
-        rec = subprocess.run([sys.executable, str(reader), "set", PYTHON_PIN_KEY, interp], capture_output=True,
+        rec = subprocess.run([_console_python(), str(reader), "set", PYTHON_PIN_KEY, interp], capture_output=True,
                              text=True, timeout=30, creationflags=roster.no_window())
     except (OSError, subprocess.SubprocessError):
         return False

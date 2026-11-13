@@ -1029,5 +1029,25 @@
       "reading": "root-inclusive. 1.0 = the interpreter itself and zero children.",
       "why_a_positive_control": "A zero from an instrument nobody proved is looking is not a measurement. The 2.0 arm is what makes the three 1.0s evidence."
     }
+  },
+  "_cold_operation_ask_gate_split": {
+    "measured_on": "2026-11-13",
+    "platform": "darwin",
+    "code_sha": "8aa1393329 + uncommitted working tree (ipc.py, _sizing_citation.py import trim, cold_operation_ask_gate_split.py); re-measure at the landing sha",
+    "produced_by": "python -m coordinator_core.benchmarks.cold_operation_ask_gate_split --dirs 4000 --runs 5 --enforce-bar (exit 0)",
+    "unit": "process ms (job-object / rusage tree CPU), never wall clock",
+    "run_bound_cold_child": {
+      "interpreter_start_ms": 14.5,
+      "imports_ms": 203.4,
+      "dispatch_ms": 4.3,
+      "body_ms": 43.8,
+      "lock_wait_ms": 0.0,
+      "spawns": 0,
+      "total_process_ms": 262.2,
+      "cold_total_process_ms": 252.9,
+      "dominant_leg": "imports_ms"
+    },
+    "run_to_run_range": "total_process_ms 202.7 to 293.4 across three 4000-dir runs, the last measured with the _sizing_citation lazy import in place; imports_ms 182 to 203 in every run",
+    "reading": "On darwin the cold child answers under the 500ms bar and the dominant leg is import weight (ask_gate -> ask_stage -> emit, ~160ms cumulative under -X importtime). No lock wait, no spawn, body ~40ms. The 150s Machine-a figure is not reproduced here; win32 is measured by C3."
   }
 }

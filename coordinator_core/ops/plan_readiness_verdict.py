@@ -16,6 +16,12 @@ Wire params:
                                 BLOCKED review is clear only when that sidecar carries a
                                 ``findings_ledger:`` stamp and every row is ``verified: true``
                                 with status absent or ``applied``.
+    base_ref (str, optional) — git ref or sha every anchor check reads in place of the working
+                               tree (precedence: a git-grep stage's own ref > a claim's
+                               ``baseline_ref`` > this). Absent, the newest ``base_ref.json`` run
+                               marker of the plan's ``sizing_object`` applies (written by
+                               ``workflow.revise base_ref``); neither, the tree is read. The reply
+                               carries ``anchor_base_ref: {ref, source: param|run}`` when one applies.
     premise  (object, optional) — {rows: [{verdict, citation, ...}]}; verdict is RESOLVES |
                                   UNRESOLVED | CONTRADICTED | UNCHECKABLE. Only UNRESOLVED and
                                   CONTRADICTED rows pull; UNCHECKABLE is a note on a ready reply.
@@ -55,7 +61,7 @@ it is a note on a ready reply, never a pull.
 Reply: see coordinator_core/contract/readiness-verdict.schema.json (the schema wins).
 
 Negative-spec:
-  - Takes no skip, force or override parameter; any key outside the five above is refused.
+  - Takes no skip, force or override parameter; any key outside the six above is refused.
   - Does NOT write, stamp or mutate anything, and does NOT sweep the corpus. It reads a review's
     ledger sidecar through ``review_findings_ledger.read_ledger`` and never calls ``verify``.
   - Reads the plan file once, through the prep gate; nothing here re-reads it.
@@ -81,6 +87,7 @@ from coordinator_core.ops import (
     readiness_declared_absent,
 )
 from coordinator_core.ops._major_finding_answer import unanswered
+from coordinator_core.ops.dispatch_emit import ask_contract
 from coordinator_core.ops._param_alias import aliased_param, spellings
 from coordinator_core.ops.plan_prep_gate import prep_gate_with_text
 from coordinator_core.ops.review_findings_ledger import read_ledger
@@ -88,7 +95,7 @@ from coordinator_core.roadmap.prep_gate import ZERO_DISPATCHABLE_KIND
 
 GENERATES: list = []
 
-_KNOWN_PARAMS = frozenset({"plan", "plan_path", "coverage", "reviews", "premise"})
+_KNOWN_PARAMS = frozenset({"plan", "plan_path", "coverage", "reviews", "premise", "base_ref"})
 # Mirrors DoE plan-blitz.mjs PREMISE_REVIEWER.
 _PREMISE_REVIEWER = "premise-check"
 _PREMISE_BLOCKING = frozenset({"UNRESOLVED", "CONTRADICTED"})
@@ -496,8 +503,11 @@ def _check_params(params: dict) -> tuple:
     if extra:
         raise ValueError(
             f"unknown param(s): {', '.join(repr(k) for k in extra)}. "
-            f"Valid: {spellings('plan', 'plan_path')}, coverage, reviews, premise"
+            f"Valid: {spellings('plan', 'plan_path')}, coverage, reviews, premise, base_ref"
         )
+    base_ref = params.get("base_ref")
+    if base_ref is not None and (not isinstance(base_ref, str) or not base_ref.strip()):
+        raise ValueError("base_ref must be a non-empty string naming a git ref or sha")
     raw_plan = aliased_param(params, "plan", "plan_path")
     if not isinstance(raw_plan, str) or not raw_plan.strip():
         raise ValueError(
@@ -801,6 +811,15 @@ def readiness_verdict(
     }
 
 
+def _resolve_base_ref(param: Any, root: Path, sizing_rel: Any) -> Optional[dict]:
+    """``{ref, source}`` for the ref anchor checks read: the ``base_ref`` param (source ``param``), else
+    the newest run marker of the plan's sizing (source ``run``); None reads the tree. No git spawn."""
+    if isinstance(param, str) and param.strip():
+        return {"ref": param.strip(), "source": "param"}
+    marked = ask_contract.run_base_ref(root, sizing_rel)
+    return {"ref": marked, "source": "run"} if marked else None
+
+
 @register_op("plan.readiness_verdict")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "plan.readiness_verdict" handler. See module docstring."""
@@ -821,6 +840,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         }
         corrects, spine_rows, ref, absent, questions = None, None, None, None, ""
         anchor, verdicts, anchor_entries, census = [_anchor_premise.unjudged(reason)], [], None, None
+        base_ref = None
     else:
         corrects, spine_rows, ref, absent, questions, text, fm = _plan_inputs(plan_text)
         from coordinator_core.lifecycle import main_worktree_root
@@ -833,12 +853,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         carried = (
             _own_run_premise.regrade(_carry_rows(repo_root, str(prep_gate["plan"])), own) if anchors else []
         )
+        base_ref = _resolve_base_ref(params.get("base_ref"), anchor_root, fm.get("sizing_object")) if anchors else None
         verdicts = _row_outranks_match(
-            _anchor_premise.anchor_verdicts(anchors, premise_rows, carried, text, anchor_root),
+            _anchor_premise.anchor_verdicts(
+                anchors, premise_rows, carried, text, anchor_root, base_ref=base_ref and base_ref["ref"]
+            ),
             anchors, premise_rows,
         )
         anchor = defects + _anchor_premise.anchor_findings(
-            anchors, premise_rows, carried, text, anchor_root, verdicts
+            anchors, premise_rows, carried, text, anchor_root, verdicts,
+            base_ref=base_ref and base_ref["ref"],
         )
         # The plan's falsifier baseline_ref stands in for the run's base sha (the op's one sha input; it can predate the run);
         # the git read happens only when some UNRESOLVED premise row exists to rule on.
@@ -854,4 +878,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     reply = {"plan": prep_gate["plan"], **lead, **out, "prep_gate": prep_gate}
     if verdicts:
         reply["anchor_verdicts"] = verdicts
+    if base_ref:
+        reply["anchor_base_ref"] = base_ref
     return reply

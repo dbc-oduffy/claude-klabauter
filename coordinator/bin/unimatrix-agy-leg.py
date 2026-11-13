@@ -406,4 +406,7 @@ def main(sock):
 
 
 if __name__ == "__main__":
+    if any(_a in ("-h", "--help") for _a in __import__("sys").argv[1:]):
+        print("usage: unimatrix-agy-leg [-h]\nAntigravity leg; usage: unimatrix-agy-leg <session-id> (needs ANTIGRAVITY_CONVERSATION_ID)")
+        raise SystemExit(0)
     main(sys.argv[1])

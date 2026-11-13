@@ -137,3 +137,6 @@ def test_default_entry_with_mint_blocked_forever_answers_inside_the_bound_withou
     hso = env["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
     assert "updatedInput" not in hso
+    reason = hso["permissionDecisionReason"]
+    assert "the disk is stalled" in reason
+    assert "Instead: `Workflow(" in reason

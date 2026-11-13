@@ -275,3 +275,148 @@ def test_production_handover_runs_the_publish_order_with_the_marker_held_around_
     assert not breadcrumb.publish_marker_held(marker_dir)
     assert list(marks) == ["copy_done", "successor_returned", "released"]
     assert marks["released"] >= marks["successor_returned"] >= marks["copy_done"]
+
+
+MARKS = {"round_begin": 100.0, "copy_begin": 130.0, "exit_done": 135.0, "publisher_exit": 136.0}
+
+
+def _dial(started: float, root: str, outcome: str, transport: str = lw.TRANSPORT_HTTP) -> lw.RoundSample:
+    return lw.RoundSample(started, 0.01, root, transport, outcome)
+
+
+def _classify(samples, marks=MARKS, successor=None, scope=lw.SCOPE_WHOLE_LANDING) -> lw.PublishRoundReport:
+    return lw.classify_round(
+        samples,
+        marks,
+        hold_scope=scope,
+        body_secs=30.0,
+        default_root_is_synced=False,
+        successor=successor if successor is not None else {"pid": 7, "alive_after_publisher_exit": True},
+    )
+
+
+def test_phase_of_names_the_cut_from_the_drain_slack_to_the_successor_answer() -> None:
+    window = lw.cut_window(MARKS, lw.SCOPE_WHOLE_LANDING)
+    assert window == (130.0 - lw.CUT_ENTRY_SLACK_SECS, 135.0)
+    assert lw.phase_of(99.0, MARKS, window) == "pre_round"
+    assert lw.phase_of(110.0, MARKS, window) == "landing"
+    assert lw.phase_of(129.5, MARKS, window) == "cut"
+    assert lw.phase_of(135.5, MARKS, window) == "post_cut"
+    assert lw.phase_of(137.0, MARKS, window) == "post_exit"
+
+
+def test_a_park_through_the_landing_counts_outside_the_cut_on_both_roots() -> None:
+    samples = [_dial(110.0 + i, root, lw.OUTCOME_TIMEOUT) for i in range(5) for root in ("default", "synced")]
+    report = _classify(samples)
+    assert report.closed_after_delivery_outside_cut == 10
+    assert report.closed_after_delivery_inside_cut == 0
+    assert report.default_root_parks is True
+    assert report.per_root["default"]["kinds_by_phase"] == {"landing": {"timeout": 5}}
+    assert not report.within_budget()
+
+
+def test_failures_confined_to_the_cut_leave_the_budget_met() -> None:
+    samples = [
+        _dial(110.0, "default", lw.OUTCOME_ANSWERED),
+        _dial(110.0, "synced", lw.OUTCOME_ANSWERED),
+        _dial(131.0, "synced", lw.OUTCOME_CLOSED),
+        _dial(134.0, "synced", lw.OUTCOME_TIMEOUT),
+        _dial(137.0, "synced", lw.OUTCOME_ANSWERED),
+    ]
+    report = _classify(samples)
+    assert report.closed_after_delivery_outside_cut == 0
+    assert report.closed_after_delivery_inside_cut == 2
+    assert report.default_root_parks is False
+    assert report.within_budget()
+
+
+def test_pipe_failures_are_reported_apart_from_the_hook_dial_count() -> None:
+    report = _classify([_dial(110.0, "synced", lw.OUTCOME_TIMEOUT, lw.TRANSPORT_PIPE)])
+    assert report.closed_after_delivery_outside_cut == 0
+    assert report.per_root["_pipe_failures"] == 1
+
+
+def test_a_successor_that_never_answered_leaves_ancestry_unmeasured() -> None:
+    assert _classify([], successor={"pid": None}).ancestry_changes_outcome is None
+
+
+def test_a_successor_that_dies_with_its_publisher_is_ancestry_causal() -> None:
+    dead = _classify([], successor={"pid": 7, "alive_after_publisher_exit": False})
+    alive = _classify([_dial(137.0, "synced", lw.OUTCOME_ANSWERED)])
+    assert dead.ancestry_changes_outcome is True
+    assert alive.ancestry_changes_outcome is False
+
+
+class _FakePublish:
+    def __init__(self, events: list) -> None:
+        self._events = events
+
+    def _quiesced_engine_roots(self, roots):
+        import contextlib
+
+        @contextlib.contextmanager
+        def _hold():
+            self._events.append("enter")
+            yield
+            self._events.append("exit")
+
+        return _hold()
+
+
+def _run_round(scope: str, monkeypatch, tmp_path: Path) -> list:
+    events: list = []
+    monkeypatch.setattr(lw, "rewrite_tree", lambda *_a, **_k: events.append("copy"))
+    lw.run_modelled_round(
+        _FakePublish(events),
+        tmp_path,
+        hold_scope=scope,
+        body_secs=30.0,
+        copy_secs=0.0,
+        marks={},
+        sleep=lambda _secs: events.append("land"),
+    )
+    return events
+
+
+def test_the_whole_landing_round_holds_across_the_landing_and_the_copy(monkeypatch, tmp_path: Path) -> None:
+    assert _run_round(lw.SCOPE_WHOLE_LANDING, monkeypatch, tmp_path) == ["enter", "land", "copy", "exit"]
+
+
+def test_the_per_root_round_lands_before_the_hold_and_holds_only_the_copy(monkeypatch, tmp_path: Path) -> None:
+    assert _run_round(lw.SCOPE_PER_ROOT, monkeypatch, tmp_path) == ["land", "enter", "copy", "exit"]
+
+
+def test_hold_scope_reads_the_landing_hold_shape_from_run_round_source() -> None:
+    import types
+
+    def whole(_a):
+        return [_a, _quiesced_engine_roots([])]  # ), _quiesced_engine_roots(
+
+    def narrowed(_a):
+        return _quiesced_engine_roots([_a])
+
+    whole.__doc__ = "x), _quiesced_engine_roots("
+    module = types.SimpleNamespace(_run_round=whole)
+    assert lw.detect_hold_scope(module) == lw.SCOPE_WHOLE_LANDING
+    assert lw.detect_hold_scope(types.SimpleNamespace(_run_round=narrowed)) == lw.SCOPE_PER_ROOT
+
+
+def test_swap_window_method_check_names_a_called_but_undefined_method(tmp_path: Path) -> None:
+    warm = tmp_path / "coordinator_core" / "warm"
+    warm.mkdir(parents=True)
+    (warm / "server.py").write_text("x = version_state.is_token_skewed(t)\n", encoding="utf-8")
+    (warm / "skew.py").write_text("class ServerVersionState:\n    def is_skewed(self): ...\n", encoding="utf-8")
+    assert lw.swap_window_method_defined(tmp_path) is False
+    (warm / "skew.py").write_text("    def is_token_skewed(self, t): ...\n", encoding="utf-8")
+    assert lw.swap_window_method_defined(tmp_path) is True
+    (warm / "server.py").write_text("pass\n", encoding="utf-8")
+    assert lw.swap_window_method_defined(tmp_path) is None
+
+
+def test_the_cut_opens_at_hold_begin_so_the_hold_entry_park_is_inside_it() -> None:
+    marks = {**MARKS, "hold_begin": 127.0}
+    assert lw.cut_window(marks, lw.SCOPE_PER_ROOT) == (127.0, 135.0)
+    inside_entry = _classify([_dial(127.5, "synced", lw.OUTCOME_TIMEOUT)], marks=marks, scope=lw.SCOPE_PER_ROOT)
+    assert inside_entry.closed_after_delivery_outside_cut == 0
+    before_entry = _classify([_dial(126.0, "synced", lw.OUTCOME_TIMEOUT)], marks=marks, scope=lw.SCOPE_PER_ROOT)
+    assert before_entry.closed_after_delivery_outside_cut == 1

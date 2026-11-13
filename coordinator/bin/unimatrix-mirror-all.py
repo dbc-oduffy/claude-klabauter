@@ -107,7 +107,7 @@ def live_sessions(skip):
 
 
 def inbox_cmd(d, name, log_dir, remote, key, tunnel_remote=None):
-    cmd = [sys.executable, str(HERE / "unimatrix-inbox.py"), str(d["pid"]), name,
+    cmd = [_roster().console_python(), str(HERE / "unimatrix-inbox.py"), str(d["pid"]), name,
            os.path.join(log_dir, f"unimatrix-inbox-{name}.log"), d["messagingSocketPath"],
            "--remote", remote, "--key", key]
     return cmd + ["--tunnel-remote", tunnel_remote] if tunnel_remote else cmd
@@ -121,7 +121,7 @@ def mux_names_path(log_dir, remote):
 def mux_cmd(log_dir, remote, key, tunnel_remote=None):
     """The one near client for a far box: it subscribes inbox-mux once and follows the names file."""
     tag = re.sub(r"[^A-Za-z0-9._-]", "_", str(remote))
-    cmd = [sys.executable, str(HERE / "unimatrix-inbox.py"), "mux",
+    cmd = [_roster().console_python(), str(HERE / "unimatrix-inbox.py"), "mux",
            os.path.join(log_dir, f"unimatrix-inbox-mux-{tag}.log"),
            "--names-file", mux_names_path(log_dir, remote), "--remote", remote, "--key", key]
     return cmd + ["--tunnel-remote", tunnel_remote] if tunnel_remote else cmd
@@ -521,7 +521,7 @@ def ensure_router(say, wait=3.0):
                 if not transport.lock_file(lease):
                     return False
                 transport.unlock_file(lease)
-            p = _roster().spawn([sys.executable, str(HERE / "unimatrix-peer-router.py")])
+            p = _roster().spawn([_roster().console_python(), str(HERE / "unimatrix-peer-router.py")])
             say(f"router not answering at {ctl}; spawned router pid {p.pid}")
             deadline = time.time() + wait
             while time.time() < deadline and not router_answers(ctl):

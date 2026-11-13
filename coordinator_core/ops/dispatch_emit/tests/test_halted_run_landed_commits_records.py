@@ -50,8 +50,34 @@ def test_landed_flip_is_committed_in_one_scoped_commit_naming_the_run(halted_rep
     assert RUN in _git(root, "log", "-1", "--format=%B")
     rel = rd.relative_to(root).as_posix()
     changed = set(_git(root, "show", "--name-only", "--format=", "HEAD").split())
-    assert changed == {f"{rel}/halted.json", f"{rel}/run-stage.json"}
+    assert {f"{rel}/halted.json", f"{rel}/run-stage.json"} <= changed
     assert _git(root, "status", "--porcelain", "--", rel) == ""
+
+
+def test_landed_commit_takes_prompts_and_a_rewritten_resume_json(halted_repo):
+    root, first, rd = halted_repo
+    rel = rd.relative_to(root).as_posix()
+    (rd / "resume.json").write_text("{}", encoding="utf-8")
+    _git(root, "add", "--", f"{rel}/resume.json")
+    _git(root, "commit", "-q", "-m", "resume")
+    (rd / "resume.json").write_text('{"again": 1}', encoding="utf-8")
+    (rd / "prompts" / "sub").mkdir(parents=True)
+    (rd / "prompts" / "sub" / "p.md").write_text("p", encoding="utf-8")
+    out = op._handler({"run_id": RUN, "sha": first}, root)
+    assert out["ok"] and out["records_commit"] == _git(root, "rev-parse", "HEAD")
+    changed = set(_git(root, "show", "--name-only", "--format=", "HEAD").split())
+    assert {f"{rel}/resume.json", f"{rel}/prompts/sub/p.md"} <= changed
+    assert _git(root, "status", "--porcelain", "--", rel) == ""
+
+
+def test_sibling_run_dirty_paths_are_not_taken(halted_repo):
+    root, first, rd = halted_repo
+    other = record_dir(root, "ask-20261029T000001-def456")
+    other.mkdir(parents=True)
+    (other / "stray.json").write_text("{}", encoding="utf-8")
+    op._handler({"run_id": RUN, "sha": first}, root)
+    changed = set(_git(root, "show", "--name-only", "--format=", "HEAD").split())
+    assert not any("def456" in p for p in changed)
 
 
 def test_second_call_writes_nothing_and_commits_nothing(halted_repo):

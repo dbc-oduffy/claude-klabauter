@@ -42,6 +42,9 @@ class _FakeVersionState:
     def is_skewed(self, client_token: str) -> bool:
         return False
 
+    def is_token_skewed(self, client_token: str) -> bool:
+        return self.is_skewed(client_token)
+
 
 class _FakeListener:
     def __init__(self, results):
@@ -131,7 +134,8 @@ def test_a_pool_task_outliving_its_connection_still_holds_the_drain(monkeypatch)
     monkeypatch.setattr(ctx, "_ensure_dispatch_pool", lambda: _Pool())
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 0.01)
 
-    response = ctx._pool_dispatch({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}})
+    # `ping` is a light op that runs in the guard pool; a heavy read-only op exercises the dispatch pool.
+    response = ctx._pool_dispatch({"jsonrpc": "2.0", "id": 1, "method": "records.query", "params": {}})
 
     assert "error" in response
     assert ctx.in_flight() == 0
@@ -177,6 +181,9 @@ def test_a_skew_eviction_does_not_kill_in_flight_or_late_requests(short_tmp_path
     class _PublishedUnder(_FakeVersionState):
         def is_skewed(self, client_token: str) -> bool:
             return client_token == "post-publish"
+
+        def is_token_skewed(self, client_token: str) -> bool:
+            return self.is_skewed(client_token)
 
     release = threading.Event()
     exited = threading.Event()
@@ -264,6 +271,9 @@ def test_a_skew_eviction_does_not_kill_in_flight_or_late_requests(short_tmp_path
 class _StopVersionState(_FakeVersionState):
     def is_skewed(self, client_token: str) -> bool:
         return client_token != "current"
+
+    def is_token_skewed(self, client_token: str) -> bool:
+        return self.is_skewed(client_token)
 
 
 def _serve_in_swap_window(monkeypatch, method: str, token: str):

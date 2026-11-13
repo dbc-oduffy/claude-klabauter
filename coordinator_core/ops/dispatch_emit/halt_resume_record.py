@@ -344,11 +344,22 @@ def build_record(
     }
 
 
+def _run_ended(record_dir: Path) -> bool:
+    """True when the run's marker is `landed` or `closed`: it has nothing to resume, so no record writer touches its dir."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    marker = halted_run._read(record_dir)
+    return bool(marker) and marker.get("status") in (halted_run.STATUS_LANDED, halted_run.STATUS_CLOSED)
+
+
 def write(record_dir: Union[str, Path], record: dict) -> Path:
-    """Atomically write `resume.json` into `record_dir` (created if absent); return its path."""
+    """Atomically write `resume.json` into `record_dir` (created if absent); return its path. A run whose
+    marker is `landed` or `closed` has nothing to resume: the write is dropped and the path returned."""
     record_dir = Path(record_dir)
-    record_dir.mkdir(parents=True, exist_ok=True)
     target = record_dir / RESUME_FILE
+    if _run_ended(record_dir):
+        return target
+    record_dir.mkdir(parents=True, exist_ok=True)
     atomic_write_bytes(target, (json.dumps(record, indent=2) + "\n").encode("utf-8"))
     return target
 
@@ -358,8 +369,10 @@ def write_refire_record(
 ) -> None:
     """Append one line to `refire-launches.jsonl` in `record_dir`: the script a refire launched, its
     sha256 (None when unreadable), `kind` ("stored" or "launcher"), `composed_by` (the engine sha that
-    composed it, None when unknown), the running `engine_sha` and `now`. Raises OSError on a failed write."""
+    composed it, None when unknown), the running `engine_sha` and `now`. Dropped for a `landed` or `closed` run. Raises OSError on a failed write."""
     record_dir = Path(record_dir)
+    if _run_ended(record_dir):
+        return
     record_dir.mkdir(parents=True, exist_ok=True)
     line = {
         "script_path": Path(script_path).as_posix(),

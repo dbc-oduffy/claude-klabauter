@@ -49,6 +49,7 @@ _SIBLING_CALL_RE = re.compile(r'(?<![A-Za-z0-9])_sibling\(\s*["\']([^"\']+)["\']
 _EXPECTED_CALL_SITES = {
     "unimatrix-install.py": {
         "unimatrix-membership.py",
+        "unimatrix-peer-contract.py",
         "unimatrix-roster.py",
     },
     "workday-start-health-probes.py": {

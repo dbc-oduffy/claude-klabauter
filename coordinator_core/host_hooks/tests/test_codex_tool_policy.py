@@ -82,3 +82,146 @@ def test_named_mcp_floor_does_not_scan_arbitrary_argument_text(monkeypatch):
     assert p4.check_mcp({"tool_name": "mcp__example_game_repo__source_control_status", "tool_input": {"description": "submit changelist"}}) is None
     monkeypatch.setattr(p4, "_armed", lambda: False)
     assert p4.check_mcp({"tool_name": "mcp__example_game_repo__source_control_submit"}) is None
+
+
+# --- multi-file apply_patch: one advisory carrying the patch's true totals -------------------------
+
+import hashlib
+import tempfile
+import zlib
+from pathlib import Path
+
+import pytest
+
+import coordinator_core.machine_profile as mp
+from coordinator_core.hooks import _em_write_budget as leaf
+from coordinator_core.hooks import nudge_em_code_dispatch as budget_hook
+from coordinator_core.session import xs_lane_budget as xb
+
+SID = "sess-multifile"
+
+
+def _obj(git, kind, payload):
+    raw = f"{kind} {len(payload)}".encode() + b"\0" + payload
+    sha = hashlib.sha1(raw).hexdigest()
+    path = git / "objects" / sha[:2] / sha[2:]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(zlib.compress(raw))
+    return sha
+
+
+def _make_repo(tmp_path, files):
+    """A loose-object repo whose HEAD commit holds `files` (flat names) as base content."""
+    root = tmp_path / "repo"
+    git = root / ".git"
+    (git / "objects").mkdir(parents=True)
+    (git / "HEAD").write_text("ref: refs/heads/main\n")
+    body = b""
+    for name, text in sorted(files.items()):
+        (root / name).write_text(text)
+        body += b"100644 " + name.encode() + b"\0" + bytes.fromhex(_obj(git, "blob", text.encode()))
+    tree = _obj(git, "tree", body)
+    sha = _obj(git, "commit", f"tree {tree}\nauthor a <a@b> 0 +0000\ncommitter a <a@b> 0 +0000\n\nm\n".encode())
+    (git / "refs" / "heads").mkdir(parents=True)
+    (git / "refs" / "heads" / "main").write_text(sha + "\n")
+    return root, sha
+
+
+def _lines(n, tag="l"):
+    return "".join(f"{tag}{i}\n" for i in range(n))
+
+
+def _add(name, n):
+    return f"*** Add File: {name}\n" + "".join(f"+row {i}\n" for i in range(n))
+
+
+def _update(name, removed, added):
+    """Replace base lines l1..l<removed> of `name` with `added` new lines."""
+    return (f"*** Update File: {name}\n@@\n" + "".join(f"-l{i}\n" for i in range(1, removed + 1))
+            + "".join(f"+new{i}\n" for i in range(added)))
+
+
+def _patch_of(*hunks):
+    return "*** Begin Patch\n" + "".join(hunks) + "*** End Patch"
+
+
+@pytest.fixture
+def budget_env(tmp_path, monkeypatch):
+    """Strict-latch-style isolation: product paths are in-repo, the session is unsized, level is warn."""
+    sys_tmp = tmp_path / "sys-tmp"
+    sys_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(sys_tmp))
+    for target in (budget_hook, leaf):
+        monkeypatch.setattr(target, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+        monkeypatch.setattr(target, "_session_sizing_state", lambda payload, sid: (False, False))
+    monkeypatch.setattr(budget_hook, "resolve_mode", lambda key, sid: False)
+    monkeypatch.setattr(mp, "guard_level", lambda name: "warn")
+    root, sha = _make_repo(tmp_path, {"a.py": _lines(10), "b.py": _lines(10)})
+    return root, sha
+
+
+def _call(root, text, sid=SID):
+    return {"tool_name": "apply_patch", "tool_input": {"command": text}, "cwd": str(root), "session_id": sid}
+
+
+def _advisory_texts(out):
+    return [line for line in out.get("additionalContext", "").splitlines() if "XS budget spent" in line]
+
+
+MULTI_FILE_PATCHES = [
+    ("add-add", _patch_of(_add("bin/wordcount.py", 42), _add("tests/test_wordcount.py", 74)), "2/2 files, 116/30 lines"),
+    ("update-update", _patch_of(_update("a.py", 5, 20), _update("b.py", 5, 20)), "2/2 files, 50/30 lines"),
+    ("add-update", _patch_of(_add("bin/new.py", 20), _update("a.py", 5, 20)), "2/2 files, 45/30 lines"),
+]
+
+
+@pytest.mark.parametrize("name,text,totals", MULTI_FILE_PATCHES, ids=[p[0] for p in MULTI_FILE_PATCHES])
+def test_multi_file_patch_draws_one_advisory_with_summed_totals(budget_env, name, text, totals):
+    root, _ = budget_env
+    for sid in (SID, SID + "-other"):
+        for _ in range(2):
+            texts = _advisory_texts(tool_policy.evaluate(_call(root, text, sid)))
+            assert len(texts) == 1 and totals in texts[0], texts
+
+
+def test_each_file_alone_in_budget_but_the_patch_is_over(budget_env):
+    root, _ = budget_env
+    alone = _patch_of(_update("a.py", 5, 20))
+    assert _advisory_texts(tool_policy.evaluate(_call(root, alone, "solo"))) == []
+
+
+def test_admitted_multi_file_patch_records_every_file_in_the_lane(budget_env):
+    root, sha = budget_env
+    assert xb.open_xs_lane(root, SID, sha)
+    out = tool_policy.evaluate(_call(root, _patch_of(_add("p.py", 3), _add("q.py", 4))))
+    assert _advisory_texts(out) == []
+    assert sorted(xb.read_lane(root, SID)["paths"]) == ["p.py", "q.py"]
+    (root / "p.py").write_text("".join(f"row {i}\n" for i in range(3)))
+    (root / "q.py").write_text("".join(f"row {i}\n" for i in range(4)))
+    again = _advisory_texts(tool_policy.evaluate(_call(root, _patch_of(_add("r.py", 1)))))
+    assert len(again) == 1 and "3/2 files, 8/30 lines" in again[0]
+
+
+def test_exempt_file_is_not_priced_into_the_patch(budget_env):
+    root, _ = budget_env
+    text = _patch_of(_add("notes.md", 100), _add("bin/one.py", 5), _add("bin/two.py", 5))
+    assert _advisory_texts(tool_policy.evaluate(_call(root, text))) == []
+
+
+def test_patch_events_share_the_whole_patch_projection(tmp_path):
+    text = _patch_of(_add("x.py", 2), _add("y.py", 3))
+    events, _ = patch_events(_patch(text, str(tmp_path)))
+    assert len(events) == 2
+    assert events[0]["patch_projections"] == events[1]["patch_projections"]
+    assert [p["file_path"] for p in events[0]["patch_projections"]] == [str(tmp_path / "x.py"), str(tmp_path / "y.py")]
+    single, _ = patch_events(_patch(_patch_of(_add("x.py", 2)), str(tmp_path)))
+    assert "patch_projections" not in single[0]
+
+
+def test_one_path_in_two_events_leads_once(budget_env, tmp_path):
+    from coordinator_core.hooks import _em_write_budget as em_budget
+
+    text = _patch_of(_add("x.py", 2), _add("x.py", 3), _add("y.py", 3))
+    events, _ = patch_events(_patch(text, str(tmp_path)))
+    verdicts = [em_budget._patch_batch(e, e["tool_input"]["file_path"])[0] for e in events]
+    assert verdicts == [False, True, True]

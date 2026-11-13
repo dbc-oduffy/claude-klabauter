@@ -1866,7 +1866,7 @@ def _write_stall_record(
         final = stall_dir / f"{stamp}-{os.getpid()}-{key}.txt"
         tmp = final.with_name(final.name + ".tmp")
         tmp.write_text(
-            f"{_stall_class_line(stall_class)}sinks: {sinks}\nleg: {leg}\nfs-probe-ms: {probe}\nrepo-drive-probe-ms: {repo_probe}\n"
+            f"{_stall_class_line(stall_class)}{_ENGINE_STAMP_LINES}sinks: {sinks}\nleg: {leg}\nfs-probe-ms: {probe}\nrepo-drive-probe-ms: {repo_probe}\n"
             f"repo-drive-probe-root: {repo_root_source} {repo_root}\n"
             f"{_stall_timing_lines(op_ident, elapsed, cpu_delta)}--- threads ---\n{threads}",
             encoding="utf-8",
@@ -1895,6 +1895,23 @@ def _restart_check(stall_dir) -> None:
         pass
 
 
+def _read_engine_stamp_lines() -> str:
+    """`engine-stamp:` and `source-sha:` header lines for this engine's published build stamp.
+    `unstamped` / `unknown` when the tree carries none. Never raises."""
+    try:
+        root = _engine_clone_root()
+        raw = skew.read_engine_stamp_bytes(root)
+        stamp = " ".join(raw.decode("utf-8", "replace").split()) if raw else "unstamped"
+        sha = skew.read_engine_stamp_sha(root) or "unknown"
+    except Exception:  # noqa: BLE001
+        stamp, sha = "unstamped", "unknown"
+    return f"engine-stamp: {stamp}\nsource-sha: {sha}\n"
+
+
+#: Read once at import: the stamp the running engine booted under, and no disk read at stall time.
+_ENGINE_STAMP_LINES = _read_engine_stamp_lines()
+
+
 def _stall_class_line(stall_class: Optional[str]) -> str:
     return f"stall-class: {stall_class}\n" if stall_class else ""
 
@@ -1921,8 +1938,8 @@ def _write_stall_stub(
     final = stall_dir / f"{stamp}-{os.getpid()}-{key}.txt"
     tmp = final.with_name(final.name + ".tmp")
     tmp.write_text(
-        f"{_stall_class_line(stall_class)}stub: full dump written by the episode's first stall\nepisode-full-dump: {episode or 'pending'}\n"
-        f"leg: {leg or ''}\n",
+        f"{_stall_class_line(stall_class)}stub: full dump written by the episode's first stall\n{_ENGINE_STAMP_LINES}"
+        f"episode-full-dump: {episode or 'pending'}\nleg: {leg or ''}\n",
         encoding="utf-8",
         newline="\n",
     )

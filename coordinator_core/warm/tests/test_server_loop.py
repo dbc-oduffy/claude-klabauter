@@ -89,6 +89,9 @@ class _FakeVersionState:
     def is_skewed(self, client_token: str) -> bool:
         return self._skewed
 
+    def is_token_skewed(self, client_token: str) -> bool:
+        return self.is_skewed(client_token)
+
 
 def _frame(*, id_, method="noop", extra=None, token="client-token") -> bytes:
     """A frame from a TRUSTED caller by default.

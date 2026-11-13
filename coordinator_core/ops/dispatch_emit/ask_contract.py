@@ -27,6 +27,7 @@ Signatures implemented in their own modules:
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -225,6 +226,74 @@ def stop_after_source(root: Path, run_id: str) -> Optional[dict]:
 def lineage_stop_after(root: Path, run_id: str) -> Optional[str]:
     """`STOP_AFTER_PLAN` when `stop_after_source` finds a live marker for `run_id`; else None."""
     return STOP_AFTER_PLAN if stop_after_source(root, run_id) else None
+
+
+#: Record-dir file holding a run's revised premise-check base ref.
+BASE_REF_FILE = "base_ref.json"
+_BASE_REF_RUN_STAMP = re.compile(r"\d{8}T\d{6}-[0-9a-f]{6}")
+
+
+def write_base_ref_marker(dir_: Path, ref: str, sender: object = None) -> dict:
+    """Atomically write `BASE_REF_FILE` into `dir_`; the one writer of the marker. Returns the marker."""
+    from datetime import datetime, timezone
+
+    who = " ".join(sender.split()) if isinstance(sender, str) else ""
+    marker = {
+        "base_ref": ref,
+        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "from": who or None,
+    }
+    atomic_write_bytes(
+        Path(dir_) / BASE_REF_FILE, (json.dumps(marker, sort_keys=True) + "\n").encode("utf-8"), preserve_mode=False
+    )
+    return marker
+
+
+def read_base_ref(dir_: Path) -> Optional[str]:
+    """The non-blank `base_ref` of `dir_`'s `BASE_REF_FILE`; None when absent or malformed."""
+    ref = (_read_json_object(Path(dir_) / BASE_REF_FILE) or {}).get("base_ref")
+    return ref.strip() if isinstance(ref, str) and ref.strip() else None
+
+
+def run_base_ref(root: Path, sizing_rel: object) -> Optional[str]:
+    """The base ref ruled for `sizing_rel`: the `read_base_ref` of the newest run of that sizing that
+    carries a marker, any status (an in-flight run a revise reached, or a refire's predecessor), walking
+    past newer marker-less runs so a second refire keeps the ruling. Runs are the `ask-<stamp>` and
+    `warp-<stem>-<stamp>` dirs under `RECORD_DIR_ROOT` whose run.json (else halted.json) names the
+    sizing. One directory listing, file reads only, no git spawn; None when no run carries one."""
+    if not isinstance(sizing_rel, str) or not sizing_rel.strip():
+        return None
+    norm = PurePosixPath(sizing_rel.strip().replace("\\", "/")).as_posix()
+    stem = PurePosixPath(norm).stem
+    dated = re.match(r"(\d{4})-(\d{2})-(\d{2})", stem)
+    if dated is None:
+        return None
+    floor = "".join(dated.groups())
+    warp = Path(root) / RECORD_DIR_ROOT
+    warp_prefix = f"warp-{stem}-"
+    try:
+        listing = os.listdir(warp)
+    except OSError:
+        return None
+    stamped = []
+    for n in listing:
+        if n.startswith("ask-") and n[4:12] >= floor:
+            stamped.append((n[4:], n))
+        elif n.startswith(warp_prefix) and _BASE_REF_RUN_STAMP.fullmatch(n[len(warp_prefix):]):
+            stamped.append((n[len(warp_prefix):], n))
+    for _, name in sorted(stamped, reverse=True):
+        if not safe_id(name):
+            continue
+        ref = read_base_ref(warp / name)
+        if ref is None:
+            continue
+        for marker in ("run.json", "halted.json"):
+            named = (_read_json_object(warp / name / marker) or {}).get("sizing_rel")
+            if isinstance(named, str):
+                if PurePosixPath(named.replace("\\", "/")).as_posix() == norm:
+                    return ref
+                break
+    return None
 
 
 #: `dispatch.ask_stage` reply key of a `stop_after=plan` park: the `stop_after_source` dict.

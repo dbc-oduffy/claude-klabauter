@@ -37,7 +37,6 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.ops.fleet.archive_sizings import _derive_yyyy_mm
 from coordinator_core.session.output_tree_layout import locate
 
 _ARCHIVE_SIZINGS_SUBDIR = ("archive", "sizings")
@@ -50,6 +49,9 @@ def _archive_sizings_fallback(repo_root: Path, cited: str) -> Optional[Path]:
     basename = os.path.basename(cited.replace("\\", "/"))
     if not basename:
         return None
+    # Deferred: archive_sizings drags git_native/asyncio onto the live-hit cold path.
+    from coordinator_core.ops.fleet.archive_sizings import _derive_yyyy_mm
+
     month = _derive_yyyy_mm(basename)
     if month is not None:
         probe = archive_root / month / basename

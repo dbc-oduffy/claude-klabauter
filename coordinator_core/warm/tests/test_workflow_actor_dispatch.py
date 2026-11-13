@@ -48,6 +48,7 @@ def test_authenticated_result_attaches_after_env_merge_and_ignores_wire_actor(ac
  monkeypatch.setattr(workflow_peer,'authorize',lambda *args,**kwargs:{'kind':'worker','verified_native_actor':actor})
  class Version:
   def is_skewed(self,token):return False
+  def is_token_skewed(self,token):return False
  def dispatch(msg,*,caller=None):
   observed.append(caller);return {'jsonrpc':'2.0','id':msg['id'],'result':'ok'}
  frame={'jsonrpc':'2.0','id':1,'method':'invoke.from_argv','params':{'argv':['ping'],'cwd':actor.repo_root},'_engine_token':'token','_caller':{'session_id':SID,'pid':'30','cwd':actor.repo_root,'verified_native_actor':{'pid':999}},'_env':{'CODEX_THREAD_ID':SID},'_verified_native_actor':{'pid':999}}

@@ -946,6 +946,10 @@ _CALLER_FACING_MESSAGE_MAX_LEN = 2000
 DISPATCH_TIMEOUT_SECS: float = 30.0
 # A cold mutating op is awaited up to this multiple of its backstop, then reported hung.
 _COLD_AWAIT_CEILING_FACTOR: float = 5.0
+# Cold mutating ops reported hung at their own backstop, not the ceiling: the gate answers
+# a bounded question, so a handler past its backstop is stuck, and waiting 5x only delays the
+# loud failure. Retry stays unsafe until a refire-adopts-minted-run test pins idempotence.
+_COLD_FAIL_AT_BACKSTOP_OPS: frozenset = frozenset({"dispatch.ask_gate"})
 
 
 def _warn_on_near_miss_timeout_env(environ: Optional[Dict[str, str]] = None) -> None:
@@ -2769,6 +2773,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                 )
             _fut.add_done_callback(lambda f: f.cancelled() or f.exception())
             _t0 = time.monotonic()
+            _cpu0 = time.process_time()
             try:
                 result = await asyncio.wait_for(asyncio.shield(_fut), timeout=op_timeout)
             except asyncio.TimeoutError:
@@ -2785,7 +2790,12 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     "op": method,
                     "backstop_secs": op_timeout,
                 }
-                _ceiling = op_timeout * _COLD_AWAIT_CEILING_FACTOR
+                _attempts = [_cold_attempt("backstop", _t0, _cpu0, "elapsed")]
+                _completed_after_backstop["attempts"] = _attempts
+                _t1, _cpu1 = time.monotonic(), time.process_time()
+                _ceiling = op_timeout * (
+                    1.0 if method in _COLD_FAIL_AT_BACKSTOP_OPS else _COLD_AWAIT_CEILING_FACTOR
+                )
                 try:
                     result = await asyncio.wait_for(
                         asyncio.shield(_fut),
@@ -2796,15 +2806,18 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                         # The handler itself raised TimeoutError; that is its error, not the ceiling.
                         raise
                     _abandoned.set()
+                    _attempts.append(_cold_attempt("await_ceiling", _t1, _cpu1, "hung"))
                     _log().error(
-                        "coordinator_core.ipc: op %r hung past ceiling %ss", method, _ceiling
+                        "coordinator_core.ipc: op %r hung past ceiling %ss; attempts %s",
+                        method, _ceiling, _attempts,
                     )
                     return _hung_past_ceiling_envelope(
-                        method, op_timeout, _ceiling, time.monotonic() - _t0, id_
+                        method, op_timeout, _ceiling, time.monotonic() - _t0, id_, _attempts
                     )
                 except asyncio.CancelledError:
                     raise
                 except BaseException as exc:
+                    _attempts.append(_cold_attempt("await_ceiling", _t1, _cpu1, "raised"))
                     _completed_after_backstop["waited_secs"] = round(time.monotonic() - _t0, 3)
                     _log().error(
                         "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
@@ -2815,6 +2828,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     err = _handler_exception_error(exc)
                     err.setdefault("data", {})["diagnosis"] = _completed_after_backstop
                     return {"jsonrpc": "2.0", "id": id_, "error": err}
+                _attempts.append(_cold_attempt("await_ceiling", _t1, _cpu1, "completed"))
                 _completed_after_backstop["waited_secs"] = round(time.monotonic() - _t0, 3)
             except asyncio.CancelledError:
                 raise
@@ -2879,8 +2893,24 @@ def _cold_mutating_op(method: str) -> bool:
         return False
 
 
+def _cold_attempt(phase: str, wall0: float, cpu0: float, outcome: str) -> dict:
+    """One cold-await attempt record: process ms (whole-process CPU, thread-inclusive) beside wall ms.
+
+    A wall figure far above process ms is a wait (lock, child, I/O), not compute. No spawn.
+    """
+    import time  # noqa: PLC0415 - import budget
+
+    return {
+        "phase": phase,
+        "outcome": outcome,
+        "process_ms": round((time.process_time() - cpu0) * 1000.0, 1),
+        "wall_ms": round((time.monotonic() - wall0) * 1000.0, 1),
+    }
+
+
 def _hung_past_ceiling_envelope(
-    method: str, backstop: float, ceiling: float, waited: float, id_: Any
+    method: str, backstop: float, ceiling: float, waited: float, id_: Any,
+    attempts: Optional[list] = None,
 ) -> dict:
     """-32004 for a cold mutating op still running at the await ceiling: it may have completed."""
     try:
@@ -2899,12 +2929,17 @@ def _hung_past_ceiling_envelope(
             ),
             "data": {
                 "retry_safe": False,
+                "next_action": (
+                    f"reconcile: inspect the state {method!r} writes (run record, sizing) "
+                    f"before any refire"
+                ),
                 "diagnosis": {
                     "case": "hung_past_ceiling",
                     "op": method,
                     "waited_secs": round(waited, 3),
                     "ceiling_secs": ceiling,
                     "backstop_secs": backstop,
+                    "attempts": list(attempts or []),
                 }
             },
         },

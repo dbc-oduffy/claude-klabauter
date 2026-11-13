@@ -696,7 +696,8 @@ def _answer_overran(call: dict) -> dict:
             return _minted_start_envelope(roots[0], ids, deadline, call)
         return _refuse(f"The submission outran the hook budget as its run was minted. Do not re-submit. {_minted_remedy([])}")
     if gate_state == "writing":
-        return _refuse(_STALLED_RECORD_WRITE)
+        denied = call.get("write_denied")
+        return _refuse(_DENIED_RECORD_WRITE.format(cause=denied) if denied else _STALLED_RECORD_WRITE)
     resuming = call.get("resume")
     if resuming:
         return _refuse(
@@ -712,6 +713,13 @@ def _answer_overran(call: dict) -> dict:
 _STALLED_RECORD_WRITE = (
     "The submission was refused: the disk is stalled, so the run record could not be written within the hook "
     "budget. Nothing was minted and no run will appear later; re-submitting is safe once the disk recovers."
+)
+
+#: The emit's record write raised (the sandbox or the filesystem refused it): the gate stays "writing" after a
+#: raise, so the call's recorded `write_denied` cause is what tells a denial from a slow write.
+_DENIED_RECORD_WRITE = (
+    "The submission was refused: the run record write raised ({cause}); it was not slow. "
+    "Nothing was minted; remove the cause (a sandbox needs writes allowed under the repo's .git), then re-submit."
 )
 
 
@@ -1025,6 +1033,8 @@ def _emit_within_budget(
                 box["result"] = emit(params, root)
         except BaseException as exc:  # re-raised on the caller's thread
             box["error"] = exc
+            if isinstance(exc, OSError) and call is not None:
+                call["write_denied"] = _cause(exc)
 
     def gated() -> None:
         run_token.WRITE_GATE.set(gate)
@@ -1763,6 +1773,22 @@ def _supersedes(tool_input: Mapping[str, Any]) -> tuple[Optional[str], Optional[
     return value.strip(), None
 
 
+def _carry_retired_revisions(root: Path, retired: Sequence[str], run_id: str) -> str:
+    """Carry the notes and queued revisions of each retired halted run into the fresh `run_id`, and
+    answer the reply sentence naming them and their source run; "" when nothing moved or the carry failed."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    sources = [i for i in dict.fromkeys(retired) if i != run_id]
+    try:
+        notes = rl.carry_notes(root, sources, run_id)
+        queued = rl.carry_inbox_entries(root, sources, run_id)
+    except (OSError, rl.LedgerRefused):
+        return ""  # the fresh run proceeds; the revisions stay under the retired run's id
+    parts = [f"{n['run']} note: {n['note'].split(chr(10), 1)[0].strip()}" for n in notes]
+    parts += [f"{q['source']} queued: {q['text'].split(chr(10), 1)[0].strip()}" for q in queued]
+    return f" Carried from the retired halted run: {'; '.join(parts)}." if parts else ""
+
+
 def _revise_hint(run_id: str) -> str:
     """The call shape for a mid-run PM revision of `run_id`."""
     return (
@@ -2274,7 +2300,20 @@ def _existing_research(root: Path, ask: Optional[str], sizing_rel: Optional[str]
     return sorted(found)
 
 
+_CODEX_ROUTE = "coordinator-invoke engine_ask.submit --params-file - --repo <repo> (docs/reference/codex-engine-ask-route.md)"
+
+
+def _caller_is_codex() -> bool:
+    """True when the submitting caller is Codex, which has no Workflow tool: its thread id or vendor in the caller env."""
+    from coordinator_core.session.caller_env import effective_caller_env
+
+    env = effective_caller_env()
+    return bool(env.get("CODEX_THREAD_ID")) or env.get("COORDINATOR_AGENT_VENDOR") == "codex"
+
+
 def _refuse(text: str) -> dict:
+    if _caller_is_codex():
+        return deny("PreToolUse", f"{text}\nInstead: `{_CODEX_ROUTE}`.")
     return deny("PreToolUse", f"{text}\nInstead: `Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}})`.")
 
 
@@ -2907,8 +2946,10 @@ def _resume_route(
     launch: Optional[Callable[..., Path]],
     reserved_run_id: Optional[str] = None,
     ask_parent_id: Optional[str] = None,
+    retired: Optional[list] = None,
 ) -> tuple[Optional[dict], Optional[dict]]:
-    """(envelope, emit result) for a refire of a halted sizing, else (None, None).
+    """(envelope, emit result) for a refire of a halted sizing, else (None, None); a halt this call
+    retires so the plain emit mints a fresh run is appended to `retired`.
 
     A halted marker for the sizing wins over a fan-out slice's reserved run id: the halted run
     resumes, and the revisions queued under the reserved or parent ask id are carried into its record.
@@ -3024,7 +3065,8 @@ def _resume_route(
         # retire the halt so the plain emit below mints a fresh run id and token.
         from coordinator_core.ops.dispatch_emit.halted_run import mark_resumed
 
-        mark_resumed(rd)
+        if mark_resumed(rd) and retired is not None:
+            retired.append(halted_id)
         return None, None
     _record_refire(rd, script, "launcher", None)
     from coordinator_core import warp_live
@@ -3477,11 +3519,14 @@ def _evaluate(
         return deny("PreToolUse", clash)
 
     retire_note = ""
+    retired: list = []
     if sizing_rel and reserved_run_id is None:
         from coordinator_core.ops.dispatch_emit.ask_gate import retire_token_spent_halt
 
         try:
-            _bounded_call(("retire", str(root), sizing_rel), lambda: retire_token_spent_halt(root, sizing_rel))
+            spent = _bounded_call(("retire", str(root), sizing_rel), lambda: retire_token_spent_halt(root, sizing_rel))
+            if isinstance(spent, str):
+                retired.append(spent)
         except (OSError, ValueError) as exc:  # non-blocking: a failed retire leaves the halted run resumable
             retire_note = f" Retiring the spent halt failed: {type(exc).__name__}: {exc}."
 
@@ -3529,7 +3574,7 @@ def _evaluate(
     if sizing_rel and asks is None and "from_sizing" not in params:
         resume_envelope, result = _resume_route(
             root, sizing_rel, payload, params, session_id, launch,
-            reserved_run_id=reserved_run_id, ask_parent_id=ask_parent_id,
+            reserved_run_id=reserved_run_id, ask_parent_id=ask_parent_id, retired=retired,
         )
         if resume_envelope is not None:
             return resume_envelope
@@ -3603,6 +3648,7 @@ def _evaluate(
     except OSError:
         pass  # liveness then reads the run token alone
 
+    carried_note = _carry_retired_revisions(root, retired, str(run_id)) if retired else ""
     marked = ""
     if supersedes:
         from coordinator_core.ops.dispatch_emit.sibling_hold import SupersedeRefused, mark_superseded
@@ -3673,7 +3719,7 @@ def _evaluate(
     envelope = rewrite_input(
         "PreToolUse",
         new_input,
-        f"{lead}Submitted to the engine as run {run_id}.{marked}{carries}{derived}{retire_note}{detached_note} {tail} {_revise_hint(str(run_id))}",
+        f"{lead}Submitted to the engine as run {run_id}.{marked}{carries}{carried_note}{derived}{retire_note}{detached_note} {tail} {_revise_hint(str(run_id))}",
     )
     hso = envelope["hookSpecificOutput"]
     if detached_steps:

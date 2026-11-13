@@ -18,6 +18,25 @@ import pytest
 pytestmark = pytest.mark.complete
 
 
+@pytest.fixture(autouse=True)
+def _isolated_settings_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+
+
+def test_dump_repos_uses_kernel_when_present_else_forwarder(tmp_path, monkeypatch):
+    from coordinator_core import machine_local_spawn
+    from coordinator_core.ops.learn_lessons_roots import _machine_local_dump_repos
+
+    seen = []
+    monkeypatch.setattr(machine_local_spawn, "dump", lambda impl, args=(), **kw: seen.append(impl) or {})
+    _machine_local_dump_repos("/fwd/machine-local")
+    kernel = tmp_path / "settings-home" / "bin" / "_machine_local.py"
+    kernel.parent.mkdir(parents=True)
+    kernel.write_text("")
+    _machine_local_dump_repos("/fwd/machine-local")
+    assert seen == ["/fwd/machine-local", str(kernel)]
+
+
 def _make_machine_local(bin_dir: Path, repos: dict, publish_targets=(), extra=None) -> Path:
     extra_dict = extra or {}
     python_body = f"""

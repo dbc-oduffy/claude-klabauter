@@ -87,6 +87,16 @@ from coordinator_core.ops.dispatch_emit.halted_record_eviction import (  # noqa:
 )
 
 
+def _split_run_state(paths: list, record_dir_rel: str, record_ignored: bool) -> tuple[list, list]:
+    """``run_artifacts.split_run_state``, except a record dir git does not ignore is tracked-class:
+    its paths stay landable."""
+    if record_ignored:
+        return run_artifacts.split_run_state(paths)
+    own = record_dir_rel + "/"
+    state = {p for p in run_artifacts.split_run_state(paths)[1] if not p.startswith(own)}
+    return [p for p in paths if p not in state], sorted(state)
+
+
 def _reap_staged_twins(worktree_root: Path, run_id: str, *, own: bool) -> None:
     """Sweep expired staged twins always; drop the halted run's own twins only when ``own`` (its run
     token verified). Zero spawns; never fails the commit. Trap: an unverified caller must never pass
@@ -499,6 +509,10 @@ def _land(
     artifacts, more_withheld = process_artifact_policy.withhold_process_artifacts(worktree_root, artifacts)
     process_withheld.update(more_withheld)
     paths, deleted = record_dir_changes(worktree_root, record_dir_rel, snapshot.changed)
+    nested_prefix = record_dir_rel + "/"
+    for rel in sorted(snapshot.changed):
+        if rel.startswith(nested_prefix) and "/" in rel[len(nested_prefix):]:
+            (paths if (worktree_root / rel).is_file() else deleted).append(rel)
     if process_withheld:
         process_withheld.update({p: process_artifact_policy.WITHHELD_REASON for p in (*paths, *deleted)})
         paths, deleted = [], []
@@ -535,9 +549,11 @@ def _land(
         record_dirs=artifacts.record_dirs,
         root=artifacts.root,
     )
+    record_probe = f"{record_dir_rel}/.record-ignore-probe"
     probed_ignored = snapshot.ignored_among(
-        [*run_artifacts.ignored_probe(worktree_root, extra_set), *sorted(own_record)]
+        [*run_artifacts.ignored_probe(worktree_root, extra_set), *sorted(own_record), record_probe]
     )
+    record_ignored = record_probe in probed_ignored
     extra_artifacts = run_artifacts.landable(
         worktree_root, extra_set, snapshot.changed, probed_ignored, session_id=session_id,
     )
@@ -662,8 +678,8 @@ def _land(
         art_paths = [p for p in art_paths if p not in withheld]
     paths = paths + product + art_paths
     deleted = deleted + gone + art_deleted
-    paths, state_paths = run_artifacts.split_run_state(paths)
-    deleted, state_gone = run_artifacts.split_run_state(deleted)
+    paths, state_paths = _split_run_state(paths, record_dir_rel, record_ignored)
+    deleted, state_gone = _split_run_state(deleted, record_dir_rel, record_ignored)
     ignored_excluded.extend(state_paths + state_gone)
     landed_classes: dict = {}
     for p in art_paths + art_deleted:
@@ -759,7 +775,7 @@ def _land(
         post_candidates=[p for p in post_candidates if p in snapshot.changed], landed=landed_now,
         common_dir=resolve_git_common_dir(worktree_root), manifest_doc=manifest_doc,
     )
-    paths[:], kept_state = run_artifacts.split_run_state(paths)
+    paths[:], kept_state = _split_run_state(paths, record_dir_rel, record_ignored)
     ignored_excluded.extend(kept_state)
     if outcome_path and outcome_path not in paths:
         paths.append(outcome_path)

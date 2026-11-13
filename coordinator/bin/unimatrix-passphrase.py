@@ -74,6 +74,19 @@ def _locked(r):
     return any(m in _tail(r).lower() for m in _LOCKED_MARKERS)
 
 
+def _console_python():
+    """A real console CPython for a child argv; OSError when none resolves."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("unimatrix_passphrase_python_interp",
+                                                  Path(__file__).resolve().parent / "lib" / "python_interp.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    found = mod.resolve_console_python()
+    if not found:
+        raise FileNotFoundError("no console Python interpreter resolvable")
+    return found
+
+
 def _vault(run):
     reader = settings_home() / "bin" / "_machine_local.py"
     missing = PassphraseSourceMissing(f"passphrase_source_missing: op CLI vault unset; set machine-local key "
@@ -81,7 +94,7 @@ def _vault(run):
     if not reader.is_file():
         raise missing
     try:
-        r = run([sys.executable, str(reader), "get", VAULT_KEY], capture_output=True, text=True,
+        r = run([_console_python(), str(reader), "get", VAULT_KEY], capture_output=True, text=True,
                 timeout=OP_TIMEOUT, creationflags=_no_window())
     except (OSError, subprocess.SubprocessError):
         raise missing from None
@@ -326,4 +339,7 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    if any(_a in ("-h", "--help") for _a in sys.argv[1:]):
+        print(__doc__)
+        raise SystemExit(0)
     sys.exit(main(sys.argv[1:]))

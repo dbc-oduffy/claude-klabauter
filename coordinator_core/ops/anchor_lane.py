@@ -8,7 +8,7 @@ reads ``unchecked`` as a default. A single ``expect`` over an ``&&`` chain appli
 """
 
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional, Tuple
 
 from coordinator_core.ops import _anchor_check
 
@@ -37,13 +37,20 @@ def _expect_per_stage(command: str, expect: str) -> str:
     return " then ".join([text.strip()] * stages) if stages > 1 else text
 
 
-def evaluate(anchor: Mapping[str, Any], repo_root: Path):
-    """The ``AnchorVerdict`` for one ``{id, check: {command, expect}}`` anchor under ``repo_root``."""
+def evaluate(
+    anchor: Mapping[str, Any],
+    repo_root: Path,
+    base_ref: Optional[str] = None,
+    blobs: Optional[Mapping[Tuple[str, str], Optional[bytes]]] = None,
+):
+    """The ``AnchorVerdict`` for one ``{id, check: {command, expect}}`` anchor under ``repo_root``.
+    ``base_ref`` and ``blobs`` are forwarded to ``_anchor_check.evaluate`` (ref-read stages)."""
     from coordinator_core.ops.dispatch_emit.run_truth_contract import AnchorVerdict
 
     check = anchor.get("check") or {}
     command, expect = str(check.get("command") or ""), str(check.get("expect") or "")
-    result = _anchor_check.evaluate(command, _expect_per_stage(command, expect), repo_root)
+    ref_args = (base_ref, blobs) if base_ref is not None or blobs is not None else ()
+    result = _anchor_check.evaluate(command, _expect_per_stage(command, expect), repo_root, *ref_args)
     outcome = _OUTCOME[result["state"]]
     observed = result.get("detail") if outcome == "unevaluable" else result.get("observed")
     return AnchorVerdict(

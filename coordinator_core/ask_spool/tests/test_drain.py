@@ -659,3 +659,87 @@ def test_a_failover_drain_error_never_fails_the_spool_drain(tmp_path, monkeypatc
 
     monkeypatch.setattr(background, "drain_pending", boom)
     assert drain.run(str(tmp_path)) == _counts()
+
+
+def _spool_args(root, args, sid="sess1", tuid="tu1"):
+    payload = json.dumps(
+        {"tool_name": "Workflow", "session_id": sid, "tool_use_id": tuid, "cwd": str(root),
+         "tool_input": {"name": "ask", "args": args}}
+    ).encode()
+    record.spool_ask(str(root), payload, session_id=sid, tool_use_id=tuid, reason="engine_unreachable")
+
+
+class _Seen:
+    """Wraps the real evaluate with its emit legs stubbed, recording the payload it was handed."""
+
+    def __init__(self):
+        self.payloads, self.envelopes = [], []
+
+    def __call__(self, payload):
+        from coordinator_core import warp_fire
+        from coordinator_core.hooks import submit_engine_ask as mod
+
+        def boom(*a, **k):
+            raise RuntimeError("emit reached")
+
+        self.payloads.append(payload)
+        payload = {**payload, "tool_input": {**payload["tool_input"], "name": warp_fire.SUBMIT_WORKFLOW_NAME}}
+        envelope = mod.evaluate(payload, emit=boom, fanout=boom, launch=boom)
+        self.envelopes.append(envelope)
+        return envelope
+
+
+def _reason(envelope):
+    return (envelope.get("hookSpecificOutput") or {}).get("permissionDecisionReason") or ""
+
+
+@pytest.fixture
+def _first_turn(monkeypatch):
+    from coordinator_core.hooks import submit_engine_ask as mod
+
+    monkeypatch.setattr(mod, "_is_first_turn", lambda _p: True)
+
+
+def test_replay_names_the_submitting_anchor_repo_so_the_real_evaluate_does_not_refuse(tmp_path, monkeypatch, _first_turn):
+    from coordinator_core.bash_guards import _write_bump_applicability as wba
+
+    anchor = tmp_path / "submitting-repo"
+    anchor.mkdir()
+    monkeypatch.setattr(wba, "launch_anchor_disagreement", lambda *a, **k: (str(anchor), str(tmp_path / "launch")))
+    _spool_args(tmp_path, {"ask": "do x"})
+    seen = _Seen()
+    drain.run(str(tmp_path), evaluate=seen)
+    assert seen.payloads[0]["tool_input"]["args"]["repo"] == str(anchor)
+    assert "different repos" not in _reason(seen.envelopes[0])
+
+
+def test_a_live_submission_with_a_disagreeing_anchor_is_still_refused(tmp_path, monkeypatch, _first_turn):
+    from coordinator_core.bash_guards import _write_bump_applicability as wba
+    from coordinator_core import warp_fire
+    from coordinator_core.hooks import submit_engine_ask as mod
+
+    monkeypatch.setattr(wba, "launch_anchor_disagreement", lambda *a, **k: (str(tmp_path / "a"), str(tmp_path / "b")))
+    live = {"tool_name": "Workflow", "session_id": "s", "cwd": str(tmp_path),
+            "tool_input": {"name": warp_fire.SUBMIT_WORKFLOW_NAME, "args": {"ask": "do x"}}}
+    assert "different repos" in _reason(mod.evaluate(live))
+
+
+def test_replay_leaves_payload_alone_on_agreement_an_own_repo_or_no_anchor(tmp_path, monkeypatch):
+    from coordinator_core.bash_guards import _write_bump_applicability as wba
+
+    monkeypatch.setattr(wba, "launch_anchor_disagreement", lambda *a, **k: None)
+    _spool_args(tmp_path, {"ask": "do x"})
+    seen = Engine(tmp_path)
+    got = []
+    drain.run(str(tmp_path), evaluate=lambda p: got.append(p) or seen(p))
+    assert "repo" not in got[0]["tool_input"]["args"]
+
+    monkeypatch.setattr(wba, "launch_anchor_disagreement", lambda *a, **k: (str(tmp_path / "a"), str(tmp_path / "b")))
+    own = {"tool_input": {"args": {"ask": "x", "repo": "rel"}}, "session_id": "s"}
+    assert drain._naming_submitting_repo(own) is own
+    asks = {"tool_input": {"args": {"asks": [{"ask": "x", "repo": "/r"}]}}, "session_id": "s"}
+    assert drain._naming_submitting_repo(asks) is asks
+    legacy = {"tool_input": {"args": {"ask": "x"}}}
+    assert drain._naming_submitting_repo(legacy) is legacy
+    text = drain._naming_submitting_repo({"tool_input": {"args": "bare ask"}, "session_id": "s"})
+    assert text["tool_input"]["args"] == {"ask": "bare ask", "repo": str(tmp_path / "a")}

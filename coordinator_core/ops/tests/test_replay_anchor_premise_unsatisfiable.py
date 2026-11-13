@@ -9,7 +9,7 @@ from coordinator_core.ops import plan_readiness_verdict as prv
 
 _UNEVALUABLE = [
     {"id": "AP-PIPE", "claim": "pipe", "check": {"command": "grep -c hello a.txt | wc -l", "expect": "1"}},
-    {"id": "AP-GREP-N", "claim": "flag", "check": {"command": "grep -n hello a.txt", "expect": "1"}},
+    {"id": "AP-GREP-N", "claim": "flag", "check": {"command": "grep -nn hello a.txt", "expect": "1"}},
     {"id": "AP-NOT-GREP", "claim": "not grep", "check": {"command": "ls a.txt", "expect": "a.txt"}},
 ]
 _REFUSED = [

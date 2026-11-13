@@ -19,6 +19,7 @@ PINNED_LEGS = [
     ("prune_claude_temp", {"startup"}),
     ("retention_run", {"startup"}),
     ("klabauter_freshness", {"startup"}),
+    ("authoring_checkout_freshness", {"startup"}),
 ]
 
 _LEG_ATTRS = {
@@ -29,6 +30,7 @@ _LEG_ATTRS = {
     "prune_claude_temp": "_prune_claude_temp_leg",
     "retention_run": "_retention_run_leg",
     "klabauter_freshness": "_klabauter_freshness_leg",
+    "authoring_checkout_freshness": "_authoring_checkout_freshness_leg",
 }
 
 
@@ -96,8 +98,8 @@ def test_raising_leg_does_not_drop_others(calls, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "_session_start_register_published_engine_handler", boom)
     _run({"source": "startup", "cwd": str(tmp_path)})
     assert "session_start_register_published_engine" not in calls
-    assert calls[-1] == "klabauter_freshness"
-    assert len(calls) == 6
+    assert calls[-1] == "authoring_checkout_freshness"
+    assert len(calls) == 7
 
 
 def _fresh_mod():
@@ -125,6 +127,36 @@ def test_freshness_leg_swallows_failure(monkeypatch):
 
     monkeypatch.setattr(_fresh_mod(), "run_freshness", boom)
     assert mod._klabauter_freshness_leg({}) is None
+
+
+def _authoring_mod():
+    from coordinator_core.ops.fleet import authoring_checkout_freshness
+
+    return authoring_checkout_freshness
+
+
+def test_authoring_leg_joins_advisories_and_fetches(monkeypatch):
+    seen = []
+
+    def fake_run(do_fetch=False):
+        seen.append(do_fetch)
+        return {"advisories": ["a-line", "b-line"]}
+
+    monkeypatch.setattr(_authoring_mod(), "run", fake_run)
+    ctx = mod._authoring_checkout_freshness_leg({})["hookSpecificOutput"]["additionalContext"]
+    assert "a-line\nb-line" in ctx
+    assert seen == [True]
+
+    monkeypatch.setattr(_authoring_mod(), "run", lambda do_fetch=False: {"advisories": []})
+    assert mod._authoring_checkout_freshness_leg({}) is None
+
+
+def test_authoring_leg_swallows_failure(monkeypatch):
+    def boom(do_fetch=False):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(_authoring_mod(), "run", boom)
+    assert mod._authoring_checkout_freshness_leg({}) is None
 
 
 def test_freshness_op_passes_fetch_flag(monkeypatch):

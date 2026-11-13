@@ -44,6 +44,9 @@ class _FakeVersionState:
     def is_skewed(self, client_token: str) -> bool:
         return False
 
+    def is_token_skewed(self, client_token: str) -> bool:
+        return self.is_skewed(client_token)
+
 
 def _frame(method, params, id_=1) -> bytes:
     msg = {"jsonrpc": "2.0", "id": id_, "method": method, "params": params, "_engine_token": "t"}

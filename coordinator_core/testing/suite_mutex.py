@@ -84,8 +84,11 @@ as "the suite mutex is held".
     - NOT an authorization check. It answers "may this run start *now*",
       never "is this caller entitled to run a suite at all" — tier/grant
       enforcement is the ``bash_guards`` layer's job.
-    - NOT a fairness queue. Waiters poll with backoff; acquisition order
-      under contention is unspecified.
+    - NOT a lock server. Blocking acquirers are served FIFO through a ticket
+      queue (``<lock>.queue/``): only the oldest live ticket may ``mkdir``, so
+      a releaser that retries at once queues behind existing waiters. Ticket
+      names embed ``time.time_ns()``; a wall-clock step can misorder two
+      tickets once, which is accepted.
     - Does NOT raise from ``holder()`` — a mutex whose read path can explode
       would take down every guard that consults it.
     - Does NOT use ``fcntl``, ``flock``, ``os.getuid``, POSIX signals for
@@ -98,6 +101,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -166,6 +170,16 @@ _POLL_MAX_SECS = 5.0
 _POLL_BACKOFF = 1.5
 
 _UNKNOWN_OWNER = "<unknown>"
+
+_QUEUE_SUFFIX = ".queue"
+_TICKET_NAME_RE = re.compile(r"^\d{20}-\d+$")
+_TICKET_CREATE_ATTEMPTS = 5
+
+# An `adoptable` ticket is written by a `--wait` process that exits as soon as
+# the mutex is free, before the follow-on run invocation acquires; pid liveness
+# alone would prune it at once. It is held this long so the run can adopt it,
+# and pruned after so an abandoned `--wait` never wedges the queue head.
+_TICKET_ADOPT_GRACE_SECS: float = 60.0
 
 # Cap on immediate mkdir retries after `holder()` reports the lock free — see
 # the guarded branch in `acquire()`.
@@ -517,14 +531,156 @@ def _holder_is_self_or_ancestor(holder_pid: int) -> bool:
         return True
 
 
+def _queue_dir(path: Path) -> Path:
+    """Ticket queue directory beside the lock dir at ``path``."""
+    return path.parent / (path.name + _QUEUE_SUFFIX)
+
+
+def _ticket_time_secs(name: str) -> float:
+    """Arrival instant (epoch seconds) encoded in a ticket name."""
+    return int(name.split("-", 1)[0]) / 1e9
+
+
+def _read_ticket(qdir: Path, name: str) -> Optional[dict]:
+    """Shape-validated ticket metadata, or None for an unreadable or partial file."""
+    try:
+        parsed = json.loads((qdir / name).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    try:
+        pid = int(parsed.get("pid"))
+    except (TypeError, ValueError):
+        return None
+    owner = parsed.get("owner")
+    created = parsed.get("created")
+    handed = parsed.get("handed_at")
+    return {
+        "pid": pid,
+        "owner": owner if isinstance(owner, str) else _UNKNOWN_OWNER,
+        "created": created if isinstance(created, str) else "",
+        "adoptable": parsed.get("adoptable") is True,
+        "handed_at": handed if isinstance(handed, (int, float)) and not isinstance(handed, bool) else None,
+    }
+
+
+def _ticket_alive(name: str, meta: Optional[dict], now: float) -> bool:
+    """Whether a ticket still holds its place; pid doubt (None) counts as alive."""
+    age = max(0.0, now - _ticket_time_secs(name))
+    if meta is None:
+        # O_EXCL create and the body write are two steps; a reader can land between them.
+        return age <= _META_GRACE_SECS
+    if meta["adoptable"]:
+        # The grace runs from the hand-off (`handed_at`), not the ticket's creation:
+        # a `--wait` that queued longer than the grace would otherwise lose its place at once.
+        handed_at = meta["handed_at"]
+        grace_age = age if handed_at is None else max(0.0, now - handed_at)
+        return grace_age <= _TICKET_ADOPT_GRACE_SECS
+    alive = _pid_alive(meta["pid"])
+    if alive is False:
+        return False
+    if alive is True:
+        return not _pid_reused(meta["pid"], meta["created"])
+    return age <= STALE_TTL_SECS
+
+
+def _live_tickets(qdir: Path) -> list:
+    """Live tickets as ``[(name, meta)]`` in arrival order, pruning dead ones. Never raises."""
+    try:
+        names = sorted(n for n in os.listdir(str(qdir)) if _TICKET_NAME_RE.match(n))
+    except OSError:
+        return []
+    now = time.time()
+    live = []
+    for name in names:
+        meta = _read_ticket(qdir, name)
+        if _ticket_alive(name, meta, now):
+            live.append((name, meta))
+        else:
+            _unlink_quiet(qdir / name)
+    return live
+
+
+def _write_ticket(qdir: Path, name: str, meta: dict, *, replace: bool) -> bool:
+    body = json.dumps(meta, sort_keys=True) + "\n"
+    try:
+        if replace:
+            tmp = qdir / f".{name}.{uuid.uuid4().hex}.tmp"
+            tmp.write_text(body, encoding="utf-8", newline="\n")
+            try:
+                os.replace(str(tmp), str(qdir / name))
+            except OSError:
+                _unlink_quiet(tmp)
+                raise
+            return True
+        fd = os.open(str(qdir / name), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(body)
+        return True
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        _LOG.warning("suite_mutex: could not write ticket %s: %s", name, exc)
+        return False
+
+
+def take_ticket(owner: str, *, adoptable: bool = False, pid: Optional[int] = None,
+                path: Optional[Path] = None) -> Optional[str]:
+    """Take a place at the back of the queue; returns the ticket name, or None on failure.
+
+    ``pid`` defaults to the calling process and is the pid the ticket's liveness
+    is judged on: the ACQUIRING process, never a runner child. An ``adoptable``
+    ticket survives its writer's death for ``_TICKET_ADOPT_GRACE_SECS`` and is
+    adopted by the next ``acquire()`` of the same ``owner``. Never raises.
+    """
+    qdir = _queue_dir(lock_path() if path is None else path)
+    meta = {
+        "pid": os.getpid() if pid is None else int(pid),
+        "owner": owner,
+        "created": _now_iso(),
+        "adoptable": bool(adoptable),
+    }
+    try:
+        qdir.mkdir(parents=True, exist_ok=True)
+        for _ in range(_TICKET_CREATE_ATTEMPTS):
+            name = "%020d-%d" % (time.time_ns(), meta["pid"])
+            try:
+                return name if _write_ticket(qdir, name, meta, replace=False) else None
+            except FileExistsError:
+                continue
+    except OSError as exc:
+        _LOG.warning("suite_mutex: could not take a ticket under %s: %s", qdir, exc)
+    return None
+
+
+def drop_ticket(name: str, *, path: Optional[Path] = None) -> None:
+    """Remove a ticket; a missing one is fine. Never raises."""
+    _unlink_quiet(_queue_dir(lock_path() if path is None else path) / name)
+
+
+def _adopt_ticket(qdir: Path, live: list, owner: str) -> Optional[str]:
+    """Claim the oldest ``adoptable`` ticket of ``owner`` for this process, keeping its place."""
+    for name, meta in live:
+        if meta is not None and meta["adoptable"] and meta["owner"] == owner:
+            claimed = dict(meta, pid=os.getpid(), adoptable=False)
+            if _write_ticket(qdir, name, claimed, replace=True):
+                return name
+    return None
+
+
 def acquire(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = None,
             path: Optional[Path] = None) -> bool:
     """Acquire the machine-wide suite mutex for ``owner``. True iff held on return.
 
-    ``timeout=0`` (the default) is non-blocking: one attempt, then False.
-    ``timeout>0`` polls with exponential backoff up to that many seconds
-    before giving up and returning False. Failure is always a False return,
-    never an exception — a guard consulting this must be able to deny cleanly.
+    ``timeout=0`` (the default) is non-blocking: one attempt, then False, and
+    False whenever a live waiter is queued — it never jumps the queue.
+    ``timeout>0`` takes a ticket and polls with exponential backoff up to that
+    many seconds, going only when its ticket is the oldest live one; the ticket
+    is dropped on acquire, timeout and failure. A releaser re-entering here
+    takes a NEW ticket behind existing waiters. Failure is always a False
+    return, never an exception — a guard consulting this must be able to deny
+    cleanly.
 
     Re-entrant: if the lock is already held by this same ``owner``, this is a
     no-op success (True), not a deadlock and not a second acquisition. The
@@ -539,49 +695,81 @@ def acquire(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = 
     """
     effective_pid = os.getpid() if pid is None else int(pid)
     path = lock_path() if path is None else path
+    qdir = _queue_dir(path)
+    blocking = timeout > 0
     deadline = time.monotonic() + max(0.0, timeout)
     interval = _POLL_INITIAL_SECS
     reclaim_retries = 0
+    ticket: Optional[str] = None
 
-    while True:
-        if _try_mkdir(path):
-            try:
-                _write_meta(path, pid=effective_pid, owner=owner, cmd=cmd)
-            except OSError as exc:
-                _LOG.warning(
-                    "suite_mutex: acquired %s but could not stamp metadata — "
-                    "releasing rather than holding an unattributable lock: %s",
-                    path,
-                    exc,
-                )
-                _reclaim(path, "metadata stamp failed immediately after acquire", None)
+    try:
+        while True:
+            # Re-entry is decided before any ticket exists, so a nested acquire
+            # never queues behind waiters that are themselves waiting on it.
+            held_now = holder(path=path)
+            if held_now is not None and held_now["owner"] == owner and _holder_is_self_or_ancestor(held_now["pid"]):
+                return True
+
+            live = _live_tickets(qdir)
+            if ticket is not None and all(name != ticket for name, _ in live):
+                ticket = None
+            if ticket is None:
+                ticket = _adopt_ticket(qdir, live, owner)
+                if ticket is None and blocking:
+                    ticket = take_ticket(owner, path=path)
+                if ticket is not None:
+                    live = _live_tickets(qdir)
+
+            # A blocking caller goes only from the head of the queue; a
+            # non-blocking one without a ticket may go only into an empty queue,
+            # and never jumps ahead of a live waiter.
+            if ticket is not None:
+                may_try = bool(live) and live[0][0] == ticket
+            else:
+                may_try = not live
+
+            if may_try:
+                if _try_mkdir(path):
+                    try:
+                        _write_meta(path, pid=effective_pid, owner=owner, cmd=cmd)
+                    except OSError as exc:
+                        _LOG.warning(
+                            "suite_mutex: acquired %s but could not stamp metadata — "
+                            "releasing rather than holding an unattributable lock: %s",
+                            path,
+                            exc,
+                        )
+                        _reclaim(path, "metadata stamp failed immediately after acquire", None)
+                        return False
+                    return True
+
+                current = holder(path=path)
+                if current is None:
+                    # The dir existed but resolved to no holder — it was just freed or
+                    # reclaimed, so retry the mkdir immediately. Bounded, because a lock
+                    # dir that cannot be removed (an undeletable stray inside it) would
+                    # otherwise spin this loop hot forever, including at timeout=0.
+                    reclaim_retries += 1
+                    if reclaim_retries <= _RECLAIM_RETRY_LIMIT:
+                        continue
+                    _LOG.warning(
+                        "suite_mutex: %s reports no holder but could not be acquired after "
+                        "%d attempts — treating as held",
+                        path,
+                        reclaim_retries,
+                    )
+                    return False
+                if current["owner"] == owner and _holder_is_self_or_ancestor(current["pid"]):
+                    return True
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 return False
-            return True
-
-        current = holder(path=path)
-        if current is None:
-            # The dir existed but resolved to no holder — it was just freed or
-            # reclaimed, so retry the mkdir immediately. Bounded, because a lock
-            # dir that cannot be removed (an undeletable stray inside it) would
-            # otherwise spin this loop hot forever, including at timeout=0.
-            reclaim_retries += 1
-            if reclaim_retries <= _RECLAIM_RETRY_LIMIT:
-                continue
-            _LOG.warning(
-                "suite_mutex: %s reports no holder but could not be acquired after "
-                "%d attempts — treating as held",
-                path,
-                reclaim_retries,
-            )
-            return False
-        if current["owner"] == owner and _holder_is_self_or_ancestor(current["pid"]):
-            return True
-
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return False
-        time.sleep(min(interval, remaining))
-        interval = min(interval * _POLL_BACKOFF, _POLL_MAX_SECS)
+            time.sleep(min(interval, remaining))
+            interval = min(interval * _POLL_BACKOFF, _POLL_MAX_SECS)
+    finally:
+        if ticket is not None:
+            drop_ticket(ticket, path=path)
 
 
 def release(owner: str, *, path: Optional[Path] = None) -> None:

@@ -1158,7 +1158,35 @@ def undeclared_edits_for_run(repo_root: Path, run_id: str, declared: Sequence[st
     except ValueError:
         return []
     found = stage_dirt_snapshot.undeclared_edits(repo_root, record, declared)
+    if found:
+        found = _without_foreign_claimed(repo_root, found, session_id, run_id)
     return list(_without_peer_held(repo_root, found, session_id, run_id)) if found else []
+
+
+def _without_foreign_claimed(
+    repo_root: Path, found: Sequence[str], session_id: str, run_id: str
+) -> List[str]:
+    """``found`` narrowed to dirt the run positively wrote: a path stays only when a self session
+    (``land_run._firing_sessions`` plus prior-pass sessions) holds a write claim on it. A path with no
+    claimant, only foreign claimants, an unanswerable lookup, or a failing attribution is foreign and
+    is dropped: absence of a witness is never evidence the run wrote it. One claim lookup; spawns nothing."""
+    try:
+        from coordinator_core.ops.dispatch_emit import land_run
+        from coordinator_core.session import claim_index, touch_record
+
+        selves = land_run._firing_sessions(repo_root, run_id, session_id or None) | land_run._prior_pass_sessions(
+            repo_root, run_id
+        )
+        table = land_run._bounded_claim_lookup(claim_index, list(found), str(repo_root))
+        kinds = getattr(table, "recorded_kind", None) or {}
+
+        def writers(path: str) -> List[str]:
+            claimants = table.get(path, [])
+            return [s for s in claimants if touch_record.kind_blocks_a_peer_commit(kinds.get(path, {}).get(s))]
+
+        return [path for path in found if any(s in selves for s in writers(path))]
+    except Exception:  # noqa: BLE001 -- no witness is foreign: a failing attribution drops every candidate
+        return []
 
 
 @register_op("review.prep")

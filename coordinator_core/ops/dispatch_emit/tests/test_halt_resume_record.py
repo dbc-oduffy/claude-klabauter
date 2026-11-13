@@ -294,3 +294,30 @@ def test_stalled_read_does_not_block_the_next_read(tmp_path, monkeypatch):
         assert hrr.bounded_read(fast, 1000) == b"f"
     finally:
         release.set()
+
+
+@pytest.mark.parametrize("status,written", [("landed", False), ("closed", False), ("halted", True), ("resumed", True)])
+def test_write_drops_the_record_of_a_finished_run(tmp_path, status, written):
+    fp = _setup(tmp_path)
+    rd = tmp_path / "run"
+    rd.mkdir()
+    (rd / "halted.json").write_text(json.dumps({"status": status}))
+    target = hrr.write(rd, _record(fp))
+    assert target == rd / "resume.json"
+    assert target.exists() is written
+
+
+@pytest.mark.parametrize("status,written", [("landed", False), ("closed", False), ("halted", True)])
+def test_refire_record_dropped_for_a_finished_run(tmp_path, status, written):
+    rd = tmp_path / "run"
+    rd.mkdir()
+    (rd / "halted.json").write_text(json.dumps({"status": status}))
+    script = tmp_path / "s.py"
+    script.write_text("x")
+    hrr.write_refire_record(rd, script, "stored", None, 1.0)
+    assert (rd / hrr.REFIRE_LOG_FILE).exists() is written
+
+
+def test_write_without_a_marker_still_writes_the_record(tmp_path):
+    fp = _setup(tmp_path)
+    assert hrr.write(tmp_path / "fresh", _record(fp)).exists()

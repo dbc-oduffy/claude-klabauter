@@ -146,7 +146,7 @@ def start(req, roster, state):
     env["AGY_LEG_LOG"] = str(state / f"{conv}.log")
     if isinstance(req.get("agyPid"), int) and req["agyPid"] > 0:
         env["AGY_LEG_PARENT_PID"] = str(req["agyPid"])  # the leg exits when this agy does
-    p = subprocess.Popen([sys.executable, str(HERE / "unimatrix-agy-leg.py"), ep], env=env,
+    p = subprocess.Popen([roster.console_python(), str(HERE / "unimatrix-agy-leg.py"), ep], env=env,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          **detach_kwargs())
     write_record(record, {"pid": p.pid, "conversation": conv, "endpoint": ep, "ls_address": ls,

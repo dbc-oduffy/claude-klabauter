@@ -642,6 +642,84 @@ def test_wait_times_out_naming_the_holder(tmp_path):
     assert "time.sleep(4.0)" in result.stderr
 
 
+def _queue_names(settings_home: Path) -> list:
+    qdir = settings_home / "test-suite-mutex.lock.queue"
+    return sorted(os.listdir(qdir)) if qdir.is_dir() else []
+
+
+def _wait_then_release(tmp_path, monkeypatch):
+    """Hold the mutex as a peer, start `--wait` as session sess-w, release; return the exited wait."""
+    from coordinator_core.testing import suite_mutex
+
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    for var in ("CLAUDE_SESSION_ID", "COORDINATOR_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-peer")
+    assert suite_mutex.acquire("sess-peer", "peer-suite") is True
+
+    env = _base_env(tmp_path)
+    env["CLAUDE_CODE_SESSION_ID"] = "sess-w"
+    waiter = subprocess.Popen(
+        [sys.executable, str(_WRAPPER), "--wait", "--wait-timeout", "30"],
+        cwd=str(tmp_path), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    deadline = time.monotonic() + 15
+    while not _queue_names(tmp_path) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert _queue_names(tmp_path), "--wait never took a ticket"
+    assert waiter.poll() is None, "--wait returned while the mutex was held"
+    suite_mutex.release("sess-peer")
+    waiter.communicate(timeout=30)
+    assert waiter.returncode == 0
+    return suite_mutex
+
+
+def test_wait_then_run_keeps_its_place_ahead_of_a_releasers_retry(tmp_path, monkeypatch):
+    suite_mutex = _wait_then_release(tmp_path, monkeypatch)
+
+    # --wait has exited, so only the adoptable ticket stands between the peer and the mutex.
+    assert len(_queue_names(tmp_path)) == 1
+    assert suite_mutex.acquire("sess-peer", "peer-suite") is False
+    assert suite_mutex.acquire("sess-peer", "peer-suite", timeout=0.2) is False
+
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-w")
+    assert suite_mutex.acquire("sess-w", "run", timeout=0) is True
+    assert suite_mutex.holder()["owner"] == "sess-w"
+    assert _queue_names(tmp_path) == []
+    suite_mutex.release("sess-w")
+
+
+def test_unadopted_wait_ticket_expires_after_the_grace(tmp_path, monkeypatch):
+    suite_mutex = _wait_then_release(tmp_path, monkeypatch)
+    assert suite_mutex.acquire("sess-peer", "peer-suite") is False
+
+    monkeypatch.setattr(suite_mutex, "_TICKET_ADOPT_GRACE_SECS", 0.0)
+    time.sleep(0.05)
+    assert suite_mutex.acquire("sess-peer", "peer-suite") is True
+    assert _queue_names(tmp_path) == []
+    suite_mutex.release("sess-peer")
+
+
+def test_timed_out_wait_drops_its_ticket(tmp_path):
+    env = _base_env(tmp_path)
+    holder = threading.Thread(
+        target=lambda: _run(
+            ["--", sys.executable, "-c", "import time; time.sleep(3.0)"], env=env, timeout=30,
+        )
+    )
+    holder.start()
+    deadline = time.monotonic() + 15
+    while not _lock_dir(tmp_path).exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    result = _run(["--wait", "--wait-timeout", "0.5"], env=env, timeout=30)
+    holder.join(timeout=30)
+
+    assert result.returncode == 1
+    assert _queue_names(tmp_path) == []
+
+
 @pytest.mark.parametrize(
     "args",
     [

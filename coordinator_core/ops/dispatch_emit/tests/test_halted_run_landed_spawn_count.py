@@ -1,7 +1,7 @@
 """Exact-equality git spawn counts for `dispatch.record_halted_run_landed`.
 
 The op's ancestry and prefix reads are two batched `run_git` spawns; the figures come from
-the budget manifest row, never chosen here, so a per-sha or per-path spawn fails these tests
+the budget manifest row (plus `RECORD_RESIDUE_STATUS`, the landed-record commit's one status read), so a per-sha or per-path spawn fails these tests
 instead of fitting under them.
 """
 
@@ -24,6 +24,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 PARENT = "ask-parent-20261015T000000-abcdef"
 SOLO = "warp-2026-10-20-solo-20261020T000000-abcdef"
 REAL_LAUNCH = op._launch
+RECORD_RESIDUE_STATUS = 1  # the one `git status` of record_dir_residue in the landed-record commit
 
 
 def _budget() -> dict:
@@ -94,7 +95,7 @@ def test_sibling_run_full_sha_spawns_one_ancestry_check(repo, monkeypatch):
     _seed_sibling(root)
     out, spawns = _count(monkeypatch, root, run_id="A", sha=shas[0])
     assert out["ok"], out
-    assert len(spawns) == _budget()["ancestry_check"], [s.argv for s in spawns]
+    assert len(spawns) == _budget()["ancestry_check"], [s.argv for s in spawns]  # sibling run: no record-dir commit
 
 
 def test_solo_run_full_sha_spawns_one_ancestry_check(repo, monkeypatch):
@@ -102,7 +103,7 @@ def test_solo_run_full_sha_spawns_one_ancestry_check(repo, monkeypatch):
     _seed_solo(root)
     out, spawns = _count(monkeypatch, root, run_id=SOLO, sha=shas[0])
     assert out["ok"], out
-    assert len(spawns) == _budget()["ancestry_check"], [s.argv for s in spawns]
+    assert len(spawns) == _budget()["ancestry_check"] + RECORD_RESIDUE_STATUS, [s.argv for s in spawns]
 
 
 def test_abbreviated_sha_spawns_prefix_resolve_plus_ancestry_check(repo, monkeypatch):
@@ -111,7 +112,9 @@ def test_abbreviated_sha_spawns_prefix_resolve_plus_ancestry_check(repo, monkeyp
     out, spawns = _count(monkeypatch, root, run_id=SOLO, sha=shas[0][:12])
     assert out["ok"] and out["sha"] == shas[0], out
     budget = _budget()
-    assert len(spawns) == budget["ancestry_check"] + budget["prefix_resolve"], [s.argv for s in spawns]
+    assert len(spawns) == (
+        budget["ancestry_check"] + budget["prefix_resolve"] + RECORD_RESIDUE_STATUS
+    ), [s.argv for s in spawns]
 
 
 def test_three_sha_set_is_still_one_ancestry_check(repo, monkeypatch):
@@ -119,7 +122,7 @@ def test_three_sha_set_is_still_one_ancestry_check(repo, monkeypatch):
     _seed_solo(root)
     out, spawns = _count(monkeypatch, root, run_id=SOLO, shas=list(shas))
     assert out["ok"], out
-    assert len(spawns) == _budget()["ancestry_check"], [s.argv for s in spawns]
+    assert len(spawns) == _budget()["ancestry_check"] + RECORD_RESIDUE_STATUS, [s.argv for s in spawns]
 
 
 def test_several_withheld_paths_add_no_per_path_spawn(repo, monkeypatch):
@@ -132,7 +135,7 @@ def test_several_withheld_paths_add_no_per_path_spawn(repo, monkeypatch):
     marker.write_text(json.dumps(data), encoding="utf-8")
     out, spawns = _count(monkeypatch, root, run_id=SOLO, sha=landed)
     assert out["ok"] and sorted(out["covers"][landed]) == sorted(names), out
-    assert len(spawns) == _budget()["ancestry_check"], [s.argv for s in spawns]
+    assert len(spawns) == _budget()["ancestry_check"] + RECORD_RESIDUE_STATUS, [s.argv for s in spawns]
 
 
 def test_idempotent_second_call_spawns_nothing(repo, monkeypatch):

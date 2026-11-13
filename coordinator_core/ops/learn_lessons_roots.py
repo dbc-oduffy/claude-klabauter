@@ -119,7 +119,9 @@ def _is_publish_target(
 
 
 def _machine_local_dump_repos(machine_local: str) -> Dict[str, str]:
-    data = machine_local_spawn.dump(machine_local, ("--prefix", "repos", "--format", "json"))
+    kernel = machine_local_spawn.kernel_path()
+    target = kernel if os.path.isfile(kernel) else machine_local
+    data = machine_local_spawn.dump(target, ("--prefix", "repos", "--format", "json"))
     if not data:
         return {}
     return {k: v for k, v in data.items() if isinstance(v, str) and v}

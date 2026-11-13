@@ -29,15 +29,17 @@ terminates the unrun child, exit 75); a recorded run prints suite-run: ran ....
     with-suite-mutex -- python3 -m pytest -m 'not cadence'
     with-suite-mutex --owner-label workday-complete -- python3 bin/run-full-test-suite.py --yes
 
-WAIT MODE: --wait blocks until the mutex has no holder, then exits 0; it
-runs no command and takes nothing. It is the wait the guard's refusal names:
+WAIT MODE: --wait queues a FIFO ticket and blocks until it is head of the
+queue and the mutex has no holder, then exits 0; it runs no command and takes
+no lock. The ticket is left adoptable for suite_mutex._TICKET_ADOPT_GRACE_SECS:
+a follow-on run of the same session (same owner) inherits its place. It is the wait the guard's refusal names:
 the bash_guards deny a suite-shaped command (wrapped or not) while another run
 holds the mutex, so the wrapped form can never reach its own blocking acquire
 at that moment, and a raw pid-liveness poll on the holder is denied by its own
 guard. --wait is not suite-shaped, so it passes both. Exit 1 after
 --wait-timeout SECS (default suite_mutex.MUTEX_WAIT_SECS) with the
-holder still named. Freedom is a snapshot, not a reservation: another run can
-take the mutex between this exit and the retry, which is then refused again.
+holder still named. The reservation holds only for a run of the same session
+id within the grace; any other taker is refused again.
 
 Without --wait, a literal -- followed by at least one token is REQUIRED — mirrors
 coordinator/bin/scoped-git-commit's own hard requirement for a -- and a
@@ -547,25 +549,58 @@ def _default_collection(owner_label: Optional[str], command: List[str]) -> str:
     return name if name and suite_run_record.COLLECTION_RE.match(name) else _DEFAULT_COLLECTION
 
 
-def _wait_for_free(timeout: float) -> int:
-    """Block until ``suite_mutex.holder()`` is None; 0 when free, 1 on timeout."""
+def _hand_ticket_to_run(qdir, ticket: str) -> None:
+    """Flip ``ticket`` to adoptable so the follow-on run of the same owner inherits its place."""
+    meta = suite_mutex._read_ticket(qdir, ticket)
+    if meta is not None:
+        suite_mutex._write_ticket(qdir, ticket, dict(meta, adoptable=True, handed_at=time.time()), replace=True)
+
+
+def _wait_for_free(timeout: float, owner: str) -> int:
+    """Block until this wait's queue ticket is head and the mutex is free; 0 then, 1 on timeout.
+
+    The ticket outlives this process as an adoptable one (``suite_mutex`` prunes
+    it after ``_TICKET_ADOPT_GRACE_SECS``); a timeout or interrupt drops it.
+    """
     deadline = time.monotonic() + timeout
-    while True:
-        current = suite_mutex.holder()
-        if current is None:
-            return 0
-        if time.monotonic() >= deadline:
-            print(
-                "with-suite-mutex: still held after %gs by pid %s | owner %s | "
-                "started %s | %s"
-                % (
-                    timeout, current.get("pid", "?"), current.get("owner", "?"),
-                    current.get("started_at", "?"), current.get("cmd", "?"),
-                ),
-                file=sys.stderr,
-            )
-            return 1
-        time.sleep(min(_WAIT_POLL_SECS, max(0.0, deadline - time.monotonic())))
+    qdir = suite_mutex._queue_dir(suite_mutex.lock_path())
+    ticket = suite_mutex.take_ticket(owner)
+    handed_off = False
+    try:
+        while True:
+            current = suite_mutex.holder()
+            live = suite_mutex._live_tickets(qdir)
+            if ticket is not None and all(name != ticket for name, _ in live):
+                ticket = suite_mutex.take_ticket(owner)
+                live = suite_mutex._live_tickets(qdir)
+            at_head = ticket is None or (bool(live) and live[0][0] == ticket)
+            if current is None and at_head:
+                if ticket is not None:
+                    _hand_ticket_to_run(qdir, ticket)
+                    handed_off = True
+                return 0
+            if time.monotonic() >= deadline:
+                if current is not None:
+                    print(
+                        "with-suite-mutex: still held after %gs by pid %s | owner %s | "
+                        "started %s | %s"
+                        % (
+                            timeout, current.get("pid", "?"), current.get("owner", "?"),
+                            current.get("started_at", "?"), current.get("cmd", "?"),
+                        ),
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        "with-suite-mutex: mutex free but %d waiter(s) queued ahead after %gs."
+                        % (len(live), timeout),
+                        file=sys.stderr,
+                    )
+                return 1
+            time.sleep(min(_WAIT_POLL_SECS, max(0.0, deadline - time.monotonic())))
+    finally:
+        if ticket is not None and not handed_off:
+            suite_mutex.drop_ticket(ticket)
 
 
 def _kill_process_tree(process: "subprocess.Popen[bytes]") -> int:
@@ -909,7 +944,7 @@ def main(argv: List[str]) -> int:
         if "--" in argv:
             print("with-suite-mutex: --wait takes no `-- <command>`.", file=sys.stderr)
             return 2
-        return _wait_for_free(wait_timeout)
+        return _wait_for_free(wait_timeout, suite_mutex.mutex_owner(_DEFAULT_OWNER_PREFIX))
     owner_label, collection, max_runtime, command, reuse_fresh = _parse_args(argv)
     if not command:
         return 2

@@ -82,14 +82,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-try:
-    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
-    from cc_invoke import ensure_engine_on_path
-
-    ensure_engine_on_path(__file__)
-except ImportError:  # a receiving-box copy carries no lib/; the engine resolves lazily
-    pass
-
 SESS = "~/.claude/sessions"
 SOCKS = "/tmp/cc-socks"
 INBOX_NAME_RE = re.compile(r"[A-Za-z0-9_-](?:[A-Za-z0-9_.-]{0,62}[A-Za-z0-9_-])?")
@@ -366,6 +358,14 @@ def _load_sibling(filename, modname):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def _console_python():
+    """A real console CPython for a child argv; OSError when none resolves."""
+    found = _load_sibling("lib/python_interp.py", "unimatrix_relay_python_interp").resolve_console_python()
+    if not found:
+        raise FileNotFoundError("no console Python interpreter resolvable")
+    return found
 
 
 def codex_export_refused(d, cache):
@@ -1278,7 +1278,7 @@ def _pin_value():
         val = None
         if reader.is_file():
             try:
-                r = subprocess.run([sys.executable, str(reader), "get", PIN_KEY], capture_output=True, text=True,
+                r = subprocess.run([_console_python(), str(reader), "get", PIN_KEY], capture_output=True, text=True,
                                    timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 val = os.path.expanduser(r.stdout.strip()) if not r.returncode and r.stdout.strip() else None
             except (OSError, subprocess.SubprocessError):
@@ -1540,6 +1540,13 @@ def probe_specs(platform=None):
 
 
 def main():
+    try:
+        import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+        from cc_invoke import ensure_engine_on_path
+
+        ensure_engine_on_path(__file__)
+    except ImportError:  # a receiving-box copy carries no lib/; the engine resolves lazily
+        pass
     parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
         sys.exit("usage: roster | specs | send <pid> | send-batch <pid> | send-to <pid> <digest> | send-named <pid> <digest> <name-digest> | send-session <pid> <digest> <name-digest> <session-id> | receipts <session-id> <since> | inbox <name> | inbox-mux | reply-inbox <name> | source | "

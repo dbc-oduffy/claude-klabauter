@@ -122,20 +122,15 @@ class _SpawnCounter:
         subprocess.Popen.__init__ = self._orig  # type: ignore[method-assign]
 
 
-def _handler(op: str) -> Callable[..., Any]:
-    from coordinator_core.ipc import get_op_handler
-
-    h = get_op_handler(op)
-    if h is None:
-        raise RuntimeError(f"op not registered: {op}")
-    return h
-
-
 def _call(op: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """One in-process handler call; returns timings, spawns and the drained row fields."""
-    from coordinator_core.telemetry import op_row_fields
+    """One in-process handler call; returns timings, spawns and the drained row fields.
 
-    handler = _handler(op)
+    Handler resolution falls inside the timed block (a dict lookup) and the reentry scope is
+    measured too: both are cost a real reentrant caller pays.
+    """
+    from coordinator_core.telemetry import op_row_fields
+    from coordinator_core.warm.entry_seam import reentrant_dispatch
+
     token = op_row_fields.begin()
     spawns = _SpawnCounter()
     w0 = time.perf_counter()
@@ -143,7 +138,7 @@ def _call(op: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     error = None
     try:
         with spawns:
-            handler(payload, None)
+            reentrant_dispatch(op, payload)
     except Exception as exc:  # noqa: BLE001 -- a raise is a measured outcome
         error = f"{type(exc).__name__}: {exc}"
     process_ms = (time.process_time() - c0) * 1000.0
@@ -163,6 +158,8 @@ def _call(op: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 def measure_shape(spec: Dict[str, Any], cwd: str, n: int) -> Dict[str, Any]:
     """First call (cold: imports, discovery) then `n` steady calls; steady figures are medians."""
     cold = _call(spec["op"], _payload(spec, cwd, "bench-cold"))
+    if (cold["error"] or "").startswith("OpUnavailableError"):
+        raise RuntimeError(f"op not registered: {spec['op']}: {cold['error']}")
     steady = [_call(spec["op"], _payload(spec, cwd, f"bench-{i}")) for i in range(n)]
     med = lambda key: round(statistics.median(s[key] for s in steady), 1)  # noqa: E731
     last = steady[-1]

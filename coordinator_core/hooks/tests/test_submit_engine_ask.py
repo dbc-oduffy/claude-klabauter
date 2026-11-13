@@ -1878,11 +1878,26 @@ def test_launcher_run_token_is_minted_while_hook_budget_remains(tmp_path, monkey
     assert len(minted) == 1
 
 
-def test_launcher_run_token_mint_is_skipped_once_hook_budget_is_spent(tmp_path, monkeypatch):
+def test_launcher_run_token_mint_still_lands_once_hook_budget_is_spent(tmp_path, monkeypatch):
     minted = _count_mints(monkeypatch)
     monkeypatch.setattr(mod, "_BUDGET", [0.0])
     mod._ensure_launcher_run_token(_repo(tmp_path), "ask-r1", "state/sizings/x.yaml", "sess-1")
-    assert minted == []
+    assert len(minted) == 1
+
+
+def test_spent_budget_mint_joins_only_the_short_window(tmp_path, monkeypatch):
+    joins: list = []
+    real = mod._write_leg
+
+    def spy(label, fn, gated=False, join_s=None):
+        joins.append(join_s)
+        return real(label, fn, gated=gated, join_s=join_s)
+
+    monkeypatch.setattr(mod, "_write_leg", spy)
+    _count_mints(monkeypatch)
+    monkeypatch.setattr(mod, "_BUDGET", [0.0])
+    mod._ensure_launcher_run_token(_repo(tmp_path), "ask-r1", "state/sizings/x.yaml", "sess-1")
+    assert joins == [mod._SPENT_WINDOW_MINT_JOIN_S]
 
 
 def _refire_listings(monkeypatch, tmp_path) -> list:

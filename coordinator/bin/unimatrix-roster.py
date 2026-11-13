@@ -87,6 +87,22 @@ def no_window():
     return getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
 
+_PYTHON_INTERP = []
+
+
+def console_python():
+    """A real console CPython for a child argv (never a forwarder or pythonw exe); OSError when none resolves."""
+    if not _PYTHON_INTERP:
+        spec = importlib.util.spec_from_file_location("unimatrix_roster_python_interp", HERE / "lib" / "python_interp.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _PYTHON_INTERP.append(mod)
+    found = _PYTHON_INTERP[0].resolve_console_python()
+    if not found:
+        raise FileNotFoundError("no console Python interpreter resolvable")
+    return found
+
+
 def spawn(cmd):
     """Start a child that can be tree-killed later: its own process group off Windows."""
     if sys.platform == "win32":
@@ -398,7 +414,7 @@ def authenticated_data(endpoint, data, directory=None):
 
 def bridge_cmd(endpoint, log, remote, key, return_port=None, inbox=None, tunnel_remote=None, supervisor=None):
     """Bridge argv; `supervisor` is the roster pid the bridge exits with (its start stamp is read from the mirror entry)."""
-    cmd = [sys.executable, str(HERE / "unimatrix-bridge.py"), endpoint, "relay", log]
+    cmd = [console_python(), str(HERE / "unimatrix-bridge.py"), endpoint, "relay", log]
     if return_port is not None and inbox:
         cmd += [str(return_port), inbox]
     cmd += ["--remote", remote, "--key", key]

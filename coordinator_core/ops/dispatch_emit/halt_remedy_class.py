@@ -84,6 +84,8 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     # commit_stage_halt: the commit agent was cancelled or failed; the watcher lands the marker through
     # remedy_or_halt and a refire resumes the kept work.
     "commit_stage": (MECHANICAL, "refire-resumes-kept-work"),
+    # commit_stage_halt.halt_run_on_unrecorded_end: the run ended with no halt record; a refire resumes the kept work.
+    "run-ended-unrecorded": (MECHANICAL, "refire-resumes-kept-work"),
     "citation_unbacked": (DECISION, None),
 }
 

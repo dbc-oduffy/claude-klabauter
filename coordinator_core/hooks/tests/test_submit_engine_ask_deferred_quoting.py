@@ -45,15 +45,15 @@ def test_deferred_emit_names_a_params_file_holding_the_ask_byte_for_byte(tmp_pat
 
 
 @pytest.mark.spawns_process
-def test_relay_is_told_to_delete_the_params_file_after_the_emit_reads_it(tmp_path):
+def test_relay_is_told_to_leave_the_params_file_in_place_after_the_emit_reads_it(tmp_path):
+    """The relay's `rm -f` is refused by block-subagent-destructive-action, so the prompt forbids touching any file."""
     script = mod._write_deferred_script(tmp_path, {"ask": NASTY, "session_id": ""})
     got = _node(script, tmp_path, [{"path": "", "run_id": "", "error": "stop here"}], [])
     (prompt,) = [c["agent"] for c in got["calls"] if "agent" in c]
     (params_file,) = re.findall(r'--params-file "([^"]+)"', prompt)
     assert Path(params_file).is_file()
-    (removed,) = re.findall(r'rm -f "([^"]+)"', prompt)
-    assert removed == params_file
-    assert prompt.index("--params-file") < prompt.index("rm -f")
+    assert not re.search(r"\brm\b", prompt)
+    assert "Do not delete or modify any file" in prompt
 
 
 def test_short_params_also_ride_a_params_file(tmp_path):

@@ -20,8 +20,10 @@ The classification is the spike's finding; see docs/research/2026-11-02-warm-sto
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -67,6 +69,9 @@ class _Version:
 
     def is_skewed(self, client_token):
         return client_token == stop_token
+
+    def is_token_skewed(self, client_token):
+        return self.is_skewed(client_token)
 
 
 def _dispatch(self, msg, **_kw):
@@ -161,13 +166,16 @@ def spawned(engine_root: Path):
 
 
 @pytest.fixture()
-def state(engine_root: Path, monkeypatch: pytest.MonkeyPatch) -> _State:
+def state(engine_root: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> _State:
     """Point the real client at the fixture server and count the spawns it would attempt."""
     st = _State()
     monkeypatch.setenv("COORDINATOR_WARM", "1")
     monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "2")
     # A test-marked client reaches no server unless it names a test-isolated runtime base.
-    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(engine_root.parent / "rt"))
+    # Short on POSIX: a unix socket under the pytest tmp_path overflows the sun_path budget.
+    rt = Path(tempfile.mkdtemp(prefix="cm-", dir=None if os.name == "nt" else "/tmp"))
+    request.addfinalizer(lambda: shutil.rmtree(rt, ignore_errors=True))
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(rt))
     monkeypatch.setattr(client, "_engine_clone_root", lambda: engine_root)
     monkeypatch.setattr(breadcrumb, "_default_engine_clone", lambda: engine_root)
     monkeypatch.setattr(election, "_default_engine_clone", lambda: engine_root)

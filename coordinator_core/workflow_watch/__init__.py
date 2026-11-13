@@ -238,6 +238,42 @@ def _write_commit_stage_halt(
         pass
 
 
+def _write_unrecorded_end_halt(
+    journal_path: str, terminal_status: str, script_path: str | None, root=None
+) -> None:
+    """Land `halted: run-ended-unrecorded` when the run ended with no `halted.json` and no committed
+    commit leg; never raises."""
+    if not script_path:
+        return
+    try:
+        from pathlib import Path
+
+        from coordinator_core.ops.dispatch_emit import ask_contract
+        from coordinator_core.workflow_watch import stall
+        from coordinator_core.ops.dispatch_emit.commit_stage_halt import (
+            commit_leg_outcome,
+            halt_run_on_unrecorded_end,
+        )
+
+        base = Path(root) if root is not None else next(
+            (p for p in (Path.cwd(), *Path.cwd().parents) if (p / ask_contract.RUN_DIR_ROOT).is_dir()), None
+        )
+        if base is None:
+            return
+        found = _submitted_launch(base, script_path)
+        if found is None:
+            return
+        run_id, sizing_rel, _launched_at = found
+        outcome = commit_leg_outcome(stall._tail_text(journal_path, stall.JOURNAL_TAIL_BYTES))
+        if outcome is not None and outcome[1] == "committed":
+            return
+        halt_run_on_unrecorded_end(
+            ask_contract.record_dir(base, run_id), terminal_status=terminal_status, sizing_rel=sizing_rel,
+        )
+    except Exception:
+        pass
+
+
 def _watch(
     transcript_path: str,
     journal_path: str,
@@ -272,6 +308,7 @@ def _watch(
                 pass
             _write_returned_halt(record.result_text, script_path)
             _write_commit_stage_halt(journal_path, record.status, script_path)
+            _write_unrecorded_end_halt(journal_path, record.status, script_path)
             print(f"terminal: {record.status}")
             sys.stdout.flush()
             _emit_cost(journal_path)

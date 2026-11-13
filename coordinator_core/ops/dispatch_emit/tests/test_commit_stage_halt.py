@@ -13,8 +13,10 @@ from coordinator_core import workflow_watch
 from coordinator_core.ops.dispatch_emit import ask_compose, ask_contract, halted_run, halted_run_landed
 from coordinator_core.ops.dispatch_emit.commit_stage_halt import (
     HALT_COMMIT_STAGE,
+    HALT_UNRECORDED_END,
     commit_leg_outcome,
     halt_run_on_commit_stage_end,
+    halt_run_on_unrecorded_end,
 )
 
 SIZING = "state/sizings/2026-11/x.yaml"
@@ -227,3 +229,48 @@ def test_watch_at_default_arguments_leaves_a_marker_the_halted_close_accepts(tmp
     assert marker["halted"] == HALT_COMMIT_STAGE and marker["sizing_rel"] == SIZING
     out = halted_run_landed._record_solo(tmp_path, RUN_ID, ["abc1234"])
     assert "never ran" not in json.dumps(out)
+
+
+def test_run_ended_with_no_halt_record_writes_run_ended_unrecorded(tmp_path):
+    record_dir = _record_dir(tmp_path)
+    assert halt_run_on_unrecorded_end(record_dir, terminal_status="failed", sizing_rel=SIZING) is not None
+    marker = halted_run.read_strict(record_dir)
+    assert marker["status"] == "halted" and marker["halted"] == HALT_UNRECORDED_END
+    assert marker["sizing_rel"] == SIZING
+    assert marker["reason"] == "run ended failed with no halt record"
+
+
+def test_unrecorded_end_never_marks_a_completed_run_halted(tmp_path):
+    record_dir = _record_dir(tmp_path)
+    assert halt_run_on_unrecorded_end(record_dir, terminal_status="completed", sizing_rel=SIZING) is None
+    assert not (record_dir / halted_run.HALTED_FILE).exists()
+
+
+@pytest.mark.parametrize("status", [halted_run.STATUS_LANDED, halted_run.STATUS_HALTED])
+def test_unrecorded_end_never_overwrites_an_existing_marker(tmp_path, status):
+    record_dir = _record_dir(tmp_path)
+    (record_dir / halted_run.HALTED_FILE).write_text(json.dumps({"status": status, "halted": "x"}), encoding="utf-8")
+    before = (record_dir / halted_run.HALTED_FILE).read_text(encoding="utf-8")
+    assert halt_run_on_unrecorded_end(record_dir, terminal_status="failed", sizing_rel=SIZING) is None
+    assert (record_dir / halted_run.HALTED_FILE).read_text(encoding="utf-8") == before
+
+
+def test_unrecorded_end_never_raises(tmp_path, monkeypatch):
+    def boom(*_a, **_k):
+        raise OSError("disk")
+
+    monkeypatch.setattr(halted_run, "write_halt_marker", boom)
+    assert halt_run_on_unrecorded_end(_record_dir(tmp_path), terminal_status="failed", sizing_rel=SIZING) is None
+
+
+def test_watch_on_a_run_with_no_commit_leg_and_no_marker_lands_run_ended_unrecorded(tmp_path, monkeypatch):
+    record_dir = _record_dir(tmp_path)
+    journal = _journal(tmp_path, [])
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(
+        "<task-notification><task-id>task1</task-id><status>failed</status></task-notification>",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    assert workflow_watch._watch(str(transcript), journal, "task1", 0.01, 5.0, script_path=SCRIPT) == 0
+    assert halted_run.read_strict(record_dir)["halted"] == HALT_UNRECORDED_END

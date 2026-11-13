@@ -133,4 +133,23 @@ def patch_events(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], list[st
             events.append(dict(base, tool_name="Write", tool_input=target))
         if after is None:
             warnings.append(f"Patch guard checked target path {path!r}; prospective body is unavailable ({kind.lower()} or ambiguous hunks).")
+    _share_projections(events)
     return events, warnings
+
+
+def _share_projections(events: list[dict[str, Any]]) -> None:
+    """Give every event of a multi-file patch the whole patch's projected files, so the write budget
+    prices the patch once with true file and line totals instead of once per file."""
+    projections = []
+    for index, event in enumerate(events):
+        event["patch_event"] = index
+        args = event["tool_input"]
+        content = args.get("content") if event["tool_name"] == "Write" else args.get("new_string")
+        if isinstance(content, str):
+            projections.append({"file_path": args["file_path"], "content": content, "event": index})
+    if len(projections) > 1:
+        for event in events:
+            event["patch_projections"] = projections
+    else:
+        for event in events:
+            event.pop("patch_event", None)

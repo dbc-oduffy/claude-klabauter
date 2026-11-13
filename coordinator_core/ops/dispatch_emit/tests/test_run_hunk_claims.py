@@ -1,6 +1,7 @@
 """run_hunk_claims.own_hunks: disjoint, overlapping, adjacent, unattributed, plus the zero-spawn pin.
 
-A claimant's baseline is the file it staged against; its delta is worktree minus that baseline."""
+A claimant's baseline is the file it staged against; its delta is worktree minus that baseline.
+The staging split (`co_declared_settle.settle`) is driven over the real `resumed_from` ledger link."""
 
 from __future__ import annotations
 
@@ -309,3 +310,137 @@ def test_under_bound_single_claimant_owns_its_edits_but_not_the_pre_baseline_hun
     split = rhc.own_hunks(world.root, ME, PATH, hunks, {})
     assert split.own == [_h(1), _h(n)]
     assert split.unattributed == [_h(mid)]
+
+
+PRIOR = "ask-20261024T010000-dddddd"
+
+
+def _lineage(monkeypatch, chain):
+    from coordinator_core.ops.dispatch_emit import landing_integrity
+
+    monkeypatch.setattr(landing_integrity, "_resumed_chain", lambda root, rid: list(chain) if rid == ME else [])
+
+
+def test_own_prior_attempt_hunks_are_claimed_not_competing(world, monkeypatch):
+    world.tree({2: "prior", 9: "mine"})
+    world.baseline(ME, {2: "prior"})  # a refire stages over the earlier attempt's bytes
+    world.baseline(PRIOR, {})  # the earlier attempt's delta covers both hunks
+    hunks = [_h(2), _h(9)]
+    _lineage(monkeypatch, [])
+    base = rhc.own_hunks(world.root, ME, PATH, hunks, {PRIOR: True})
+    assert base.own != hunks and base.unattributed  # at base the prior attempt competes
+    _lineage(monkeypatch, [PRIOR])
+    split = rhc.own_hunks(world.root, ME, PATH, hunks, {PRIOR: True})
+    assert split.own == hunks
+    assert split.unattributed == [] and split.overlapping == {}
+
+
+def test_unrelated_run_hunk_stays_foreign_beside_own_prior_attempt(world, monkeypatch):
+    world.tree({2: "prior", 5: "peer", 9: "mine"})
+    world.baseline(ME, {2: "prior"})
+    world.baseline(PRIOR, {})
+    world.baseline(SENIOR, {})  # unrelated run's delta covers every tree hunk, so a shared hunk has two owners
+    _lineage(monkeypatch, [PRIOR])
+    split = rhc.own_hunks(world.root, ME, PATH, [_h(5)], {PRIOR: True, SENIOR: True})
+    assert split.own == [] and split.unattributed == [_h(5)]
+
+
+@pytest.fixture
+def staged_lineage(tmp_path, monkeypatch):
+    """A real repo, the real `resumed_from` ledger reader, and `co_declared_settle.settle` (the staging
+    split `land_run` calls) over a prior attempt of the same parent that holds the shared path."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    def git(*args):
+        subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    git("init", "-q")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (tmp_path / "src").mkdir()
+    (tmp_path / PATH).write_bytes(_text({}).encode())
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    baselines: dict = {}
+    monkeypatch.setattr(hha, "_baseline", lambda root, run: baselines.get(run))
+
+    class Staged:
+        root = tmp_path
+
+        @staticmethod
+        def baseline(run, edits):
+            sha = git_objects.write_object(git_dir.resolve_git_common_dir(tmp_path), b"blob", _text(edits).encode())
+            baselines[run] = {PATH: sha}
+
+        @staticmethod
+        def parent(run):
+            copy = tmp_path / contract.run_parent_copy_rel(run)
+            copy.parent.mkdir(parents=True, exist_ok=True)
+            copy.write_text(json.dumps({"parent_id": "ask-parent-20261024T000000-111111"}))
+
+        @staticmethod
+        def link(run, resumed_from):
+            rl._write_run(rl.run_dir(tmp_path, run), {rl.RESUMED_FROM_FIELD: resumed_from})
+
+    return Staged
+
+
+def _staged_world(staged):
+    staged.parent(ME)
+    staged.parent(PRIOR)
+    staged.root.joinpath(PATH).write_bytes(_text({2: "prior", 9: "mine"}).encode())
+    staged.baseline(ME, {2: "prior"})
+    staged.baseline(PRIOR, {})
+
+
+@pytest.mark.spawns_process
+def test_settle_stages_the_prior_attempt_hunk_through_the_ledger_lineage(staged_lineage):
+    from coordinator_core.ops.dispatch_emit import co_declared_settle as cds
+
+    _staged_world(staged_lineage)
+    staged_lineage.link(ME, PRIOR)
+    stage, still = cds.settle(staged_lineage.root, ME, [(PATH, PRIOR)])
+    assert still == []
+    assert [(h.old_start, h.old_len) for h in stage[PATH]] == [(2, 1), (9, 1)]
+
+
+@pytest.mark.spawns_process
+def test_settle_holds_the_same_hunks_when_no_resumed_from_link_exists(staged_lineage):
+    from coordinator_core.ops.dispatch_emit import co_declared_settle as cds
+
+    _staged_world(staged_lineage)
+    assert cds.settle(staged_lineage.root, ME, [(PATH, PRIOR)]) == ({}, [(PATH, PRIOR)])
+
+
+def _bind_sizing(staged, run, sizing_rel):
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    rl._write_run(rl.run_dir(staged.root, run), {"sizing_rel": sizing_rel})
+
+
+@pytest.mark.spawns_process
+def test_settle_stages_the_prior_attempt_hunk_when_both_runs_share_a_sizing_and_no_link_exists(staged_lineage):
+    from coordinator_core.ops.dispatch_emit import co_declared_settle as cds
+
+    _staged_world(staged_lineage)
+    _bind_sizing(staged_lineage, ME, "docs/sizing/one.md")
+    _bind_sizing(staged_lineage, PRIOR, "docs/sizing/one.md")
+    stage, still = cds.settle(staged_lineage.root, ME, [(PATH, PRIOR)])
+    assert still == []
+    assert [(h.old_start, h.old_len) for h in stage[PATH]] == [(2, 1), (9, 1)]
+
+
+@pytest.mark.spawns_process
+def test_settle_holds_when_the_unlinked_holder_is_bound_to_another_sizing(staged_lineage):
+    from coordinator_core.ops.dispatch_emit import co_declared_settle as cds
+
+    _staged_world(staged_lineage)
+    _bind_sizing(staged_lineage, ME, "docs/sizing/one.md")
+    _bind_sizing(staged_lineage, PRIOR, "docs/sizing/two.md")
+    assert cds.settle(staged_lineage.root, ME, [(PATH, PRIOR)]) == ({}, [(PATH, PRIOR)])

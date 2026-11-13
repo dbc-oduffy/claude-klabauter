@@ -12,8 +12,8 @@ half by monkeypatching `_resolve_repo_root` directly — this suite keeps it
 real so `cmd_abandon`'s own path-containment check runs against a real
 worktree root). `cs_close_handoff` writes in-process (no subprocess — see
 `coordinator_core.archive_stamp._call_handoff_transition`), while the
-CHAIN half's own engine seams (`_guard_exit_code`, `cc_invoke.route_mutation`)
-are monkeypatched exactly as `test_handoff_archive_transition.py`'s
+CHAIN half's own engine seam (`cc_invoke.route_mutation`)
+is monkeypatched exactly as `test_handoff_archive_transition.py`'s
 `_StubHarness` does — this suite asserts `cmd_abandon`'s own composition
 and refusal logic, not the engine behind either call it composes. Marked
 cadence + spawns_process for the real git spawn.
@@ -134,7 +134,7 @@ class PredicateTest(unittest.TestCase):
 class _AbandonHarness(unittest.TestCase):
     """Real tmp git repo + a placeholder handoff under state/handoffs/.
     Monkeypatches only the CHAIN half's engine seams
-    (`_guard_exit_code`, `cc_invoke.route_mutation`) — `cs_close_handoff`
+    (`cc_invoke.route_mutation`) — `cs_close_handoff`
     and `_resolve_repo_root` stay real."""
 
     def setUp(self):
@@ -146,7 +146,6 @@ class _AbandonHarness(unittest.TestCase):
         self.handoff_path = self.repo_root / "state" / "handoffs" / "placeholder.md"
         self.handoff_path.write_text(_placeholder_text(), encoding="utf-8")
 
-        self._orig_guard = _cli._guard_exit_code
         self._orig_route_mutation = _cli.cc_invoke.route_mutation
         self.addCleanup(self._restore)
         self.route_calls: list[dict] = []
@@ -159,7 +158,6 @@ class _AbandonHarness(unittest.TestCase):
         _cli.cc_invoke.route_mutation = _stub_route_mutation
 
     def _restore(self):
-        _cli._guard_exit_code = self._orig_guard
         _cli.cc_invoke.route_mutation = self._orig_route_mutation
 
 
@@ -167,11 +165,9 @@ class AbandonSuccessTest(_AbandonHarness):
     def test_placeholder_baton_closes_then_chains(self):
         """AC7: an all-scaffold, carried_items-empty baton is closed
         (deployment_state: closed, closed_reason: cancelled — via the real,
-        in-process `cs_close_handoff`) and then chain-dispatched (guard
-        childless -> mode stamp_shipped), all rc 0. AC11: process time is
+        in-process `cs_close_handoff`) and then chain-dispatched (mode
+        stamp_shipped), all rc 0. AC11: process time is
         recorded, not asserted."""
-        _cli._guard_exit_code = lambda path, exclude: 1
-
         started = time.process_time()
         rc = _cli.cmd_abandon(str(self.handoff_path), "cancelled")
         elapsed_ms = (time.process_time() - started) * 1000
@@ -189,18 +185,22 @@ class AbandonSuccessTest(_AbandonHarness):
         self.assertNotIn("shipped_in:", text)
 
     def test_live_holder_retains_stays_closed_but_unarchived_rc0(self):
-        """AC8: a live claim holder makes `chain` retain (mode stamp_only) —
-        that is `chain`'s own retention contract, matching abandon's promise:
-        the record stays closed-but-unarchived (terminal) with rc 0."""
-        _cli._guard_exit_code = lambda path, exclude: 0  # has-children
-
-        rc = _cli.cmd_abandon(str(self.handoff_path), "displaced")
+        """A retained stamp_shipped envelope (live claim holder) is not a
+        failure: the baton stays closed on disk, unarchived, rc 0."""
+        self.route_result = {
+            "moved": False,
+            "retained": True,
+            "retain_reason": "live claim holder",
+            "retain_kind": "live-holder",
+        }
+        rc = _cli.cmd_abandon(str(self.handoff_path), "cancelled")
 
         self.assertEqual(rc, 0)
-        self.assertEqual(self.route_calls[0]["params"]["mode"], "stamp_only")
-        text = self.handoff_path.read_text(encoding="utf-8")
-        self.assertIn("deployment_state: closed", text)
-        self.assertIn("closed_reason: displaced", text)
+        self.assertEqual(self.route_calls[0]["params"]["mode"], "stamp_shipped")
+        self.assertTrue(self.handoff_path.exists())
+        self.assertIn(
+            "deployment_state: closed", self.handoff_path.read_text(encoding="utf-8")
+        )
 
 
 class AbandonRefusalTest(_AbandonHarness):

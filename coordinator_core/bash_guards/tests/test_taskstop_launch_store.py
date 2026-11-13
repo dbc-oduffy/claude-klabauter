@@ -94,3 +94,67 @@ def test_log_append():
     assert [r["outcome"] for r in rows] == ["ambiguous", "killed"]
     assert rows[0]["competing"] == ["t2"]
     assert rows[1]["killed"] == [[10, 20]]
+
+
+def _near_ticks(s: float) -> int:
+    return int(s * 1e7)
+
+
+def test_records_near_never_opens_old_mtime_records(_home, monkeypatch):
+    for i in range(20):
+        store.write_record(_rec(f"old{i}"))
+        _age_file(_home, f"old{i}", 3600)
+    store.write_record(_rec("sib"))
+    anchor = _rec("anchor")
+    opened = []
+    real = store._load
+    monkeypatch.setattr(store, "_load", lambda p: (opened.append(p.name), real(p))[1])
+    got = store.records_near(anchor.mark)
+    assert [r.task_id for r in got] == ["sib"]
+    assert opened == ["sib.json"]
+
+
+def test_records_near_returns_timed_out_shape(_home):
+    # Mark inside the window, mtime later: timed-out records are written after their mark.
+    anchor = _rec("anchor")
+    late = LaunchRecord("late", "s", "t", "c", anchor.mark - _near_ticks(1.0))
+    store.write_record(late)
+    assert [r.task_id for r in store.records_near(anchor.mark)] == ["late"]
+
+
+def test_records_near_boundary_sibling_returned_sorted(_home):
+    anchor = _rec("anchor")
+    edge_mark = anchor.mark - _near_ticks(2.25)
+    store.write_record(LaunchRecord("zz", "s", "t", "c", edge_mark))
+    store.write_record(LaunchRecord("aa", "s", "t", "c", anchor.mark))
+    p = _home / "taskstop-reaper" / "launches" / "zz.json"
+    t = (edge_mark - store.FILETIME_UNIX_EPOCH) / 1e7
+    import os
+
+    os.utime(p, (t, t))
+    assert [r.task_id for r in store.records_near(anchor.mark)] == ["aa", "zz"]
+
+
+def test_records_near_includes_record_when_stat_fails(_home, monkeypatch):
+    import os
+
+    store.write_record(_rec("sib"))
+    real = os.scandir
+
+    class _Entry:
+        def __init__(self, e):
+            self._e = e
+            self.name = e.name
+            self.path = e.path
+
+        def stat(self):
+            raise OSError("boom")
+
+    with monkeypatch.context() as m:
+        m.setattr(os, "scandir", lambda p: [_Entry(e) for e in real(p)])
+        got = store.records_near(_rec("a").mark)
+    assert [r.task_id for r in got] == ["sib"]
+
+
+def test_records_near_missing_store_is_empty():
+    assert store.records_near(_mark(0)) == []

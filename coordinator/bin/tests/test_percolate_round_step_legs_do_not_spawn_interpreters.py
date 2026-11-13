@@ -67,7 +67,11 @@ def _interpreter_spawn_argvs(tree: ast.AST) -> list:
             and isinstance(head.value, ast.Name)
             and head.value.id == "sys"
             and head.attr == "executable"
-        ) or (isinstance(head, ast.Name) and head.id == "python")
+        ) or (isinstance(head, ast.Name) and head.id == "python") or (
+            isinstance(head, ast.Call)
+            and isinstance(head.func, ast.Name)
+            and head.func.id == "_console_python"
+        )
         if starts_with_interpreter:
             found.append(node)
     return found
@@ -105,7 +109,7 @@ def test_the_display_only_reproduction_line_is_still_display_only():
     ever assigned, never called.
     """
     source = _ROUND_PY.read_text(encoding="utf-8")
-    assert f"{_DISPLAY_ONLY_TARGET} = [sys.executable" in source, (
+    assert f"{_DISPLAY_ONLY_TARGET} = [_console_python()" in source, (
         f"`{_DISPLAY_ONLY_TARGET}` no longer names the display-only reproduction "
         "line in `_run_step`; the exclusion in this file's spawn scan is now "
         "either dead or excusing something else. Re-read `_run_step` before "

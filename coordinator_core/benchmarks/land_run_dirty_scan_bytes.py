@@ -18,7 +18,6 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -32,22 +31,21 @@ import pytest  # noqa: E402
 
 from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed  # noqa: E402
+from coordinator_core.git.run import run_git  # noqa: E402
 
 FILES = 405
 CHANGED = 5
 VARIANTS = ("stat_dirty", "stat_clean")
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _BODY_LINES = 40
 
 
 def _git(root: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", "-c", "user.name=bench", "-c", "user.email=bench@example.invalid", "-c", "commit.gpgsign=false", *args],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        creationflags=_NO_WINDOW,
+    result = run_git(
+        ["-c", "user.name=bench", "-c", "user.email=bench@example.invalid", "-c", "commit.gpgsign=false", *args],
+        cwd=str(root),
     )
+    if result.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} exited {result.returncode}: {result.stderr.strip()}")
 
 
 def _rel(i: int) -> str:

@@ -40,6 +40,7 @@ _DEFAULT_ARGS = ("--include-unset",)
 _MISS = object()
 
 _CACHE: dict = {}
+_DUMP_MEMO: dict = {}
 _PROCESS_FLIGHT = threading.Lock()
 
 
@@ -158,11 +159,20 @@ def _registry_dir() -> str:
     override = os.environ.get("MACHINE_LOCAL_REGISTRY_DIR")
     if override:
         return override
+    return os.path.join(_settings_root(), "machine-local")
+
+
+def _settings_root() -> str:
     root = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if not root:
         home = os.environ.get("CLAUDE_HOME") or str(Path.home())
         root = os.path.join(home, ".coordinator-claude-settings")
-    return os.path.join(root, "machine-local")
+    return root
+
+
+def kernel_path() -> str:
+    """The `_machine_local.py` kernel under the settings home, same ladder as `_registry_dir`."""
+    return os.path.join(_settings_root(), "bin", "_machine_local.py")
 
 
 def _mtime(path: str):
@@ -232,7 +242,57 @@ def _load_kernel(impl: str):
     return mod
 
 
+def _stat_sig(path: str):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _layer_signature(impl: str, args: tuple) -> tuple | None:
+    """Everything the in-process dump reads: stat of the kernel and of every `*.toml` in the
+    registry dir (base, local and each concern layer), plus the env the resolver consults.
+    None when the registry dir cannot be listed, so the caller recomputes rather than trusts."""
+    reg = _registry_dir()
+    try:
+        with os.scandir(reg) as it:
+            layers = sorted(
+                (e.name, _stat_sig(e.path)) for e in it if e.name.endswith(".toml")
+            )
+    except FileNotFoundError:
+        layers = []
+    except OSError:
+        return None
+    env = tuple(
+        sorted(
+            (k, v)
+            for k, v in os.environ.items()
+            if k.startswith(("REPO_", "MACHINE_LOCAL_")) or k == "COORDINATOR_SETTINGS_HOME"
+        )
+    )
+    return (impl, args, reg, _stat_sig(impl), tuple(layers), env)
+
+
 def _dump_in_process(impl: str, args: tuple):
+    """(payload,) when the kernel answered in-process, else None (caller falls through).
+
+    A successful dump is memoized per process under `_layer_signature`, so N reads over an
+    unchanged registry cost one dump; a failed one is never memoized.
+    """
+    sig = _layer_signature(impl, args)
+    if sig is not None:
+        hit = _DUMP_MEMO.get((impl, args))
+        if hit is not None and hit[0] == sig:
+            return (dict(hit[1]),)
+    answered = _compute_dump_in_process(impl, args)
+    if sig is not None and answered is not None and answered[0] is not None:
+        _DUMP_MEMO[(impl, args)] = (sig, answered[0])
+        return (dict(answered[0]),)
+    return answered
+
+
+def _compute_dump_in_process(impl: str, args: tuple):
     """(payload,) when the kernel answered in-process, else None (caller falls through).
 
     payload is None when a key hit an operational failure, the same answer a `dump` exit
@@ -389,7 +449,7 @@ def _get_in_process(impl: str, key: str):
         mod = _load_kernel(impl)
         rc, val = mod.resolve_one(key, layers=None)
         if rc == mod.EXIT_OK:
-            return (val if val else None, True)
+            return (val if isinstance(val, str) else None, True)
         if rc == mod.EXIT_NOT_FOUND:
             return (None, True)
     except (SystemExit, Exception):
@@ -400,6 +460,8 @@ def _get_in_process(impl: str, key: str):
 def get(impl, key: str, *, in_process: bool = True):
     """(value | None, ok): ok is False only when the read itself failed, not on a clean absence.
 
+    A set-but-empty key reads "", never None; None means unset.
+
     A dump that fails or times out falls through to one `get` spawn, so the worst case is two
     bounded spawns (2 x ML_SPAWN_TIMEOUT_S); neither is retried.
     """
@@ -407,7 +469,7 @@ def get(impl, key: str, *, in_process: bool = True):
     payload = dump(impl, in_process=in_process)
     if payload is not None and key in payload:
         value = payload[key]
-        return (value if isinstance(value, str) and value else None), True
+        return (value if isinstance(value, str) else None), True
     if in_process and impl.endswith(".py"):
         answered = _get_in_process(impl, key)
         if answered is not None:
@@ -428,7 +490,7 @@ def _get_spawned(impl: str, key: str):
     if cp is None:
         return None, False
     if cp.returncode == 0:
-        return (cp.stdout.strip() or None), True
+        return cp.stdout.rstrip("\r\n"), True
     if cp.returncode == 1:
         return None, True
     return None, False

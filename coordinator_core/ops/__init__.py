@@ -570,6 +570,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.migrate_prose_queue", 'registers "fleet.migrate_prose_queue"'),
     ("coordinator_core.ops.fleet.archive_sizings", 'registers "fleet.archive_terminal_sizings"'),
     ("coordinator_core.ops.fleet.klabauter_freshness", 'registers "fleet.klabauter_freshness"'),
+    ("coordinator_core.ops.fleet.authoring_checkout_freshness", 'registers "fleet.authoring_checkout_freshness"'),
     (
         "coordinator_core.ops.orphan_branch_sweep",
         'registers "git_branch.compute_descendant_tip", "git_branch.detect_unpushed_commits", '
@@ -706,6 +707,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.distill_write_curated_clusters", 'registers "distill.write_curated_clusters"'),
     ("coordinator_core.ops.distill_apply_disposal", 'registers "distill.apply_disposal"'),
     ("coordinator_core.ops.crossrepo_closure_status", 'registers "crossrepo.closure_status"'),
+    ("coordinator_core.ops.ceremony.update_docs_worklist", 'registers "ceremony.update_docs_worklist"'),
     (
         "coordinator_core.ops.tracker.advance_status",
         'registers "tracker.advance_status" (provisional — see module docstring\'s '

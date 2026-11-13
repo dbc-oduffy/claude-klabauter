@@ -22,6 +22,9 @@ class _FakeVersionState:
     def is_skewed(self, client_token: str) -> bool:
         return False
 
+    def is_token_skewed(self, client_token: str) -> bool:
+        return self.is_skewed(client_token)
+
 
 def _repo(tmp_path, specs: int):
     repo = tmp_path / "repo"

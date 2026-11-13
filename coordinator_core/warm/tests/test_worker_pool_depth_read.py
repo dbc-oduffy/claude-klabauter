@@ -31,6 +31,9 @@ class _FakeVersionState:
     def is_skewed(self, client_token: str) -> bool:
         return False
 
+    def is_token_skewed(self, client_token: str) -> bool:
+        return self.is_skewed(client_token)
+
 
 def test_worker_pool_depth_reports_full_pool_size_on_fresh_boot():
     """A freshly started pool of `WORKER_POOL_SIZE` workers reports 30 live

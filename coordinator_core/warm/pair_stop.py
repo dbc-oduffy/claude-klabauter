@@ -172,7 +172,11 @@ def _read_line_with_deadline(fh, deadline_secs: float) -> "bytes | None":
 
 
 def _open_pipe(pipe: str):
-    return open(pipe, "r+b")
+    """Client end of the server endpoint: a named pipe on Windows, an AF_UNIX socket elsewhere,
+    where open() on the socket path fails and the ask would never reach the server."""
+    from coordinator_core.warm import client
+
+    return client._open_pipe(pipe)
 
 
 def _is_stop_acknowledgement(line: "bytes | None") -> bool:

@@ -368,7 +368,9 @@ def _ladder_snapshot(machine_local_bin: Path) -> Optional[Dict[str, str]]:
         return None
     from coordinator_core import machine_local_spawn
 
-    data = machine_local_spawn.dump(str(machine_local_bin), ("--prefix", "repos", "--format", "json"))
+    kernel = machine_local_spawn.kernel_path()
+    target = kernel if os.path.isfile(kernel) else str(machine_local_bin)
+    data = machine_local_spawn.dump(target, ("--prefix", "repos", "--format", "json"))
     if not data:
         return None
     return {k: v for k, v in data.items() if isinstance(v, str) and v}

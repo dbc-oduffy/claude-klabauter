@@ -279,6 +279,26 @@ def _stub_fold_bar_verdict(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stub_registry_integrity(request, monkeypatch):
+    """Round tests drive fixture source dirs whose commit carries no op registry and a fixed fake
+    shipped sha, so the registry-integrity read would refuse unreadable. A module sets
+    REAL_REGISTRY_INTEGRITY = True to exercise the real check."""
+    if getattr(request.module, "REAL_REGISTRY_INTEGRITY", False):
+        return
+    if _published_module_absent("coordinator_core.authz.registration_quad_static"):
+        return
+    from coordinator_core.authz import registration_quad_static
+
+    if not hasattr(registration_quad_static, "registry_module_absences"):
+        return
+    monkeypatch.setattr(registration_quad_static, "registry_module_absences", lambda *a, **k: [])
+    # Fixture source dirs are not always git repos; the check resolves the common dir before reading.
+    from coordinator_core import lifecycle
+
+    monkeypatch.setattr(lifecycle, "git_common_dir", lambda path: Path(path) / ".git")
+
+
+@pytest.fixture(autouse=True)
 def _stub_source_preflight(request, monkeypatch):
     """The round's source-published gate runs real git and a real push; the
     round tests fake the source dir. A module sets REAL_SOURCE_PREFLIGHT = True

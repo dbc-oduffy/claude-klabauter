@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.git import run as _git_run_module
 from coordinator_core.ops.dispatch_emit import run_artifacts as ra
+
+_REAL_RUN_GIT = _git_run_module.run_git
 
 RUN = "ask-20261016T120000-bbbbbb"
 OLD = "ask-20261016T100000-aaaaaa"
@@ -315,7 +318,7 @@ def test_record_dir_walk_skips_emitted_workflow_scripts_and_receipts(tmp_path):
     assert _tree_files(tmp_path, "state/warp/r1") == ["state/warp/r1/halted.json"]
 
 
-def test_record_dir_walk_skips_prompts_dir_but_keeps_siblings(tmp_path):
+def test_record_dir_walk_includes_prompts_dir_and_siblings(tmp_path):
     from coordinator_core.ops.dispatch_emit.run_artifacts import _tree_files
 
     rd = tmp_path / "state" / "warp" / "r1"
@@ -324,7 +327,52 @@ def test_record_dir_walk_skips_prompts_dir_but_keeps_siblings(tmp_path):
     (rd / "prompts" / "review-1.md").write_text("x", encoding="utf-8")
     (rd / "other" / "keep.md").write_text("x", encoding="utf-8")
     (rd / "halted.json").write_text("x", encoding="utf-8")
-    assert _tree_files(tmp_path, "state/warp/r1") == ["state/warp/r1/halted.json", "state/warp/r1/other/keep.md"]
+    assert _tree_files(tmp_path, "state/warp/r1") == [
+        "state/warp/r1/halted.json",
+        "state/warp/r1/other/keep.md",
+        "state/warp/r1/prompts/review-1.md",
+    ]
+
+
+def test_candidate_paths_classes_prompts_as_record_dir(graph):
+    prompt = f"state/warp/{RUN}/prompts/review-1.md"
+    _w(graph, prompt)
+    assert ra.candidate_paths(graph, RUN).class_of(prompt) == "record-dir"
+
+
+def _git(root: Path, *args: str) -> None:
+    import subprocess
+
+    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+
+def _repo(root: Path, monkeypatch) -> None:
+    monkeypatch.setattr(_git_run_module, "run_git", _REAL_RUN_GIT)
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "t")
+
+
+def test_record_dir_residue_names_modified_and_untracked_but_not_clean(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch)
+    rec = f"state/warp/{RUN}"
+    _w(tmp_path, f"{rec}/resume.json", "a")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "base")
+    assert ra.record_dir_residue(tmp_path, RUN) == []
+    _w(tmp_path, f"{rec}/resume.json", "b")
+    _w(tmp_path, f"{rec}/prompts/sub/p.md")
+    _w(tmp_path, "state/warp/other-run/x.json")
+    assert ra.record_dir_residue(tmp_path, RUN) == [f"{rec}/prompts/sub/p.md", f"{rec}/resume.json"]
+
+
+def test_record_dir_residue_is_empty_for_ignored_absent_or_unsafe(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch)
+    (tmp_path / ".gitignore").write_text("state/warp/\n", encoding="utf-8")
+    _w(tmp_path, f"state/warp/{RUN}/halted.json")
+    assert ra.record_dir_residue(tmp_path, RUN) == []
+    assert ra.record_dir_residue(tmp_path, "absent-run") == []
+    assert ra.record_dir_residue(tmp_path, "../x") == []
 
 
 def test_write_tracked_outcome_round_trips_outside_run_state(tmp_path):

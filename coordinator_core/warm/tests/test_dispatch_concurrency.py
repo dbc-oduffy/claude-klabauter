@@ -32,6 +32,9 @@ class _FakeVersionState:
     def is_skewed(self, client_token: str) -> bool:
         return False
 
+    def is_token_skewed(self, client_token: str) -> bool:
+        return self.is_skewed(client_token)
+
 
 def test_worker_loop_dispatches_through_the_process_pool_not_in_process(monkeypatch):
     captured: dict[str, object] = {}

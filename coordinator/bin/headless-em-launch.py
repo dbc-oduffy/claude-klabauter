@@ -32,8 +32,6 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 _REPO_ROOT = HERE.parents[1]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
 
 REFUSED = 2
 SESSION_ENV = "COORDINATOR_SESSION_ID"
@@ -154,6 +152,10 @@ def launch(family, extra, *, session_id=None, which=shutil.which, execv=os.execv
 
 
 def main(argv=None, **kw):
+    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import place_engine_root_on_path
+
+    place_engine_root_on_path(str(_REPO_ROOT))
     args = list(sys.argv[1:] if argv is None else argv)
     if args in ([], ["--help"], ["-h"]):
         print(__doc__)

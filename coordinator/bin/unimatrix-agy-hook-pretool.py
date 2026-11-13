@@ -247,9 +247,21 @@ def leg_current(conv, agy_pid, state=None):
     return agy_pid is not None and rec.get("agy_pid") == agy_pid and ls_reachable(rec.get("ls_address"))
 
 
+def _console_python():
+    """A real console CPython; the running image only when no resolver is beside this script (the hook never raises)."""
+    try:
+        spec = importlib.util.spec_from_file_location("unimatrix_pretool_python_interp", HERE / "lib" / "python_interp.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        found = mod.resolve_console_python()
+    except (OSError, ImportError, AttributeError):
+        found = None
+    return found or sys.executable
+
+
 def launcher_argv(conv, agy_pid):
     """Launcher command line; --agy-pid is omitted when no agy ancestor was found."""
-    argv = [sys.executable, str(LAUNCH), "--conversation", conv]
+    argv = [_console_python(), str(LAUNCH), "--conversation", conv]
     return argv + ["--agy-pid", str(agy_pid)] if agy_pid is not None else argv
 
 
@@ -387,7 +399,7 @@ def is_peer_reply(payload):
             tokens = list(lexer)
         except ValueError:
             return False
-    if len(tokens) < 2 or tokens[0] != sys.executable or tokens[1] != str(SEND_SCRIPT):
+    if len(tokens) < 2 or tokens[0] not in (sys.executable, _console_python()) or tokens[1] != str(SEND_SCRIPT):
         return False
     return os.name == "nt" or not any(t and set(t) <= set("();<>|&") for t in tokens)
 

@@ -5,6 +5,7 @@ envelope, the run records, and an exact spawn count (the submission starts no pr
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,7 @@ from coordinator_core.benchmarks.budget import load_manifest
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.ops import baton_pm_turns as pm_turns
-from coordinator_core.ops.dispatch_emit import ask_compose
+from coordinator_core.ops.dispatch_emit import ask_compose, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RELAYED_ASK_FILE, RUN_DIR_ROOT, record_dir
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -72,16 +73,31 @@ def _run_dirs(root: Path) -> list[Path]:
     return sorted(p for p in (root / RUN_DIR_ROOT).iterdir() if p.is_dir())
 
 
-def _assert_rewrite(env: dict, *, launcher: bool = False) -> dict:
+def _assert_rewrite(env: dict, *, launcher: bool = False, deferred: bool = False) -> dict:
+    """`launcher` (multi-ask, afab5e2bc1) and `deferred` (a plain raw ask: premint + deferred emit, 4625b1ff61)
+    rewrites carry `scriptPath` only; the script embeds what the run needs. A sizing rewrite carries `args`."""
     hso = env["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow", env
     updated = hso["updatedInput"]
     assert Path(updated["scriptPath"]).is_file()
-    if launcher:
+    if launcher or deferred:
         assert set(updated) == {"scriptPath"}, updated
     else:
         assert updated.get("args")
     return updated
+
+
+def _run_deferred_emit(updated: dict, repo: Path) -> dict:
+    """The emit a premint-deferred script's relay runs: `dispatch.emit` on the params file the script names."""
+    script = Path(updated["scriptPath"])
+    assert script.name.startswith("defer-")
+    literal = re.search(r"^const PARAMS_FILE = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1)
+    params = json.loads(Path(json.loads(literal)).read_text(encoding="utf-8"))
+    assert params["preminted_run_id"]
+    result = mod._default_emit(params, repo)
+    assert result["run_id"] == params["preminted_run_id"], result
+    assert run_token._record_path(repo, result["run_id"]).is_file()  # the premint marker is the hook's one record
+    return result
 
 
 def _all_git_run(spawns) -> None:
@@ -108,12 +124,13 @@ def test_raw_ask_submission_through_the_real_emit(repo, monkeypatch):
     assert pm_turns.append_turn("add the widget", session_id=sid, cwd=str(repo))["ok"]
     with _count_spawns_attributed(monkeypatch) as spawns:
         env = mod.evaluate(_payload(repo, {"ask": "add the widget", "source": "pm"}))
+        hook_spawns = len(spawns)
+        updated = _assert_rewrite(env, deferred=True)
+        assert not (repo / RUN_DIR_ROOT).exists() or not _run_dirs(repo)  # the hook emitted no run
+        run_id = _run_deferred_emit(updated, repo)["run_id"]
 
-    _assert_rewrite(env)
-    (run_dir,) = _run_dirs(repo)
-    assert (run_dir / "submission.json").is_file()
-    assert (record_dir(repo, run_dir.name) / ASK_TEXT_FILE).read_text(encoding="utf-8") == "add the widget"
-    assert len(spawns) == _budget("raw_ask_submission"), [s.argv for s in spawns]
+    assert (record_dir(repo, run_id) / ASK_TEXT_FILE).read_text(encoding="utf-8") == "add the widget"
+    assert hook_spawns == _budget("raw_ask_submission"), [s.argv for s in spawns]
     _all_git_run(spawns)
 
 
@@ -146,25 +163,23 @@ def test_asks_submission_through_the_real_fanout_and_emit(repo, monkeypatch):
 def test_relayed_ask_submission_writes_relayed_ask_beside_no_ask_md(repo, monkeypatch):
     with _count_spawns_attributed(monkeypatch) as spawns:
         env = mod.evaluate(_payload(repo, {"ask": "RELAYED-MARK add the widget", "source": "relayed"}))
+        hook_spawns = len(spawns)
+        run_id = _run_deferred_emit(_assert_rewrite(env, deferred=True), repo)["run_id"]
 
-    _assert_rewrite(env)
-    (run_dir,) = _run_dirs(repo)
-    assert (run_dir / "submission.json").is_file()
-    records = record_dir(repo, run_dir.name)
+    records = record_dir(repo, run_id)
     assert (records / RELAYED_ASK_FILE).read_text(encoding="utf-8") == "RELAYED-MARK add the widget"
     assert not (records / ASK_TEXT_FILE).exists()
-    assert not (run_dir / ASK_TEXT_FILE).exists()
-    assert len(spawns) == _budget("raw_ask_submission"), [s.argv for s in spawns]
+    assert not (repo / RUN_DIR_ROOT / run_id / ASK_TEXT_FILE).exists()
+    assert hook_spawns == _budget("raw_ask_submission"), [s.argv for s in spawns]
 
 
 def test_ask_with_inline_brief_reaches_the_real_emit(repo):
     env = mod.evaluate(_payload(repo, {"ask": "add the widget", "source": "pm", "brief": "BRIEF-MARK prefer small"}))
-    _assert_rewrite(env)
-    (run_dir,) = _run_dirs(repo)
+    run_id = _run_deferred_emit(_assert_rewrite(env, deferred=True), repo)["run_id"]
     assert any(
         "BRIEF-MARK" in p.read_text(encoding="utf-8", errors="ignore")
         for p in repo.rglob("*")
-        if p.is_file() and run_dir.name in str(p)
+        if p.is_file() and run_id in str(p)
     )
 
 

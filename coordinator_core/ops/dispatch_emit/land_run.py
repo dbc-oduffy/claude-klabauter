@@ -918,6 +918,12 @@ def _redeem_or_answer(
     if landed is not None:
         return landed
     if run_token.claim_pending(root, run_id, token, script_path):
+        if _own_ended_claim_released(root, run_id, token, script_path):
+            won = run_token.redeem_claim(root, run_id, token, script_path, budget_secs=budget)
+            if won is not None:
+                if token_state is not None:
+                    token_state["identity"] = won
+                return None
         return _error(
             "a first call of this run's landing still holds the run token claim and has not finished; "
             "this call committed nothing",
@@ -928,6 +934,17 @@ def _redeem_or_answer(
         "script (a token admits one landed commit). A run cut after review: pass params.run_id with "
         "--from-task-output <the run's task-output file>; its recorded land params are used",
         refused="run-token",
+    )
+
+
+def _own_ended_claim_released(root: Path, run_id: object, token: str, script_path: object) -> bool:
+    """True when the run is halted and the pending claim is this thread's own, left by an earlier
+    call that ended without settling it: released here so the halting run's commit can redeem."""
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.halted_run_route import _halted_marker
+
+    return _halted_marker(root, run_id) is not None and run_token.release_own_ended_claim(
+        root, run_id, token, script_path
     )
 
 
@@ -4243,22 +4260,20 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 recorded_reason[p] = "peer-held"
     from coordinator_core.ops.dispatch_emit import peer_hunk_gate as _phg
 
-    # A per-run artifact still co-declared after settle is withheld unless its sibling is halted; an
-    # UNREADABLE_PEER_CLAIMS sibling has unknown halt state and withholds too.
+    # A path still co-declared after settle is withheld unless its sibling is halted, so a live peer's
+    # hunks never ride this commit; an UNREADABLE_PEER_CLAIMS sibling has unknown halt state and withholds too.
     for f in findings:
-        if (
-            f.reason != _phg.PEER_HUNKS_CO_DECLARED or f.path not in paths or f.path in settled_stage
-            or not _cds.is_per_run_artifact(f.path)
-        ):
+        if f.reason != _phg.PEER_HUNKS_CO_DECLARED or f.path not in paths or f.path in settled_stage:
             continue
         sibling = f.detail.partition(":")[0]
         if sibling != _phg.UNREADABLE_PEER_CLAIMS and _cds.sibling_halted(root, sibling):
             continue
+        reason = "peer-held" if _cds.is_per_run_artifact(f.path) else f"withheld by {sibling}"
         paths.remove(f.path)
-        withhold_reason[f.path] = "peer-held"
+        withhold_reason[f.path] = reason
         named_out.add(f.path)
         if f.path in recorded_changed:
-            recorded_reason[f.path] = "peer-held"
+            recorded_reason[f.path] = reason
     for p, (hunks, holder, _partial) in list(halted_clear.items()):
         if p not in paths:
             continue
@@ -4298,6 +4313,30 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         run_base=run_base, minted_before=own_seniority, own_run_ids=(rid, sibling_run_id),
     )
     paths.extend(carried_targets)
+    # A run-edited file a landing file reads a changed name from rides the commit, or the landing refuses:
+    # never lands the importer without it.
+    withhold_why = {
+        **{p: "withheld" for p in held_paths}, **em_withheld, **art_withheld, **art_dropped, **recorded_reason,
+        **withhold_reason,
+    }
+    needed_carried, needed_refusal = _needed_path_gate(
+        root, paths, deleted,
+        {*(p for p in reviewed_bytes if isinstance(p, str)), *declared_changed, *art_withheld, *art_dropped},
+        reasons=withhold_why,
+        barred={*held_paths, *em_withheld, *withhold_reason, *art_withheld, *art_dropped, *recorded_reason},
+        session_id=session_id, rid=rid, script_path=script_path, plan_rel=request.plan_path,
+        run_base=run_base, minted_before=own_seniority, own_run_ids=(rid, sibling_run_id),
+    )
+    if needed_refusal:
+        _remove(root, receipt_paths)
+        first = needed_refusal[0]
+        return _error(
+            f"landing refused {NEEDED_PATH_OMITTED}: {first['path']} is changed by this run and read by "
+            f"{first['needed_by'][0]['importer']} ({first['needed_by'][0]['name']}), but is held by {first['holder']}; "
+            "land after that holder or release the path, then re-fire",
+            refused=NEEDED_PATH_OMITTED, paths=[r["path"] for r in needed_refusal], needed_by=needed_refusal,
+        )
+    paths.extend(needed_carried)
     tests_without_source = {
         **_tests_importing_dropped_modules(
             root, [p for p in paths if p not in tests_without_source],
@@ -4311,9 +4350,21 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     }
     if tests_without_source:
         paths[:] = [p for p in paths if p not in tests_without_source]
+        # A live peer's declared module stays the record: the importer's finding names who holds it.
+        peer_declared = {
+            p for p, _sibling in _phg.co_declared_peer_holds(
+                root, sibling_run_id or rid,
+                sorted({v.partition(": ")[2] for v in tests_without_source.values()}),
+                sorted({v.partition(": ")[2] for v in tests_without_source.values()}),
+                own_plan=request.plan_path,
+            )
+        }
         claim_provenance = [
             f for f in claim_provenance
-            if not (f.reason == _li_claims.IMPORT_CLOSURE_UNTRACKED and f.path in tests_without_source)
+            if not (
+                f.reason == _li_claims.IMPORT_CLOSURE_UNTRACKED and f.path in tests_without_source
+                and tests_without_source[f.path].partition(": ")[2] not in peer_declared
+            )
         ]
         withhold_reason.update(tests_without_source)
         named_out.update(tests_without_source)
@@ -4609,8 +4660,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             if not (isinstance(verified.get(p), str) and _worktree_blob(root, p) == verified[p])
         }
 
-    # An "inconclusive" overlay (no seeds, timeout, collection error) lands with an advisory; only red,
-    # missing and mismatch refuse.
+    # Only a measured "pre_existing" overlay lands with an advisory; red, inconclusive, missing and
+    # mismatch refuse.
     reach_dirt_foreign: dict = {}
     reach_dirt_overlay: dict = {}
     if measured is not None and merge_plan is None and not (anchor_only or request.review_only):
@@ -4676,7 +4727,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             if overlay.verdict == "mismatch":
                 overlay = clean_overlay_verify.reverify_on_mismatch(root, measured_run, measured, overlay)
             reach_dirt_overlay = {"verdict": overlay.verdict, "seeds": list(overlay.seeds)}
-            if overlay.verdict in ("inconclusive", "missing", "pre_existing"):
+            if overlay.verdict == "pre_existing":
                 reach_dirt_overlay["advisory"] = f"clean-overlay verdict {overlay.verdict}: {overlay.detail}"
                 # The landing is recoverable so it proceeds, but unverified: the trailer is what a release
                 # gate reads to list the commits the full-tree regate alone covers.
@@ -4689,10 +4740,14 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             elif overlay.verdict != "green":
                 _remove(root, receipt_paths)
                 _reap_measured_export(root, measured_run)
+                remedy = (
+                    f"Run {clean_overlay_verify.remedy_call(measured_run, root)} in the verify stage, then re-land"
+                    if measured_run and safe_id(measured_run)
+                    else "This run has no measured run: re-measure it in the verify stage, then re-land"
+                )
                 return _error(
                     f"landing refused: peer dirt is in the verified tests' reach and the clean-overlay verdict "
-                    f"is {overlay.verdict}: {overlay.detail}. Run "
-                    f"{clean_overlay_verify.remedy_call(measured_run)} in the verify stage, then re-land",
+                    f"is {overlay.verdict}: {overlay.detail}. {remedy}",
                     refused=VERIFY_OVERLAY_RED if overlay.red else VERIFY_OVERLAY_UNVERIFIED,
                     reach_dirt_foreign=reach_dirt_foreign,
                     paths=sorted(reach_dirt_foreign),
@@ -4908,6 +4963,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["shipped_claims"] = shipped_summary
     if claim_provenance:
         reply["provenance"] = _li_claims.provenance_entries(claim_provenance)
+    if needed_carried:
+        reply["needed_path_carried"] = needed_carried
     if deleted_notes:
         reply["targeted_tests_note"] = "; ".join(deleted_notes)
     reply.update(_fence_reply(fence))
@@ -5301,6 +5358,73 @@ def _land_merge_artifacts(root: Path, artifacts: dict, message: str, merge_sha: 
     return {"committed": True, "sha": out.sha}
 
 
+def _split_free_targets(
+    root: Path, targets: Collection[str], *, barred: Collection, session_id, rid, script_path, plan_rel, run_base,
+    minted_before, own_run_ids: Sequence,
+) -> tuple:
+    """``(free, holders)``: ``free`` the sorted targets no run withholds, peer holds or declares (safe to widen
+    into the landing); ``holders`` maps every other target to what keeps it out (a run id, session ids, or
+    ``barred`` for this run's own withhold)."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index, peer_hunk_gate
+
+    halted = halted_withheld_index.withheld_by_path(root)
+    own = {str(r) for r in own_run_ids if r}
+    holders: dict = {}
+    for t in targets:
+        if t in barred:
+            holders[t] = "barred"
+        elif t in halted and str(halted[t]) not in own:
+            holders[t] = str(halted[t])
+    free = sorted(t for t in targets if t not in holders)
+    held = _peer_held(
+        root, free, session_id, rid, script_path, plan_rel=plan_rel,
+        run_base=run_base if isinstance(run_base, str) else None, minted_before=minted_before,
+    ) if free else {}
+    # A module any unlanded peer declares (manifest or plan spine, whatever its seniority) is that run's to
+    # land: `_peer_held` reads no spine and holds only a senior peer.
+    # `own_run_ids` is (rid, sibling_run_id): the last non-empty id is passed so the sibling, when present, is
+    # the run excluded from the peer set.
+    declared_by_peer = {
+        p: sibling for p, sibling in peer_hunk_gate.co_declared_peer_holds(
+            root, next((r for r in reversed(list(own_run_ids)) if r), None), free, free, own_plan=plan_rel,
+        )
+    } if free else {}
+    for t in free:
+        if held.get(t):
+            holders[t] = ", ".join(sorted(held[t]))
+        elif t in declared_by_peer:
+            holders[t] = str(declared_by_peer[t])
+    return [t for t in free if t not in holders], holders
+
+
+NEEDED_PATH_OMITTED = "needed-path-omitted"
+
+
+def _needed_path_gate(
+    root: Path, paths: Sequence[str], deleted: Sequence[str], omitted: Collection[str], *, reasons: Mapping, **free_kw,
+) -> tuple:
+    """``(carry, refusal)``: each run-edited ``.py`` in ``omitted`` that a landing file imports or reads a
+    changed name from (``needed_path.needed_by``). ``carry`` lists the free ones (widen the landing);
+    ``refusal`` is the list of ``{path, needed_by, holder}`` for the ones a withhold, peer or duplicate run
+    keeps out, empty when none."""
+    from coordinator_core.ops.dispatch_emit import needed_path
+
+    wanted = sorted(p for p in omitted if p.endswith(".py") and p not in paths and p not in deleted and (root / p).is_file())
+    hits = needed_path.needed_by(root, list(paths), wanted) if wanted else {}
+    if not hits:
+        return [], []
+    carry, holders = _split_free_targets(root, set(hits), **free_kw)
+    refusal = [
+        {
+            "path": t,
+            "needed_by": [{"importer": imp, "name": name} for imp, name in hits[t]],
+            "holder": (reasons.get(t) or "withheld") if holders[t] == "barred" else holders[t],
+        }
+        for t in sorted(holders)
+    ]
+    return carry, refusal
+
+
 def _carry_withheld_symbol_targets(
     root: Path, provenance: Sequence, paths: Sequence[str], deleted: Sequence[str], *, barred: Collection,
     session_id, rid, script_path, plan_rel, run_base, minted_before, own_run_ids: Sequence,
@@ -5312,7 +5436,7 @@ def _carry_withheld_symbol_targets(
     out (withheld, held or barred) to ``TEST_WITHOUT_SOURCE: <target>`` for a test and
     ``LOST_DEFINITION: <target>`` otherwise; the caller removes it from the landing."""
     from coordinator_core.authoring_leaks import import_closure
-    from coordinator_core.ops.dispatch_emit import halted_withheld_index, landing_integrity as li
+    from coordinator_core.ops.dispatch_emit import landing_integrity as li
 
     pairs = import_closure.withheld_symbol_pairs(
         root, [
@@ -5322,22 +5446,15 @@ def _carry_withheld_symbol_targets(
     )
     if not pairs:
         return [], {}
-    halted = halted_withheld_index.withheld_by_path(root)
-    own = {str(r) for r in own_run_ids if r}
     out_of_landing = {
         t for t in set(pairs.values())
         if t not in paths and t not in deleted and (root / t).is_file()
     }
-    free = sorted(
-        t for t in out_of_landing
-        if t not in barred and not (t in halted and str(halted[t]) not in own)
+    carry, holders = _split_free_targets(
+        root, out_of_landing, barred=barred, session_id=session_id, rid=rid, script_path=script_path,
+        plan_rel=plan_rel, run_base=run_base, minted_before=minted_before, own_run_ids=own_run_ids,
     )
-    held = _peer_held(
-        root, free, session_id, rid, script_path, plan_rel=plan_rel,
-        run_base=run_base if isinstance(run_base, str) else None, minted_before=minted_before,
-    ) if free else {}
-    carry = [t for t in free if not held.get(t)]
-    stays_out = out_of_landing - set(carry)
+    stays_out = set(holders)
     dropped = {
         imp: f"{TEST_WITHOUT_SOURCE if _is_test_path(imp) else li.LOST_DEFINITION}: {tgt}"
         for imp, tgt in sorted(pairs.items())
@@ -5465,7 +5582,8 @@ def _integrity(
     from coordinator_core.ops.dispatch_emit import co_declared_settle
 
     # Non-retired job: hunk-level settlement (`stage` carries only this run's own hunks of a shared
-    # path) and the provenance record of what stays co-declared. Never a refusal (DR-474).
+    # path) and the provenance record of what stays co-declared; the caller withholds each still-held
+    # live-peer path from the commit. Never a refusal (DR-474).
     stage, still_held = co_declared_settle.settle(root, run_id, merge_ancestry_release.release(
         root, peer_hunk_gate.co_declared_peer_holds(
             root, run_id, live, own_declared, own_plan=plan, minted_before=minted_before,

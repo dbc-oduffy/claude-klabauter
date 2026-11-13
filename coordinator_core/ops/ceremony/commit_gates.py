@@ -70,7 +70,12 @@ from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from coordinator_core import machine_path_leak
 from coordinator_core.attribution import is_exempt_path, scan_added_lines
-from coordinator_core.authz.registration_quad_static import registration_violations
+from coordinator_core.authz.registration_quad_static import (
+    CONTRACT_JSON_PATHS,
+    SURFACE_PATHS,
+    registration_violations,
+    registry_module_absences,
+)
 from coordinator_core.claude_md_budget import budget_verdict
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_index import (
@@ -1202,14 +1207,31 @@ def registration_quad_gate(
     """Refuse a commit whose post-commit tree registers an op on fewer than all five surfaces.
 
     Filter-first: a commit touching no `coordinator_core/**.py` and no surface file skips
-    with no read. Unreadable or ambiguous surface files refuse.
+    with no read. Unreadable or ambiguous surface files refuse. A commit touching a surface
+    or contract json also refuses when the committed registry names a module the committed
+    tree (commit paths plus HEAD) cannot supply.
     """
     verdict = registration_violations(read_source, gate_paths)
+    if verdict.outcome == "refuse":
+        return GateOutcome(passed=False, skipped=False, diagnostics=[verdict.reason])
+    registry_touched = any(
+        p.replace("\\", "/") in SURFACE_PATHS or p.replace("\\", "/") in CONTRACT_JSON_PATHS
+        for p in gate_paths
+    )
+    if registry_touched:
+        absences = registry_module_absences(read_source, gate_paths)
+        if absences:
+            return GateOutcome(
+                passed=False,
+                skipped=False,
+                diagnostics=[
+                    "registry names module(s) absent from the committed tree: " + ", ".join(absences)
+                ],
+            )
+        return GateOutcome(passed=True, skipped=False, diagnostics=[])
     if verdict.outcome == "skip":
         return GateOutcome(passed=True, skipped=True, diagnostics=[])
-    if verdict.outcome == "pass":
-        return GateOutcome(passed=True, skipped=False, diagnostics=[])
-    return GateOutcome(passed=False, skipped=False, diagnostics=[verdict.reason])
+    return GateOutcome(passed=True, skipped=False, diagnostics=[])
 
 
 def claude_md_budget_gate(

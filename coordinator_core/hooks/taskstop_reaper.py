@@ -43,7 +43,7 @@ def _reap(payload: dict) -> None:
     if rec.session_id != payload.get("session_id"):
         _log(ReapRow(task_id, ReapOutcome.SESSION_MISMATCH))
         return
-    row = reap_launch(rec, store.all_records(), _snapshot, _kill)
+    row = reap_launch(rec, store.records_near(rec.mark), _snapshot, _kill)
     _log(row)
     if row.outcome in (ReapOutcome.KILLED, ReapOutcome.INCOMPLETE):
         store.delete_record(task_id)

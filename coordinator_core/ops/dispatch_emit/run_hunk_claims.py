@@ -328,6 +328,31 @@ def _released_holders(root: Path, run_id: str, path: str, holders: Mapping[str, 
     return {h for h in others if not attributable(h, [path])}
 
 
+def _own_lineage(root: Path, run_id: str, holders: Mapping[str, bool]) -> set[str]:
+    """Holders that are `run_id`'s own earlier attempts: its `resumed_from` chain, and any holder bound to
+    the same sizing (`ask_stage._chain_kin` reads the same kin). Their delta is the run's own claim, not a
+    competing one. Unreadable ledger records yield nothing (the holder competes)."""
+    others = [h for h in holders if h != run_id]
+    if not others:
+        return set()
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+    from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
+
+    kin = set(_resumed_chain(root, run_id)) & set(others)
+
+    def sizing_of(rid: str) -> Optional[str]:
+        try:
+            bound = (rl.read_run(rl.run_dir(root, rid)) or {}).get("sizing_rel")
+        except (OSError, ValueError, rl.LedgerRefused):
+            return None
+        return str(bound).replace("\\", "/") if isinstance(bound, str) and bound else None
+
+    mine = sizing_of(run_id)
+    if mine is not None:
+        kin |= {h for h in others if sizing_of(h) == mine}
+    return kin
+
+
 def _foreign_spans(root: Path, common_dir: Path, run_id: str, path: str, tree: list[bytes]) -> Optional[list[tuple[int, int]]]:
     """Worktree slots where `tree` differs from the run's recorded write print of `path`: `[]` when no
     print is recorded for the path (attribution unchanged), None when the print object is unreadable
@@ -356,11 +381,16 @@ def _split(root: Path, run_id: str, path: str, hunks: list[Hunk], holders: Mappi
     except FileNotFoundError:
         tree = []
     released = _released_holders(root, run_id, path, holders)
-    claimants = [run_id, *[h for h in holders if h != run_id and h not in released]]
+    lineage = _own_lineage(root, run_id, holders)
+    claimants = [run_id, *[h for h in holders if h != run_id and h not in released and h not in lineage]]
     deltas = {
         c: _claimant_delta(root, common_dir, c, path, tree, coarse_ok=c != run_id, absent_claims_all=c == run_id)
         for c in claimants
     }
+    if deltas[run_id] is not None:
+        for prior in lineage:
+            prior_delta = _claimant_delta(root, common_dir, prior, path, tree, coarse_ok=True)
+            deltas[run_id] = [*deltas[run_id], *(prior_delta or [])]
 
     split = HunkSplit()
     attributed: dict[str, list[Hunk]] = {}

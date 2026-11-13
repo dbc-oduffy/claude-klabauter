@@ -1838,6 +1838,16 @@ _DROP_EDITABLE_FINDER_SRC = (
     "    if 'coordinator_core' not in getattr(_f, '__module__', '')\n"
     "    and 'coordinator_core' not in type(_f).__module__\n"
     "]\n"
+    # This module shadows the interpreter's own sitecustomize (e.g. Homebrew's,
+    # which adds site-packages); chain it so the child keeps its site setup.
+    "import importlib.machinery as _m, importlib.util as _u, os as _os\n"
+    "_here = _os.path.dirname(_os.path.abspath(__file__))\n"
+    "_rest = [_p for _p in sys.path\n"
+    "         if _os.path.abspath(_p or _os.getcwd()) != _here]\n"
+    "_spec = _m.PathFinder.find_spec('sitecustomize', _rest)\n"
+    "if _spec is not None and _spec.loader is not None:\n"
+    "    _mod = _u.module_from_spec(_spec)\n"
+    "    _spec.loader.exec_module(_mod)\n"
 )
 
 

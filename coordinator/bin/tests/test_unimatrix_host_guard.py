@@ -425,3 +425,90 @@ def test_grok_deny_passes_through_as_engine(tmp_path, monkeypatch):
 def test_grok_invalid_engine_answer_degrades_to_neutral(tmp_path, monkeypatch):
     stub_shim(monkeypatch, {"decision": "deny"})
     assert hg.guard("grok", GROK_PAYLOAD, str(tmp_path)) == ({}, "degraded")
+
+
+# --- multi-file apply_patch through the real shim, adapter and guard validation ---------------------
+
+def _loose_repo(tmp_path, files):
+    import hashlib
+    import zlib
+
+    def obj(git, kind, payload):
+        raw = f"{kind} {len(payload)}".encode() + b"\0" + payload
+        sha = hashlib.sha1(raw).hexdigest()
+        path = git / "objects" / sha[:2] / sha[2:]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(zlib.compress(raw))
+        return sha
+
+    root = tmp_path / "repo"
+    git = root / ".git"
+    (git / "objects").mkdir(parents=True)
+    (git / "HEAD").write_text("ref: refs/heads/main\n")
+    body = b""
+    for name, text in sorted(files.items()):
+        (root / name).write_text(text)
+        body += b"100644 " + name.encode() + b"\0" + bytes.fromhex(obj(git, "blob", text.encode()))
+    tree = obj(git, "tree", body)
+    sha = obj(git, "commit", f"tree {tree}\nauthor a <a@b> 0 +0000\ncommitter a <a@b> 0 +0000\n\nm\n".encode())
+    (git / "refs" / "heads").mkdir(parents=True)
+    (git / "refs" / "heads" / "main").write_text(sha + "\n")
+    return root
+
+
+def _patch_text(*hunks):
+    return "*** Begin Patch\n" + "".join(hunks) + "*** End Patch"
+
+
+def _add_hunk(name, n):
+    return f"*** Add File: {name}\n" + "".join(f"+row {i}\n" for i in range(n))
+
+
+def _update_hunk(name, removed, added):
+    return (f"*** Update File: {name}\n@@\n" + "".join(f"-l{i}\n" for i in range(1, removed + 1))
+            + "".join(f"+new{i}\n" for i in range(added)))
+
+
+@pytest.fixture
+def warm_engine_in_process(tmp_path, monkeypatch):
+    """The warm dial answered in-process by the same `tool_policy.evaluate` the warm op runs."""
+    import tempfile
+
+    import coordinator_core.machine_profile as mp
+    from coordinator_core.host_hooks import shim, tool_policy
+    from coordinator_core.hooks import _em_write_budget as leaf
+    from coordinator_core.hooks import nudge_em_code_dispatch as budget_hook
+
+    sys_tmp = tmp_path / "sys-tmp"
+    sys_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(sys_tmp))
+    for target in (budget_hook, leaf):
+        monkeypatch.setattr(target, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+        monkeypatch.setattr(target, "_session_sizing_state", lambda payload, sid: (False, False))
+    monkeypatch.setattr(budget_hook, "resolve_mode", lambda key, sid: False)
+    monkeypatch.setattr(mp, "guard_level", lambda name: "warn")
+    monkeypatch.setattr(shim, "_dial", lambda request: {"result": tool_policy.evaluate(request["params"]["payload"])})
+    monkeypatch.setattr(shim, "DIAL_BUDGET_SECS", 10.0)  # the answer under test, not the dial wall, is pinned here
+    return _loose_repo(tmp_path, {"a.py": "".join(f"l{i}\n" for i in range(10)),
+                                  "b.py": "".join(f"l{i}\n" for i in range(10))})
+
+
+GUARD_PATCHES = [
+    ("add-add", [_add_hunk("bin/wordcount.py", 42), _add_hunk("tests/test_wordcount.py", 74)], "2/2 files, 116/30 lines"),
+    ("update-update", [_update_hunk("a.py", 5, 20), _update_hunk("b.py", 5, 20)], "2/2 files, 50/30 lines"),
+    ("add-update", [_add_hunk("bin/new.py", 20), _update_hunk("a.py", 5, 20)], "2/2 files, 45/30 lines"),
+]
+
+
+@pytest.mark.parametrize("name,hunks,totals", GUARD_PATCHES, ids=[p[0] for p in GUARD_PATCHES])
+def test_multi_file_apply_patch_guard_answer_is_the_budget_advisory_with_true_totals(
+        warm_engine_in_process, name, hunks, totals):
+    root = warm_engine_in_process
+    for session in ("sess-one", "sess-two"):
+        for _ in range(2):
+            payload = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "apply_patch", "session_id": session,
+                                  "cwd": str(root), "tool_input": {"command": _patch_text(*hunks)}})
+            answer, state = hg.guard("codex", payload, str(REPO), budget_secs=20.0)
+            assert state == "neutral-unknown" and answer != {}, (answer, state)
+            context = answer["hookSpecificOutput"]["additionalContext"]
+            assert context.count("XS budget spent") == 1 and totals in context, context

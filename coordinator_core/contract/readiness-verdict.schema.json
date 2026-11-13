@@ -90,6 +90,16 @@
       "maxLength": 1000,
       "description": "One-line statement of why the verdict holds."
     },
+    "anchor_base_ref": {
+      "type": "object",
+      "description": "The git ref every anchor check was evaluated against; present only when a base ref applied. source is the param or the run marker a revise set.",
+      "additionalProperties": false,
+      "required": ["ref", "source"],
+      "properties": {
+        "ref": { "type": "string" },
+        "source": { "type": "string", "enum": ["param", "run"] }
+      }
+    },
     "anchor_verdicts": {
       "type": "array",
       "description": "One entry per declared anchor premise, in declaration order; present whenever the plan declared at least one well-formed anchor. source says who supplied the verdict: a premise row, a live carry row, the in-process engine check, or none (verdict null).",

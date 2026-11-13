@@ -66,6 +66,9 @@ class _FakeVersionState:
     def is_skewed(self, client_token: str) -> bool:
         return self._skewed
 
+    def is_token_skewed(self, client_token: str) -> bool:
+        return self.is_skewed(client_token)
+
 
 def _frame(*, id_=1, method="ceremony.commit_v2", extra=None, token="client-token") -> bytes:
     msg = {"jsonrpc": "2.0", "id": id_, "method": method, "params": {}}

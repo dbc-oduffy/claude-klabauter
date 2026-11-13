@@ -3,11 +3,10 @@
 
 Same idiom as test_archive_stamp_cli_ship_handoff.py /
 test_archive_stamp_cli_chain_supersede_archive.py: monkeypatches the module's
-own seams (`_guard_exit_code`, `_resolve_repo_root`, `cc_invoke.route_mutation`)
-so this suite asserts ONLY the CLI's own dispatch logic — guard-result ->
-mode selection, opportunistic-vs-hard-fail error handling, argv parsing — not
-the engine behind `handoff.archive_transition` or `handoff.has_live_children`
-(those are coordinator_core's own test surfaces).
+own seams (`_resolve_repo_root`, `cc_invoke.route_mutation`)
+so this suite asserts ONLY the CLI's own dispatch logic — mode selection,
+opportunistic-vs-hard-fail error handling, argv parsing — not the engine
+behind `handoff.archive_transition` (coordinator_core's own test surface).
 
 exception: `ClosedTargetSupersedeChokePointTest`
 below deliberately does the opposite, calling the real op handler
@@ -79,7 +78,6 @@ class _RecordingRouteMutation:
 class _StubHarness(unittest.TestCase):
     def setUp(self):
         self._orig_route_mutation = _cli.cc_invoke.route_mutation
-        self._orig_guard = _cli._guard_exit_code
         self._orig_repo_root = _cli._resolve_repo_root
         self.addCleanup(self._restore)
 
@@ -93,7 +91,6 @@ class _StubHarness(unittest.TestCase):
 
     def _restore(self):
         _cli.cc_invoke.route_mutation = self._orig_route_mutation
-        _cli._guard_exit_code = self._orig_guard
         _cli._resolve_repo_root = self._orig_repo_root
         try:
             os.unlink(self.handoff_path)
@@ -166,8 +163,7 @@ class ChainSubcommandTest(_StubHarness):
         self.assertEqual(rc, 1)
         self.assertEqual(self.route_mutation.calls, [])
 
-    def test_childless_guard_selects_stamp_shipped(self):
-        _cli._guard_exit_code = lambda path, exclude: 1
+    def test_chain_selects_stamp_shipped(self):
         self.route_mutation.result = {"moved": True}
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 0)
@@ -175,22 +171,12 @@ class ChainSubcommandTest(_StubHarness):
         self.assertEqual(self.route_mutation.calls[0]["params"]["mode"], "stamp_shipped")
         self.assertEqual(self.route_mutation.calls[0]["op"], "handoff.archive_transition")
 
-    def test_has_children_guard_selects_stamp_only(self):
-        _cli._guard_exit_code = lambda path, exclude: 0
-        self.route_mutation.result = {}
+    def test_op_retained_envelope_returns_0(self):
+        self.route_mutation.result = {"moved": False, "retained": True, "retain_reason": "live children"}
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 0)
-        self.assertEqual(self.route_mutation.calls[0]["params"]["mode"], "stamp_only")
-
-    def test_indeterminate_guard_selects_stamp_only(self):
-        _cli._guard_exit_code = lambda path, exclude: 2
-        self.route_mutation.result = {}
-        rc = _cli.cmd_chain(self.handoff_path, [])
-        self.assertEqual(rc, 0)
-        self.assertEqual(self.route_mutation.calls[0]["params"]["mode"], "stamp_only")
 
     def test_exclude_forwarded(self):
-        _cli._guard_exit_code = lambda path, exclude: 1
         self.route_mutation.result = {"moved": True}
         rc = _cli.cmd_chain(self.handoff_path, ["state/handoffs/x.md", "state/handoffs/y.md"])
         self.assertEqual(rc, 0)
@@ -203,7 +189,6 @@ class ChainSubcommandTest(_StubHarness):
         """C1/AC1: an op-level refusal (RouteMutationError) is now a hard
         failure, not opportunistic-swallowed success — the mutation this
         call promised did not land, so rc must say so (plan § S5, site 4)."""
-        _cli._guard_exit_code = lambda path, exclude: 1
         self.route_mutation.exc = _cli.cc_invoke.RouteMutationError("refused", {"exit_code": 1})
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 1)
@@ -213,7 +198,6 @@ class ChainSubcommandTest(_StubHarness):
     # a RouteMutationError is a RuntimeError subclass, so the sibling test
     # above alone did not exercise the new `except RuntimeError` branch.
     def test_archive_transition_transport_failure_returns_1(self):
-        _cli._guard_exit_code = lambda path, exclude: 1
         self.route_mutation.exc = RuntimeError("transport down")
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 1)
@@ -223,30 +207,19 @@ class ChainSubcommandTest(_StubHarness):
         attempted, not a clean pass-through — cmd_chain refuses (rc 1)
         rather than reporting the same 0 a genuine archive would (plan
         § S5, site 2)."""
-        _cli._guard_exit_code = lambda path, exclude: 1
         _cli._resolve_repo_root = lambda path: None
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 1)
         self.assertEqual(self.route_mutation.calls, [])
 
-    def test_guard_spawn_failure_returns_1(self):
-        def _raise(path, exclude):
-            raise OSError("no interpreter")
-
-        _cli._guard_exit_code = _raise
-        rc = _cli.cmd_chain(self.handoff_path, [])
-        self.assertEqual(rc, 1)
-        self.assertEqual(self.route_mutation.calls, [])
-
     def test_archive_deferred_ambiguous_fails_loud(self):
-        """C1 negative-spec (Finding 3): a childless-guard 'stamp_shipped'
+        """C1 negative-spec (Finding 3): a 'stamp_shipped'
         dispatch whose op envelope reports no landing (`moved` falsy) AND
         whose on-disk re-read also shows no landing (the untouched empty
         tmp file this harness seeds by default) is genuinely ambiguous —
         neither the envelope nor the disk can distinguish a deliberate
         deferral from a failed move attempt — so this must fail loud (rc 1).
         Mirrors the shape of test_archive_transition_transport_failure_returns_1."""
-        _cli._guard_exit_code = lambda path, exclude: 1
         self.route_mutation.result = {
             "moved": False,
             "message": "deferred by policy",
@@ -270,7 +243,6 @@ class ChainSubcommandTest(_StubHarness):
         `shipped_in`) must return 0 with NO fail-loud message — the
         production incident this fix closes was exactly this shape."""
         self._seed_landed_chain_frontmatter("abc12345")
-        _cli._guard_exit_code = lambda path, exclude: 1
         self.route_mutation.result = {"moved": False}
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
@@ -290,7 +262,6 @@ class ChainSubcommandTest(_StubHarness):
         so a future edit cannot quietly widen the rescue into swallowing
         real failures."""
         self._seed_claimed_frontmatter()
-        _cli._guard_exit_code = lambda path, exclude: 1
         self.route_mutation.result = {"moved": False, "message": "git mv failed"}
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
@@ -304,7 +275,6 @@ class ChainSubcommandTest(_StubHarness):
     def test_sha_forwarded_when_supplied(self):
         """C3/AC5: `--sha` (threaded here as cmd_chain's `sha` param) must
         land in params["sha"] verbatim."""
-        _cli._guard_exit_code = lambda path, exclude: 1
         self.route_mutation.result = {"moved": True}
         rc = _cli.cmd_chain(self.handoff_path, [], sha="deadbeef")
         self.assertEqual(rc, 0)
@@ -313,7 +283,6 @@ class ChainSubcommandTest(_StubHarness):
     def test_force_forwarded_when_supplied(self):
         """C3/AC5: `--force` (threaded here as cmd_chain's `force` param)
         must land in params["force"] truthy."""
-        _cli._guard_exit_code = lambda path, exclude: 1
         self.route_mutation.result = {"moved": True}
         rc = _cli.cmd_chain(self.handoff_path, [], sha="deadbeef", force=True)
         self.assertEqual(rc, 0)
@@ -324,7 +293,6 @@ class ChainSubcommandTest(_StubHarness):
         leave `params` byte-identical to pre-chunk resolution — neither key
         is added at all, not merely falsy-valued. Pins the docstring's
         explicit 'byte-identical to before this chunk' claim (Position A)."""
-        _cli._guard_exit_code = lambda path, exclude: 1
         self.route_mutation.result = {"moved": True}
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 0)
@@ -463,7 +431,6 @@ class SupersedeSubcommandTest(_StubHarness):
 
 class MainArgvTest(_StubHarness):
     def test_chain_argv_dispatch(self):
-        _cli._guard_exit_code = lambda path, exclude: 1
         self.route_mutation.result = {"moved": True}
         rc = _cli.main(["chain", self.handoff_path])
         self.assertEqual(rc, 0)
@@ -488,7 +455,6 @@ class MainArgvTest(_StubHarness):
         confirm --sha/--force actually wire from the CLI through to the
         dispatched params — the argparse layer is untested by the
         cmd_chain-direct passthrough tests above."""
-        _cli._guard_exit_code = lambda path, exclude: 1
         self.route_mutation.result = {"moved": True}
         rc = _cli.main(["chain", self.handoff_path, "--sha", "cafebabe", "--force"])
         self.assertEqual(rc, 0)

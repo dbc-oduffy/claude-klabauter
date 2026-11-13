@@ -34,6 +34,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "handoff.human_gate_clear":              "common_dir",
     # Acts on the klabauter checkout and settings home, never the caller's worktree.
     "fleet.klabauter_freshness":             "none",
+    # Acts on every registered authoring checkout, never the caller's worktree.
+    "fleet.authoring_checkout_freshness":    "none",
     "orientation.regenerate_cache":          "common_dir",
     "ceremony.pickup":                      "show_top",
     "ceremony.handoff":                     "show_top",
@@ -622,6 +624,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "groupem.box_roster":                     "none",
     "groupem.suite_grant_receive":            "none",
     "groupem.box_key_pin":                    "none",
+    "groupem.box_key_pin_from_peer":          "none",
+    "groupem.suite_grant_revoke_receive":     "none",
     "workstream_complete.stand_down_watchers": "none",
     # session.work_state — read-only held/unclaimed corpus read over
     # state/handoffs/, which is main-worktree-rooted repo state -- exactly

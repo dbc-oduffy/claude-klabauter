@@ -466,6 +466,8 @@ def land(worktree_root: Path, repo_root: Path, params: dict) -> dict:
         if siblings is not None:
             refusal["siblings"] = siblings
         return refusal
+    if token is not None:
+        run_token.release_own_ended_claim(worktree_root, run_id, token, script_path)
     reply = _land(worktree_root, repo_root, params, run_id, record_dir_rel, halted)
     if token is not None:
         reply = _reconcile_landing(worktree_root, run_id, token, script_path, halted, reply)

@@ -262,13 +262,38 @@ def _stale_reason(root: Path, key: str) -> Optional[str]:
         return None
 
 
+def _naming_submitting_repo(payload: dict) -> dict:
+    """`payload` with the submitting session's anchor repo as the call's absolute `repo`, when that anchor and the
+    launch repo differ and the call names no `repo` of its own; else `payload` unchanged."""
+    from coordinator_core.bash_guards._write_bump_applicability import launch_anchor_disagreement
+
+    session = payload.get("session_id")
+    tool_input = payload.get("tool_input")
+    if not (isinstance(session, str) and session and isinstance(tool_input, dict)):
+        return payload
+    args = tool_input.get("args")
+    args = {"ask": args} if isinstance(args, str) and args.strip() else args
+    if not isinstance(args, dict) or args.get("repo"):
+        return payload
+    if any(isinstance(item, dict) and item.get("repo") for item in (args.get("asks") or ())):
+        return payload
+    cwd = payload.get("cwd")
+    env = payload.get("env") if isinstance(payload.get("env"), dict) else None
+    if env and env.get("CLAUDE_PROJECT_DIR"):
+        env = {**os.environ, **env}
+    disagree = launch_anchor_disagreement(session, cwd if isinstance(cwd, str) and cwd else None, env)
+    if not (disagree and Path(disagree[0]).is_absolute()):
+        return payload
+    return {**payload, "tool_input": {**tool_input, "args": {**args, "repo": str(Path(disagree[0]))}}}
+
+
 def _mint(root: Path, header: dict, payload: dict, evaluate: Optional[Evaluate], taken: set) -> str:
-    """Mint through the submit hook's own emit path; the run id, or _Refused."""
+    """Mint through the submit hook's own emit path, into the repo the ask was submitted from; the run id, or _Refused."""
     if evaluate is None:
         from coordinator_core.hooks.submit_engine_ask import evaluate as evaluate_fn
     else:
         evaluate_fn = evaluate
-    envelope = evaluate_fn(payload)
+    envelope = evaluate_fn(_naming_submitting_repo(payload))
     hso = envelope.get("hookSpecificOutput") if isinstance(envelope, dict) else None
     hso = hso if isinstance(hso, dict) else {}
     reason = str(hso.get("permissionDecisionReason") or "")

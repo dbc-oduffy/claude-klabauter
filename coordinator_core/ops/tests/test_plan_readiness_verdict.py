@@ -174,8 +174,12 @@ def test_coverage_must_be_an_object(tmp_path):
 def test_zero_dispatchable_rows_fail_spine_and_name_the_em_owned_rows(tmp_path):
     common = _plan(tmp_path)
     plan = tmp_path / REL
+    # A code-writing row routes to an executor even when it declares performer: em, so the
+    # EM-owned row writes a doc.
     plan.write_text(
-        plan.read_text(encoding="utf-8").replace("  disposition: open\n", "  disposition: open\n  performer: em\n"),
+        plan.read_text(encoding="utf-8")
+        .replace("  disposition: open\n", "  disposition: open\n  performer: em\n")
+        .replace("writes: [coordinator_core/ops/plan_prep_gate.py]", "writes: [docs/note.md]"),
         encoding="utf-8",
     )
     reply = op._handler({"plan": REL}, common)

@@ -25,6 +25,7 @@ noted):
   - `prune_claude_temp` (`startup` only; stamp check, then a detached
     `ops/prune_claude_temp.py` spawn)
   - `klabauter_freshness` (`startup` only; fetch, guarded fast-forward, installer re-run)
+  - `authoring_checkout_freshness` (`startup` only; fetch, lag report, safe ff-only)
 
 SOURCE-GATING lives here, because the caller is an http entry on the union
 matcher. The handler reads `payload["source"]`: a missing source runs no leg; a
@@ -97,6 +98,8 @@ _LEGS: "tuple[tuple[str, frozenset, Callable[[dict], object]], ...]" = (
      lambda p: _retention_run_leg(p)),
     ("klabauter_freshness", _STARTUP_ONLY,
      lambda p: _klabauter_freshness_leg(p)),
+    ("authoring_checkout_freshness", _STARTUP_ONLY,
+     lambda p: _authoring_checkout_freshness_leg(p)),
 )
 
 
@@ -139,6 +142,19 @@ def _klabauter_freshness_leg(payload_params: dict) -> "Optional[dict]":
 
         text = klabauter_freshness.surfaced_advisory(klabauter_freshness.run_freshness())
         return context_only("SessionStart", text) if text else None
+    except Exception:
+        return None
+
+
+def _authoring_checkout_freshness_leg(payload_params: dict) -> "Optional[dict]":
+    """Fetch, report lag and fast-forward safe authoring day branches (the async transport
+    carries the remote round trip). Returns the advisories joined, None when there are none.
+    Never raises."""
+    try:
+        from coordinator_core.ops.fleet import authoring_checkout_freshness
+
+        advisories = authoring_checkout_freshness.run(do_fetch=True).get("advisories") or []
+        return context_only("SessionStart", "\n".join(advisories)) if advisories else None
     except Exception:
         return None
 

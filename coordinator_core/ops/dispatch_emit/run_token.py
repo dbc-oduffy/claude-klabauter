@@ -937,6 +937,22 @@ def release(repo_root: Path, run_id: object, token: object, script_path: object)
     return True
 
 
+def release_own_ended_claim(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
+    """`release` for a matching claim recorded by this very process and thread: a thread runs one call
+    at a time, so a new call there finds the claiming call over (its settle never ran). False for a
+    claim any other thread or process holds, however live, and for no matching claim."""
+    if not _well_formed(run_id, token, script_path):
+        return False
+    record = _read_rec(repo_root, run_id, claimed=True)
+    if (
+        not _matches(record, run_id, token, script_path, repo_root)
+        or record.get("pid") != os.getpid()
+        or record.get("thread") != threading.get_ident()
+    ):
+        return False
+    return release(repo_root, run_id, token, script_path)
+
+
 def is_live(repo_root: Path, run_id: str) -> bool:
     """True while the run's record is unclaimed and inside its TTL."""
     record = _read_rec(repo_root, run_id)

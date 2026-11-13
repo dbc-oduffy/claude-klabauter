@@ -336,9 +336,12 @@ def pwsh_alias_first_problems(environ, platform):
     """A problem line on win32 when PATH resolves pwsh to a WindowsApps alias, which codex's sandbox cannot launch."""
     if platform != "win32":
         return []
-    root = str(HERE.parents[1])
-    if root not in sys.path:
-        sys.path.insert(0, root)
+    lib = str(HERE / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    from cc_invoke import place_engine_root_on_path
+
+    place_engine_root_on_path(str(HERE.parents[1]))
     from coordinator_core.codex_runner.sandbox_preflight import alias_first_pwsh
     alias = alias_first_pwsh(environ)
     if alias is None:

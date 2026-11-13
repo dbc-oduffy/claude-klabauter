@@ -189,7 +189,7 @@ class BrokerChannel(DirectChannel):
 
     def _spawn_detached(self):
         flags = _no_window() | getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "broker", "--box", self.box, "--host", self.host,
+        subprocess.Popen([_roster().console_python(), str(Path(__file__).resolve()), "broker", "--box", self.box, "--host", self.host,
                           "--key", self.key, "--home", str(self.home), *[f"--extra={e}" for e in self.extra]],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          creationflags=flags, close_fds=True)
@@ -259,7 +259,7 @@ def machine_local_value(name):
     if not reader.is_file():
         return ""
     try:
-        r = subprocess.run([sys.executable, str(reader), "get", name], capture_output=True, text=True, timeout=30,
+        r = subprocess.run([_roster().console_python(), str(reader), "get", name], capture_output=True, text=True, timeout=30,
                            creationflags=_no_window())
     except (OSError, subprocess.SubprocessError):
         return ""

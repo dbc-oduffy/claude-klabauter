@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import posixpath
 import subprocess
 import sys
 import tomllib
@@ -2120,7 +2121,10 @@ def test_authorized_keys_line_key_body_with_posix_and_windows_interpreters():
 
 
 class _FarBox(_PairBox):
-    """_PairBox whose ssh runs the stdin program locally under a fake HOME, as the far box would."""
+    """_PairBox whose ssh runs the stdin program locally under a fake HOME, as the far box would; the platform
+    the probe reports is the simulated far box's (`far_platform`, a posix box by default), never the host's."""
+
+    far_platform = "linux"
 
     def __init__(self, home, reply=None, **kw):
         super().__init__(**kw)
@@ -2138,9 +2142,18 @@ class _FarBox(_PairBox):
         self.sent.append(kw["input"])
         env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
                "COORDINATOR_SETTINGS_HOME": str(self.home / "fsh")}
-        r = subprocess.run([sys.executable, "-"], input=kw["input"], capture_output=True, text=True, env=env,
+        program = kw["input"]
+        # Trap: keyed on the installer program text; if it stops naming IsUserAnAdmin the stub
+        # no-ops and win32 results follow the host's real admin state again.
+        if "IsUserAnAdmin" in program:
+            program = ("import sys\nif sys.platform == 'win32':\n    import ctypes\n"
+                       "    ctypes.windll.shell32.IsUserAnAdmin = lambda: 0\n" + program)
+        r = subprocess.run([sys.executable, "-"], input=program, capture_output=True, text=True, env=env,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        return done(r.returncode, r.stdout)
+        out = r.stdout
+        if "import os, sys" in kw["input"] and "\t" in out:
+            out = self.far_platform + out[out.index("\t"):]
+        return done(r.returncode, out)
 
 
 def test_pair_installs_line_once_over_authorized_link(monkeypatch, tmp_path):
@@ -3085,8 +3098,8 @@ def test_control_install_over_link_records_the_probed_far_invocation(monkeypatch
     far.mkdir()
     assert ui.install_over_link("machine-a", "B", run=_FarBox(far), control=True, from_cidrs=["10.0.0.0/8"])[0] == "added"
     rec = _record(home, "machine-a")
-    assert rec == {"platform": sys.platform, "interpreter": sys.executable,
-                   "script": os.path.join(str(far / "fsh"), "unimatrix", "unimatrix-control.py"), "shell": "posix"}
+    assert rec == {"platform": "linux", "interpreter": sys.executable,
+                   "script": posixpath.join(str(far / "fsh"), "unimatrix", "unimatrix-control.py"), "shell": "posix"}
     assert not list((home / "unimatrix" / "control-far").glob("*.tmp"))
 
 

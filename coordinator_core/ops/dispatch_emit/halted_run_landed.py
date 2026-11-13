@@ -231,7 +231,7 @@ def _closed_trailers(root: Path, run_id: str, record_dir: Path) -> str:
 
 
 def _commit_records(root: Path, run_id: str, record_dir: Path, sha: str, verified: bool = False) -> dict:
-    """Commit the landed flip's record files (halted.json, run-stage.json) in one scoped commit naming *run_id*.
+    """Commit the landed flip's record files (halted.json, run-stage.json) plus every other changed or untracked path in the run's record dir (prompts/, resume.json) in one scoped commit naming *run_id*.
 
     ``verified`` (the sha was checked an ancestor of HEAD) adds ``Checkpoint-Run-Closed:`` trailers for the run's bases.
 
@@ -241,17 +241,19 @@ def _commit_records(root: Path, run_id: str, record_dir: Path, sha: str, verifie
     from coordinator_core.git.commit import CommitRefused, NothingToCommit, commit_paths
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_STAGE_FILE
+    from coordinator_core.ops.dispatch_emit.run_artifacts import record_dir_residue
 
     try:
-        rels = [
+        fixed = [
             (record_dir / name).relative_to(root).as_posix()
             for name in (halted_run.HALTED_FILE, RUN_STAGE_FILE)
             if (record_dir / name).is_file()
         ]
     except ValueError:
         return {}
-    if not rels or not rels[0].startswith("state/"):
+    if not fixed or not fixed[0].startswith("state/"):
         return {}
+    rels = sorted(set(fixed) | set(record_dir_residue(root, run_id)))
     try:
         outcome = commit_paths(
             root, rels,

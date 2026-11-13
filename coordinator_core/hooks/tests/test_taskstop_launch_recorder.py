@@ -156,6 +156,23 @@ def test_timed_out_read_only_search_incomplete_kill_keeps_record(seams):
     assert store.read_record("bgto1") is not None
 
 
+def test_timed_out_reap_opens_only_records_inside_the_window(seams, monkeypatch, _home):
+    kill, snaps, state = seams
+    old = time.time() - 3600
+    for i in range(300):
+        store.write_record(rec.LaunchRecord(f"old{i}", "s", "t", "grep -rn x .", _MARK))
+        os.utime(_home / "taskstop-reaper" / "launches" / f"old{i}.json", (old, old))
+    store.write_record(rec.LaunchRecord("sib", "s", "t", "grep -rn x .", _MARK))
+    state["rows"] = [_LIVE, *_tree(10), *_tree(20)]
+    opened = []
+    real = store._load
+    monkeypatch.setattr(store, "_load", lambda p: (opened.append(p.name), real(p))[1])
+    rec._handler({"payload": _timed_out_payload()})
+    assert opened == ["sib.json"]
+    assert kill.calls == []
+    assert store.read_record("bgto1") is not None
+
+
 def test_timed_out_read_only_search_no_candidate_keeps_record(seams):
     kill, snaps, state = seams
     state["rows"] = [_LIVE]

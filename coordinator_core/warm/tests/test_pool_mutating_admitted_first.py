@@ -11,6 +11,10 @@ from coordinator_core.ops.dispatch_emit import land_deadline
 from coordinator_core.warm import server
 
 
+# A read-only op that is neither hook-lane nor light: `ping` takes a reserved slot, so it never queues behind heavy holders.
+_HEAVY_READ_OP = "records.query"
+
+
 class _ManualPool:
     def __init__(self):
         self.submitted = []
@@ -125,7 +129,7 @@ def test_pool_dispatch_admits_waiting_land_before_waiting_read_and_stamps_submit
     first.start()
     assert _wait_for(lambda: len(pool.submitted) == 1)
 
-    read = threading.Thread(target=ctx._pool_dispatch, args=(_msg("ping"),))
+    read = threading.Thread(target=ctx._pool_dispatch, args=(_msg(_HEAVY_READ_OP),))
     read.start()
     time.sleep(0.1)
     land = threading.Thread(target=ctx._pool_dispatch, args=(_msg("dispatch.land_run"),))
@@ -139,7 +143,7 @@ def test_pool_dispatch_admits_waiting_land_before_waiting_read_and_stamps_submit
 
     pool.submitted[1].set_result({})
     assert _wait_for(lambda: len(pool.submitted) == 3)
-    assert pool.messages[2]["method"] == "ping"
+    assert pool.messages[2]["method"] == _HEAVY_READ_OP
     pool.submitted[2].set_result({})
     for t in (first, read, land):
         t.join(5)
@@ -153,7 +157,7 @@ def test_a_request_held_at_the_deadline_is_never_submitted(tmp_path, monkeypatch
     gate = ctx._admission_gate()
     assert gate.acquire(True, 1.0) == 0.0
 
-    out = ctx._pool_dispatch(_msg("ping"))
+    out = ctx._pool_dispatch(_msg(_HEAVY_READ_OP))
     assert len(pool.submitted) == 0
     assert out["error"]["code"] == server.INTERNAL_ERROR
     gate.release()

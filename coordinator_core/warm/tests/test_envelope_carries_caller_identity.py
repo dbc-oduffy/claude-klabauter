@@ -233,6 +233,9 @@ def test_serve_line_reads_the_widened_caller_object_and_threads_the_pid():
         def is_skewed(self, client_token: str) -> bool:
             return False
 
+        def is_token_skewed(self, client_token: str) -> bool:
+            return self.is_skewed(client_token)
+
     _warm_server._serve_line(
         raw,
         write=written.append,

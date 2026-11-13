@@ -37,9 +37,12 @@ def _neutral(host):
 
 def _load_shim(engine_root):
     """Import coordinator_core.host_hooks.shim with engine_root first on sys.path. Test seam."""
-    root = str(engine_root)
-    if root not in sys.path:
-        sys.path.insert(0, root)
+    lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    from cc_invoke import place_engine_root_on_path
+
+    place_engine_root_on_path(str(engine_root))
     from coordinator_core.host_hooks import shim
     return shim
 

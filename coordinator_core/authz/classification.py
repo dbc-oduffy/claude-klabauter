@@ -2823,6 +2823,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "fleet.archive_terminal_sizings": OpClass.MUTATING,
     "fleet.klabauter_freshness": OpClass.MUTATING,
+    "fleet.authoring_checkout_freshness": OpClass.MUTATING,
     # fleet.backfill_dispositionless_memos (C5,
     # docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md) — MUTATING:
     # writes realized_by/actioned_note frontmatter fields onto memos already resident
@@ -3021,6 +3022,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # pinned peer key under <settings-home>/state/group-em/.
     "groupem.suite_grant_receive": OpClass.MUTATING,
     "groupem.box_key_pin": OpClass.MUTATING,
+    # groupem.suite_grant_revoke_receive / box_key_pin_from_peer -- MUTATING: delete a relayed grant
+    # record; pin a member box's key (trust anchor, no weaker than box_key_pin).
+    "groupem.suite_grant_revoke_receive": OpClass.MUTATING,
+    "groupem.box_key_pin_from_peer": OpClass.MUTATING,
     # workstream_complete.stand_down_watchers -- MUTATING: kills this session's
     # attributed watcher trees and removes the Group EM holder record.
     "workstream_complete.stand_down_watchers": OpClass.MUTATING,
@@ -4813,6 +4818,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "fleet.archive_queue_entry": OpClass.MUTATING,
     # fleet.klabauter_freshness — fast-forwards the klabauter checkout and re-runs installers.
     "fleet.klabauter_freshness": OpClass.MUTATING,
+    # fleet.authoring_checkout_freshness — ff-only of each authoring checkout's day branch.
+    "fleet.authoring_checkout_freshness": OpClass.MUTATING,
     "fleet.archive_release_accumulator": OpClass.MUTATING,
     "fleet.migrate_handoff_vocabulary": OpClass.MUTATING,
     # fleet.migrate_prose_queue — ops/fleet/migrate_prose_queue.py: writes

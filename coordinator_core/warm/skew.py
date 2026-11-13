@@ -978,6 +978,14 @@ class ServerVersionState:
         self._last_skew_axes = tuple(axes)
         return bool(axes)
 
+    def is_token_skewed(self, client_token: str) -> bool:
+        """Axis 1 alone: the client's live primary token disagrees with this server's.
+
+        The publish swap-window branch of `warm.server` asks this instead of `is_skewed`: the copy
+        raises axis 2 (source stale) on the pair that must keep answering until its successor does,
+        so axis 2 must not refuse there. Sets no `last_skew_axes`: this path never evicts."""
+        return compute_client_token(self._root) != client_token
+
     @property
     def last_skew_axes(self) -> tuple:
         """The axes that decided the most recent `is_skewed` call -- a

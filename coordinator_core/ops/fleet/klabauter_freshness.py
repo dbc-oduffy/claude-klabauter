@@ -8,6 +8,7 @@ tree once. Mutates the checkout and installed copies, so it is not COMPUTE_ONLY.
 
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 from typing import Optional
 
@@ -19,26 +20,46 @@ SURFACED_ADVISORY = (
 )
 
 
-def resolve_checkout() -> Path:
-    """The klabauter checkout: the registered engine source tree, else this module's repo."""
-    from coordinator_core.engine_root import engine_source_root
+def resolve_checkout() -> tuple[Optional[Path], str]:
+    """The box's klabauter clone and the remediation to quote when there is none.
 
-    source = engine_source_root()
-    return Path(source) if source else Path(__file__).resolve().parents[3]
+    Never falls back to this module's own tree: that is the claude-klabauter checkout, not klabauter.
+    """
+    from coordinator_core.install.engine_root_for_install import resolve_engine_root_for_install
+
+    resolved = resolve_engine_root_for_install()
+    if resolved.kind == "none" or resolved.root is None:
+        return None, resolved.remediation or ""
+    return Path(resolved.root), ""
 
 
 def run_freshness(do_fetch: bool = True, checkout: Optional[Path] = None) -> dict:
-    """Run one freshness pass; returns `FreshnessResult.to_dict()`."""
+    """Run one freshness pass; returns `FreshnessResult.to_dict()`.
+
+    With no `checkout` and no resolvable klabauter clone, returns a `current` result whose
+    `reason` names `repos.claude_klabauter` and carries the remediation; nothing is probed.
+    """
     from coordinator_core._settings_home import settings_home
     from coordinator_core.engine_root import coordinator_engine_root
-    from coordinator_core.install.klabauter_freshness_apply import apply_freshness
+    from coordinator_core.install.klabauter_freshness_apply import (
+        FreshnessResult,
+        apply_freshness,
+    )
+
+    if checkout is None:
+        checkout, remediation = resolve_checkout()
+        if checkout is None:
+            return FreshnessResult(
+                hostname=socket.gethostname(),
+                reason=f"repos.claude_klabauter is unresolved: {remediation}",
+            ).to_dict()
 
     try:
         engine = Path(coordinator_engine_root())
     except RuntimeError:
         engine = None
     result = apply_freshness(
-        checkout or resolve_checkout(),
+        checkout,
         settings_home(),
         do_fetch=do_fetch,
         engine_root=engine,

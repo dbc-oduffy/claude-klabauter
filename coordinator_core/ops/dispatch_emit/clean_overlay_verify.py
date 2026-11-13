@@ -43,8 +43,8 @@ _OUTPUT_TAIL = 2000
 @dataclass(frozen=True)
 class OverlayVerdict:
     """`verdict` is "green" (tests ran and passed), "red" (a test failed), "pre_existing" (every failing test
-    also fails at the base sha: lands with an advisory) or "inconclusive" (no overlay or no test ran: never a
-    refusal). `detail` is the tail of the runner output or the reason."""
+    also fails at the base sha: lands with an advisory) or "inconclusive" (no overlay or no test ran: land_run
+    refuses it like "missing"). `detail` is the tail of the runner output or the reason."""
 
     verdict: str
     detail: str = ""
@@ -288,8 +288,8 @@ def write_verdict(root: Path, run_id: str, measured: dict, outcome: OverlayVerdi
 
 def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
     """Read the run's overlay verdict for the `measured` record. One file read, no spawn: "green" or "red"
-    (or "inconclusive" / "pre_existing", which land_run lands with an advisory) when a verdict keyed to exactly this landing
-    set and base sha exists; otherwise "missing" (no file) or
+    (or "inconclusive", which land_run refuses, / "pre_existing", which it lands with an advisory) when a verdict
+    keyed to exactly this landing set and base sha exists; otherwise "missing" (no file, refused) or
     "mismatch" (keyed to a different landing set or base sha; `detail` says which side moved)."""
     try:
         data = json.loads(verdict_path(root, run_id).read_text(encoding="utf-8"))

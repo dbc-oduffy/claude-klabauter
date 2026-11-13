@@ -856,6 +856,17 @@ _EXPECTED_CLAIM_INDEX_ANSWER_CALL_SITES = frozenset(
             "coordinator_core/ops/session/safe_commit_offer.py",
             "_reconcile_offer",
         ),
+        # research.close's deliverability check: partitions the untracked docs/research strays into
+        # "this session holds the sole claim" (refuse the close) and everything else (a peer's, listed
+        # as `peer_files`, never refused). The claim is only ever read to NARROW the refusal to the
+        # caller's own writes; no session id means nothing is own, and it never adds a path to a
+        # pathspec. Not routable through compute_offer: that answers "what do I commit", this answers
+        # "did I leave files outside the run dir" before any commit exists.
+        (
+            "commit_set",
+            "coordinator_core/ops/research_close.py",
+            "_own_strays",
+        ),
     }
 )
 

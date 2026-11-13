@@ -15,6 +15,27 @@ from coordinator_core.ops.check_machine_local_regeneratability import (
 from coordinator_core.testing.fake_machine_local import write_fake_machine_local
 
 
+@pytest.fixture(autouse=True)
+def _isolated_settings_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+
+
+def test_ladder_snapshot_dumps_via_kernel_when_present_else_forwarder(tmp_path, monkeypatch):
+    from coordinator_core import machine_local_spawn
+    from coordinator_core.ops.check_machine_local_regeneratability import _ladder_snapshot
+
+    seen = []
+    monkeypatch.setattr(machine_local_spawn, "dump", lambda impl, args=(), **kw: seen.append(impl) or {})
+    forwarder = tmp_path / "machine-local"
+    forwarder.write_text("")
+    _ladder_snapshot(forwarder)
+    kernel = tmp_path / "settings-home" / "bin" / "_machine_local.py"
+    kernel.parent.mkdir(parents=True)
+    kernel.write_text("")
+    _ladder_snapshot(forwarder)
+    assert seen == [str(forwarder), str(kernel)]
+
+
 def _make_claude_dir(tmp_path):
     ml_dir = tmp_path / ".claude" / "machine-local"
     ml_dir.mkdir(parents=True)

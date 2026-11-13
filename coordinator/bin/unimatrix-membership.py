@@ -253,7 +253,13 @@ def _check_chain(snap, held):
 
 def _ssh_verify(canon, sig, pin_text, run):
     kind, body, _ = _pin_fields(pin_text)
-    tmp = tempfile.mkdtemp(prefix="unimatrix-verify-")
+    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import ensure_engine_on_path
+
+    ensure_engine_on_path(__file__)
+    from coordinator_core.temp_layout import managed_tempdir
+
+    tmp = tempfile.mkdtemp(prefix="unimatrix-verify-", dir=managed_tempdir())
     try:
         allowed = Path(tmp) / "allowed_signers"
         sigfile = Path(tmp) / "snapshot.sig"

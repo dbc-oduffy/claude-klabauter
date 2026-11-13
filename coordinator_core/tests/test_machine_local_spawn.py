@@ -195,6 +195,141 @@ def test_get_serves_from_the_dump_and_reads_absence_in_process(tmp_path, monkeyp
     assert mls.get(str(KERNEL), "nothing.here") == (None, True)
 
 
+def _kernel_env(tmp_path, monkeypatch, toml: str) -> None:
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    (reg / "registry.local.toml").write_text(toml, encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.setenv(locked_write.MACHINE_LOCK_ROOT_ENV, str(tmp_path / "locks"))
+    mls._CACHE.clear()
+
+
+def test_get_distinguishes_set_but_empty_from_unset_on_every_path(tmp_path, monkeypatch):
+    _kernel_env(tmp_path, monkeypatch, 'alpha = "one"\nbeta = ""\n')
+    impl = str(KERNEL)
+    # dump branch, in-process then spawned dump
+    assert mls.get(impl, "beta") == ("", True)
+    mls._CACHE.clear()
+    assert mls.get(impl, "beta", in_process=False) == ("", True)
+    # a key absent from the dump: in-process get, and the get spawn
+    assert mls._get_in_process(impl, "beta") == ("", True)
+    assert mls._get_spawned(impl, "beta") == ("", True)
+    assert mls._get_in_process(impl, "alpha") == ("one", True)
+    assert mls._get_spawned(impl, "alpha") == ("one", True)
+    # unset stays None on both
+    assert mls._get_in_process(impl, "gamma.none") == (None, True)
+    assert mls._get_spawned(impl, "gamma.none") == (None, True)
+    assert mls.get(impl, "gamma.none") == (None, True)
+
+
+def _count_layer_builds(monkeypatch) -> list:
+    builds: list = []
+    real_load = mls._load_kernel
+
+    def load(impl):
+        mod = real_load(impl)
+        real_build = mod._build_resolution_layers
+
+        def build(*a, **k):
+            builds.append(1)
+            return real_build(*a, **k)
+
+        mod._build_resolution_layers = build
+        return mod
+
+    monkeypatch.setattr(mls, "_load_kernel", load)
+    return builds
+
+
+def test_twenty_six_gets_over_an_unchanged_registry_dump_once(tmp_path, monkeypatch):
+    _kernel_env(tmp_path, monkeypatch, 'alpha = "one"\nbeta = ""\n')
+    mls._DUMP_MEMO.clear()
+    builds = _count_layer_builds(monkeypatch)
+    impl = str(KERNEL)
+    for _ in range(26):
+        assert mls.get(impl, "alpha") == ("one", True)
+    assert len(builds) == 1
+    assert mls.get(impl, "beta") == ("", True)
+    assert len(builds) == 1
+    assert mls.get(impl, "gamma.none") == (None, True)
+
+
+@pytest.mark.parametrize("layer", ["registry.toml", "registry.local.toml", "net.local.toml"])
+def test_touching_any_layer_file_invalidates_the_dump_memo(tmp_path, monkeypatch, layer):
+    _kernel_env(tmp_path, monkeypatch, 'alpha = "one"\n')
+    reg = tmp_path / "reg"
+    (reg / "registry.toml").write_text('concerns = ["net"]\n', encoding="utf-8")
+    (reg / "net.local.toml").write_text('[net]\nhost = "a"\n', encoding="utf-8")
+    mls._DUMP_MEMO.clear()
+    builds = _count_layer_builds(monkeypatch)
+    impl = str(KERNEL)
+    assert mls.get(impl, "net.host") == ("a", True)
+    assert mls.get(impl, "net.host") == ("a", True)
+    assert len(builds) == 1
+    target = reg / layer
+    before = target.stat()
+    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns + 5_000_000_000))
+    assert mls.get(impl, "net.host") == ("a", True)
+    assert len(builds) == 2
+    # a size change with the mtime pinned back also invalidates
+    text = target.read_text(encoding="utf-8")
+    mtime = target.stat().st_mtime_ns
+    target.write_text(text + "# pad\n", encoding="utf-8")
+    os.utime(target, ns=(mtime, mtime))
+    mls.get(impl, "net.host")
+    assert len(builds) == 3
+    assert mls.get(impl, "net.host") == ("a", True)
+    assert len(builds) == 3
+
+
+def test_dump_memo_serves_a_copy_and_follows_a_changed_value(tmp_path, monkeypatch):
+    _kernel_env(tmp_path, monkeypatch, 'alpha = "one"\n')
+    impl = str(KERNEL)
+    mls._DUMP_MEMO.clear()
+    first = mls.dump(impl)
+    first["alpha"] = "mutated"
+    assert mls.dump(impl) == {"alpha": "one"}
+    local = tmp_path / "reg" / "registry.local.toml"
+    local.write_text('alpha = "two"\n', encoding="utf-8")
+    assert mls.get(impl, "alpha") == ("two", True)
+
+
+def test_get_dump_branch_maps_an_unset_none_value_to_none(env):
+    assert mls.get(env["stub"], "repos.b", in_process=False) == (None, True)
+    assert mls.get(env["stub"], "repos.a", in_process=False) == ("/x/a", True)
+
+
+def test_get_spawned_strips_only_the_trailing_newline(env, tmp_path):
+    impl = tmp_path / "_echo.py"
+    impl.write_text('print("  padded  ")\n', encoding="utf-8")
+    assert mls._get_spawned(str(impl), "k") == ("  padded  ", True)
+
+
+def test_repos_reads_agree_in_process_and_spawned(tmp_path, monkeypatch):
+    _kernel_env(tmp_path, monkeypatch, 'alpha = "one"\n')
+    sibling = tmp_path / "sib"
+    sibling.mkdir()
+    monkeypatch.setenv("REPO_ZZPIN", str(sibling))
+    impl = str(KERNEL)
+    in_proc = mls._get_in_process(impl, "repos.zzpin")
+    spawned = mls._get_spawned(impl, "repos.zzpin")
+    assert in_proc is not None and in_proc[1] is True and in_proc[0]
+    assert in_proc == spawned
+    monkeypatch.setenv("REPO_ZZPIN", str(tmp_path / "missing"))
+    assert mls._get_in_process(impl, "repos.zzpin") is None
+    assert mls._get_spawned(impl, "repos.zzpin")[1] is False
+
+
+def test_kernel_path_honours_settings_home_then_claude_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
+    assert mls.kernel_path() == str(tmp_path / "sh" / "bin" / "_machine_local.py")
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME")
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "ch"))
+    expected = tmp_path / "ch" / ".coordinator-claude-settings" / "bin" / "_machine_local.py"
+    assert mls.kernel_path() == str(expected)
+
+
 def test_get_falls_back_to_one_bounded_spawn(env, monkeypatch):
     monkeypatch.setenv("STUB_SLEEP", "30")
     monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 0.6)

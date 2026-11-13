@@ -413,15 +413,15 @@ def test_land_run_refuses_a_red_verdict(halted, monkeypatch):  # noqa: F811
     assert _git(halted, "log", "-1", "--format=%s").strip() == "fixture"
 
 
-def test_land_run_lands_on_an_inconclusive_verdict_with_an_advisory(halted, monkeypatch):  # noqa: F811
+def test_land_run_refuses_an_inconclusive_verdict(halted, monkeypatch):  # noqa: F811
     _no_spawn(monkeypatch)
 
     _, result = _dirty_land(halted, "inconclusive")
 
-    assert result["committed"] is True, result
-    assert result["clean_overlay_verify"]["verdict"] == "inconclusive"
-    assert "inconclusive" in result["clean_overlay_verify"]["advisory"]
-    assert _git(halted, "log", "-1", "--format=%(trailers:key=Overlay,valueonly)").strip().startswith("inconclusive"), _git(halted, "log", "-1", "--format=%B")
+    assert result["committed"] is False
+    assert result["refused"] == "verify-overlay-unverified", result
+    assert "inconclusive" in result["error"], result
+    assert _git(halted, "log", "-1", "--format=%s").strip() == "fixture"
     assert FIXTURE in result["reach_dirt_foreign"]
 
 
@@ -446,16 +446,14 @@ def test_land_run_reverifies_a_mismatched_verdict_and_lands_when_pre_existing(ha
     assert result["clean_overlay_verify"]["verdict"] == "pre_existing"
 
 
-def test_land_run_lands_a_missing_verdict_with_an_advisory(halted, monkeypatch):  # noqa: F811
+def test_land_run_refuses_a_missing_verdict(halted, monkeypatch):  # noqa: F811
     _no_spawn(monkeypatch)
 
     _, result = _dirty_land(halted, None)
 
-    assert result["committed"] is True, result
-    assert not result.get("refused")
-    assert result["clean_overlay_verify"]["verdict"] == "missing"
-    assert "missing" in result["clean_overlay_verify"]["advisory"]
-    assert _git(halted, "log", "-1", "--format=%(trailers:key=Overlay,valueonly)").strip().startswith("missing"), _git(halted, "log", "-1", "--format=%B")
+    assert result["committed"] is False
+    assert result["refused"] == "verify-overlay-unverified", result
+    assert _git(halted, "log", "-1", "--format=%s").strip() == "fixture"
     assert FIXTURE in result["reach_dirt_foreign"]
 
 

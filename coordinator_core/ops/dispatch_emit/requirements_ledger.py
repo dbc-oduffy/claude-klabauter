@@ -37,6 +37,7 @@ from coordinator_core.ops import method_step, requirement_register as rr
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_SOURCE_RELAYED,
+    BASE_REF_FILE,
     CLAIM_PARAM,
     EMPTY_REGISTER_REASON,
     LATE_ROWS_FIELD,
@@ -112,6 +113,7 @@ _PARAMS = (
     Field("retract_row", "dict"),
     Field("build_only", "bool"),
     Field("stop_after", "str"),
+    Field("base_ref", "str"),
     Field("from", "str"),
     Field(CLAIM_PARAM, "bool"),
     Field("halted", "dict"),
@@ -304,16 +306,21 @@ def _inbox(dir_: Path) -> list[dict]:
 def carry_inbox(repo_root: Path, from_run_ids: Iterable[str], to_run_id: str) -> int:
     """Append the queued revisions filed under `from_run_ids` that `to_run_id`'s inbox lacks (matched on
     stripped text); the count appended. Unsafe ids and missing dirs carry nothing."""
+    return len(carry_inbox_entries(repo_root, from_run_ids, to_run_id))
+
+
+def carry_inbox_entries(repo_root: Path, from_run_ids: Iterable[str], to_run_id: str) -> list[dict]:
+    """`carry_inbox`, answering the appended entries (`{text, at, from?}`, `source` added) so a caller can name them."""
     from coordinator_core.atomic_append import append_line
 
     try:
         dest = run_dir(repo_root, to_run_id)
     except LedgerRefused:
-        return 0
+        return []
     if not dest.is_dir():
-        return 0
+        return []
     have = {e["text"].strip() for e in _inbox(dest)}
-    carried = 0
+    carried: list[dict] = []
     for source_id in from_run_ids:
         if source_id == to_run_id:
             continue
@@ -327,10 +334,47 @@ def carry_inbox(repo_root: Path, from_run_ids: Iterable[str], to_run_id: str) ->
                 continue
             append_line(dest / INBOX_FILE, (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
             have.add(key)
-            carried += 1
+            carried.append({**entry, "source": source_id})
     if carried:
         declare_write(dest / INBOX_FILE)
     return carried
+
+
+def carry_notes(repo_root: Path, from_run_ids: Iterable[str], to_run_id: str) -> list[dict]:
+    """Copy the live notes of each `from_run_ids` run (its `resumed_from` chain included) that
+    `to_run_id`'s own chain lacks (matched on (note, at)) into `to_run_id`'s `NOTES_FILE`, then refresh
+    its requirements view; the notes copied, each with `run` naming its source. Unsafe ids and missing
+    dirs carry nothing."""
+    from coordinator_core.atomic_append import append_line
+    from coordinator_core.ops.dispatch_emit import run_notes
+
+    try:
+        dest = run_dir(repo_root, to_run_id)
+    except LedgerRefused:
+        return []
+    if not dest.is_dir():
+        return []
+    have = {(e["note"], e["at"]) for e in carried_notes(repo_root, to_run_id)}
+    moved: list[dict] = []
+    for source_id in from_run_ids:
+        if source_id == to_run_id:
+            continue
+        try:
+            run_dir(repo_root, source_id)
+        except LedgerRefused:
+            continue
+        for e in run_notes.live(carried_notes(repo_root, source_id)):
+            key = (e["note"], e["at"])
+            if key in have:
+                continue
+            line = json.dumps({"note": e["note"], "at": e["at"]}, ensure_ascii=False) + "\n"
+            append_line(dest / NOTES_FILE, line.encode("utf-8"))
+            have.add(key)
+            moved.append({**e, "run": source_id})
+    if moved:
+        declare_write(dest / NOTES_FILE)
+        _write_view(repo_root, dest, to_run_id)
+    return moved
 
 
 def read_notes(dir_: Path) -> list[str]:
@@ -1491,6 +1535,7 @@ def revise(
     outcome: Optional[dict] = None, stop_after: Optional[str] = None, retract_note: Optional[dict] = None,
     claim: bool = False, owned_red: Sequence = (), pre_existing: Sequence = (), add_paths: Sequence = (), retract_row: Optional[dict] = None,
     widened: Sequence = (), accept_partial: Sequence = (), ledger_verdict: Optional[dict] = None,
+    base_ref: Optional[str] = None,
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
     run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
@@ -1530,6 +1575,10 @@ def revise(
     needs an emitted run whose record dir holds no `manifest.json` (a staged run cannot be parked),
     writes `STOP_AFTER_FILE` atomically, adds no row, and alone satisfies the non-empty precondition;
     a repeat rewrites the marker.
+    `base_ref` (a non-blank string without whitespace; anything else refuses) rules the git ref every
+    premise check of the run's plan evaluates against: it needs an emitted run, writes `BASE_REF_FILE`
+    atomically (a later revise overwrites it), adds no row, and alone satisfies the non-empty
+    precondition; `ask_contract.run_base_ref` finds it again through the run's sizing on a refire.
     `retract_note` (`{note_id, reason}`, `run_notes.validate_retract` before any write) withdraws one of
     this run's notes as applied or superseded: it needs an emitted run (a halted one qualifies), refuses
     an id the run's `NOTES_FILE` lacks or already retracted, appends a retraction line to `NOTES_FILE`
@@ -1606,14 +1655,16 @@ def revise(
         row_retraction = rid.strip()
     if stop_after is not None and stop_after != STOP_AFTER_PLAN:
         raise LedgerRefused(f"stop_after takes only {STOP_AFTER_PLAN!r}, got {stop_after!r}")
+    if base_ref is not None and (not isinstance(base_ref, str) or not base_ref.strip() or base_ref != base_ref.strip() or any(c.isspace() for c in base_ref)):
+        raise LedgerRefused(f"base_ref must be a non-blank string without whitespace, got {base_ref!r}")
     if (
         not text and all_of_pm_ask is None and not has_note and not withheld_entries and not credit_entries
         and not accept_entries and not red_entries and not pre_entries and not build_only and stop_after is None and retraction is None and not add_paths
-        and not widened and row_retraction is None and not ledger_verdict
+        and not widened and row_retraction is None and not ledger_verdict and base_ref is None
     ):
         raise LedgerRefused(
             "workflow.revise needs a non-empty verbatim, note, all_of_pm_ask, withhold_paths, "
-            "accept_partial, credit_chunks, retract_note, retract_row, build_only, stop_after, ledger_verdict, or a combination"
+            "accept_partial, credit_chunks, retract_note, retract_row, build_only, stop_after, base_ref, ledger_verdict, or a combination"
         )
     if named and not text:
         raise LedgerRefused("out_of_scope needs a non-empty verbatim: the ruling carries its words")
@@ -1625,7 +1676,7 @@ def revise(
     verbatim_only = not (
         named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or pre_entries or build_only
         or stop_after or retraction is not None or row_retraction is not None or claim or accept_entries
-        or add_paths or widened or ledger_verdict
+        or add_paths or widened or ledger_verdict or base_ref
     )
     if (
         (text or has_note) and str(run_id).startswith("ask-")
@@ -1667,11 +1718,11 @@ def revise(
                 raise LedgerRefused(f"research pipeline run {run_id!r} is finished: revision not delivered")
             if (
                 named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or pre_entries or build_only
-                or stop_after or retraction is not None or claim or accept_entries
+                or stop_after or retraction is not None or claim or accept_entries or base_ref
             ):
                 raise LedgerRefused(
                     f"{run_id!r} is a research pipeline run: it takes only a verbatim or note revision, "
-                    "not out_of_scope, all_of_pm_ask, withhold_paths, credit_chunks, build_only, stop_after, "
+                    "not out_of_scope, all_of_pm_ask, withhold_paths, credit_chunks, build_only, stop_after, base_ref, "
                     "retract_note or claim"
                 )
             try:
@@ -1701,7 +1752,7 @@ def revise(
             return Ledger((), False), dir_, None
         if (
             named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or pre_entries or build_only
-            or stop_after or retraction is not None or row_retraction is not None or accept_entries
+            or stop_after or retraction is not None or row_retraction is not None or accept_entries or base_ref
         ):
             raise LedgerRefused(
                 f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first "
@@ -1805,6 +1856,11 @@ def revise(
 
         write_stop_after_marker(dir_, stop_after, sender)
         declare_write(dir_ / STOP_AFTER_FILE)
+    if base_ref:
+        from coordinator_core.ops.dispatch_emit.ask_contract import write_base_ref_marker
+
+        write_base_ref_marker(dir_, base_ref, sender)
+        declare_write(dir_ / BASE_REF_FILE)
     note_uncovered = _note_uncovered_paths(root, dir_, run, note) if has_note else []
     if note_uncovered and _widen_footprint(root, run, run_id, note_uncovered, note, outcome):
         note_uncovered = []
@@ -2319,6 +2375,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `research` block; needs an emitted run bound to a sizing; adds no row; replied as `research_dropped`),
     `stop_after` (str, only "plan": records the park marker so `dispatch.ask_stage` parks the run after
     planning; needs an emitted run that has not staged; adds no row; replied as `stop_after`),
+    `base_ref` (str, a git ref without whitespace: the ref every premise check of the run's plan reads,
+    recorded to the run's `base_ref.json` and found again on a refire through the sizing; needs an
+    emitted run, adds no row; replied as `base_ref`),
     `owned_red` (list of `{nodeid, owner_run_id, reason?}`: failing tests another run owns, recorded to
     the run's `owned_red.jsonl`; needs an emitted run, adds no row; replied as `owned_red`),
     `pre_existing` (list of `{nodeid, reason}`: failing tests the EM rules pre-existing at the run base,
@@ -2367,7 +2426,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             out_of_scope=params.get("out_of_scope") or (), note=params.get("note"),
             sender=params.get("from"), withhold_paths=params.get("withhold_paths") or (),
             credit_chunks=params.get("credit_chunks") or (), stop_after=params.get("stop_after"),
-            retract_note=params.get("retract_note"), claim=bool(params.get(CLAIM_PARAM)),
+            base_ref=params.get("base_ref"), retract_note=params.get("retract_note"), claim=bool(params.get(CLAIM_PARAM)),
             owned_red=params.get("owned_red") or (), pre_existing=params.get("pre_existing") or (), add_paths=params.get("add_paths") or (),
             retract_row=params.get("retract_row"), widened=params.get("widened") or (),
             accept_partial=params.get("accept_partial") or (), ledger_verdict=params.get("ledger_verdict"),
@@ -2439,6 +2498,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["widened"] = outcome["widened"]
     if params.get("stop_after"):
         out["stop_after"] = params["stop_after"]
+    if params.get("base_ref"):
+        out["base_ref"] = params["base_ref"]
     if params.get("widened"):
         from coordinator_core.ops.dispatch_emit import in_run_widen
 
@@ -2586,7 +2647,7 @@ def _land_on_verdict(
     return full, None
 
 
-_APPLIED_KEYS = ("widened", "footprint_widened", "research_dropped", "claimed", "stop_after", "withhold_paths", "accept_partial", "credit_chunks", "owned_red", "pre_existing", "retracted_note", "retracted_row", "withheld")
+_APPLIED_KEYS = ("widened", "footprint_widened", "research_dropped", "claimed", "stop_after", "base_ref", "withhold_paths", "accept_partial", "credit_chunks", "owned_red", "pre_existing", "retracted_note", "retracted_row", "withheld")
 
 
 def _mutation_reply(applied: tuple, refused: tuple, target: str, **fields) -> dict:

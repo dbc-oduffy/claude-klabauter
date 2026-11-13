@@ -467,7 +467,7 @@ def review_applied_in_tree(worktree_root: Path, inline_review: object) -> Option
             return None
         head = text.split("\n---", 2)[0] if text.startswith("---") else ""
         found = _VERDICT_RE.search(head)
-        standing = bool(found) and found.group(1).upper() == REQUIRES_CHANGES
+        standing = bool(found) and _claimed_standing(found.group(1))
         for i, row in enumerate(rows):
             status = row.get("status") or "applied"
             if status in _DISPOSED_STATUSES or row.get("out_of_ask") is True:
@@ -485,16 +485,60 @@ def review_applied_in_tree(worktree_root: Path, inline_review: object) -> Option
     return applied, owed
 
 
+def _claimed_standing(verdict: object) -> bool:
+    return isinstance(verdict, str) and re.sub(r"[\s-]+", "_", verdict.strip()).upper() == REQUIRES_CHANGES
+
+
+def _unverifiable_standing(worktree_root: Path, inline_review: object) -> list:
+    """Names of ``REQUIRES_CHANGES`` verdicts the ledger walk cannot resolve: a verdict claimed in
+    ``wave_reviews`` with no sidecar behind it, a claimed verdict whose sidecar is unreadable, and a
+    readable standing sidecar with no ledger rows. Each one is unresolved, never a pass."""
+    if not isinstance(inline_review, dict):
+        return []
+    claims: dict = {}
+    out: list = []
+    reviews = inline_review.get("wave_reviews")
+    for i, w in enumerate(reviews if isinstance(reviews, list) else []):
+        if not isinstance(w, dict) or not _claimed_standing(w.get("verdict")):
+            continue
+        path = w.get("sidecar_path")
+        if isinstance(path, str) and path:
+            claims[path] = True
+        else:
+            out.append(f"wave_reviews[{i}]:no-sidecar")
+    listed = inline_review.get("wave_sidecar_paths")
+    paths = [w for w in (listed if isinstance(listed, list) else []) if isinstance(w, str) and w]
+    for w in dict.fromkeys([*paths, *claims]):
+        try:
+            text = (worktree_root / w).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            if claims.get(w):
+                out.append(f"{w}:sidecar-unreadable")
+            continue
+        head = text.split("\n---", 2)[0] if text.startswith("---") else ""
+        found = _VERDICT_RE.search(head)
+        if (found.group(1) if found else None) is not None:
+            standing = _claimed_standing(found.group(1))
+        else:
+            standing = bool(claims.get(w))
+        if standing and not _ledger_rows(text):
+            out.append(f"{w}:no-ledger-rows")
+    return out
+
+
 def review_owed_refusal(worktree_root: Path, inline_review: object) -> Optional[str]:
-    """The refusal reason when a ``REQUIRES_CHANGES`` reviewer's findings are not all in the landed
-    tree, else ``None``. Names the owed findings."""
+    """The refusal reason when a ``REQUIRES_CHANGES`` verdict is unresolved, else ``None``: a
+    reviewer's findings not all in the landed tree, or a standing verdict no ledger can resolve
+    (``_unverifiable_standing``). Names what is owed."""
     derived = review_applied_in_tree(worktree_root, inline_review)
-    if derived is None or not derived[1]:
+    owed = list(derived[1]) if derived is not None else []
+    owed.extend(_unverifiable_standing(worktree_root, inline_review))
+    if not owed:
         return None
-    owed = derived[1]
+    applied = derived[0] if derived is not None else 0
     return (
         f"review verdict {REQUIRES_CHANGES} stands with {len(owed)} finding(s) not in the landed tree "
-        f"({derived[0]} applied): {', '.join(owed[:8])}{' ...' if len(owed) > 8 else ''}"
+        f"({applied} applied): {', '.join(owed[:8])}{' ...' if len(owed) > 8 else ''}"
     )
 
 

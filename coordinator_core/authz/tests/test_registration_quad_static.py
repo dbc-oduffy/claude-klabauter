@@ -178,3 +178,61 @@ def test_docstring_placeholder_is_not_an_op_key():
     assert _REGISTER_OP_KEY_RE.match('@register_op("...") async def _handler(params)') is None
     assert _REGISTER_OP_KEY_RE.match('@register_op("ping")').group(1) == "ping"
     assert _REGISTER_OP_KEY_RE.match('@register_op("distill.scope")').group(1) == "distill.scope"
+
+
+CATALOG = "coordinator_core/contract/op-catalog.json"
+MCP = "coordinator_core/contract/mcp-tools.json"
+PKG_MOD = "pkg/mod.py"
+
+
+def _registry_tree(**extra) -> dict[str, bytes]:
+    files = _tree(("x.y",))
+    files[PKG_MOD] = b"X = 1\n"
+    files[CATALOG] = b'{"ops": [{"name": "x.y", "module": "pkg.mod"}]}'
+    files[MCP] = b'{"tools": [{"name": "x__y"}]}'
+    files.update(extra)
+    return files
+
+
+def test_registry_module_absences_pass_when_modules_present():
+    assert rqs.registry_module_absences(_reader(_registry_tree())) == []
+
+
+def test_registry_module_absences_package_init_counts():
+    files = _registry_tree()
+    del files[PKG_MOD]
+    files["pkg/mod/__init__.py"] = b""
+    assert rqs.registry_module_absences(_reader(files)) == []
+
+
+def test_untracked_registered_module_refuses():
+    files = _registry_tree()
+    del files[PKG_MOD]
+    assert rqs.registry_module_absences(_reader(files)) == ["pkg.mod"]
+
+
+def test_unparseable_registered_module_is_reported():
+    files = _registry_tree(**{PKG_MOD: b"def (:\n"})
+    assert rqs.registry_module_absences(_reader(files), [PKG_MOD]) == ["pkg.mod: does not parse"]
+    assert rqs.registry_module_absences(_reader(files)) == []
+
+
+def test_catalog_key_without_module_map_entry_is_reported():
+    files = _registry_tree(**{CATALOG: b'{"ops": [{"name": "x.y"}, {"name": "q.r"}]}'})
+    assert rqs.registry_module_absences(_reader(files)) == ["q.r: no OP_MODULE_MAP entry"]
+
+
+def test_mcp_tool_name_maps_back_to_op_key():
+    files = _registry_tree(**{MCP: b'{"tools": [{"name": "q__r"}]}'})
+    assert rqs.registry_module_absences(_reader(files)) == ["q.r: no OP_MODULE_MAP entry"]
+
+
+def test_registry_module_absences_defer_to_quad_on_broken_surface():
+    files = _registry_tree()
+    files[MAP] = b"OP_MODULE_MAP = build()\n"
+    assert rqs.registry_module_absences(_reader(files)) == []
+
+
+def test_unparseable_contract_json_is_reported():
+    files = _registry_tree(**{CATALOG: b"{not json"})
+    assert rqs.registry_module_absences(_reader(files)) == [f"{CATALOG}: does not parse"]

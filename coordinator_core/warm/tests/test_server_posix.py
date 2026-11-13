@@ -72,6 +72,9 @@ class _FakeVersionState:
     def is_skewed(self, client_token: str) -> bool:
         return self._skewed
 
+    def is_token_skewed(self, client_token: str) -> bool:
+        return self.is_skewed(client_token)
+
 
 class _FakeListener:
     """A listening socket's `accept()` and nothing else -- enough to drive

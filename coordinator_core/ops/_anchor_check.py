@@ -1,18 +1,20 @@
 """In-process evaluator for an anchor premise's check. No spawn, no walk: it streams only the
-files the command names (any size), under the repo root it is handed.
+files the command names (any size), under the repo root it is handed. A stage that reads a git ref
+(its own `git grep ... REF -- FILE`, or the caller's base_ref) counts over blobs the caller
+fetched once with `read_at_ref`; the evaluator itself never spawns.
 
-Grammar (shlex, posix): stage := grep FLAGS (PATTERN | (-e PATTERN)+) FILE, FLAGS = c (or n, which
-implies c) plus at most one of E or F (a line counts when any -e pattern matches);
-command := stage (("&&" | ";") stage)*; expect := N | >=N | <=N | >N | <N | "N then M [then K ...]".
-Anything else is NOT_EVALUABLE."""
+Grammar (shlex, posix): stage := [git] grep FLAGS (PATTERN | (-e PATTERN)+) [REF --] FILE, REF only
+with `git`; FLAGS = c (or n, which implies c) plus at most one of E or F (a line counts when any -e
+pattern matches); command := stage (("&&" | ";") stage)*; expect := N | >=N | <=N | >N | <N |
+"N then M [then K ...]". Anything else is NOT_EVALUABLE."""
 
 import re
 import shlex
 from pathlib import Path, PurePosixPath
-from typing import List, Optional, Tuple
+from typing import Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
 
 GRAMMAR: str = (
-    'grep -c [-E|-F] (PATTERN | -e PATTERN ...) FILE [&&|; grep ...]; '
+    '[git] grep -c [-E|-F] (PATTERN | -e PATTERN ...) [REF --] FILE [&&|; grep ...]; '
     'expect N|>=N|<=N|>N|<N|"N then M"'
 )
 
@@ -59,7 +61,10 @@ def _tokens(command: str) -> List[str]:
         raise _NotEvaluable(f"unparsable command: {exc}")
 
 
-def _parse_stages(command: str) -> List[Tuple[str, List[str], str]]:
+Stage = Tuple[str, List[str], str, Optional[str]]
+
+
+def _parse_stages(command: str) -> List[Stage]:
     toks = _tokens(command)
     if not toks:
         raise _NotEvaluable("empty command")
@@ -74,12 +79,22 @@ def _parse_stages(command: str) -> List[Tuple[str, List[str], str]]:
     return [_parse_stage(s) for s in stages]
 
 
-def _parse_stage(words: List[str]) -> Tuple[str, List[str], str]:
-    if not words or words[0] != "grep":
+def _valid_ref(ref: str) -> bool:
+    """A ref token git reads as one revision name: no whitespace or control byte, no `..`, no
+    leading `-`, no `:` (which would turn it into a `<rev>:<path>` blob spec)."""
+    if not ref or not ref.isprintable() or any(c.isspace() for c in ref):
+        return False
+    return ".." not in ref and not ref.startswith("-") and ":" not in ref
+
+
+def _parse_stage(words: List[str]) -> Stage:
+    """(mode, patterns, path, ref); ref is None for a plain grep stage."""
+    git = words[:2] == ["git", "grep"]
+    if not words or not (git or words[0] == "grep"):
         raise _NotEvaluable("only grep stages are evaluable")
     flags: List[str] = []
     patterns: List[str] = []
-    rest = words[1:]
+    rest = words[2 if git else 1:]
     while rest and rest[0].startswith("-"):
         flag = rest.pop(0)
         if flag == "-e":
@@ -102,6 +117,14 @@ def _parse_stage(words: List[str]) -> Tuple[str, List[str], str]:
         raise _NotEvaluable("flags must include c once, with at most one of E or F")
     if "E" in flags and "F" in flags:
         raise _NotEvaluable("E and F are mutually exclusive")
+    ref: Optional[str] = None
+    if git:
+        if len(rest) < 3 or rest[-2] != "--":
+            raise _NotEvaluable("a git grep stage ends with `<ref> -- <path>`")
+        ref = rest[-3]
+        if not _valid_ref(ref):
+            raise _NotEvaluable(f"ref {ref!r} is not a plain revision name")
+        rest = rest[:-3] + rest[-1:]
     if patterns:
         if len(rest) != 1:
             raise _NotEvaluable("a stage with -e patterns takes exactly one file")
@@ -110,7 +133,7 @@ def _parse_stage(words: List[str]) -> Tuple[str, List[str], str]:
             raise _NotEvaluable("a stage takes exactly one pattern and one file")
         patterns.append(rest.pop(0))
     mode = "F" if "F" in flags else "E" if "E" in flags else "B"
-    return mode, patterns, rest[0]
+    return mode, patterns, rest[0], ref
 
 
 def _compile(mode: str, pattern: str) -> "re.Pattern[str]":
@@ -167,21 +190,95 @@ def _resolve(file_arg: str, repo_root: Path) -> Path:
     return target
 
 
+def _count_lines(regexes: "List[re.Pattern[str]]", raws: Iterable[bytes]) -> int:
+    n = 0
+    for raw in raws:
+        if raw.endswith(b"\r\n"):
+            raw = raw[:-2]
+        elif raw.endswith(b"\n"):
+            raw = raw[:-1]
+        line = raw.decode("utf-8", errors="replace")
+        if any(r.search(line) for r in regexes):
+            n += 1
+    return n
+
+
 def _count(regexes: "List[re.Pattern[str]]", path: Path) -> Optional[int]:
     """None when grep would print no count (missing file or not a regular file)."""
     if not path.is_file():
         return None
-    n = 0
     with path.open("rb") as fh:
-        for raw in fh:
-            if raw.endswith(b"\r\n"):
-                raw = raw[:-2]
-            elif raw.endswith(b"\n"):
-                raw = raw[:-1]
-            line = raw.decode("utf-8", errors="replace")
-            if any(r.search(line) for r in regexes):
-                n += 1
-    return n
+        return _count_lines(regexes, fh)
+
+
+def _blob_lines(data: bytes) -> Iterator[bytes]:
+    parts = data.split(b"\n")
+    for i, part in enumerate(parts):
+        if i < len(parts) - 1:
+            yield part + b"\n"
+        elif part:
+            yield part
+
+
+def _count_bytes(regexes: "List[re.Pattern[str]]", data: bytes) -> int:
+    """`_count` over blob bytes: the same CRLF/LF line rule as a file read."""
+    return _count_lines(regexes, _blob_lines(data))
+
+
+def _rel(file_arg: str) -> str:
+    return PurePosixPath(file_arg).as_posix()
+
+
+def blob_pairs(command: str, base_ref: Optional[str] = None) -> List[Tuple[str, str]]:
+    """The (ref, path) pairs `evaluate` will look up in `blobs` for this command: each stage's own
+    ref, else base_ref; tree-read stages contribute none. Unparsable command -> []."""
+    try:
+        stages = _parse_stages(command)
+    except _NotEvaluable:
+        return []
+    return [(ref or base_ref, _rel(f)) for _, _, f, ref in stages if (ref or base_ref)]
+
+
+def read_at_ref(
+    repo_root: Path, pairs: Iterable[Tuple[str, str]]
+) -> Dict[Tuple[str, str], Optional[bytes]]:
+    """{(ref, path): blob bytes | None} from ONE `git cat-file --batch` spawn; None is a path git
+    finds no blob for at that ref. A ref git cannot resolve, or one failing `_valid_ref`, has NO
+    key (the caller reads that as unreadable). Zero pairs -> zero spawns."""
+    from coordinator_core.git.run import run_git
+
+    wanted = [
+        (r, p) for r, p in dict.fromkeys(pairs) if _valid_ref(r) and p and "\n" not in p
+    ]
+    refs = list(dict.fromkeys(r for r, _ in wanted))
+    if not refs:
+        return {}
+    specs = [f"{r}^{{commit}}" for r in refs] + [f"{r}:{p}" for r, p in wanted]
+    res = run_git(
+        ["-C", str(repo_root), "cat-file", "--batch"],
+        input=("\n".join(specs) + "\n").encode("utf-8"),
+    )
+    if res.returncode != 0:
+        return {}
+    data, pos, replies = res.stdout_bytes, 0, []
+    for _ in specs:
+        end = data.find(b"\n", pos)
+        if end < 0:
+            return {}
+        header = data[pos:end].split()
+        pos = end + 1
+        if len(header) == 3 and header[2].isdigit():
+            size = int(header[2])
+            replies.append((header[1], data[pos:pos + size]))
+            pos += size + 1
+        else:
+            replies.append((None, b""))
+    resolvable = {r for r, (kind, _) in zip(refs, replies) if kind == b"commit"}
+    return {
+        (r, p): (body if kind == b"blob" else None)
+        for (r, p), (kind, body) in zip(wanted, replies[len(refs):])
+        if r in resolvable
+    }
 
 
 def _parse_expect(expect: str) -> List[Tuple[str, int]]:
@@ -216,24 +313,42 @@ def evaluable(command: str) -> Optional[str]:
     return None
 
 
-def evaluate(command: str, expect: str, repo_root: Path) -> dict:
+def evaluate(
+    command: str,
+    expect: str,
+    repo_root: Path,
+    base_ref: Optional[str] = None,
+    blobs: Optional[Mapping[Tuple[str, str], Optional[bytes]]] = None,
+) -> dict:
     """{"state": "MATCH" | "MISMATCH" | "NOT_EVALUABLE", "observed": str, "detail": str}.
     No spawn, no walk; reads only the files the command names, under repo_root.
     observed is the printed counts, one per line. Every stage runs and reports its count, 0
     included (grep's exit 1 on zero matches is a result, not a failure); a missing file ends
-    the chain."""
+    the chain.
+    A stage's effective ref is its own `git grep` ref, else base_ref, else none (the tree). A
+    ref-read stage counts over blobs[(ref, path)] (from `read_at_ref`): None -> MISMATCH "no such
+    file at <ref>"; a key absent from blobs -> NOT_EVALUABLE "base ref <ref> unreadable"."""
     try:
         stages = _parse_stages(command)
         wants = _parse_expect(expect)
         plan = [
-            ([_compile(m, p) for p in ps], _resolve(f, Path(repo_root))) for m, ps, f in stages
+            ([_compile(m, p) for p in ps], _resolve(f, Path(repo_root)), ref or base_ref, _rel(f))
+            for m, ps, f, ref in stages
         ]
         counts: List[int] = []
-        for regexes, path in plan:
-            n = _count(regexes, path)
+        for regexes, path, ref, rel in plan:
+            if ref is None:
+                n = _count(regexes, path)
+                gone = f"no such file: {path.name}"
+            else:
+                if not _valid_ref(ref) or blobs is None or (ref, rel) not in blobs:
+                    raise _NotEvaluable(f"base ref {ref} unreadable")
+                blob = blobs[(ref, rel)]
+                n = None if blob is None else _count_bytes(regexes, blob)
+                gone = f"no such file at {ref}: {path.name}"
             if n is None:
                 observed = "\n".join(str(c) for c in counts)
-                return _result("MISMATCH", observed, f"no such file: {path.name}")
+                return _result("MISMATCH", observed, gone)
             counts.append(n)
     except _NotEvaluable as exc:
         return _result("NOT_EVALUABLE", "", str(exc))
@@ -242,7 +357,7 @@ def evaluate(command: str, expect: str, repo_root: Path) -> dict:
         return _result("MATCH", observed, "")
     detail = f"expected {expect!r}"
     if len(wants) == len(counts):
-        for (o, w), c, (_, path) in zip(wants, counts, plan):
+        for (o, w), c, (_, path, _, _) in zip(wants, counts, plan):
             if not _holds(o, w, c):
                 detail += f"; {path.name} counted {c}"
                 break

@@ -241,6 +241,8 @@ def _plan_for_grep(classification) -> Optional[AnswerPlan]:
         stages = [build_stage(tokens) for tokens, _piped in segments[1:]]
     except Unanswerable:
         return None
+    if any(t == "-" or t.startswith("<") for t in spec.targets):
+        return None  # stdin redirect / `-` operand: the search reads stdin, not the repo
     return AnswerPlan(source=GrepSource(spec), stages=stages)
 
 

@@ -353,13 +353,11 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/review_partition_slices.py': ('claims-explicitly', 'claim token in _write_slice'),
     'coordinator_core/index_distribution/newer_index_marker.py': ('in-repo-non-state', 'newer-index marker json via tmp + os.replace under the repo index-distribution dir, never state/: write_marker'),
     'coordinator_core/backlog_grind_assemble/grind_fix_paths.py': ('in-repo-non-state', 'per-row fix-paths json via tmp + os.replace under the caller-supplied <run_dir>/fix-paths, a run-artifact dir, never state/: write'),
-    'coordinator_core/bug_blitz/reap_green.py': ('claims-explicitly', 'both raw writes are declared first: declare_write(rel) before the row close in _close_row and declare_write(reap_record_rel()) before the reap record in reap'),
     'coordinator_core/cartography/atlas_catchup.py': ('ignored-target', 'watermark and pending json via tmp + os.replace under the gitignored .coordinator-local/freshness/: _write_json'),
     'coordinator_core/cartography/atlas_freshness.py': ('in-repo-non-state', 'files: frontmatter line rewrite of docs/architecture/systems pages (write_bytes) and acted-fact JSON lines appended to the gitignored .coordinator-local/freshness/atlas-acted.jsonl, never state/: apply_repair, record_acted'),
     'coordinator_core/distill/autofire.py': ('ignored-target', 'autofire claim file (os.open O_CREAT|O_EXCL, then write_text) at the gitignored .coordinator-local/distill-autofire/claim.json: _launch_claimed'),
     'coordinator_core/distill/autofire_launch.py': ('ignored-target', 'fire.mjs marker script written under the gitignored .coordinator-local/distill-autofire/: launch'),
     'coordinator_core/hooks/commit_resolution.py': ('git-internal', 'staged-set cache json via tmp + os.replace beside the index inside the git dir, never the worktree: _save'),
-    'coordinator_core/ops/ceremony/update_docs_worklist.py': ('ignored-target', 'worklist frontmatter cache json via tmp + os.replace under the paths.update_docs_worklist_cache settings key or the gitignored repo .coordinator-local/cache/update-docs-worklist: _store_cache'),
     'coordinator_core/ops/rag_freshness.py': ('outside-repo', 'refresh-queue marker json under <settings-home>/rag-freshness-queue, never the repo: queue_refresh'),
     'coordinator_core/ops/reverify_base_measure.py': ('in-repo-non-state', 'baseline-measure result file at the caller-supplied out path (a run scratch artifact), never state/: main'),
     'coordinator_core/ops/_anchor_premise.py': ('outside-repo', 'baseline blobs from git show written into a tempfile.TemporaryDirectory, discarded on exit: the anchor-baseline evaluator'),
@@ -796,6 +794,9 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/housekeeping/cycle.py': ('in-repo-non-state', 'rollback only: restores the exact pre-release bytes of a record whose gate clear did not land in a commit, under the record lock'),
     'coordinator_core/ops/records_query.py': ('git-internal', 'per-record-type cache under <git-dir>'),
     'coordinator_core/sidecar_reap.py': ('outside-repo', 'reap pathspec file in managed_tempdir()'),
+    'coordinator_core/updatedocs/readme_wikis.py': ('in-repo-non-state', 'rewrites the Wikis table block of the tracked docs/README.md in place (open "w"), never state/: sync_wikis'),
+    'coordinator_core/machine_local_spawn.py': ('outside-repo', 'cross-process memo cache (tmp + os.replace) under the settings home, never the repo: _shared_write'),
+    'coordinator_core/prior_art_recall/benchmark.py': ('outside-repo', 'report.json and run dirs under the caller-supplied out_dir, never state/: run_benchmark'),
     'coordinator_core/updatedocs/_stamp_cache.py': ('git-internal', 'update-docs stamp cache <git-dir>/claude-klabauter-updatedocs-<name>.json'),
     'coordinator_core/ceremony_common/run/decide.py': ('git-internal', 'decisions.jsonl in the run directory under .coordinator-local/coordinator-sessions/'),
     'coordinator_core/ceremony_common/run/driver.py': ('git-internal', 'run files and briefing in the run directory under .coordinator-local/coordinator-sessions/'),
@@ -822,6 +823,8 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/dispatch_emit/owed_leg_queue.py': ('in-repo-non-state', 'owed-leg yaml records under the tracked state/owed-legs/ via open(..., "w"), no declare_write: write_owed_legs'),
     'coordinator_core/ops/review_reachability.py': ('in-repo-non-state', 'no file write: the write_/open( tokens are the pipeline-output scan patterns it matches in a reviewed diff: _pipeline_outputs'),
     'coordinator_core/ops/pm_directive_map.py': ('outside-repo', 'disposition and unmapped sidecars beside pm_turns.jsonl in the per-session baton directory, never the repo: append_disposition, the unmapped-file write'),
+    'coordinator_core/bug_blitz/reap_green.py': ('claims-explicitly', 'closed backlog row files and the reap record state/scratch/bug-blitz/reap/latest.json, each declared through declare_write before the write: _close_row, reap'),
+    'coordinator_core/ops/ceremony/update_docs_worklist.py': ('outside-repo', 'worklist cache json via tmp + os.replace under the registry paths.update_docs_worklist_cache dir, or the gitignored .coordinator-local/cache fallback, never state/: _store_cache'),
 }
 
 _TO_FIX_CEILING: FrozenSet[str] = frozenset({

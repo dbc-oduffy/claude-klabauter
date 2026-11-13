@@ -820,6 +820,7 @@ _RESOLVER_FAMILY_BY_FILE = {
     "triage-plan-candidates.py": frozenset({"env_first"}),
     "unimatrix-codex-launch.py": frozenset({"env_first"}),
     "unimatrix-install.py": frozenset({"env_first"}),
+    "unimatrix-membership.py": frozenset({"env_first"}),
     "unimatrix-relay.py": frozenset({"env_first"}),
     "validate-fast-and-packageability.py": frozenset({"self_location"}),
     "verify-publish-targets-portable-sync.py": frozenset({"self_location"}),

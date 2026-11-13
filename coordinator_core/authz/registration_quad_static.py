@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import json
 from typing import Callable, Iterable, Optional
 
 from coordinator_core.authz.registration_quad import (
@@ -26,7 +27,11 @@ from coordinator_core.authz.registration_quad import (
 
 _LEDGER_FILE = "coordinator_core/authz/registration_quad.py"
 _SURFACE_PATHS = frozenset(_SURFACE_FILES.values())
+SURFACE_PATHS = _SURFACE_PATHS
 _ALL_SURFACE_FILES = (*_SURFACE_FILES.values(), _LEDGER_FILE)
+_CONTRACT_OP_CATALOG = "coordinator_core/contract/op-catalog.json"
+_CONTRACT_MCP_TOOLS = "coordinator_core/contract/mcp-tools.json"
+CONTRACT_JSON_PATHS = frozenset({_CONTRACT_OP_CATALOG, _CONTRACT_MCP_TOOLS})
 
 
 @dataclasses.dataclass(frozen=True)
@@ -250,3 +255,87 @@ def registration_violations(
     if kept:
         return StaticQuadVerdict("refuse", tuple(kept), _render(kept))
     return StaticQuadVerdict("pass")
+
+
+def _catalog_op_names(read_source: Callable[[str], Optional[bytes]]) -> tuple[list[str], list[str]]:
+    """Op names the two contract json files name, and the paths of those that do not parse."""
+    names: list[str] = []
+    unparsed: list[str] = []
+    data = read_source(_CONTRACT_OP_CATALOG)
+    if data:
+        try:
+            names += [o["name"] for o in json.loads(data).get("ops", ()) if isinstance(o, dict) and "name" in o]
+        except (ValueError, AttributeError):
+            unparsed.append(_CONTRACT_OP_CATALOG)
+    data = read_source(_CONTRACT_MCP_TOOLS)
+    if data:
+        try:
+            names += [
+                t["name"].replace("__", ".")
+                for t in json.loads(data).get("tools", ())
+                if isinstance(t, dict) and isinstance(t.get("name"), str)
+            ]
+        except (ValueError, AttributeError):
+            unparsed.append(_CONTRACT_MCP_TOOLS)
+    return names, unparsed
+
+
+def _module_candidates(module: str) -> tuple[str, str]:
+    base = module.replace(".", "/")
+    return f"{base}.py", f"{base}/__init__.py"
+
+
+def registry_module_absences(
+    read_source: Callable[[str], Optional[bytes]], parse_paths: Iterable[str] = ()
+) -> list[str]:
+    """Registry-named modules the tree `read_source` describes cannot supply, sorted.
+
+    Only modules whose resolved path is in `parse_paths` are parsed (parsing the ~380 real
+    modules costs ~350ms, over the gate's budget); every module is presence-checked.
+
+    Modules are `_EAGER_OP_MODULES` first elements, `OP_MODULE_MAP` values, and the module of
+    every op named in the op catalog and MCP tool list (through `OP_MODULE_MAP`; a name with
+    no entry is reported as `<op>: no OP_MODULE_MAP entry`). A module with neither
+    `<path>.py` nor `<path>/__init__.py` is reported bare; one that fails `ast.parse` is
+    reported `<module>: does not parse`; a contract json that is not valid is reported `<path>: does not parse`. An unreadable or non-literal map/eager surface
+    returns [] (`registration_violations` refuses that case). Static only: a runtime-only
+    import error is out of reach. Zero subprocess spawns.
+    """
+    sources: dict[str, bytes] = {}
+    for path in _ALL_SURFACE_FILES:
+        data = read_source(path)
+        if data is None:
+            return []
+        sources[path] = data
+    try:
+        tables = _extract(sources)
+    except _ExtractError:
+        return []
+    module_map: dict[str, str] = tables["module_map"]
+    modules: set[str] = set(tables["eager_modules"]) | set(module_map.values())
+    catalog_ops, unparsed = _catalog_op_names(read_source)
+    out: list[str] = [f"{path}: does not parse" for path in unparsed]
+    for op in sorted(set(catalog_ops)):
+        mod = module_map.get(op)
+        if mod is None:
+            out.append(f"{op}: no OP_MODULE_MAP entry")
+        else:
+            modules.add(mod)
+    parse_set = {_norm(p) for p in parse_paths}
+    for module in sorted(modules):
+        data = None
+        found = ""
+        for candidate in _module_candidates(module):
+            data = read_source(candidate)
+            if data is not None:
+                found = candidate
+                break
+        if data is None:
+            out.append(module)
+            continue
+        if found in parse_set:
+            try:
+                ast.parse(data)
+            except (SyntaxError, ValueError):
+                out.append(f"{module}: does not parse")
+    return out

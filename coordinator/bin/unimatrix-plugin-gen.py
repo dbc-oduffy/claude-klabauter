@@ -589,3 +589,16 @@ def generate(plugin_root, out_dir, host="agy"):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(plan.files[rel])
     return {"written": written, "unmapped": unmapped}
+
+
+def main(argv: list[str]) -> int:
+    """Library module: only `--help` is answered; anything else exits 2 with nothing to run."""
+    if any(a in ("-h", "--help") for a in argv):
+        print("usage: unimatrix-plugin-gen [-h]\ntranslate a coordinator plugin tree into a host-plugin tree (library module)")
+        return 0
+    print("unimatrix-plugin-gen: library module; nothing to run", file=__import__("sys").stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(__import__("sys").argv[1:]))

@@ -16,6 +16,7 @@ from typing import List, Optional
 from coordinator_core._settings_home import settings_home
 from coordinator_core.atomic_append import append_line
 from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.bash_guards._taskstop_attribution import POST_WINDOW_S, PRE_SLACK_S
 from coordinator_core.bash_guards._taskstop_contract import (
     FILETIME_UNIX_EPOCH,
     LOG_RELPATH,
@@ -24,6 +25,9 @@ from coordinator_core.bash_guards._taskstop_contract import (
     LaunchRecord,
     ReapRow,
 )
+
+# FAT mtime granularity.
+_MTIME_SLACK_S = 2.0
 
 # task_id becomes a filename: no separator, dot or drive colon may pass.
 _TASK_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -71,6 +75,34 @@ def all_records() -> List[LaunchRecord]:
     out = []
     for p in paths:
         rec = _load(p)
+        if rec is not None:
+            out.append(rec)
+    return out
+
+
+def records_near(mark: int) -> List[LaunchRecord]:
+    """Records that can compete with a launch at `mark`: opens only files not older than the window."""
+    import os
+
+    # Invariant: a record is written at or after its mark, so mtime >= mark. Never add an upper
+    # bound: a timed-out record is written timedOutAfterMs after its mark.
+    floor = (
+        (mark - FILETIME_UNIX_EPOCH) / 1e7 - (PRE_SLACK_S + POST_WINDOW_S) - _MTIME_SLACK_S
+    )
+    try:
+        entries = sorted(os.scandir(_store_dir()), key=lambda e: e.name)
+    except OSError:
+        return []
+    out = []
+    for entry in entries:
+        if not entry.name.endswith(".json"):
+            continue
+        try:
+            if entry.stat().st_mtime < floor:
+                continue
+        except OSError:
+            pass  # unknown age: keep it, a dropped sibling would turn ambiguity into a kill
+        rec = _load(Path(entry.path))
         if rec is not None:
             out.append(rec)
     return out

@@ -58,9 +58,25 @@ def test_a_chain_emit_yielding_an_empty_run_id_starts_nothing(tmp_path, chain_pa
 
 
 @pytest.mark.spawns_process
-@pytest.mark.parametrize("path", ["scratch/warp/ask-1.workflow.mjs", "scratch/warp/not-a-run-script.mjs"])
-def test_a_path_naming_the_ask_itself_or_no_run_script_is_still_refused(tmp_path, path):
-    handoff = {"chain": {"ask": "do it", "path": path, "run_id": "fresh-looking-id"}}
+def test_a_path_naming_the_ask_itself_is_still_refused(tmp_path):
+    handoff = {"chain": {"ask": "do it", "path": "scratch/warp/ask-1.workflow.mjs", "run_id": "fresh-looking-id"}}
     got = _run_deferred(tmp_path, _PARAMS, replies=[_reply()], results=[handoff])
     assert got["out"]["status"] == "failed" and "not a fresh run id" in got["out"]["error"]
     assert _starts(got) == ["ask-1.workflow.mjs"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("run_id", ["", "ask-1"])
+def test_a_path_naming_no_run_script_without_a_fresh_minted_run_id_is_refused(tmp_path, run_id):
+    handoff = {"chain": {"ask": "do it", "path": "scratch/warp/not-a-run-script.mjs", "run_id": run_id}}
+    got = _run_deferred(tmp_path, _PARAMS, replies=[_reply()], results=[handoff])
+    assert got["out"]["status"] == "failed" and "not a fresh run id" in got["out"]["error"]
+    assert _starts(got) == ["ask-1.workflow.mjs"]
+
+
+@pytest.mark.spawns_process
+def test_a_path_naming_no_run_script_falls_back_to_the_emits_minted_run_id(tmp_path):
+    handoff = {"chain": {"ask": "do it", "path": "scratch/warp/not-a-run-script.mjs", "run_id": "fresh-looking-id"}}
+    got = _run_deferred(tmp_path, _PARAMS, replies=[_reply()], results=[handoff, {"done": True}])
+    assert _starts(got) == ["ask-1.workflow.mjs", "not-a-run-script.mjs"]
+    assert got["out"] == {"done": True, "chained_from": "ask-1"}

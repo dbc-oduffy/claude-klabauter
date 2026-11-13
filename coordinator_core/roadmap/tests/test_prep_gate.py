@@ -1580,7 +1580,7 @@ def test_sizing_assemble_refuses_pm_approval_of_a_doc(monkeypatch, capsys, crite
     rc = sa.main(["--tshirt", "M", "--exit-criterion", criterion])
     if refused:
         assert rc == sa.EXIT_USAGE
-        assert "PM approval of a non-direction artifact" in capsys.readouterr().err
+        assert "sign-off clause on a non-direction artifact" in capsys.readouterr().err
     else:
         assert rc == sa.EXIT_OK
 

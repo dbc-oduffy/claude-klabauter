@@ -147,7 +147,7 @@ def doc_approval_refusal(statement: object) -> Optional[str]:
                 continue
             if _APPROVER.search(clause) or _ADJECTIVAL_APPROVED.search(clause):
                 return (
-                    f"{EXIT_CRITERION_REFUSAL_HEAD}a sign-off clause on a non-direction artifact "
+                    f"{EXIT_CRITERION_REFUSAL_HEAD}sign-off clause on a non-direction artifact "
                     f"({artifact.group(0)!r}); engineering calls need no sign-off. "
                     f"{REMEDIATION_MARKER}{DOC_APPROVAL_REMEDIATION}."
                 )

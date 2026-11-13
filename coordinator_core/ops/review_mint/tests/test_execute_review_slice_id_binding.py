@@ -174,6 +174,17 @@ def test_a_range_token_that_survives_its_one_redispatch_halts():
     assert result["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
 
 
+def test_an_empty_prep_with_a_review_naming_another_groups_real_slice_is_bound_to_its_group():
+    expected = _bound_group_one("r.prep.slices")
+    foreign = (
+        "(r, n) => n === 1 ? { ...r, prep: { ...r.prep, slices: [] }, "
+        "review: { ...r.review, slice_id: _full.slices[0].id } } : r"
+    )
+    result = _run_in_wave(_FULL, 9, patch=foreign)
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][1]["slice_id"] == expected
+
+
 def test_an_out_of_group_real_slice_id_is_not_redispatched():
     base = _run_in_wave(_FULL, 9)
     result = _run_in_wave(_FULL, 9, patch=_prep_rewrite("_full.slices"))

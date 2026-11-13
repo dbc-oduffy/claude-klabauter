@@ -327,6 +327,29 @@ class TestLiteralReadsOfANamedFileAreNotIntercepted:
         assert _enveloped(guard.check)(_payload("grep b f.txt", str(tmp_path))) is not None
 
 
+class TestStdinReadingSearchesAreNotIntercepted:
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "rg foo < f.txt",
+            "grep foo < f.txt",
+            "rg foo <f.txt",
+            "rg foo <<< x",
+            "rg foo -",
+            "sed -n 1,2p f.txt | rg b",
+        ],
+    )
+    def test_stdin_search_has_no_plan(self, cmd):
+        from coordinator_core.search.answer import plan_for
+
+        assert plan_for(cmd) is None
+
+    def test_named_file_search_still_has_a_plan(self):
+        from coordinator_core.search.answer import plan_for
+
+        assert plan_for("rg b f.txt") is not None
+
+
 def test_answer_is_a_rewrite_record_carrying_no_override(tmp_path):
     from coordinator_core.guard_messages.alternative_record import AlternativeRecord, Override
 

@@ -16,7 +16,7 @@ pytestmark = pytest.mark.complete
 _OP = "ceremony.fake_cold_mutating"
 
 
-def _dispatch(monkeypatch, handler, route, op=_OP):
+def _dispatch(monkeypatch, handler, route, op=_OP, origin=None):
     monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "0.1")
     monkeypatch.setenv(op_latency.ROUTE_ENV, route)
     monkeypatch.setitem(ipc._REGISTRY, op, handler)
@@ -27,6 +27,9 @@ def _dispatch(monkeypatch, handler, route, op=_OP):
     overruns = []
     monkeypatch.setattr(ipc, "_report_ceremony_overrun", lambda *a: overruns.append(a))
     msg = {"jsonrpc": "2.0", "id": 1, "method": op, "params": {}}
+    if origin is not None:
+        monkeypatch.setattr(ipc, "git_common_dir", lambda *a, **k: origin / ".git")
+        msg["_origin_worktree"] = str(origin)
     return asyncio.run(ipc._dispatch_message_impl(msg)), overruns
 
 
@@ -79,6 +82,42 @@ def test_cold_mutating_hung_past_ceiling_reports_may_have_completed(monkeypatch)
     assert diag["backstop_secs"] == 0.1
     assert diag["ceiling_secs"] == 0.1 * ipc._COLD_AWAIT_CEILING_FACTOR
     assert 0.1 < diag["waited_secs"] < 0.9
+
+
+def test_cold_ask_gate_hung_fails_at_backstop_not_ceiling(monkeypatch, tmp_path):
+    def hung(params, ctx=None, repo_root=None):
+        time.sleep(0.45)
+        return {"ok": True}
+
+    env, _ = _dispatch(monkeypatch, hung, op_latency.IN_PROCESS, op="dispatch.ask_gate", origin=tmp_path)
+    assert env["error"]["code"] == -32004
+    data = env["error"]["data"]
+    assert data["retry_safe"] is False
+    assert "reconcile" in data["next_action"]
+    assert "dispatch.ask_gate" in env["error"]["message"]
+    diag = data["diagnosis"]
+    assert diag["case"] == "hung_past_ceiling"
+    assert diag["op"] == "dispatch.ask_gate"
+    assert diag["ceiling_secs"] == 0.1
+    assert diag["waited_secs"] < 0.3
+    assert ipc._COLD_AWAIT_CEILING_FACTOR == 5.0
+
+
+def test_cold_ask_gate_inside_backstop_still_succeeds(monkeypatch, tmp_path):
+    def quick(params, ctx=None, repo_root=None):
+        return {"ok": True}
+
+    env, _ = _dispatch(monkeypatch, quick, op_latency.IN_PROCESS, op="dispatch.ask_gate", origin=tmp_path)
+    assert env["result"] == {"ok": True}
+
+
+def test_cold_ask_gate_past_backstop_but_done_in_ceiling_is_not_awaited(monkeypatch, tmp_path):
+    def slow(params, ctx=None, repo_root=None):
+        time.sleep(0.25)
+        return {"ok": True}
+
+    env, _ = _dispatch(monkeypatch, slow, op_latency.IN_PROCESS, op="dispatch.ask_gate", origin=tmp_path)
+    assert env["error"]["data"]["diagnosis"]["case"] == "hung_past_ceiling"
 
 
 def test_warm_route_still_reports_indeterminate(monkeypatch):
