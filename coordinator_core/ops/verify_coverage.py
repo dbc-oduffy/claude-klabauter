@@ -279,6 +279,7 @@ over-match live trees if excluded by name alone."""
 HISTORICAL_PLAN_STATUSES = frozenset({"implemented", "landed", "complete", "superseded", "abandoned"})
 HISTORICAL_PLAN_AGE_DAYS = 90
 _FM_KEY_RE = re.compile(r"^(status|created):\s*['\"]?([^\s'\"#]+)", re.MULTILINE)
+_PLAN_REVIEW_SIDECAR_RE = re.compile(r"^(?P<plan>.+\.md)\.[^./\\]+-review\.md$")
 
 
 def is_historical_plan(file: str, sweep_root: str, content: str, today: Optional[date] = None) -> bool:
@@ -288,7 +289,17 @@ def is_historical_plan(file: str, sweep_root: str, content: str, today: Optional
     (HISTORICAL_PLAN_STATUSES), or `created` is more than HISTORICAL_PLAN_AGE_DAYS days
     old (an unfinished plan that old is a stale record, not a live doctrine surface).
     A file without frontmatter, or outside a docs/plans tree, is never historical.
+    A plan review sidecar (`<plan>.md.<reviewer>-review.md`) takes its parent plan's
+    verdict; a sidecar whose parent plan is absent or unreadable is judged live.
     """
+    sidecar = _PLAN_REVIEW_SIDECAR_RE.match(file)
+    if sidecar:
+        try:
+            with open(sidecar.group("plan"), "r", encoding="utf-8") as fh:
+                parent = fh.read()
+        except (OSError, UnicodeDecodeError):
+            return False
+        return is_historical_plan(sidecar.group("plan"), sweep_root, parent, today)
     parts = [os.path.normcase(p) for p in os.path.relpath(file, sweep_root).split(os.sep)]
     if not any(a == "docs" and b == "plans" for a, b in zip(parts, parts[1:])):
         return False

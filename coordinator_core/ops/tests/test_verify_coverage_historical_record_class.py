@@ -56,6 +56,26 @@ def test_recent_unfinished_plan_still_halts(tmp_path, capsys):
     assert flagged == [os.path.join("docs", "plans", "live.md")]
 
 
+def test_plan_review_sidecar_inherits_parent_verdict(tmp_path, capsys):
+    old = (date.today() - timedelta(days=200)).isoformat()
+    recent = date.today().isoformat()
+    code, flagged = _sweep(tmp_path, {
+        "docs/plans/old.md": _plan("deferred", old),
+        "docs/plans/old.md.sid-review.md": QUOTE,
+        "docs/plans/live.md": _plan("executing", recent),
+        "docs/plans/live.md.sid-review.md": QUOTE,
+        "docs/plans/orphan.md.sid-review.md": QUOTE,
+        "docs/live.md": QUOTE,
+    }, capsys)
+    assert code == 1
+    assert flagged == sorted([
+        os.path.join("docs", "live.md"),
+        os.path.join("docs", "plans", "live.md"),
+        os.path.join("docs", "plans", "live.md.sid-review.md"),
+        os.path.join("docs", "plans", "orphan.md.sid-review.md"),
+    ])
+
+
 def test_plan_predicate_boundaries(tmp_path):
     sweep = str(tmp_path)
     f = os.path.join(sweep, "docs", "plans", "p.md")
