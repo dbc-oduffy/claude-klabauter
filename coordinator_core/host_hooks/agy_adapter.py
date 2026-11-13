@@ -17,6 +17,19 @@ SERVED_EVENTS = frozenset({"PreToolUse"})
 _SHELL_TOOL = "run_command"
 _ASK_DECISIONS = frozenset({"ask", "force_ask"})
 
+#: agy edit tools -> the Claude-shaped write-guard tool names `tool_policy.evaluate` routes to `write_guards.engine`.
+_EDIT_TOOLS = {
+    "write_file": "Write",
+    "write_to_file": "Write",
+    "edit_file": "Edit",
+    "replace_file_content": "Edit",
+    "sed_file": "Edit",
+    "multi_replace_file_content": "MultiEdit",
+    "notebook_edit": "NotebookEdit",
+}
+#: Arg keys an agy edit tool may carry its target path under; the first non-empty one becomes `file_path`.
+_PATH_KEYS = ("TargetFile", "AbsolutePath", "FilePath", "file_path", "path")
+
 
 class AgyAdapter:
     """Adapter for agy command hooks (JSON on stdin, JSON on stdout)."""
@@ -34,6 +47,10 @@ class AgyAdapter:
         if name == _SHELL_TOOL:
             tool_name = "Bash"
             tool_input: Dict[str, Any] = {"command": str(args.get("CommandLine") or "")}
+        elif name in _EDIT_TOOLS:
+            tool_name = _EDIT_TOOLS[name]
+            tool_input = dict(args)
+            tool_input["file_path"] = next((str(args[k]) for k in _PATH_KEYS if args.get(k)), "")
         else:
             tool_name = name
             tool_input = dict(args)

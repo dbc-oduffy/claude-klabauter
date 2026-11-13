@@ -67,3 +67,23 @@ def test_routing_verify_keeps_covered_by_and_does_not_gain_the_post_fix_sentence
     call = _verify(routing=True)
     assert _schema(call)["properties"]["covered_by"] == {"type": "string"}
     assert "never a file this row's fix touched or created" not in _prompt(call)
+
+
+def test_routing_verify_names_covered_anywhere_and_right_home_with_a_schema_field():
+    call = _verify(routing=True)
+    assert _schema(call)["properties"]["right_home"] == {"type": "string"}
+    assert "right_home" not in _schema(call)["required"]
+    prompt = _prompt(call)
+    assert "if ANY artifact at HEAD already states the rule, even one outside the declared target" in prompt
+    assert "set `right_home` to the correct file path" in prompt
+
+
+def test_right_home_is_routing_only_never_on_retire_or_post_fix_verify():
+    assert "right_home" not in _schema(_verify())["properties"]
+    assert "right_home" not in _schema(_verify(routing=True, retire=True))["properties"]
+    assert "right_home" not in _prompt(_verify())
+
+
+def test_triage_forbids_the_row_own_file_as_a_target():
+    for targeted in (False, True):
+        assert "Never declare the row's own file" in _prompt(_triage(targeted_runner=targeted))

@@ -19,9 +19,10 @@ commit under the same rules, and a repeat with nothing new lands nothing.
 
 from __future__ import annotations
 
+import os
 from functools import partial
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence
 
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import (
@@ -83,6 +84,10 @@ def commit_grind_rows(main_root: Path, repo_root: Path, params: dict, ledger_pat
     script_path = params.get("script_path")
     if token is not None and not run_token.redeem(main_root, run_id, token, script_path):
         receipt = run_token.spent_receipt(main_root, run_id, token, script_path)
+        if receipt is None:
+            minted_in = _minting_checkout(main_root, run_id, token, script_path)
+            if minted_in is not None:
+                return commit_grind_rows(minted_in, run_token._common_dir(minted_in), params, ledger_paths)
         if receipt is not None:
             return _land_late_rows(main_root, repo_root, receipt, grind, params, run_id, ledger_paths)
         return _error(
@@ -102,6 +107,30 @@ def commit_grind_rows(main_root: Path, repo_root: Path, params: dict, ledger_pat
                 run_token.consume(main_root, run_id, landed=landed)
             else:
                 run_token.release(main_root, run_id, token, script_path)
+
+
+def _minting_checkout(main_root: Path, run_id: str, token: object, script_path: object) -> Optional[Path]:
+    """The checkout holding this run's token when the call was routed to another one (a caller whose cwd is
+    not the consumer repo): the git worktree enclosing an absolute ``script_path``, only when it differs
+    from ``main_root`` and its own record admits or has spent this exact token and script. The token check
+    itself is unchanged; None when no such checkout exists."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    if not isinstance(script_path, str) or not os.path.isabs(script_path):
+        return None
+    here = os.path.realpath(main_root)
+    cur = os.path.dirname(os.path.realpath(script_path))
+    while not os.path.exists(os.path.join(cur, ".git")):
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+    if os.path.normcase(cur) == os.path.normcase(here):
+        return None
+    root = Path(cur)
+    if run_token.admits(root, run_id, token, script_path) or run_token.spent_receipt(root, run_id, token, script_path):
+        return root
+    return None
 
 
 def _land_late_rows(

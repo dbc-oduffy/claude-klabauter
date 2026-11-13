@@ -30,6 +30,40 @@ def test_non_shell_tool_passes_args_through():
     assert (ev.tool_name, ev.tool_input) == ("view_file", {"AbsolutePath": "/a"})
 
 
+def _edit_call(name, args):
+    return {**PAYLOAD, "toolCall": {"name": name, "args": args}}
+
+
+def test_edit_tools_map_to_write_guard_names_with_file_path():
+    expected = {
+        "write_file": "Write", "write_to_file": "Write", "edit_file": "Edit",
+        "replace_file_content": "Edit", "sed_file": "Edit", "multi_replace_file_content": "MultiEdit",
+        "notebook_edit": "NotebookEdit",
+    }
+    for name, tool in expected.items():
+        ev = AgyAdapter().adapt_event(_edit_call(name, {"TargetFile": "/work/repo/a.py"}))
+        assert (ev.tool_name, ev.tool_input["file_path"]) == (tool, "/work/repo/a.py")
+
+
+def test_edit_without_a_path_arg_yields_empty_file_path_and_view_file_stays_unmapped():
+    ev = AgyAdapter().adapt_event(_edit_call("edit_file", {}))
+    assert ev.tool_input["file_path"] == ""
+    assert AgyAdapter().adapt_event(_edit_call("view_file", {"AbsolutePath": "/a"})).tool_name == "view_file"
+
+
+def test_agy_edit_file_event_reaches_write_guards_engine(monkeypatch):
+    from coordinator_core.host_hooks import tool_policy
+    from coordinator_core.write_guards import engine
+
+    seen = []
+    monkeypatch.setattr(engine, "evaluate", lambda event, **kw: seen.append(event) or {})
+    adapter = AgyAdapter()
+    engine_event = adapter.engine_event(adapter.adapt_event(_edit_call("edit_file", {"TargetFile": "/work/repo/a.py"})))
+    tool_policy.evaluate(engine_event)
+    assert len(seen) == 1
+    assert (seen[0]["tool_name"], seen[0]["tool_input"]["file_path"]) == ("Edit", "/work/repo/a.py")
+
+
 def test_missing_workspace_and_session_are_empty():
     ev = AgyAdapter().adapt_event({"toolCall": {"name": "run_command", "args": {}}})
     assert (ev.cwd, ev.session_id) == ("", "")

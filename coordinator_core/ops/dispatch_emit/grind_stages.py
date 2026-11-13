@@ -217,6 +217,17 @@ _COVERED_BY_LEDGER_CLAUSE = " When you set `covered_by`, pass `--verdict dedupe`
 _TRIAGE_COVERED_CLAUSE = (
     "A row whose rule is already stated at HEAD gets a retire verdict (`discard`), never a fix verdict: "
     "cite the covering `path:line` in `evidence`. "
+    "Never declare the row's own file (the lesson row you are triaging) as a target: a target is the "
+    "artifact the rule belongs in. "
+)
+
+#: Routing-only: coverage anywhere at HEAD retires the row even when triage's target was wrong; an
+#: uncovered row with a wrong target reroutes once via `right_home`.
+_ROUTING_COVERED_ANYWHERE_CLAUSE = (
+    " Search beyond triage's target: if ANY artifact at HEAD already states the rule, even one outside "
+    "the declared target, report fail and set `covered_by` to it as `path:line`. If the target is wrong "
+    "and nothing at HEAD covers the rule, report fail and set `right_home` to the correct file path; set "
+    "`right_home` for no other failure."
 )
 
 _FIX_COVERED_CLAUSE = (
@@ -1209,13 +1220,21 @@ def compose_verify_agent_call(
         parts = [
             ("lit", ". No fix has run for this row and none is expected. Triage evidence: "),
             ("expr", evidence_js) if evidence_js else ("lit", "(none)"),
-            ("lit", ". " + (_RETIRE_VERIFY_CLAUSE if retire else _ROUTING_VERIFY_CLAUSE + _COVERED_BY_CLAUSE)),
+            (
+                "lit",
+                ". " + (
+                    _RETIRE_VERIFY_CLAUSE if retire
+                    else _ROUTING_VERIFY_CLAUSE + _COVERED_BY_CLAUSE + _ROUTING_COVERED_ANYWHERE_CLAUSE
+                ),
+            ),
         ]
         if targeted_runner:
             parts.append(("lit", _ROUTING_VERIFY_RUNNER_CLAUSE))
     else:
         parts.append(("lit", _COVERED_BY_CLAUSE + _COVERED_BY_HEAD_CLAUSE))
     schema["properties"]["covered_by"] = {"type": "string"}
+    if routing and not retire:
+        schema["properties"]["right_home"] = {"type": "string"}
     parts = [*head, *parts, *fail_record]
     return _agent_call(
         _join_prompt_parts(parts),

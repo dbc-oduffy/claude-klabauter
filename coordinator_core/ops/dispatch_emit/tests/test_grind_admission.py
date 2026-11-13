@@ -7,23 +7,31 @@ from coordinator_core.ops.dispatch_emit.grind_admission import admit, receipt_bl
 IDS = tuple(f"r{i}" for i in range(21))
 
 
-def test_calls_bound_admits_first_16_of_21():
+def test_calls_bound_admits_first_10_of_21():
     a = admit(IDS, max_agent_calls=40, budget_tokens=None)
-    assert a.admitted == IDS[:16]
-    assert a.not_admitted == IDS[16:]
-    assert len(a.not_admitted) == 5
+    assert a.admitted == IDS[:10]
+    assert a.not_admitted == IDS[10:]
+    assert len(a.not_admitted) == 11
 
 
-def test_calls_boundary_51_all_50_twenty():
-    a = admit(IDS, max_agent_calls=51, budget_tokens=None)
+def test_calls_boundary_77_all_76_twenty():
+    a = admit(IDS, max_agent_calls=77, budget_tokens=None)
     assert a.admitted == IDS and a.not_admitted == ()
-    assert len(admit(IDS, max_agent_calls=50, budget_tokens=None).admitted) == 20
+    assert len(admit(IDS, max_agent_calls=76, budget_tokens=None).admitted) == 20
 
 
 def test_terminal_commit_call_is_reserved():
     a = admit(IDS, max_agent_calls=40, budget_tokens=None)
     assert a.arithmetic["run_fixed_agent_calls"] == 1
-    assert a.arithmetic["bound_by_calls"] == (39 * 100) // 236 == 16
+    assert a.arithmetic["bound_by_calls"] == (39 * 100) // 359 == 10
+
+
+def test_admitted_rows_cover_worst_measured_refuted_discard_cost():
+    # example-stats-repo 20261113T035948Z: 12 resolved rows cost 43 calls; the old 16-row admission ran out.
+    worst_per_row_centi = (43 * 100 + 11) // 12
+    a = admit(IDS, max_agent_calls=40, budget_tokens=None)
+    assert len(a.admitted) * worst_per_row_centi + 100 <= 40 * 100
+    assert len(a.admitted) < 16
 
 
 def test_calls_of_one_admits_no_rows():
@@ -45,7 +53,7 @@ def test_token_bound():
 
 def test_min_of_bounds():
     assert len(admit(IDS, max_agent_calls=40, budget_tokens=1_000_000).admitted) == 7
-    assert len(admit(IDS, max_agent_calls=10, budget_tokens=10_000_000).admitted) == 3
+    assert len(admit(IDS, max_agent_calls=10, budget_tokens=10_000_000).admitted) == 2
 
 
 def test_order_preserved_no_loss():
@@ -62,5 +70,5 @@ def test_non_positive_refused(kw):
 
 def test_receipt_block():
     b = receipt_block(admit(IDS, max_agent_calls=40, budget_tokens=None))
-    assert b["count"] == 5 and b["row_ids"] == list(IDS[16:])
-    assert b["arithmetic"]["admitted_count"] == 16
+    assert b["count"] == 11 and b["row_ids"] == list(IDS[10:])
+    assert b["arithmetic"]["admitted_count"] == 10

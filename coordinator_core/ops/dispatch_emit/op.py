@@ -812,15 +812,22 @@ def _unfired_bind(status: Path, root: Path, run_id: str, sizing_rel: Optional[st
 
 
 def _bind_reserved_run(root: Path, run_id: str, parent_id: str, sizing_rel: Optional[str] = None) -> None:
-    """Copy the parent record into the run's own record dir, then mark the run `running`; the
-    exclusive status create is the bind, so a second bind of one id is refused unless the run is
-    halted or its earlier bind never fired (`_unfired_bind`, needs `sizing_rel`). The first bind
-    also records HEAD as the run base, write-once, so a rebind keeps it."""
+    """Copy the parent record into the run's own record dir (a rebind whose scratch parent was
+    reaped keeps the run's existing copy; neither present is refused before any status write),
+    then mark the run `running`; the exclusive status create is the bind, so a second bind of
+    one id is refused unless the run is halted or its earlier bind never fired (`_unfired_bind`,
+    needs `sizing_rel`). The first bind also records HEAD as the run base, write-once, so a
+    rebind keeps it."""
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
         STATUS_RUNNING, parent_record_rel, run_parent_copy_rel, status_rel,
     )
     from coordinator_core.session import claimed_write
 
+    parent = root / parent_record_rel(parent_id)
+    copy = root / run_parent_copy_rel(run_id)
+    source = parent if parent.is_file() else copy if copy.is_file() else None
+    if source is None:
+        raise ValueError(f"dispatch.emit reserved_run_id {run_id!r}: parent record {parent_record_rel(parent_id)} is missing")
     status = root / status_rel(run_id)
     status.parent.mkdir(parents=True, exist_ok=True)
     record = json.dumps({"run_id": run_id, "status": STATUS_RUNNING}) + "\n"
@@ -830,12 +837,9 @@ def _bind_reserved_run(root: Path, run_id: str, parent_id: str, sizing_rel: Opti
         if not _halted(status) and not _unfired_bind(status, root, run_id, sizing_rel):
             raise ValueError(f"dispatch.emit reserved_run_id {run_id!r} is already bound to a run") from None
         claimed_write.replace_text(status, record)
-    parent = root / parent_record_rel(parent_id)
-    if not parent.is_file():
-        raise ValueError(f"dispatch.emit reserved_run_id {run_id!r}: parent record {parent_record_rel(parent_id)} is missing")
-    copy = root / run_parent_copy_rel(run_id)
-    copy.parent.mkdir(parents=True, exist_ok=True)
-    claimed_write.replace_text(copy, parent.read_text(encoding="utf-8"))
+    if source is not copy:
+        copy.parent.mkdir(parents=True, exist_ok=True)
+        claimed_write.replace_text(copy, source.read_text(encoding="utf-8"))
     _record_run_base(root, run_id)
 
 

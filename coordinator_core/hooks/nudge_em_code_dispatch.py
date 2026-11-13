@@ -80,6 +80,7 @@ from coordinator_core.hooks._em_write_budget import (  # noqa: F401 -- re-bound 
     _SESSION_SIZING,
     _SIZED_ADVISORY,
     _budget_core,
+    _enclosing_repo_root,
     _is_bootstrap_or_out_of_repo,
     _is_scratch_or_tmp,
     _session_sizing_state,
@@ -379,7 +380,10 @@ def _is_scratch_py(file_path: str) -> bool:
     """A `.py` file under a `scratch/` directory: the probe-script shape."""
     if _ext_of(file_path) != ".py":
         return False
-    return "scratch" in os.path.abspath(file_path).replace("\\", "/").split("/")[:-1]
+    abs_path = os.path.abspath(file_path)
+    root = _enclosing_repo_root(abs_path)
+    below = os.path.relpath(abs_path, root) if root else abs_path
+    return "scratch" in below.replace("\\", "/").split("/")[:-1]
 
 
 def _nag_line(prefix: str, session_id: str, sizing_rel=None) -> str:

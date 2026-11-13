@@ -737,3 +737,20 @@ def test_a_mint_with_no_key_and_no_prior_record_has_none(tmp_path):
     repo = _repo(tmp_path)
     run_token.mint(repo, "ask-1", "a.mjs")
     assert _ask_key(repo, "ask-1") is None
+
+
+def test_admits_compares_the_script_canonically_but_never_loosely(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / "scratch").mkdir()
+    script = repo / "scratch" / "s.workflow.mjs"
+    script.write_text("x", encoding="utf-8")
+    (repo / "scratch" / "other.workflow.mjs").write_text("x", encoding="utf-8")
+    link = tmp_path.parent / (tmp_path.name + "-link")
+    link.symlink_to(repo, target_is_directory=True)
+    token = run_token.mint(repo, "ask-1", str(script))
+    assert run_token.admits(repo, "ask-1", token, "scratch/s.workflow.mjs")
+    assert run_token.admits(repo, "ask-1", token, str(link / "scratch" / "s.workflow.mjs"))
+    assert run_token.admits(repo, "ask-1", token, str(repo / "scratch" / ".." / "scratch" / "s.workflow.mjs"))
+    assert not run_token.admits(repo, "ask-1", token, "scratch/other.workflow.mjs")
+    assert not run_token.admits(repo, "ask-1", token, "s.workflow.mjs")
+    assert not run_token.admits(repo, "ask-1", token, 5)

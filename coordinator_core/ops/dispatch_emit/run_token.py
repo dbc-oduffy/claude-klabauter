@@ -652,11 +652,32 @@ def sweep_expired_escrows(repo_root: Path, now: Optional[float] = None) -> int:
     return removed
 
 
-def _matches(record: Optional[dict], run_id: object, token: object, script_path: object) -> bool:
+def _canonical_script(repo_root: Optional[Path], script: str) -> str:
+    """`script` as one real absolute path: a relative one is read from the checkout `repo_root` (a
+    worktree root or its `.git`) and symlinks and case are resolved, so two spellings of one file agree."""
+    base = Path(repo_root) if repo_root is not None else Path.cwd()
+    if repo_root is not None and base.name == ".git":
+        base = base.parent
+    return os.path.normcase(os.path.realpath(os.path.join(str(base), script)))
+
+
+def _same_script(repo_root: Optional[Path], recorded: str, script_path: object) -> bool:
+    """True when `script_path` names the script the record was minted for: the identical string, or a
+    spelling that resolves to the same file. A different file never matches."""
+    if not isinstance(script_path, str):
+        return False
+    if script_path == recorded:
+        return True
+    return _canonical_script(repo_root, script_path) == _canonical_script(repo_root, recorded)
+
+
+def _matches(
+    record: Optional[dict], run_id: object, token: object, script_path: object, repo_root: Optional[Path] = None
+) -> bool:
     if record is None or record.get("run_id") != run_id or not _fresh(record):
         return False
     recorded_script = record.get("script_path")
-    if not isinstance(recorded_script, str) or not recorded_script or script_path != recorded_script:
+    if not isinstance(recorded_script, str) or not recorded_script or not _same_script(repo_root, recorded_script, script_path):
         return False
     want = _digest(str(token))
     admitted = [record.get("sha256"), *(record.get(_PRIOR) or ())]
@@ -678,7 +699,7 @@ def admits(repo_root: Path, run_id: object, token: object, script_path: object) 
     (`ask_contract.touch_run_activity`); that heartbeat never fails the admit."""
     if not _well_formed(run_id, token, script_path):
         return False
-    admitted = _matches(_read_rec(repo_root, run_id), run_id, token, script_path)
+    admitted = _matches(_read_rec(repo_root, run_id), run_id, token, script_path, repo_root)
     if admitted:
         _heartbeat(repo_root, run_id)
     return admitted
@@ -701,7 +722,7 @@ def halt_admits(repo_root: Path, run_id: object, token: object, script_path: obj
     if not _well_formed(run_id, token, script_path):
         return False
     return any(
-        _matches(_read_rec(repo_root, run_id, **kind), run_id, token, script_path)
+        _matches(_read_rec(repo_root, run_id, **kind), run_id, token, script_path, repo_root)
         for kind in ({}, {"claimed": True}, {"retired": True})
     )
 
@@ -721,7 +742,7 @@ def readmit_reviewed(repo_root: Path, run_id: object, token: object, script_path
     if live is None or any(_present(repo_root, run_id, **k) for k in ({}, {"claimed": True}, {"spent": True})):
         return False
     receipt = _read_rec(repo_root, run_id, retired=True)
-    if not _matches(receipt, run_id, token, script_path):
+    if not _matches(receipt, run_id, token, script_path, repo_root):
         return False
     record = {k: receipt.get(k) for k in _RECEIPT_KEYS if receipt.get(k) is not None}
     record["readmitted_at"] = time.time()
@@ -761,11 +782,11 @@ def redeem_claim(
     if live is None or claimed is None:
         return None
     record = _read_rec(repo_root, run_id)
-    if not _matches(record, run_id, token, script_path):
+    if not _matches(record, run_id, token, script_path, repo_root):
         held = _read_rec(repo_root, run_id, claimed=True)
         if held is None:
             return None
-        identity, aside = _adopt_expired_claim(claimed, held, run_id, token, script_path, budget_secs)
+        identity, aside = _adopt_expired_claim(claimed, held, run_id, token, script_path, budget_secs, repo_root)
         if aside is not None:
             aside.unlink(missing_ok=True)
         return identity
@@ -793,7 +814,7 @@ def holds_claim(repo_root: Path, run_id: object, token: object, script_path: obj
     if not isinstance(identity, dict) or not _well_formed(run_id, token, script_path):
         return False
     record = _read_rec(repo_root, run_id, claimed=True)
-    return _matches(record, run_id, token, script_path) and all(
+    return _matches(record, run_id, token, script_path, repo_root) and all(
         record.get(k) == identity.get(k) for k in _IDENTITY_KEYS
     )
 
@@ -856,11 +877,12 @@ def _adopt_expired_claim(
     token: object,
     script_path: object,
     budget_secs: Optional[float] = None,
+    repo_root: Optional[Path] = None,
 ) -> tuple[Optional[dict], Optional[Path]]:
     """Take over a matching, expirable claim: the rename out of `claimed` has exactly one winner,
     who re-creates the claim under its own pid, time and `budget_secs` deadline. Returns (the new
     claim identity or None, the renamed-aside file the caller unlinks)."""
-    if not _matches(record, run_id, token, script_path) or not _claim_expirable(record, claimed):
+    if not _matches(record, run_id, token, script_path, repo_root) or not _claim_expirable(record, claimed):
         return None, None
     aside = claimed.with_name(f"{claimed.name}.adopt.{os.getpid()}")
     try:
@@ -897,7 +919,7 @@ def release(repo_root: Path, run_id: object, token: object, script_path: object)
     claimed = _record_path(repo_root, run_id, claimed=True)
     if live is None or claimed is None:
         return False
-    if not _matches(_read_rec(repo_root, run_id, claimed=True), run_id, token, script_path) or live.exists():
+    if not _matches(_read_rec(repo_root, run_id, claimed=True), run_id, token, script_path, repo_root) or live.exists():
         return False
     try:
         os.replace(claimed, live)
@@ -976,7 +998,7 @@ def spent_receipt(repo_root: Path, run_id: object, token: object, script_path: o
     if not _well_formed(run_id, token, script_path):
         return None
     receipt = _read_rec(repo_root, run_id, spent=True)
-    if not _matches(receipt, run_id, token, script_path):
+    if not _matches(receipt, run_id, token, script_path, repo_root):
         return None
     landed = receipt.get("landed")
     return landed if isinstance(landed, dict) else None
@@ -990,7 +1012,7 @@ def claim_pending(repo_root: Path, run_id: object, token: object, script_path: o
         return False
     path = _record_path(repo_root, run_id, claimed=True)
     record = _read_rec(repo_root, run_id, claimed=True)
-    return _matches(record, run_id, token, script_path) and not _claim_expirable(record, path)
+    return _matches(record, run_id, token, script_path, repo_root) and not _claim_expirable(record, path)
 
 
 def note_halt_landing(repo_root: Path, run_id: object, token: object, script_path: object, landed: dict) -> None:
@@ -1001,7 +1023,7 @@ def note_halt_landing(repo_root: Path, run_id: object, token: object, script_pat
         return
     record = _read_rec(repo_root, run_id)
     target = _record_path(repo_root, run_id, halted=True)
-    if not _matches(record, run_id, token, script_path) or target is None:
+    if not _matches(record, run_id, token, script_path, repo_root) or target is None:
         return
     from coordinator_core.atomic_replace import atomic_write_bytes
 
@@ -1020,7 +1042,7 @@ def halt_landing(repo_root: Path, run_id: object, token: object, script_path: ob
     if not _well_formed(run_id, token, script_path):
         return None
     receipt = _read_rec(repo_root, run_id, halted=True)
-    if not _matches(receipt, run_id, token, script_path):
+    if not _matches(receipt, run_id, token, script_path, repo_root):
         return None
     landed = receipt.get("landed")
     return landed if isinstance(landed, dict) else None
@@ -1078,13 +1100,20 @@ def _wake_stage_waiters(repo_root: Path, ended_run_id: str) -> None:
 
 
 def _resume_stage_waiter(repo_root: Path, waiter: dict) -> bool:
-    """Retire the waiter's token and spool its refire; True when a refire entry was spooled."""
+    """Retire the waiter's token and spool its refire; True when a refire entry was spooled.
+
+    A launcher child (a live escrow) is left untouched and spools nothing: its parked script holds in
+    place and re-stages itself once woken, and the staged twin that script writes reads the token back
+    from escrow. Trap: retiring it here unlinks the escrow, so the twin is tokenless and the child halts
+    at its commit stage with no run token."""
     import logging
 
     from coordinator_core.ask_spool import record as spool
     from coordinator_core.ops.dispatch_emit.ask_contract import RESUME_RUN_ID_ARG
 
     run_id = waiter["run_id"]
+    if escrowed(repo_root, run_id) is not None:
+        return False
     sizing_rel = (_read_rec(repo_root, run_id) or {}).get("sizing_rel")
     discard(repo_root, run_id)
     if not (isinstance(sizing_rel, str) and sizing_rel):

@@ -3197,3 +3197,46 @@ def test_sizing_path_carries_the_month_shard_in_python_and_js_twin():
     assert (
         "'state/sizings/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '/' + d.slice(0, 4)" in gc._SIZE_PATH_JS
     )
+
+
+def _lessons_script() -> str:
+    import dataclasses
+
+    return _compose(profile=dataclasses.replace(_fixture_profile(), name="lessons"))
+
+
+def _eval_lock_keys(script: str, declared_by_row: dict[str, list[str]]) -> dict[str, list[str]]:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    shared = re.search(r"^const SHARED_WRITE_KEYS = .*;$", script, re.M).group(0)
+    fn = re.search(r"^function _lockKeysFor\(row, rowId\) \{.*\}$", script, re.M).group(0)
+    prog = (
+        f"{shared}\n{fn}\nconst d = {json.dumps(declared_by_row)};\nconst out = {{}};\n"
+        "for (const r of Object.keys(d)) { out[r] = _lockKeysFor({ declaredFiles: d[r] }, r); }\n"
+        "console.log(JSON.stringify(out));\n"
+    )
+    done = subprocess.run([node, "-e", prog], capture_output=True, text=True, check=True, timeout=30)
+    return json.loads(done.stdout)
+
+
+def test_lessons_rows_share_the_lessons_md_lock_key_and_other_profiles_do_not():
+    keys = _eval_lock_keys(
+        _lessons_script(),
+        {"a": ["state/lessons/a.yaml"], "b": ["state/lessons/b.yaml"], "c": ["state/lessons.md"]},
+    )
+    assert "state/lessons.md" in keys["a"] and "state/lessons.md" in keys["b"]
+    assert set(keys["a"]) & set(keys["b"]) == {"state/lessons.md"}
+    assert keys["c"].count("state/lessons.md") == 1
+    assert "ledger:a" in keys["a"] and "ledger:b" in keys["b"]
+
+    other = _eval_lock_keys(_compose(), {"a": ["x/a.yaml"], "b": ["x/b.yaml"]})
+    assert not set(other["a"]) & set(other["b"])
+
+
+def test_lock_keys_hold_shared_write_keys_on_the_withlock_path():
+    script = _lessons_script()
+    assert 'const SHARED_WRITE_KEYS = ["state/lessons.md"];' in script
+    assert "const SHARED_WRITE_KEYS = [];" in _compose()
+    assert "async function _entangle" in script
+    assert script.count("withLock(lockKeys, async () => _fixCall(row))") == 1

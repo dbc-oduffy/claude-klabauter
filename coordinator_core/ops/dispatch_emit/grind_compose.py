@@ -427,6 +427,16 @@ _HISTORICAL_UNDO_FAILED_HEAD = "undo-failed: the fix wrote historical records an
 _COVERED_UNDO_FAILED_HEAD = "undo-failed: the row was found already covered and its fix edits may remain in the tree"
 
 
+#: Profiles whose row file is a record of the lesson itself, never a fix target; in `lessons-strip`, `bug`,
+#: `debt` and `improvement` the row's own file is a legitimate target. Twin: ``SELF_TARGET_REFUSED_PROFILES``.
+SELF_TARGET_REFUSED_PROFILES = frozenset({"lessons"})
+
+#: Repo-relative files every row of a profile may write through its fix or close, whatever triage
+#: declared; each is a lock key of every row's fix and verify stages, so those rows serialize
+#: instead of entangling. Absent profile: no shared key.
+SHARED_WRITE_KEYS_BY_PROFILE: dict[str, tuple[str, ...]] = {"lessons": ("state/lessons.md",)}
+
+
 def _norm_rel(path: Any) -> str:
     """A reported path as repo-relative POSIX. Twin: ``_normRel`` in the emitted script."""
     return re.sub(r"^(\./)+", "", str(path).replace("\\", "/"))
@@ -504,6 +514,7 @@ class Row:
     widened: bool = False
     verify_retried: bool = False
     dedupe_flipped: bool = False
+    rerouted: bool = False
     on_fail_used: bool = False
     done: bool = False
     sha: str = ""
@@ -901,6 +912,13 @@ def run_admission(
                 routing, triage_node_id, rec["verdict"], rec.get("tshirt_size"), tradeoff,
                 row.pm_ruling, on_tradeoff,
             )
+            if (
+                profile in SELF_TARGET_REFUSED_PROFILES and action[0] == "node" and _reaches_fix(routing, action[1])
+                and _norm_rel(row.path) in {_norm_rel(p) for p in rec.get("declared_files") or []}
+            ):
+                by_triage_check["triage_handback"] += 1
+                _handback_row(row, "needs-judgment", f"triage targeted the lesson row itself: {row.path}")
+                return
             if action == ("handback", "baton"):
                 to_size.append(row)
                 return
@@ -1151,6 +1169,16 @@ def run_admission(
                 elif not row.verify_retried and not _covered_is_own_edit(row, covered):
                     _close_covered(row, covered, True)
                     return
+            home = _norm_rel(str(result.get("right_home") or "").strip())
+            if (
+                home and not covered and not row.rerouted and row.node in pre_fix_verify
+                and not (profile in SELF_TARGET_REFUSED_PROFILES and home == _norm_rel(row.path))
+            ):
+                row.rerouted = True
+                row.declared_files = [home]
+                row.verify_feedback = result.get("reason", "")
+                _apply_route_row(row, follow_edge(routing, row.node, "pass", row), "rerouted to right_home")
+                return
             if not row.verify_retried:
                 row.verify_retried = True
                 row.verify_feedback = result.get("reason", "")
@@ -1256,7 +1284,7 @@ def run_admission(
             row.pm_ruling = h["adjudication"]["ruling"]
             row.node, row.done, row.fix_node = fix_target, False, None
             row.touched_files, row.created_files, row.removed_files, row.fix_reported = [], [], [], False
-            row.widened = row.verify_retried = row.dedupe_flipped = row.on_fail_used = False
+            row.widened = row.verify_retried = row.dedupe_flipped = row.rerouted = row.on_fail_used = False
             row.verify_feedback = ""
             by_triage_check["ruled_tradeoff"] += 1
             if row.batch_id not in queue:
@@ -1554,7 +1582,7 @@ _ROUTING_HELPERS = (
     "  if (route.kind === 'handback') { row.done = true; _handBack(rowId, route.value, reason, tradeoff, ruling); }\n"
     "  else { row.node = route.value; }\n"
     "}\n"
-    "function _lockKeysFor(row, rowId) { return row.declaredFiles.concat([`ledger:${rowId}`]); }\n"
+    "function _lockKeysFor(row, rowId) { return Array.from(new Set(row.declaredFiles.concat(SHARED_WRITE_KEYS, [`ledger:${rowId}`]))); }\n"
     "function _sizeFailReason(s) {\n"
     "  const tail = String(s.stderr || '').trim().slice(-300) || '(no stderr)';\n"
     "  const why = String(s.reason || '').trim();\n"
@@ -2168,6 +2196,8 @@ def compose_grind_script(
     lines.append("const TRIAGE_DEPTH_BY_KEY = " + json.dumps(triage_depth_by_key, sort_keys=True) + ";")
     lines.append("const VERIFY_SPEC = " + json.dumps(verify_spec_by_node, sort_keys=True) + ";")
     lines.append("const VERIFY_PRE_FIX = " + json.dumps(pre_fix_nodes) + ";")
+    lines.append("const SELF_TARGET_REFUSED_PROFILES = " + json.dumps(sorted(SELF_TARGET_REFUSED_PROFILES)) + ";")
+    lines.append("const SHARED_WRITE_KEYS = " + json.dumps(list(SHARED_WRITE_KEYS_BY_PROFILE.get(profile.name, ()))) + ";")
     lines.append("const VERIFY_HAND_BACK = " + json.dumps(hand_back_nodes) + ";")
     lines.append("const VERIFY_RETIRE = " + json.dumps(retire_nodes) + ";")
 
@@ -2518,7 +2548,7 @@ def compose_grind_script(
         "declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], "
         "evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', "
         "origin: '', refuteNote: '', rulingNote: '', fixReported: false, sizingPath: '', undoReason: '', "
-        "widened: false, verifyRetried: false, dedupeFlipped: false, onFailUsed: false, done: false, sha: '' };\n"
+        "widened: false, verifyRetried: false, dedupeFlipped: false, rerouted: false, onFailUsed: false, done: false, sha: '' };\n"
         "  }\n"
         "}"
     )
@@ -2564,6 +2594,8 @@ def compose_grind_script(
         "      if (_items.length >= 2) { await _splitRow(recRow, row, _items); continue; }\n"
         "      const tradeoff = rec.has_tradeoff ? (rec.tradeoff || '') : '';\n"
         "      const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff, row.pmRuling, rec.ruling_on_tradeoff);\n"
+        "      if (SELF_TARGET_REFUSED_PROFILES.includes(PROFILE_NAME) && route.kind === 'node' && _reachesFix(route.value, new Set())"
+        " && (rec.declared_files || []).some((p) => _normRel(p) === _normRel(row.path))) { _byTriageCheck.triage_handback += 1; await _handBackRow(recRow, 'needs-judgment', `triage targeted the lesson row itself: ${row.path}`); continue; }\n"
         "      if (route.kind === 'handback' && route.value === 'baton') { _toSize.push(recRow); continue; }\n"
         "      if (route.kind === 'handback') { _byTriageCheck.triage_handback += 1; }\n"
         "      if (tradeoff && route.kind === 'handback' && route.value === 'repeat-refused') { _byTriageCheck.repeat_refused += 1; applyRoute(row, recRow, route, REPEAT_REFUSED_HEAD + row.pmRuling, tradeoff, row.pmRuling); }\n"
@@ -2748,6 +2780,15 @@ def compose_grind_script(
         "    } else if (result.covered_by && !VERIFY_PRE_FIX.includes(row.node) && !row.dedupeFlipped && row.origin !== 'triage:dedupe' && !row.verifyRetried && !_coveredIsOwnEdit(row, result.covered_by)) {\n"
         "      await _closeCovered(row, rowId, result.covered_by, true); return;\n"
         "    }\n"
+        "    const _home = _normRel(String(result.right_home || '').trim());\n"
+        "    if (_home !== '' && !result.covered_by && !row.rerouted && VERIFY_PRE_FIX.includes(row.node)"
+        " && !(SELF_TARGET_REFUSED_PROFILES.includes(PROFILE_NAME) && _home === _normRel(row.path))) {\n"
+        "      row.rerouted = true;\n"
+        "      row.declaredFiles = [_home];\n"
+        "      row.verifyFeedback = result.reason || '';\n"
+        "      await _applyRouteRow(row, rowId, followEdge(row.node, 'pass', row), 'rerouted to right_home');\n"
+        "      return;\n"
+        "    }\n"
         "    if (!row.verifyRetried) {\n"
         "      row.verifyRetried = true;\n"
         "      row.verifyFeedback = result.reason || '';\n"
@@ -2843,7 +2884,7 @@ def compose_grind_script(
         "    row.rulingNote = ' Binding ruling for this row (its pm_ruling, adjudicated this run): ' + h.adjudication.ruling;\n"
         "    row.node = SIZE_FIX_TARGET; row.done = false; row.fixNode = null; row.closeResult = null; row.lastOutcome = '';\n"
         "    row.touchedFiles = [row.path]; row.createdFiles = []; row.removedFiles = []; row.fixReported = false;\n"
-        "    row.widened = false; row.verifyRetried = false; row.dedupeFlipped = false; row.onFailUsed = false;\n"
+        "    row.widened = false; row.verifyRetried = false; row.dedupeFlipped = false; row.rerouted = false; row.onFailUsed = false;\n"
         "    row.verifyFeedback = ''; row.undoReason = '';\n"
         "    _byTriageCheck.ruled_tradeoff += 1;\n"
         "    if (!_queue.includes(row.batchId)) { _continuedBatches.add(row.batchId); _queue.push(row.batchId); }\n"

@@ -203,11 +203,20 @@ def test_each_claim_check_lists_the_token_store_once(repo, monkeypatch):
     real_sole = review_edit_source.sole_run_attested_writes
     in_sole: list = []
 
+    per_check: list = []
+
     def held(r):
         listings.append(1)
         if in_sole:
             sole.append(1)
+        elif per_check:
+            per_check[-1] += 1
         return real_held(r)
+
+    def counted_claims(*a, **k):
+        checks.append(1)
+        per_check.append(0)
+        return real_claims(*a, **k)
 
     def sole_run(*a, **k):
         in_sole.append(1)
@@ -219,14 +228,15 @@ def test_each_claim_check_lists_the_token_store_once(repo, monkeypatch):
     sole: list = []
     monkeypatch.setattr(run_token, "held_records", held)
     monkeypatch.setattr(review_edit_source, "sole_run_attested_writes", sole_run)
-    monkeypatch.setattr(
-        warp_run_deliverable, "live_run_write_claims",
-        lambda *a, **k: checks.append(1) or real_claims(*a, **k),
-    )
+    monkeypatch.setattr(warp_run_deliverable, "live_run_write_claims", counted_claims)
     out = _run_a(repo)
     assert out["committed"] is True, out
     assert checks
     # 3f98cefad2 added one listing that is not a claim check: the sole-run review-writes attribution
     # (`review_edit_source.sole_run_attested_writes`). Every claim check still lists the store once.
     assert len(sole) == 1
-    assert len(listings) - len(sole) == len(checks)
+    # A check with an empty wanted-path set returns before listing, so checks may outnumber listings;
+    # the guard is per check: none lists twice, and the totals still reconcile.
+    assert max(per_check) <= 1, per_check
+    assert sum(per_check) == len(listings) - len(sole), (per_check, len(listings), len(sole))
+    assert 1 in per_check, per_check

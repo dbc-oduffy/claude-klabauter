@@ -1,16 +1,22 @@
 """Pure grind admission arithmetic: how many selected rows a run's budget covers.
 
-Per-row cost constants come from the 15 run-cost records plus run 20261006T105900Z's
-memo, whose itemised stage tally over 14 attempted rows is triage 5, fix 15, verify 13,
-commit 11. The per-row commit call is gone, leaving 33 calls over 14 rows, 2.357 per row,
-rounded up to 2.36. The one terminal commit is reserved off the top as a fixed call.
+Per-row cost is the worst measured per-finished-row call count, refute-close and revive
+paths included, taken from two lessons-run receipts (one terminal commit call reserved off
+the top in each, adjudicate calls counted as row cost):
+- claude-klabauter 20261113T030828Z: 33 calls (triage 4, refute-close 5, fix 3, verify 19,
+  adjudicate 1, commit 1); 16 rows resolved; 32 / 16 = 2.00 per row.
+- example-stats-repo 20261113T035948Z: 44 calls (triage 4, refute-close 4, fix 7, verify 27,
+  adjudicate 1, commit 1); halted budget-exhausted with 4 refuted-discard rows unfinished;
+  the 12 rows that resolved cost 43 / 12 = 3.58 per row (the 16-row mean, 2.69, is a floor
+  because the unfinished rows are in the denominator).
+ceil(3.583) = 3.59 centi-rounded up gives 359, admitting 10 rows under max_agent_calls=40.
 """
 
 from __future__ import annotations
 
 from typing import NamedTuple, Optional, Sequence
 
-ROW_AGENT_CALLS_CENTI = 236
+ROW_AGENT_CALLS_CENTI = 359
 RUN_FIXED_AGENT_CALLS = 1
 ROW_OUTPUT_TOKENS = 140076
 NOT_ADMITTED_EXTRA_KEY = "not_admitted"
