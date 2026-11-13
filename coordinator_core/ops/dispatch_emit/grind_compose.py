@@ -431,6 +431,10 @@ _COVERED_UNDO_FAILED_HEAD = "undo-failed: the row was found already covered and 
 #: `debt` and `improvement` the row's own file is a legitimate target. Twin: ``SELF_TARGET_REFUSED_PROFILES``.
 SELF_TARGET_REFUSED_PROFILES = frozenset({"lessons"})
 
+#: Profiles with no backlog schema for `grind-row split`; a row of one routes by its verdict however many
+#: items triage names. Twin: ``NEVER_SPLIT_PROFILES``.
+NEVER_SPLIT_PROFILES = frozenset({"lessons"})
+
 #: Repo-relative files every row of a profile may write through its fix or close, whatever triage
 #: declared; each is a lock key of every row's fix and verify stages, so those rows serialize
 #: instead of entangling. Absent profile: no shared key.
@@ -903,7 +907,7 @@ def run_admission(
                     f"triage named {len(items)} independent items, over the split cap of {MAX_SPLIT_ITEMS}",
                 )
                 return
-            if len(items) >= 2:
+            if len(items) >= 2 and profile not in NEVER_SPLIT_PROFILES:
                 _split_row(row)
                 return
             tradeoff = rec.get("tradeoff", "") if rec.get("has_tradeoff") else ""
@@ -2197,6 +2201,7 @@ def compose_grind_script(
     lines.append("const VERIFY_SPEC = " + json.dumps(verify_spec_by_node, sort_keys=True) + ";")
     lines.append("const VERIFY_PRE_FIX = " + json.dumps(pre_fix_nodes) + ";")
     lines.append("const SELF_TARGET_REFUSED_PROFILES = " + json.dumps(sorted(SELF_TARGET_REFUSED_PROFILES)) + ";")
+    lines.append("const NEVER_SPLIT_PROFILES = " + json.dumps(sorted(NEVER_SPLIT_PROFILES)) + ";")
     lines.append("const SHARED_WRITE_KEYS = " + json.dumps(list(SHARED_WRITE_KEYS_BY_PROFILE.get(profile.name, ()))) + ";")
     lines.append("const VERIFY_HAND_BACK = " + json.dumps(hand_back_nodes) + ";")
     lines.append("const VERIFY_RETIRE = " + json.dumps(retire_nodes) + ";")
@@ -2591,7 +2596,7 @@ def compose_grind_script(
         "      row.origin = `triage:${rec.verdict}`;\n"
         "      const _items = Array.isArray(rec.items) ? rec.items : [];\n"
         "      if (_items.length > MAX_SPLIT_ITEMS) { _byTriageCheck.triage_handback += 1; await _handBackRow(recRow, 'needs-judgment', `triage named ${_items.length} independent items, over the split cap of ${MAX_SPLIT_ITEMS}`); continue; }\n"
-        "      if (_items.length >= 2) { await _splitRow(recRow, row, _items); continue; }\n"
+        "      if (_items.length >= 2 && !NEVER_SPLIT_PROFILES.includes(PROFILE_NAME)) { await _splitRow(recRow, row, _items); continue; }\n"
         "      const tradeoff = rec.has_tradeoff ? (rec.tradeoff || '') : '';\n"
         "      const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff, row.pmRuling, rec.ruling_on_tradeoff);\n"
         "      if (SELF_TARGET_REFUSED_PROFILES.includes(PROFILE_NAME) && route.kind === 'node' && _reachesFix(route.value, new Set())"

@@ -53,19 +53,21 @@ def _is_codex_deny(obj):
 
 
 GROK_PERMISSION_DECISIONS = ("allow", "deny", "ask")
+GROK_INNER_KEYS = CODEX_DENY_KEYS | {"additionalContext"}
 
 
 def _is_grok_decision(obj):
-    """True for {} or the nested PreToolUse answer {"hookSpecificOutput": {event, decision[, reason]}}."""
+    """True for {} or the nested PreToolUse answer {"hookSpecificOutput": {event, decision[, reason][, additionalContext]}}."""
     if obj == {}:
         return True
     if not isinstance(obj, dict) or set(obj) != {"hookSpecificOutput"}:
         return False
     inner = obj["hookSpecificOutput"]
     return (isinstance(inner, dict) and {"hookEventName", "permissionDecision"} <= set(inner)
-            and set(inner) <= CODEX_DENY_KEYS and inner["hookEventName"] == "PreToolUse"
+            and set(inner) <= GROK_INNER_KEYS and inner["hookEventName"] == "PreToolUse"
             and inner["permissionDecision"] in GROK_PERMISSION_DECISIONS
-            and isinstance(inner.get("permissionDecisionReason", ""), str))
+            and isinstance(inner.get("permissionDecisionReason", ""), str)
+            and isinstance(inner.get("additionalContext", ""), str))
 
 
 def _valid_answer(host, obj):

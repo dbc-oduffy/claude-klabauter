@@ -72,22 +72,37 @@ class GrokAdapter:
         }
 
     def render(self, host_event: HostEvent, verdict: Verdict) -> Dict[str, Any]:
-        """Claude-shaped `hookSpecificOutput` for deny and ask; anything else is the no-change `{}`."""
+        """Claude-shaped `hookSpecificOutput` for deny, ask and an allow/ask carrying `additionalContext`; else `{}`."""
         if host_event.event not in SERVED_EVENTS:
             return neutral_fallback(HOST_GROK)
         decision, reason = verdict_parts(verdict)
+        context = _advisory_text(verdict)
         if decision == "deny":
             return _decision(host_event, "deny", reason or "denied by coordinator guard")
         if decision in ("ask", "force_ask"):
-            return _decision(host_event, "ask", reason or "coordinator: confirm")
+            return _decision(host_event, "ask", reason or "coordinator: confirm", context)
+        if decision == "allow" and context:
+            return _decision(host_event, "allow", reason, context)
         return neutral_fallback(HOST_GROK)
 
 
-def _decision(host_event: HostEvent, decision: str, reason: str) -> Dict[str, Any]:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": host_event.event,
-            "permissionDecision": decision,
-            "permissionDecisionReason": reason,
-        }
+def _advisory_text(verdict: Optional[Mapping[str, Any]]) -> str:
+    """The `additionalContext` of a flat or `hookSpecificOutput`-nested verdict, or ""."""
+    if not isinstance(verdict, Mapping):
+        return ""
+    nested = verdict.get("hookSpecificOutput")
+    inner = nested.get("additionalContext") if isinstance(nested, Mapping) else None
+    context = inner or verdict.get("additionalContext")
+    return context if isinstance(context, str) else ""
+
+
+def _decision(host_event: HostEvent, decision: str, reason: str, context: str = "") -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "hookEventName": host_event.event,
+        "permissionDecision": decision,
     }
+    if reason:
+        out["permissionDecisionReason"] = reason
+    if context:
+        out["additionalContext"] = context
+    return {"hookSpecificOutput": out}

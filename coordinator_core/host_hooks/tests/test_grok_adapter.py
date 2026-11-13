@@ -94,6 +94,22 @@ def test_render_deny_ask_and_default():
     assert a.render(ev, {"permissionDecision": "allow"}) == {}
 
 
+def test_render_allow_with_advisory_carries_additional_context_and_bare_allow_stays_neutral():
+    a = GrokAdapter()
+    ev = a.adapt_event(_payload("Bash", {"command": "ls"}))
+    flat = a.render(ev, {"permissionDecision": "allow", "additionalContext": "nag"})
+    assert flat == {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                           "additionalContext": "nag"}}
+    nested = a.render(ev, {"hookSpecificOutput": {"permissionDecision": "allow", "additionalContext": "nag",
+                                                  "permissionDecisionReason": "why"}})
+    assert nested["hookSpecificOutput"]["additionalContext"] == "nag"
+    assert nested["hookSpecificOutput"]["permissionDecisionReason"] == "why"
+    ask = a.render(ev, {"decision": "ask", "reason": "sure?", "additionalContext": "nag"})
+    assert ask["hookSpecificOutput"]["additionalContext"] == "nag"
+    assert a.render(ev, {"permissionDecision": "allow", "additionalContext": ""}) == {}
+    assert a.render(ev, {"permissionDecision": "allow"}) == {}
+
+
 _CONTRACT_EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit", "edit_file", "write_file")
 
 

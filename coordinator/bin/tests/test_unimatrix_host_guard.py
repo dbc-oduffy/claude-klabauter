@@ -325,6 +325,23 @@ def test_grok_neutral_or_allow_is_neutral_unknown_never_engine(tmp_path, body):
     assert state == hg.NEUTRAL_UNKNOWN and state != "engine"
 
 
+GROK_ALLOW_ADVISORY = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                               "additionalContext": "advisory text"}}
+
+
+def test_grok_allow_with_additional_context_is_valid_and_reaches_output_intact(tmp_path):
+    assert hg._valid_answer("grok", GROK_ALLOW_ADVISORY) is True
+    root = make_engine(tmp_path, shim(f"print({json.dumps(json.dumps(GROK_ALLOW_ADVISORY))})"))
+    answer, state = hg.guard("grok", GROK_PAYLOAD, root)
+    assert answer == GROK_ALLOW_ADVISORY and state == hg.NEUTRAL_UNKNOWN
+
+
+def test_grok_non_string_additional_context_is_invalid():
+    bad = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                  "additionalContext": 3}}
+    assert hg._valid_answer("grok", bad) is False
+
+
 def test_grok_deny_passes_through_as_engine(tmp_path):
     root = make_engine(tmp_path, shim(f"print({json.dumps(json.dumps(GROK_DENY))})"))
     assert hg.guard("grok", GROK_PAYLOAD, root) == (GROK_DENY, "engine")

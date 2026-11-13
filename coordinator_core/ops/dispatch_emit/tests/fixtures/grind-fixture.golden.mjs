@@ -243,6 +243,8 @@ const VERIFY_PRE_FIX = [];
 
 const SELF_TARGET_REFUSED_PROFILES = ["lessons"];
 
+const NEVER_SPLIT_PROFILES = ["lessons"];
+
 const SHARED_WRITE_KEYS = [];
 
 const VERIFY_HAND_BACK = [];
@@ -584,7 +586,7 @@ async function _triageBatch(batchState) {
       row.origin = `triage:${rec.verdict}`;
       const _items = Array.isArray(rec.items) ? rec.items : [];
       if (_items.length > MAX_SPLIT_ITEMS) { _byTriageCheck.triage_handback += 1; await _handBackRow(recRow, 'needs-judgment', `triage named ${_items.length} independent items, over the split cap of ${MAX_SPLIT_ITEMS}`); continue; }
-      if (_items.length >= 2) { await _splitRow(recRow, row, _items); continue; }
+      if (_items.length >= 2 && !NEVER_SPLIT_PROFILES.includes(PROFILE_NAME)) { await _splitRow(recRow, row, _items); continue; }
       const tradeoff = rec.has_tradeoff ? (rec.tradeoff || '') : '';
       const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff, row.pmRuling, rec.ruling_on_tradeoff);
       if (SELF_TARGET_REFUSED_PROFILES.includes(PROFILE_NAME) && route.kind === 'node' && _reachesFix(route.value, new Set()) && (rec.declared_files || []).some((p) => _normRel(p) === _normRel(row.path))) { _byTriageCheck.triage_handback += 1; await _handBackRow(recRow, 'needs-judgment', `triage targeted the lesson row itself: ${row.path}`); continue; }
