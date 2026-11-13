@@ -7,7 +7,8 @@ pair for completions (deletions under docs/plans), one `git cat-file --batch` fo
 
 Cost trap: never path-limit `git log` over docs/plans (history simplification costs seconds);
 diff-tree with a pathspec prunes the walk. Previews are batched, never one spawn per plan.
-`plan_footprint` and `paths_to_docs` are the C10 contract surface with no claude-klabauter caller yet.
+`plan_footprint` (singular) is the C10 contract surface with no claude-klabauter caller; the batched
+`plan_footprints` and `paths_to_docs` are used by `ceremony.plan_wiki_map`.
 
 Assumed view columns (contract not yet landed; adjust here only):
   plans_completed:  plan, sha, summary, sizing, ranked, completed_at (ISO date or datetime)
@@ -18,6 +19,7 @@ Assumed view columns (contract not yet landed; adjust here only):
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -38,6 +40,10 @@ PLANS_DIR = "docs/plans"
 _GIT_TIMEOUT = 30
 _DOC_PREFIXES = ("docs/wiki/", "docs/atlas/")
 _WRITES_RE = re.compile(r"^\s*writes:\s*\[([^\]]*)\]", re.MULTILINE)
+WIKI_DIR = "docs/wiki"
+WIKI_CACHE_KEY = "paths.plan_wiki_map_cache"
+_IN_CHUNK = 500
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]+")
 
 
 def resolve_index_path(index_path: Optional[os.PathLike] = None) -> Optional[Path]:
@@ -204,8 +210,12 @@ def plan_footprint(
         rows = _select(db, f"SELECT path FROM {VIEW_PLAN_FOOTPRINT} WHERE plan = ?", (plan,))
         return [r["path"] for r in rows]
     root = Path(repo) if repo is not None else Path.cwd()
+    return _parse_writes(_plan_text(plan, None, root))
+
+
+def _parse_writes(text: str) -> List[str]:
     paths: List[str] = []
-    for m in _WRITES_RE.finditer(_plan_text(plan, None, root)):
+    for m in _WRITES_RE.finditer(text):
         for item in m.group(1).split(","):
             item = item.strip().strip("\"'")
             if item and item not in paths:
@@ -213,14 +223,112 @@ def plan_footprint(
     return paths
 
 
+def plan_footprints(
+    specs: List[Tuple[str, Optional[str]]],
+    *,
+    index_path: Optional[os.PathLike] = None,
+    repo: Optional[os.PathLike] = None,
+    texts: Optional[List[str]] = None,
+) -> Dict[str, List[str]]:
+    """`plan_footprint` for many (plan, sha) pairs, keyed by plan.
+
+    The view path is one SELECT per 500 plans; the git fallback parses one `_plan_texts` batch
+    (or the caller's `texts`, aligned with `specs`), never `plan_footprint` in a loop.
+    """
+    result: Dict[str, List[str]] = {plan: [] for plan, _ in specs}
+    db = resolve_index_path(index_path)
+    if db is not None:
+        plans = list(result)
+        for i in range(0, len(plans), _IN_CHUNK):
+            chunk = plans[i : i + _IN_CHUNK]
+            rows = _select(
+                db,
+                f"SELECT plan, path FROM {VIEW_PLAN_FOOTPRINT} "
+                f"WHERE plan IN ({','.join('?' * len(chunk))})",
+                tuple(chunk),
+            )
+            for r in rows:
+                result[r["plan"]].append(r["path"])
+        return result
+    root = Path(repo) if repo is not None else Path.cwd()
+    if texts is None:
+        texts = _plan_texts(specs, root)
+    for (plan, _), text in zip(specs, texts):
+        result[plan] = _parse_writes(text)
+    return result
+
+
+def _wiki_cache_file(root: Path) -> Path:
+    base = None
+    try:
+        from coordinator_core.machine_resolver import registry_get
+
+        base = registry_get(WIKI_CACHE_KEY)
+    except Exception:
+        base = None
+    return (Path(base) if base else root / ".coordinator-local" / "cache" / "plan-wiki-map") / (
+        "wiki-tokens.json"
+    )
+
+
+def _read_page_tokens(path: str) -> List[str]:
+    """Path-like tokens (containing `/` or `.`) a wiki page names."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return []
+    found = {t.rstrip(".,") for t in _TOKEN_RE.findall(text)}
+    return sorted(t for t in found if "/" in t or "." in t)
+
+
+def _wiki_index(root: Path) -> Dict[str, frozenset]:
+    """wiki page -> tokens, re-reading only pages whose (mtime_ns, size) changed.
+
+    Scan is `os.scandir`, no spawn; the cache is derived state and a write failure is ignored.
+    """
+    wiki = root / WIKI_DIR
+    cache_file = _wiki_cache_file(root)
+    try:
+        with open(cache_file, encoding="utf-8") as f:
+            cached = json.load(f)
+        if not isinstance(cached, dict):
+            cached = {}
+    except (OSError, ValueError):
+        cached = {}
+    fresh: Dict[str, list] = {}
+    try:
+        entries = [e for e in os.scandir(wiki) if e.name.endswith(".md") and e.is_file()]
+    except OSError:
+        return {}
+    for e in sorted(entries, key=lambda e: e.name):
+        st = e.stat()
+        rec = cached.get(e.name)
+        if isinstance(rec, list) and len(rec) == 3 and rec[0] == st.st_mtime_ns and rec[1] == st.st_size:
+            fresh[e.name] = rec
+        else:
+            fresh[e.name] = [st.st_mtime_ns, st.st_size, _read_page_tokens(e.path)]
+    if fresh != cached:
+        tmp = cache_file.with_suffix(f".{os.getpid()}.tmp")
+        try:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(fresh, separators=(",", ":")), encoding="utf-8")
+            os.replace(tmp, cache_file)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+    return {f"{WIKI_DIR}/{name}": frozenset(rec[2]) for name, rec in fresh.items()}
+
+
 def paths_to_docs(
     paths: List[str],
     *,
     index_path: Optional[os.PathLike] = None,
+    repo: Optional[os.PathLike] = None,
 ) -> Dict[str, List[str]]:
     """Map each path to the wiki pages / atlas systems that cover it.
 
-    The git fallback has no coverage graph: only a path already under a docs prefix maps (to itself).
+    The git fallback has no coverage graph: a path under a docs prefix maps to itself, and to every
+    `docs/wiki/*.md` page whose text names it (tokens cached on (mtime_ns, size); no spawn).
     """
     db = resolve_index_path(index_path)
     result: Dict[str, List[str]] = {p: [] for p in paths}
@@ -229,9 +337,12 @@ def paths_to_docs(
             rows = _select(db, f"SELECT doc FROM {VIEW_PATHS_TO_DOCS} WHERE path = ?", (p,))
             result[p] = [r["doc"] for r in rows]
         return result
+    root = Path(repo) if repo is not None else Path.cwd()
+    index = _wiki_index(root) if paths else {}
     for p in paths:
-        if p.startswith(_DOC_PREFIXES):
-            result[p] = [p]
+        docs = [p] if p.startswith(_DOC_PREFIXES) else []
+        docs += [page for page, toks in index.items() if p in toks and page != p]
+        result[p] = docs
     return result
 
 

@@ -111,7 +111,35 @@ def _reap_staged_twins(worktree_root: Path, run_id: str, *, own: bool) -> None:
         pass
 
 
+#: Appended to every non-landing halt-commit error: the commit agent that reads a bare refusal
+#: improvises a hand stage, so the reply names the one allowed move.
+HALT_REFUSAL_ALTERNATIVE = (
+    "Instead: return this reply unchanged and stage nothing by hand; the engine lands only the run's "
+    "named paths, on the next `dispatch.land_run` call."
+)
+
+
+def _with_named_path_alternative(reply: object) -> object:
+    """``reply`` with ``HALT_REFUSAL_ALTERNATIVE`` on an uncommitted error or refusal; a landed,
+    deferred or clean reply passes through. Appends to ``error`` when present, else sets ``remedy``."""
+    if not isinstance(reply, dict) or reply.get("committed") is True:
+        return reply
+    error = reply.get("error")
+    if isinstance(error, str) and error:
+        if HALT_REFUSAL_ALTERNATIVE not in error:
+            reply["error"] = f"{error}\n{HALT_REFUSAL_ALTERNATIVE}"
+    elif reply.get("refused"):
+        reply.setdefault("remedy", HALT_REFUSAL_ALTERNATIVE)
+    return reply
+
+
 def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> dict:
+    """Land a halted run's record and finished rows by named paths; an error or refusal reply carries
+    ``HALT_REFUSAL_ALTERNATIVE``, never an instruction to stage the tree."""
+    return _with_named_path_alternative(_commit_halted_record(worktree_root, repo_root, params))
+
+
+def _commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> dict:
     from coordinator_core.ops.dispatch_emit import run_token
     from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import _error
 

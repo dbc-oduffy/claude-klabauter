@@ -188,6 +188,7 @@ live — imported directly by `ceremony.session_instructions`) survives as
 | File | Op | Purpose |
 |---|---|---|
 | `commit_exec_bit.py` | `commit.exec_bit_change` | Windows-safe exec-bit change + commit (DR-151 footgun), skips if already executable |
+| `plan_wiki_map.py` | `ceremony.plan_wiki_map` | Read-only, no-model map from completed plans (touched paths plus sizing) to the `docs/wiki` pages each impactful plan affects, with a 10k-char plan preview; data via `weekly_doc_files` (doc_files views, batched git fallback), constant spawn count |
 | `node_handlers.py` | — | Handler library for D/J/F/B/X node types |
 | `pipeline_context.py` | — | Ceremony resolved-state data model |
 | `receipt_emit.py` | — | Ceremony evidence receipt emitter |

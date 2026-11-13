@@ -410,6 +410,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # main_worktree_root(common_dir), same as append_day).
     "changelog.compute_day_fields":          "common_dir",
     "changelog.daily_log":                   "common_dir",
+    "ceremony.plan_wiki_map":                  "common_dir",
     "changelog.upsert_reviewed":             "common_dir",
     "plan.append_session":                   "common_dir",
     # Backfill: records.query (strang-11 C1a COMPUTE_ONLY read op) was registered without an

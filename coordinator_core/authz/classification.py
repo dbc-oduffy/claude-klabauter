@@ -2164,6 +2164,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # changelog.daily_log — COMPUTE_ONLY: ranked plans completed in a window, from the
     # example-retrieval-repo plans_completed view or a git-free docs/plans scan; reads only, no model call, never writes.
     "changelog.daily_log": OpClass.COMPUTE_ONLY,
+    # ceremony.plan_wiki_map — COMPUTE_ONLY: read-only map from completed plans to the wiki
+    # pages they affect; no writes.
+    "ceremony.plan_wiki_map": OpClass.COMPUTE_ONLY,
     # changelog.upsert_reviewed — MUTATING: surgical single-field upsert of the
     # **Reviewed:** line(s) inside state/week-changelog/{date}.md's `## {date} — {machine}`
     # section. Curation-preserving counterpart to changelog.append_day (which recomposes

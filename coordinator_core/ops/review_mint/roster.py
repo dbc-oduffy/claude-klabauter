@@ -18,6 +18,8 @@ _VALID_EFFORTS = frozenset({"low", "medium", "high"})
 #: The tiers ``dispatch_emit.emit.derive_review_tier`` returns.
 VALID_TIERS = frozenset({"lightweight", "standard", "full"})
 _VALID_PER_VALUES = frozenset({"slice", "whole-diff"})
+#: Result schema an ``op:`` agent entry that names none resolves to.
+DEFAULT_OP_SCHEMA = "whole-diff-review-result"
 #: Mirror of ``sizing_assemble.TSHIRT_ORDER`` (importing it costs ~16ms); a test pins equality.
 _TSHIRT_ORDER = ("XS", "S", "M", "L", "XL", "XXL")
 
@@ -120,6 +122,8 @@ class ExecuteReview:
     #: adjudicates the plan's exit criterion is DoE's to name, never this
     #: engine's. `None` keeps the plan's own falsifier on the test runner.
     judge: Optional[ReviewAgent] = None
+    #: One line per agent entry skipped as unparseable (stage index and defect); empty when none.
+    advisories: Tuple[str, ...] = ()
 
 
 #: The roster label of the signal-resolved reviewer stage that required reviewers join.
@@ -245,6 +249,7 @@ def parse_execute_review(
     integration_agents: List[ReviewAgent] = []
     judge_stage_count = 0
     judge_agents: List[ReviewAgent] = []
+    advisories: List[str] = []
 
     for index, raw_stage in enumerate(raw_stages):
         if not isinstance(raw_stage, dict):
@@ -257,11 +262,12 @@ def parse_execute_review(
             raise RosterFragmentError(
                 f"execute_review stage {index} ({kind!r}) declares no agents"
             )
-        resolved = [
-            agent
-            for raw_agent in raw_agents
-            for agent in _resolve_review_agent(raw_agent, index, signals)
-        ]
+        resolved: List[ReviewAgent] = []
+        for raw_agent in raw_agents:
+            try:
+                resolved.extend(_resolve_review_agent(raw_agent, index, signals))
+            except RosterFragmentError as exc:
+                advisories.append(f"skipped unparseable roster agent entry: {exc}")
 
         if kind == "prep":
             prep_agents.extend(resolved)
@@ -322,6 +328,7 @@ def parse_execute_review(
         review_wave=wave_agents,
         integration=integration_agents[0] if integration_stage_count == 1 else None,
         judge=judge_agents[0] if judge_stage_count == 1 else None,
+        advisories=tuple(advisories),
     )
 
 
@@ -336,6 +343,8 @@ def _resolve_review_agent(
         )
 
     schema = raw_agent.get("schema")
+    if schema is None and "op" in raw_agent:
+        schema = DEFAULT_OP_SCHEMA
     if not isinstance(schema, str) or not schema:
         raise RosterFragmentError(
             f"execute_review stage {stage_index} agent entry carries no 'schema' name"

@@ -1,16 +1,16 @@
 """Settle co-declared peer holds at hunk level: a landing carries only its own hunks.
 
 `peer_hunk_gate.co_declared_peer_holds` names each landing path another unlanded run also claims.
-`settle` sorts those holds: a path co-declared by a live sibling of the same parent, or any per-run
-artifact (`is_per_run_artifact`), is read through `own_hunk_stage.read_diff` and split by
-`run_hunk_claims`; the own hunks go to `stage` and `settled_blob` builds their blob. Every other
+`settle` sorts those holds: a path co-declared by a live sibling of the same parent, any per-run
+artifact (`is_per_run_artifact`), or an additive registry file (`is_additive_registry`), is read
+through `own_hunk_stage.read_diff` and split by `run_hunk_claims`; the own hunks go to `stage` and `settled_blob` builds their blob. Every other
 hold, and every unknown, stays in `still_held`.
 
 Invariants: no spawn (in-process reads only); a hold whose sibling is `UNREADABLE_PEER_CLAIMS`
-never settles; for a per-run artifact ONLY, a pure insertion at the same HEAD anchor as a sibling's
-insertion is not overlap and stages just the own inserted lines (a line both runs changed, or a
-modified or deleted line, still holds); an unattributed hunk holds. Stdlib only at module top
-(land_run cold-import pin); readers are imported lazily.
+never settles; for a per-run artifact or additive registry file ONLY, a pure insertion at the same HEAD
+anchor as a sibling's insertion is not overlap and stages just the own inserted lines (a line both runs
+changed still holds; a registry file's modified or deleted line holds too); an unattributed hunk holds.
+Stdlib only at module top (land_run cold-import pin); readers are imported lazily.
 """
 
 from __future__ import annotations
@@ -28,6 +28,10 @@ PER_RUN_ARTIFACTS = frozenset({"DELIVERY.md"})
 PER_RUN_ARTIFACT_DIRS = ("docs/delivery/",)
 
 
+#: Registry files every run appends rows to; a pure insertion by an unrelated run settles at hunk level.
+ADDITIVE_REGISTRY_FILES = frozenset({"coordinator_core/ops/_registry_map.py", "coordinator_core/ops/__init__.py"})
+
+
 def _norm(path: object) -> str:
     text = str(path or "").replace("\\", "/")
     while text.startswith("./"):
@@ -39,6 +43,15 @@ def is_per_run_artifact(path: str) -> bool:
     """Whether `path` is a per-run artifact: a `DELIVERY.md` at any depth or a file under `docs/delivery/`."""
     text = _norm(path)
     return text.rpartition("/")[2] in PER_RUN_ARTIFACTS or text.startswith(PER_RUN_ARTIFACT_DIRS)
+
+
+def is_additive_registry(path: str) -> bool:
+    """Whether `path` is one of `ADDITIVE_REGISTRY_FILES`."""
+    return _norm(path) in ADDITIVE_REGISTRY_FILES
+
+
+def _settles_by_insertion(path: str) -> bool:
+    return is_per_run_artifact(path) or is_additive_registry(path)
 
 
 def _parent_of(root: Path, run_id: str) -> Optional[str]:
@@ -94,9 +107,12 @@ def _runs(lines: Iterable[int]) -> list:
     return out
 
 
-def _settle_artifact(root: Path, run_id: str, path: str, diff, siblings: list) -> Optional[list]:
+def _settle_artifact(
+    root: Path, run_id: str, path: str, diff, siblings: list, *, insertions_only: bool = False
+) -> Optional[list]:
     """Own hunks of a per-run artifact, narrowed to the own inserted lines where a sibling inserts at
-    the same anchor; None when any hunk is unattributed, shared on a changed line, or unknowable."""
+    the same anchor; None when any hunk is unattributed, shared on a changed line, or unknowable.
+    `insertions_only` also returns None for any hunk that modifies or deletes a HEAD line."""
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.ops.dispatch_emit import run_hunk_claims as rhc
 
@@ -126,7 +142,7 @@ def _settle_artifact(root: Path, run_id: str, path: str, diff, siblings: list) -
                 return None
             out.extend(rhc.Hunk(path, hunk.old_start, 0, first, count) for first, count in _runs(mine))
             continue
-        if not span:
+        if insertions_only or not span:
             return None
         if span & sib_lines and not span & own_lines:
             continue
@@ -140,8 +156,8 @@ def _settle_path(root: Path, run_id: str, path: str, diff, siblings: list) -> Op
     """Own hunks of `path` that land now, or None when the path stays held."""
     from coordinator_core.ops.dispatch_emit import run_hunk_claims as rhc
 
-    if is_per_run_artifact(path):
-        return _settle_artifact(root, run_id, path, diff, siblings)
+    if _settles_by_insertion(path):
+        return _settle_artifact(root, run_id, path, diff, siblings, insertions_only=is_additive_registry(path))
     split = rhc.own_hunks(root, run_id, path, list(diff.hunks), {s: True for s in siblings})
     if split.overlapping or not split.own:
         return None
@@ -181,13 +197,13 @@ def _junior_siblings_hold(root: Path, path: str, diff, split, siblings: list) ->
 
 
 def _qualifies(root: Path, run_id: str, path: str, sibs: list) -> bool:
-    """The one settle rule: no unreadable claim, and a per-run artifact or every sibling live on the same parent.
-    Any unknown (parentage, halt state) disqualifies."""
+    """The one settle rule: no unreadable claim, and a per-run artifact, an additive registry file, or every
+    sibling live on the same parent. Any unknown (parentage, halt state) disqualifies."""
     from coordinator_core.ops.dispatch_emit.peer_hunk_gate import UNREADABLE_PEER_CLAIMS
 
     try:
         return UNREADABLE_PEER_CLAIMS not in sibs and (
-            is_per_run_artifact(path) or all(_same_parent_live(root, run_id, s) for s in sibs)
+            _settles_by_insertion(path) or all(_same_parent_live(root, run_id, s) for s in sibs)
         )
     except Exception:  # noqa: BLE001 -- unknown parentage holds
         return False

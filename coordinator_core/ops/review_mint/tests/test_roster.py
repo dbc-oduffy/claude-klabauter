@@ -209,24 +209,58 @@ def test_parse_execute_review_missing_execute_review_key_refuses():
         parse_execute_review({"schema": "review-roster-fragment"})
 
 
-def test_parse_execute_review_agent_type_without_model_refuses():
+def _wave(fragment: dict) -> list:
+    return fragment["execute_review"]["stages"][1]["agents"]
+
+
+def _skipped_entry(fragment: dict, needle: str, signals=None) -> ExecuteReview:
+    """Parse without raising; exactly one advisory names stage 1 and ``needle``."""
+    review = parse_execute_review(fragment, signals=signals)
+    assert len(review.advisories) == 1
+    assert "stage 1" in review.advisories[0] and needle in review.advisories[0]
+    return review
+
+
+def test_clean_fragment_carries_no_advisories():
+    assert parse_execute_review(_v5_fragment()).advisories == ()
+
+
+def test_parse_execute_review_agent_type_without_model_skips_the_entry():
+    fragment = _v5_fragment()
+    del _wave(fragment)[0]["model"]
+    review = _skipped_entry(fragment, "no 'model'")
+    assert "coordinator:code-reviewer" not in {a.agent_type for a in review.review_wave}
+
+
+def test_parse_execute_review_agent_type_without_effort_skips_the_entry():
+    fragment = _v5_fragment()
+    del _wave(fragment)[0]["effort"]
+    _skipped_entry(fragment, "invalid 'effort'")
+
+
+def test_parse_execute_review_accepts_signals_entry_with_model_skips_the_entry():
+    fragment = _v5_fragment()
+    _wave(fragment)[2]["model"] = "opus"
+    _skipped_entry(fragment, "neither 'model' nor 'effort'")
+
+
+def test_parse_execute_review_non_mapping_agent_entry_skips_the_entry():
+    fragment = _v5_fragment()
+    _wave(fragment).append("not-a-mapping")
+    _skipped_entry(fragment, "non-mapping")
+
+
+def test_skipping_the_only_prep_agent_still_refuses():
     fragment = _v5_fragment()
     del fragment["execute_review"]["stages"][0]["agents"][0]["model"]
-    with pytest.raises(RosterFragmentError, match="no 'model'"):
+    with pytest.raises(RosterFragmentError, match="'prep' stage"):
         parse_execute_review(fragment)
 
 
-def test_parse_execute_review_agent_type_without_effort_refuses():
+def test_skipping_every_wave_agent_still_refuses():
     fragment = _v5_fragment()
-    del fragment["execute_review"]["stages"][0]["agents"][0]["effort"]
-    with pytest.raises(RosterFragmentError, match="invalid 'effort'"):
-        parse_execute_review(fragment)
-
-
-def test_parse_execute_review_accepts_signals_entry_with_model_refuses():
-    fragment = _v5_fragment()
-    fragment["execute_review"]["stages"][1]["agents"][2]["model"] = "opus"
-    with pytest.raises(RosterFragmentError, match="neither 'model' nor 'effort'"):
+    fragment["execute_review"]["stages"][1]["agents"] = ["bad"]
+    with pytest.raises(RosterFragmentError, match="no agents"):
         parse_execute_review(fragment)
 
 
@@ -237,11 +271,10 @@ def test_parse_execute_review_unknown_kind_refuses():
         parse_execute_review(fragment)
 
 
-def test_parse_execute_review_missing_schema_refuses():
+def test_parse_execute_review_missing_schema_on_agent_type_entry_skips_the_entry():
     fragment = _v5_fragment()
-    del fragment["execute_review"]["stages"][0]["agents"][0]["schema"]
-    with pytest.raises(RosterFragmentError, match="'schema'"):
-        parse_execute_review(fragment)
+    del _wave(fragment)[0]["schema"]
+    _skipped_entry(fragment, "'schema'")
 
 
 _JUDGE_AGENT = {"agentType": "coordinator:criterion-judge", "model": "opus", "effort": "low", "schema": "judge"}
@@ -279,11 +312,10 @@ def test_accepts_signals_agent_carries_tiers_to_every_resolved_type():
 
 
 @pytest.mark.parametrize("bad", [["huge"], [], "full", ["full", 3]])
-def test_unknown_or_malformed_tiers_refuse(bad):
+def test_unknown_or_malformed_tiers_skip_the_entry(bad):
     fragment = _v5_fragment()
-    fragment["execute_review"]["stages"][1]["agents"][0]["tiers"] = bad
-    with pytest.raises(RosterFragmentError, match="tiers"):
-        parse_execute_review(fragment)
+    _wave(fragment)[0]["tiers"] = bad
+    _skipped_entry(fragment, "tiers")
 
 
 def _op_entry() -> dict:
@@ -303,26 +335,53 @@ def test_op_entry_resolves_into_review_agent_op_and_others_stay_none():
 
 
 @pytest.mark.parametrize("bad", ["", None, 3, ["dispatch.test_leg"]])
-def test_op_entry_with_invalid_op_refuses(bad):
+def test_op_entry_with_invalid_op_skips_the_entry(bad):
     fragment = _v5_fragment()
     entry = _op_entry()
     entry["op"] = bad
-    fragment["execute_review"]["stages"][1]["agents"].append(entry)
-    with pytest.raises(RosterFragmentError, match="'op'"):
-        parse_execute_review(fragment)
+    _wave(fragment).append(entry)
+    _skipped_entry(fragment, "'op'")
+
+
+def test_op_entry_without_schema_resolves_the_default_schema():
+    fragment = _v5_fragment()
+    entry = _op_entry()
+    del entry["schema"]
+    _wave(fragment).append(entry)
+    review = parse_execute_review(fragment)
+    leg = {a.agent_type: a for a in review.review_wave}["dispatch.test_leg"]
+    assert leg.schema == roster.DEFAULT_OP_SCHEMA == "whole-diff-review-result"
+    assert review.advisories == ()
+
+
+def test_op_entry_keeps_a_schema_it_names():
+    fragment = _v5_fragment()
+    entry = _op_entry()
+    entry["schema"] = "custom-result"
+    _wave(fragment).append(entry)
+    leg = {a.agent_type: a for a in parse_execute_review(fragment).review_wave}["dispatch.test_leg"]
+    assert leg.schema == "custom-result"
+
+
+def test_op_entry_with_a_non_string_schema_is_skipped_not_defaulted():
+    fragment = _v5_fragment()
+    entry = _op_entry()
+    entry["schema"] = 3
+    _wave(fragment).append(entry)
+    _skipped_entry(fragment, "'schema'")
 
 
 @pytest.mark.parametrize(
     "field,value",
     [("agentType", "coordinator:code-reviewer"), ("accepts_signals", "named"), ("model", "haiku"), ("effort", "low")],
 )
-def test_op_entry_carrying_a_model_spend_field_refuses(field, value):
+def test_op_entry_carrying_a_model_spend_field_skips_the_entry(field, value):
     fragment = _v5_fragment()
     entry = _op_entry()
     entry[field] = value
-    fragment["execute_review"]["stages"][1]["agents"].append(entry)
-    with pytest.raises(RosterFragmentError, match=field):
-        parse_execute_review(fragment)
+    _wave(fragment).append(entry)
+    review = _skipped_entry(fragment, field)
+    assert "dispatch.test_leg" not in {a.agent_type for a in review.review_wave}
 
 
 def _live_fragment() -> dict:
@@ -370,26 +429,23 @@ def test_signal_resolved_entry_carries_both_fields():
         "3-4",
     ],
 )
-def test_malformed_ratio_refuses(ratio):
+def test_malformed_ratio_skips_the_entry(ratio):
     fragment = _live_fragment()
-    fragment["execute_review"]["stages"][1]["agents"][0]["executor_rows_per_reviewer"] = ratio
-    with pytest.raises(RosterFragmentError, match="executor_rows_per_reviewer"):
-        parse_execute_review(fragment)
+    _wave(fragment)[0]["executor_rows_per_reviewer"] = ratio
+    _skipped_entry(fragment, "executor_rows_per_reviewer")
 
 
-def test_ratio_on_whole_diff_entry_refuses():
+def test_ratio_on_whole_diff_entry_skips_the_entry():
     fragment = _live_fragment()
-    fragment["execute_review"]["stages"][1]["agents"][1]["executor_rows_per_reviewer"] = {"min": 3, "max": 4}
-    with pytest.raises(RosterFragmentError, match="per"):
-        parse_execute_review(fragment)
+    _wave(fragment)[1]["executor_rows_per_reviewer"] = {"min": 3, "max": 4}
+    _skipped_entry(fragment, "per")
 
 
 @pytest.mark.parametrize("bad", ["XXXL", "l", 3, ""])
-def test_unknown_min_tshirt_refuses(bad):
+def test_unknown_min_tshirt_skips_the_entry(bad):
     fragment = _live_fragment()
-    fragment["execute_review"]["stages"][1]["agents"][1]["min_tshirt"] = bad
-    with pytest.raises(RosterFragmentError, match="min_tshirt"):
-        parse_execute_review(fragment)
+    _wave(fragment)[1]["min_tshirt"] = bad
+    _skipped_entry(fragment, "min_tshirt")
 
 
 def test_tshirt_order_mirrors_sizing_assemble():

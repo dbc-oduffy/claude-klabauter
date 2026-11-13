@@ -163,6 +163,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
     ("coordinator_core.ops.canvas_harvest", 'registers "canvas.harvest"'),
     ("coordinator_core.ops.daily_log", 'registers "changelog.daily_log"'),
+    ("coordinator_core.ops.ceremony.plan_wiki_map", 'registers "ceremony.plan_wiki_map"'),
     ("coordinator_core.ops.design_registry_lookup", 'registers "design.registry.lookup"'),
     ("coordinator_core.ops.memo_correct_note", 'registers "memo.correct_note"'),
     ("coordinator_core.ops.handoff_transition", 'registers "handoff.transition"'),

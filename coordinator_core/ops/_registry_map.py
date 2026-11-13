@@ -323,6 +323,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "changelog.backfill_gaps":                "coordinator_core.ops.changelog_ops",
     "changelog.compute_day_fields":           "coordinator_core.ops.changelog_ops",
     "changelog.daily_log":                    "coordinator_core.ops.daily_log",
+    "ceremony.plan_wiki_map":                 "coordinator_core.ops.ceremony.plan_wiki_map",
     "changelog.inject_anchor":                "coordinator_core.ops.changelog_ops",
     "changelog.upsert_reviewed":              "coordinator_core.ops.changelog_ops",
     "cruft_sweep.run":                        "coordinator_core.ops.cruft_sweep",

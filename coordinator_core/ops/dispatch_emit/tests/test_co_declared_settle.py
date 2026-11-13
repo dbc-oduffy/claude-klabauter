@@ -220,6 +220,111 @@ def test_settle_eligible_never_raises(world, monkeypatch):
     assert cds.settle_eligible(world.root, None, [SRC], own_declared=[SRC]) == frozenset()
 
 
+REGISTRY = "coordinator_core/ops/_registry_map.py"
+REG_HEAD = "head1\nhead2\nhead3\n"
+
+
+def _registry_world(world, path=REGISTRY):
+    (world.root / path).parent.mkdir(parents=True, exist_ok=True)
+    (world.root / path).write_bytes(REG_HEAD.encode())
+    _git(world.root, "add", path)
+    _git(world.root, "commit", "-q", "-m", "registry seed")
+
+
+def test_additive_registry_names():
+    assert cds.is_additive_registry("coordinator_core/ops/_registry_map.py")
+    assert cds.is_additive_registry("./coordinator_core\\ops\\__init__.py")
+    assert not cds.is_additive_registry("coordinator_core/ops/ceremony/__init__.py")
+    assert not cds.is_additive_registry(SRC)
+
+
+@pytest.mark.parametrize("path", sorted(cds.ADDITIVE_REGISTRY_FILES))
+def test_registry_rows_appended_at_the_same_anchor_by_an_unrelated_run_settle_to_own_lines(world, path):
+    _registry_world(world, path)
+    world.parent(ME)
+    world.parent(SIB, "ask-parent-other")
+    (world.root / path).write_bytes((REG_HEAD + "mine\ntheirs\n").encode())
+    world.baseline(ME, path, REG_HEAD)
+    world.baseline(SIB, path, REG_HEAD + "mine\n")
+    stage, still = cds.settle(world.root, ME, [(path, SIB)])
+    assert still == []
+    assert [(h.old_start, h.old_len, h.new_start, h.new_len) for h in stage[path]] == [(3, 0, 4, 1)]
+    sha = cds.settled_blob(world.root, path, REG_HEAD.encode(), stage[path])
+    assert git_objects.read_object(resolve_git_common_dir(world.root), sha)[1] == (REG_HEAD + "mine\n").encode()
+
+
+def test_registry_rows_at_different_anchors_each_settle_to_own_row(world):
+    _registry_world(world)
+    world.parent(ME)
+    world.parent(SIB, "ask-parent-other")
+    (world.root / REGISTRY).write_bytes("head1\nmine\nhead2\nhead3\ntheirs\n".encode())
+    world.baseline(ME, REGISTRY, "head1\nhead2\nhead3\ntheirs\n")
+    world.baseline(SIB, REGISTRY, "head1\nmine\nhead2\nhead3\n")
+    stage, still = cds.settle(world.root, ME, [(REGISTRY, SIB)])
+    assert still == []
+    sha = cds.settled_blob(world.root, REGISTRY, REG_HEAD.encode(), stage[REGISTRY])
+    assert git_objects.read_object(resolve_git_common_dir(world.root), sha)[1] == b"head1\nmine\nhead2\nhead3\n"
+
+
+def test_a_registry_line_modified_by_the_own_run_still_holds(world):
+    _registry_world(world)
+    world.parent(ME)
+    world.parent(SIB, "ask-parent-other")
+    (world.root / REGISTRY).write_bytes("head1\nedited\nhead3\ntheirs\n".encode())
+    world.baseline(ME, REGISTRY, "head1\nhead2\nhead3\ntheirs\n")
+    world.baseline(SIB, REGISTRY, "head1\nedited\nhead3\n")
+    holds = [(REGISTRY, SIB)]
+    assert cds.settle(world.root, ME, holds) == ({}, holds)
+
+
+def test_a_registry_line_deleted_by_the_own_run_still_holds(world):
+    _registry_world(world)
+    world.parent(ME)
+    world.parent(SIB, "ask-parent-other")
+    (world.root / REGISTRY).write_bytes("head1\nhead3\ntheirs\n".encode())
+    world.baseline(ME, REGISTRY, "head1\nhead2\nhead3\ntheirs\n")
+    world.baseline(SIB, REGISTRY, "head1\nhead3\n")
+    holds = [(REGISTRY, SIB)]
+    assert cds.settle(world.root, ME, holds) == ({}, holds)
+
+
+def test_a_registry_insertion_touching_a_line_the_peer_changed_still_holds(world):
+    _registry_world(world)
+    world.parent(ME)
+    world.parent(SIB, "ask-parent-other")
+    (world.root / REGISTRY).write_bytes("head1\nmine\npeer2\nhead3\n".encode())
+    world.baseline(ME, REGISTRY, "head1\npeer2\nhead3\n")
+    world.baseline(SIB, REGISTRY, "head1\nhead2\nhead3\n")
+    holds = [(REGISTRY, SIB)]
+    assert cds.settle(world.root, ME, holds) == ({}, holds)
+
+
+def test_an_unattributed_registry_hunk_still_holds(world):
+    _registry_world(world)
+    (world.root / REGISTRY).write_bytes((REG_HEAD + "stray\n").encode())
+    world.baseline(ME, REGISTRY, REG_HEAD + "stray\n")
+    world.baseline(SIB, REGISTRY, REG_HEAD + "stray\n")
+    holds = [(REGISTRY, SIB)]
+    assert cds.settle(world.root, ME, holds) == ({}, holds)
+
+
+def test_registry_with_unreadable_peer_claims_is_not_eligible_and_never_settles(world, holds_of):
+    _registry_world(world)
+    (world.root / REGISTRY).write_bytes((REG_HEAD + "mine\n").encode())
+    world.baseline(ME, REGISTRY, REG_HEAD)
+    holds = [(REGISTRY, UNREADABLE_PEER_CLAIMS)]
+    assert cds.settle(world.root, ME, holds) == ({}, holds)
+    holds_of(holds)
+    assert _eligible(world, [REGISTRY]) == frozenset()
+
+
+def test_registry_is_eligible_across_parents_while_a_plain_path_is_not(world, holds_of):
+    world.parent(ME)
+    world.parent(SIB, "ask-parent-other")
+    holds_of([(REGISTRY, SIB), (SRC, SIB)])
+    assert _eligible(world, [REGISTRY, SRC]) == frozenset({REGISTRY})
+
+
 def _junior_world(world, sib_baseline):
     world.parent(ME)
     world.parent(SIB)
