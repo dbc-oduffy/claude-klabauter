@@ -189,6 +189,10 @@ def _failure_text_of(result: Any) -> Optional[str]:
 
 JOURNAL_RETAIN_SECS = 24 * 3600.0
 _JOURNAL_SUFFIX = ".outcome.json"
+_LAND_SUFFIX = ".land.json"
+LAND_VERDICT_COMMITTED = "committed"
+LAND_VERDICT_NEVER_RAN = "never-ran"
+LAND_VERDICT_UNRESOLVED = "unresolved"
 _JOURNAL_SAFE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
 
 
@@ -213,6 +217,11 @@ def _journal_file(journal_dir: Any, key: Any) -> Optional[str]:
     if not journal_dir or not isinstance(key, str) or not key or not set(key) <= _JOURNAL_SAFE_CHARS:
         return None
     return os.path.join(os.fspath(journal_dir), key + _JOURNAL_SUFFIX)
+
+
+def _land_file(journal_dir: Any, key: Any) -> Optional[str]:
+    path = _journal_file(journal_dir, key)
+    return None if path is None else path[: -len(_JOURNAL_SUFFIX)] + _LAND_SUFFIX
 
 
 def record_outcome(
@@ -284,6 +293,41 @@ def read_outcome(journal_dir: Any, key: str) -> Optional[dict]:
     return payload
 
 
+def record_land_intent(journal_dir: Any, key: str, record: dict) -> bool:
+    """Durably write `key`'s land record (`<key>.land.json`) by one `os.replace`, so a
+    later phase ("claimed", "committing", "committed") overwrites the earlier one whole.
+    Callable from the pool worker; stdlib-only, never raises; True when written."""
+    path = _land_file(journal_dir, key)
+    if path is None or not isinstance(record, dict):
+        return False
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(os.fspath(journal_dir), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, separators=(",", ":"))
+        os.replace(tmp, path)
+    except (OSError, TypeError, ValueError, RecursionError):
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def read_land_intent(journal_dir: Any, key: str) -> Optional[dict]:
+    """The land record written for `key`, or None. Never raises."""
+    path = _land_file(journal_dir, key)
+    if path is None:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            record = json.load(handle)
+    except (OSError, ValueError, RecursionError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
 def prune_journal(journal_dir: Any, now: Optional[float] = None) -> None:
     """Delete journal entries older than JOURNAL_RETAIN_SECS. Never raises."""
     cutoff = (time.time() if now is None else now) - JOURNAL_RETAIN_SECS
@@ -291,7 +335,7 @@ def prune_journal(journal_dir: Any, now: Optional[float] = None) -> None:
         with os.scandir(os.fspath(journal_dir)) as entries:
             for entry in entries:
                 try:
-                    if entry.name.endswith((_JOURNAL_SUFFIX, ".tmp")) and entry.stat().st_mtime < cutoff:
+                    if entry.name.endswith((_JOURNAL_SUFFIX, _LAND_SUFFIX, ".tmp")) and entry.stat().st_mtime < cutoff:
                         os.unlink(entry.path)
                 except OSError:
                     pass
@@ -318,6 +362,7 @@ class AckStore:
         it, and `status` answers `finished` from the journal where memory alone would
         read `unknowable` (worker killed or lost, engine restarted, record evicted)."""
         self._journal_dir = journal_dir
+        self._land_resolver: Optional[Callable[[dict], Optional[dict]]] = None
         if journal_dir:
             prune_journal(journal_dir)
         self._clock = clock
@@ -572,7 +617,41 @@ class AckStore:
             journaled = read_outcome(self._journal_dir, key)
             if journaled is not None:
                 return journaled
+            if answer.get("state") == STATE_UNKNOWABLE:
+                return self._with_land_record(key, answer)
         return answer
+
+    def set_land_resolver(self, fn: Optional[Callable[[dict], Optional[dict]]]) -> None:
+        """Register `fn(land record) -> {"verdict": "committed"|"never-ran", "sha"?}`, the
+        accept process's reader of what a dead land worker left. None clears it."""
+        self._land_resolver = fn
+
+    def _with_land_record(self, key: str, answer: dict) -> dict:
+        """Resolve an unknowable `key` through its land record. No record: `answer` as is.
+        A live `executing` answer is never resolved: its worker may be mid-commit."""
+        record = read_land_intent(self._journal_dir, key)
+        if record is None:
+            return answer
+        verdict: Optional[dict] = None
+        resolver = self._land_resolver
+        if resolver is not None:
+            try:
+                verdict = resolver(record)
+            except Exception:  # noqa: BLE001 -- a resolver that cannot answer is unresolved
+                verdict = None
+        name = verdict.get("verdict") if isinstance(verdict, dict) else None
+        if name == LAND_VERDICT_COMMITTED:
+            land = {"verdict": name}
+            if verdict.get("sha"):
+                land["sha"] = verdict["sha"]
+            return {"state": STATE_FINISHED, "outcome": OUTCOME_RESULT, "land_record": land}
+        if name == LAND_VERDICT_NEVER_RAN:
+            return {
+                "state": STATE_NOT_RECEIVED,
+                "outcome": OUTCOME_NOT_DISPATCHED,
+                "land_record": {"verdict": name},
+            }
+        return {**answer, "land_record": {"verdict": LAND_VERDICT_UNRESOLVED}}
 
     def _status_in_memory(self, key: str, expect_engine: Optional[dict] = None) -> dict:
         """The in-memory answer. `expect_engine` is the delivering engine the

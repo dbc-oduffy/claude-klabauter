@@ -2099,6 +2099,9 @@ def _terminal_commit_inner(
         if answered is not None:
             return answered
         token_state["claim"] = (worktree_root, params.get("run_id"), params["run_token"], script_path_raw)
+        from coordinator_core.ops.dispatch_emit import land_intent
+
+        land_intent.record(worktree_root, params, script_path=script_path_raw, kind="terminal_commit")
 
     guarded_script = contained_path(worktree_root / script_path_raw, [worktree_root])
     if guarded_script is None:
@@ -4056,6 +4059,7 @@ def _terminal_commit_inner(
         )
 
     def _attempt():
+        from coordinator_core.ops.dispatch_emit import land_intent
         from coordinator_core.ops.workflow_fire.finalizer import authorize_product
         authorize_product(
             worktree_root, all_paths, deleted_paths, reviewed_bytes,
@@ -4066,6 +4070,7 @@ def _terminal_commit_inner(
             supplied_blobs=commit_params.get('supplied_blobs'),
             merging=bool(commit_params.get('finish_merge')),
         )
+        land_intent.mark(land_intent.PHASE_COMMITTING)
         return commit_v2(commit_params, repo_root)
 
     def _cas_lost(r) -> bool:
@@ -4180,6 +4185,9 @@ def _terminal_commit_inner(
             real_drift if real_drift is not None else _drift_paths(reply.get("blob_drift")),
         )
     if reply.get("committed") and reply.get("sha"):
+        from coordinator_core.ops.dispatch_emit import land_intent
+
+        land_intent.mark(land_intent.PHASE_COMMITTED, str(reply["sha"]))
         token_state["landed"] = True
         # Spend at landing, before any post-commit step, so a repeat call finds the receipt.
         _settle_token(token_state, landed=True, receipt={

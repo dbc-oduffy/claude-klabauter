@@ -3364,6 +3364,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 _requeue_close(root, params)
             return answered
         token_state["claim"] = (root, params.get("run_id"), params["run_token"], script_path)
+        from coordinator_core.ops.dispatch_emit import land_intent
+
+        land_intent.record(root, params, script_path=script_path)
 
     script = contained_path(root / script_path, [root])
     if script is None:
@@ -4649,6 +4652,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                                          'terminal-receipts': receipt_paths,
                                          'bookkeeping-record': [bookkeeping_path]},
                           supplied_blobs=settled_blobs, merging=merge_plan is not None)
+        from coordinator_core.ops.dispatch_emit import land_intent
+
+        land_intent.mark(land_intent.PHASE_COMMITTING)
         try:
             return commit_paths(
                 root, commit_set, message, deleted_paths=commit_deleted,
@@ -4752,6 +4758,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             return _error(f"{type(exc).__name__}: {exc}", refused="commit")
 
     sha = outcome.sha
+    from coordinator_core.ops.dispatch_emit import land_intent
+
+    land_intent.mark(land_intent.PHASE_COMMITTED, sha)
     _reap_measured_export(root, measured_run)
     review_gap: list = []
     declared_left: dict = {}

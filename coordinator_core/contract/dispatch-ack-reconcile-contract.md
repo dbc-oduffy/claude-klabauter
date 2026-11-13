@@ -238,6 +238,7 @@ Every answer carries:
 | `result` | `state == finished`, outcome `result`, and the result was retained (§ 3a) | The handler's original reply. For an `invoke.from_argv` dispatch, a door-form poll replays its `{stdout, stderr, exit_code}`. |
 | `result_digest` | `state == finished`, a result was stamped but not kept | The bounded outcome digest (§ 3a): what the op reported, e.g. `committed`, `sha`, `exit_code`. |
 | `result_dropped` | with `result_digest` | `over-cap`, `not-serialisable`, or `evicted`: why the full reply is gone (§ 3a). |
+| `land_record` | `state` would be `unknowable` and the journal dir holds `<key>.land.json` (`dispatch_ack.record_land_intent`) | `{"verdict": "committed", "sha"?}` replaces the answer with `finished/result`; `{"verdict": "never-ran"}` replaces it with `not_received/not-dispatched`; `{"verdict": "unresolved"}` (no resolver registered via `AckStore.set_land_resolver`, or it raised or abstained) leaves the `unknowable` answer and licenses no re-run. A journaled outcome wins over the record; a key with no record answers as before. A live `executing` answer is never resolved. |
 | `engine_boot_ns` | always | This engine's `boot_ns`, letting a caller detect a restart it hasn't otherwise noticed. |
 | `engine_pid` | always | This engine's pid. |
 

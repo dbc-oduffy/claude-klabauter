@@ -276,6 +276,52 @@ def _attribute_porcelain(
     return table
 
 
+_STATUS_UNKNOWN = "?? (status unattributed; treated as uncommitted)"
+
+
+def _attribute_porcelain_z(
+    out: str, root: str, targets: List[str]
+) -> Optional[Dict[str, str]]:
+    """Split one batched `git status --porcelain -z` over many pathspecs into
+    per-target status text. `-z` carries raw (never quoted) paths and puts a
+    rename/copy's origin in its own NUL field, so every shape is attributable;
+    None only when an entry owns no target, which the caller reads as "unknown",
+    never "clean"."""
+    table: Dict[str, str] = {os.path.normcase(os.path.normpath(t)): "" for t in targets}
+    fields = out.split("\0")
+    i = 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if not entry:
+            continue
+        if len(entry) < 4:
+            return None
+        paths = [entry[3:]]
+        if entry[0] in "RC" or entry[1] in "RC":
+            if i >= len(fields) or not fields[i]:
+                return None
+            paths.append(fields[i])
+            i += 1
+        owned = False
+        for rel in paths:
+            abs_path = os.path.normpath(os.path.join(root, rel))
+            owner = None
+            for t in targets:
+                if _is_within(abs_path, t) and (owner is None or len(t) > len(owner)):
+                    owner = t
+            if owner is None:
+                continue
+            owned = True
+            key = os.path.normcase(os.path.normpath(owner))
+            line = entry[:3] + rel
+            if line not in table[key].split("\n"):
+                table[key] = (table[key] + "\n" + line) if table[key] else line
+        if not owned:
+            return None
+    return table
+
+
 def _stale_write_shape_candidates(
     cmd: str, cwd: Optional[str]
 ) -> List[Tuple[str, str, bool]]:
@@ -733,11 +779,10 @@ def check_destructive_rm(
     # LAZY, NOT A PRE-PASS: a pre-pass would spawn for targets the loop below
     # `continue`s past (scratch-allowlisted, nonexistent, claims-dir paths).
     #
-    # FALLS BACK RATHER THAN GUESSING: porcelain paths are root-relative, may be
-    # renames (`XY orig -> new`), and are quoted when `core.quotepath` fires on
-    # non-ASCII. A line that cannot be attributed with certainty is never
-    # assumed clean: this returns None and the caller re-issues the per-target
-    # status. A missed spawn is a cost; a missed deny is a peer's lost work.
+    # `-z` output is unquoted and carries rename origins, so every entry is
+    # attributable; an entry that is not reads as dirty for every target in the
+    # root, never clean. A failed `git status` (rc != 0) reads dirty for every
+    # target in the root, never clean.
     _status_by_root: Dict[str, Optional[Dict[str, str]]] = {}
 
     def _batched_status_for(root: str, tgt_abs: str, all_targets: List[str]) -> Optional[str]:
@@ -747,15 +792,29 @@ def check_destructive_rm(
                 _status_by_root[root] = None
             else:
                 rc_b, out_b = _dc_git_probe._run_git(
-                    ["-C", root, "--no-optional-locks", "status", "--porcelain", "--"] + under
+                    ["-C", root, "--no-optional-locks", "status", "--porcelain", "-z", "--"] + under
                 )
-                _status_by_root[root] = (
-                    _attribute_porcelain(out_b, root, under) if rc_b == 0 else None
-                )
+                if rc_b != 0:
+                    # Unknown is not clean: a failed or timed-out batch marks every
+                    # target in the root dirty.
+                    _status_by_root[root] = {
+                        os.path.normcase(os.path.normpath(t)): "?? (git status failed; treated as uncommitted)"
+                        for t in under
+                    }
+                else:
+                    attributed = _attribute_porcelain_z(out_b, root, under)
+                    if attributed is None:
+                        # Unattributable entry: every target in the root reads the whole
+                        # batch (never clean) rather than re-spawning per target.
+                        whole = "\n".join(e for e in out_b.split("\0") if e)
+                        attributed = {
+                            os.path.normcase(os.path.normpath(t)): whole for t in under
+                        }
+                    _status_by_root[root] = attributed
         table = _status_by_root[root]
         if table is None:
-            return None
-        return table.get(os.path.normcase(tgt_abs), "")
+            return _STATUS_UNKNOWN
+        return table.get(os.path.normcase(os.path.normpath(tgt_abs)), _STATUS_UNKNOWN)
 
     cur_repo = None
     rc, out = _dc_git_probe._run_git(["rev-parse", "--show-toplevel"])
@@ -1242,20 +1301,14 @@ def check_destructive_rm(
                 # BATCHED per repo root: the pathspec varies per target, so the
                 # (cwd, args) memo cannot absorb it. `_batched_status_for` fills
                 # on first need (never a pre-pass; see its docstring).
-                #
-                # `None` means the batch could not be attributed with certainty:
-                # fall back to the per-target call, never read it as a clean tree.
-                # See `_attribute_porcelain`'s negative spec.
                 _all_tgt_abs = [
-                    _abs_path(os.path.expanduser(t) if t.startswith("~") else te)
+                    _abs_path(_joined)
                     for t, te in targets
-                    if t and os.path.exists(os.path.expanduser(t) if t.startswith("~") else te)
+                    if t
+                    for _joined in [os.path.join(_rm_cwd, os.path.expanduser(t) if t.startswith("~") else te)]
+                    if os.path.exists(_joined)
                 ]
                 out_st = _batched_status_for(root, tgt_abs, _all_tgt_abs)
-                if out_st is None:
-                    _rc_st, out_st = _dc_git_probe._run_git(
-                        ["-C", root, "--no-optional-locks", "status", "--porcelain", "--", tgt_abs]
-                    )
                 status = "\n".join(out_st.splitlines()[:9])
                 if status:
                     peer_sid = _rm_peer_claim_of(tgt_abs, root, _dirty_paths_lookup)

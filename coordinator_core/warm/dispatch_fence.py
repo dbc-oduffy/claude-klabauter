@@ -69,6 +69,11 @@ def release() -> None:
     _holder = None
 
 
+def current_dispatch() -> Optional[tuple]:
+    """The `(claim_dir, key)` this process is running, or None outside a dispatch."""
+    return _holder
+
+
 def current_dispatch_fenced() -> bool:
     """True iff this process runs a dispatch that carries a kill fence."""
     held = _holder

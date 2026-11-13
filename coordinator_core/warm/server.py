@@ -370,6 +370,77 @@ def _executing_bound_secs(method: Optional[str]) -> float:
 
 _ack_store = dispatch_ack.AckStore(executing_bound=_executing_bound_secs)
 
+_OVERDUE_REAP_GRACE_SECS = 30.0
+
+
+def _pool_neighbour_futures(pool: Any, overdue: Optional["concurrent.futures.Future"]) -> list:
+    """Unresolved futures on `pool` other than `overdue`. Reads the executor's pending-work table;
+    an executor without one has no knowable neighbours."""
+    try:
+        items = list((getattr(pool, "_pending_work_items", None) or {}).values())
+    except Exception:  # noqa: BLE001 -- a racing executor reads as no neighbours
+        return []
+    return [
+        fut
+        for fut in (getattr(item, "future", None) for item in items)
+        if fut is not None and fut is not overdue and not fut.done()
+    ]
+
+
+def _reap_after_neighbours(pool: Any, proc: Any, neighbours: list) -> None:
+    """Terminate the retired pool's overdue `proc` once every future in `neighbours` has
+    resolved, or after `_OVERDUE_REAP_GRACE_SECS`; at once when there are none. `pool` is already
+    swapped out, so no new work reaches it."""
+    reaped = threading.Event()
+    lock = threading.Lock()
+    remaining = [len(neighbours)]
+
+    def _reap() -> None:
+        if reaped.is_set():
+            return
+        reaped.set()
+        try:
+            proc.terminate()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            pool.shutdown(wait=False)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _one_done(_fut: Any) -> None:
+        with lock:
+            remaining[0] -= 1
+            drained = remaining[0] <= 0
+        if drained:
+            _reap()
+
+    if not neighbours:
+        _reap()
+        return
+    try:
+        pool.shutdown(wait=False)
+    except Exception:  # noqa: BLE001
+        pass
+    timer = threading.Timer(_OVERDUE_REAP_GRACE_SECS, _reap)
+    timer.daemon = True
+    timer.start()
+    for fut in neighbours:
+        fut.add_done_callback(_one_done)
+        fut.add_done_callback(lambda _f: timer.cancel() if reaped.is_set() else None)
+
+
+
+def _resolve_land_record(record: dict) -> Optional[dict]:
+    """The poll's reader of a dead land worker's record. Imported on first use: the accept
+    process does not import land_run at boot."""
+    from coordinator_core.ops.dispatch_emit import land_intent
+
+    return land_intent.resolve(record)
+
+
+_ack_store.set_land_resolver(_resolve_land_record)
+
 # How often the idle watchdog re-checks `idle.should_demote` -- independent
 # of request arrival (module docstring's "idle demotion" ownership note).
 # Small relative to both `idle.ZERO_SERVED_DEADLINE_SECS` (90s) and
@@ -4296,14 +4367,22 @@ class _ServerContext:
         self.__dict__.setdefault("_retired_procs", []).extend(procs)
         self._write_recycle_line(holders, len(keys))
 
-    def _terminate_overdue_worker(self, pool: Any, claim: Optional[Path], dispatch_key: Optional[str]) -> bool:
+    def _terminate_overdue_worker(
+        self,
+        pool: Any,
+        claim: Optional[Path],
+        dispatch_key: Optional[str],
+        overdue_future: Optional["concurrent.futures.Future"] = None,
+    ) -> bool:
         """Terminate the worker holding an op past its result deadline. Its pid is the one
         its claim file records; `pool._processes` maps pid to process. Writes
         a kill fence beside the claim, then `stamp_killing` (the record reads `killed`
         only once the worker is observed dead), then swaps `pool` out under
         `_dispatch_pool_lock` (the executor breaks when a child dies; the next
         `_ensure_dispatch_pool` rebuilds). No join: a survivor must not block the accept
-        path. Neighbours on the same pool read BrokenProcessPool -> `worker-lost`. False
+        path. Killing one process of a `ProcessPoolExecutor` fails every other unresolved
+        future on it, so while neighbours of `overdue_future` are still unresolved the kill
+        waits for them to drain, bounded by `_OVERDUE_REAP_GRACE_SECS`. False
         when no worker is found (nothing is killed and the caller falls back to the
         abandoned path)."""
         try:
@@ -4317,14 +4396,8 @@ class _ServerContext:
             dispatch_fence.write(claim.parent, dispatch_key)
             _ack_store.stamp_killing(dispatch_key, pid, proc.is_alive)
         self._drop_pool(pool)
-        try:
-            proc.terminate()
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            pool.shutdown(wait=False)
-        except Exception:  # noqa: BLE001
-            pass
+        neighbours = _pool_neighbour_futures(pool, overdue_future)
+        _reap_after_neighbours(pool, proc, neighbours)
         return True
 
     def _retired_workers_alive(self) -> int:
@@ -4609,7 +4682,7 @@ class _ServerContext:
                     )
                 else:
                     dump_note = "No stall dump written: no diagnosis block."
-                if not self._terminate_overdue_worker(pool, claim, dispatch_key):
+                if not self._terminate_overdue_worker(pool, claim, dispatch_key, future):
                     if dispatch_key is not None:
                         _ack_store.mark_withdrawn(dispatch_key)
                 error = envelope.get("error")

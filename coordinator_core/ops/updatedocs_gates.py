@@ -111,6 +111,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from coordinator_core.external_tool_budget import bound_for
+from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
@@ -436,20 +437,14 @@ def _tasks_holds_markdown(repo_root: Path, tasks_dir: Path) -> bool:
     the disk walk. `--others` without `--exclude-standard` keeps gitignored files in the answer,
     since `tasks/` is usually ignored ephemera and the probe asks about disk, not the index.
     """
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(repo_root), "ls-files", "-z", "--cached", "--others",
-             "--", ":(glob)tasks/**/*.md"],
-            capture_output=True,
-            check=False,
-            timeout=2.0,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return any(tasks_dir.rglob("*.md"))
+    proc = run_git(
+        ["-C", str(repo_root), "ls-files", "-z", "--cached", "--others", "--", ":(glob)tasks/**/*.md"],
+        timeout=2.0,
+        binary=True,
+    )
     if proc.returncode != 0:
         return any(tasks_dir.rglob("*.md"))
-    return bool(proc.stdout.strip(b"\0"))
+    return bool(proc.stdout_bytes.strip(b"\0"))
 
 
 def _gate_fresh_scaffold_probe(repo_root: Path, _settings: Path, _overrides: dict) -> GateResult:

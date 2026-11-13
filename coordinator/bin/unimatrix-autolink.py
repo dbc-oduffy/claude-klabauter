@@ -690,6 +690,7 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
     lookup = {}
 
     def link_all(aliases):
+        pending = []
         for alias in aliases:
             try:
                 rec = read_record(sdir / f"autolink-{slug(alias)}.json")
@@ -697,10 +698,19 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
                     continue
                 if liveness.backoff_until(sdir, alias) > clock:
                     continue
+                pending.append(alias)
+            except Exception as ex:  # one peer's failure must not stop the next or fail the session
+                say(f"far box {alias} link failed: {type(ex).__name__}: {str(ex)[:120]}")
+        if snapshot_mode and pending:
+            try:
+                lookup["aliases"] = far_boxes_status(roster)[0]
+            except Exception as ex:  # noqa: BLE001 -- the registry read is shared by every pending alias
+                say(f"far box lookup failed: {type(ex).__name__}: {str(ex)[:120]}")
+                return
+        for alias in pending:
+            try:
                 target = names.get(alias, alias)
                 if snapshot_mode:
-                    if "aliases" not in lookup:
-                        lookup["aliases"] = far_boxes_status(roster)[0]
                     target = member_alias(roster, target, alias.rpartition("@")[2], lookup["aliases"],
                                           lookup.setdefault("hosts", {}))
                 key = key_fn(roster, target)

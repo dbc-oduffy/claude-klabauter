@@ -841,9 +841,16 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
             0,
         ),
         # 2026-11-09 -- # class: structural-floor. N MEMBER HOSTS, N SSH.
-        # `unimatrix-pair.py::_apply` pushes the signed snapshot to each member: `push_one`
+        # `unimatrix-pair.py::_push_all` pushes the signed snapshot to each member: `push_one`
         # targets exactly one `user@host` per call, and no ssh invocation reaches two hosts.
-        ("coordinator/bin/unimatrix-pair.py", "_apply", "push_one", 0),
+        ("coordinator/bin/unimatrix-pair.py", "_push_all", "push_one", 0),
+        # 2026-11-13 -- # class: structural-floor. N MEMBER ALIASES, N `ssh -G`.
+        # `ssh -G` resolves exactly one destination per call (extra operands are the remote
+        # command), so mapping each member alias to its HostName is one spawn per alias. Each
+        # alias is one distinct member box; the resolved name is cached across calls and an
+        # alias whose own name matches returns before any spawn.
+        ("coordinator/bin/unimatrix-pair.py", "make_host_alias_fn.host_alias", "_ssh_hostname", 0),
+        ("coordinator/bin/unimatrix-autolink.py", "member_alias", "ssh_hostname", 0),
         # 2026-11-09 -- # class: structural-floor. N PEERS, N DETACHED SUPERVISORS.
         # `unimatrix-autolink.py::run.link_all` calls `link_peer` once per roster alias; each
         # call starts that alias's own detached supervisors, long-lived processes bound to one
@@ -9052,6 +9059,46 @@ def test_review_prep_git_spawns_do_not_grow_with_paths_or_halted_runs(tmp_path):
     large = _review_prep_spawn_counts(tmp_path / "large", 40, 30)
     assert small == large, f"spawn counts grew with paths/halted runs: small={small} large={large}"
     assert small[0] <= 10 and small[1] <= 4, f"spawn budget exceeded: {small}"
+
+
+def _rm_verdict_with_status_batch(tmp_path, monkeypatch, status_result):
+    from coordinator_core.bash_guards import _dc_git_probe
+    from coordinator_core.bash_guards import dispatch_checks as dc
+
+    repo = tmp_path / "repo"
+    (repo / "work").mkdir(parents=True)
+    target = repo / "work" / "f.py"
+    target.write_text("x\n", encoding="utf-8")
+    real = _dc_git_probe._run_git
+
+    def fake(args, *a, **k):
+        if "status" in args:
+            return status_result
+        return real(args, *a, **k)
+
+    monkeypatch.setattr(_dc_git_probe, "_run_git", fake)
+    monkeypatch.chdir(repo)
+    import subprocess as _sp
+
+    _sp.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True)
+    return dc.check_destructive_rm(f"rm -rf {repo / 'work'}", session_id="fail-closed", payload={"cwd": str(repo)})
+
+
+def test_destructive_rm_batched_status_failure_denies_and_clean_batch_allows(tmp_path, monkeypatch):
+    """A failed batched `git status` reads dirty (deny); a successful clean batch still allows."""
+    failed = _rm_verdict_with_status_batch(tmp_path / "a", monkeypatch, (128, ""))
+    assert failed is not None, "a failed batched git status let a recursive rm through (fail-open)"
+    clean = _rm_verdict_with_status_batch(tmp_path / "b", monkeypatch, (0, ""))
+    assert clean is None, "a clean batched status must still allow the rm"
+
+
+def test_destructive_rm_target_missing_from_batch_table_reads_dirty(tmp_path, monkeypatch):
+    """A successful batch whose table lacks the target is unknown, never clean (deny)."""
+    from coordinator_core.bash_guards import _dc_rm
+
+    monkeypatch.setattr(_dc_rm, "_attribute_porcelain_z", lambda out, root, targets: {})
+    verdict = _rm_verdict_with_status_batch(tmp_path / "m", monkeypatch, (0, ""))
+    assert verdict is not None, "a target absent from the batch table let a recursive rm through (fail-open)"
 
 
 if __name__ == "__main__":

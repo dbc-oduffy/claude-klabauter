@@ -857,6 +857,23 @@ def test_snapshot_member_key_is_resolved_by_the_ssh_alias_whose_hostname_matches
     assert seen == ["macmini-lan"]
 
 
+@needs_keygen
+def test_snapshot_run_reads_far_boxes_once_for_all_pending_aliases(env, snap, monkeypatch):
+    add_key(env)
+    snap.adopt("machine-a", "bishop", "rook")
+    calls = []
+    real = env.al.far_boxes_status
+
+    def counting(roster, guard=False):
+        calls.append(guard)
+        return real(roster, guard=guard)
+
+    monkeypatch.setattr(env.al, "far_boxes_status", counting)
+    sp = Spawner()
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names=set(), pull_fn=lambda *a: False)
+    assert len(remotes(sp)) == 3 and calls == [False]
+
+
 def test_member_alias_falls_back_to_the_box_name_when_no_alias_matches_the_host(env):
     assert env.al.member_alias(env.roster, "Mac-mini", "Mac-mini.local", [], {}) == "Mac-mini"
     assert env.al.member_alias(env.roster, "Mac-mini", "", ["macmini-lan"], {}) == "Mac-mini"

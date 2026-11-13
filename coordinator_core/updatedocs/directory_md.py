@@ -22,11 +22,11 @@ from __future__ import annotations
 
 import fnmatch
 import re
-import subprocess
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path, PurePosixPath
 
+from coordinator_core.git.run import run_git
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
 
 # Accepts `Last refreshed:` / `Last updated:`, optionally bold in either placement
@@ -92,38 +92,26 @@ def _tracked_names(corpus_root: Path) -> list[str] | None:
     Returns None when `corpus_root` is not inside a git work tree (or git is
     unavailable), so the caller falls back to the disk walk.
     """
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(corpus_root), "ls-files", "-z"],
-            capture_output=True,
-            check=False,
-            timeout=0.5,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
+    proc = run_git(["-C", str(corpus_root), "ls-files", "-z"], timeout=0.5, binary=True)
     if proc.returncode != 0:
         return None
     return [
         PurePosixPath(entry.decode("utf-8", "surrogateescape")).name
-        for entry in proc.stdout.split(b"\0")
+        for entry in proc.stdout_bytes.split(b"\0")
         if entry
     ]
 
 
 def _parse_count_claims(text: str, corpus_root: Path) -> list[CountClaim]:
     claims: list[CountClaim] = []
-    tracked: list[str] | None = None
-    tracked_loaded = False
-    for match in _COUNT_ASSERTION_RE.finditer(text):
+    matches = list(_COUNT_ASSERTION_RE.finditer(text))
+    tracked = _tracked_names(corpus_root) if matches else None
+    for match in matches:
         asserted = int(match.group(1).replace(",", ""))
         filename = match.group(2) or match.group(3)
         if filename.startswith("."):
             filename = "*" + filename
         claim_site = match.group(0).strip()
-        if not tracked_loaded:
-            tracked = _tracked_names(corpus_root)
-            tracked_loaded = True
         if tracked is not None:
             actual = sum(1 for name in tracked if fnmatch.fnmatchcase(name, filename))
         else:

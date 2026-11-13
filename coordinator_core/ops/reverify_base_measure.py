@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -23,8 +22,31 @@ from coordinator_core.win_portability import no_console_creationflags
 USAGE = "usage: reverify_base_measure --sha <base> [--head-sha <sha>] --out <path> -- <ids...>"
 EXIT_OK = 0
 EXIT_USAGE = 2
-_PYTEST_USAGE_ERROR = 4
-_NOT_FOUND = re.compile(r"not found:\s+(\S+)")
+_DROPPED = "reverify-base-measure-dropped:\t"
+#: Runs inside the exported tree: pytest names one missing id per run (on stderr), so the retries
+#: that drop each next one stay in this one process; only the final attempt's output is emitted.
+_RETRY_RUNNER = (
+    "import contextlib, io, re, sys\n"
+    "import pytest\n"
+    "ids, dropped = sys.argv[1:], []\n"
+    "nf = re.compile(r'not found:\\s+(\\S+)')\n"
+    "while True:\n"
+    "    out, err = io.StringIO(), io.StringIO()\n"
+    "    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):\n"
+    "        rc = pytest.main(['-rfE', *ids])\n"
+    "    named = [m.group(1) for m in map(nf.search, (err.getvalue() + out.getvalue()).splitlines()) if m]\n"
+    "    gone = [i for i in ids if any(n == i or n.endswith('/' + i) for n in named)]\n"
+    "    if rc != 4 or not gone:\n"
+    "        break\n"
+    "    ids = [i for i in ids if i not in gone]\n"
+    "    dropped += gone\n"
+    "    if not ids:\n"
+    "        break\n"
+    "sys.stdout.write(out.getvalue())\n"
+    "sys.stderr.write(err.getvalue())\n"
+    f"sys.stdout.write(''.join('{_DROPPED}' + d + '\\n' for d in dropped))\n"
+    "sys.exit(rc)\n"
+)
 _ENGINE_ROOT = Path(__file__).resolve().parents[2]
 #: Runs baseline_export with the live engine importable by sys.path only: a PYTHONPATH entry would
 #: leak into the runner and shadow the exported tree's own packages.
@@ -51,7 +73,7 @@ def _parse(argv: list[str]) -> Optional[tuple[str, Optional[str], str, list[str]
 def _run(sha: str, ids: list[str], cwd: str) -> tuple[str, Optional[int], list[str], list[str]]:
     """One baseline_export run: (export state, runner exit, stdout lines, stderr lines)."""
     argv = [sys.executable, "-c", _LAUNCH, str(_ENGINE_ROOT), "--sha", sha, "--",
-            sys.executable, "-m", "pytest", "-rfE", *ids]
+            sys.executable, "-c", _RETRY_RUNNER, *ids]
     proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, errors="replace",
                           **no_console_creationflags())
     lines = proc.stdout.splitlines()
@@ -70,31 +92,15 @@ def _red(lines: list[str]) -> set[str]:
     return {hit.group(1) for hit in (_RED_LINE.match(ln.strip()) for ln in lines) if hit}
 
 
-def _not_found(lines: list[str], ids: list[str]) -> list[str]:
-    """Requested ids a pytest 'not found' line names (a path may carry the rootdir prefix)."""
-    named = [m.group(1) for m in (_NOT_FOUND.search(ln) for ln in lines) if m]
-    return [i for i in ids if any(n == i or n.endswith("/" + i) or n.endswith(os.sep + i) for n in named)]
-
-
 def _is_red(node: str, red: set[str]) -> bool:
     return any(r == node or r.startswith(node + "::") or r.startswith(node.rstrip("/") + "/") for r in red)
 
 
 def measure(sha: str, head_sha: Optional[str], ids: list[str], cwd: str) -> dict:
     """The red ids and the trailing-line payload for `ids` measured at `sha` (and `head_sha`)."""
-    remaining = list(ids)
-    export, runner_exit, lines, err = _run(sha, remaining, cwd)
-    # pytest names one missing id per run (on stderr), so each retry drops the next.
-    for _ in range(len(ids)):
-        if export != "ok" or runner_exit != _PYTEST_USAGE_ERROR:
-            break
-        gone = _not_found(err + lines, remaining)
-        if not gone:
-            break
-        remaining = [i for i in remaining if i not in gone]
-        if not remaining:
-            break
-        export, runner_exit, lines, err = _run(sha, remaining, cwd)
+    export, runner_exit, lines, _err = _run(sha, list(ids), cwd)
+    gone = {ln[len(_DROPPED):] for ln in lines if ln.startswith(_DROPPED)}
+    remaining = [i for i in ids if i not in gone]
     red: set[str] = set()
     passed: list[str] = []
     if export == "ok" and runner_exit in (0, 1) and remaining:

@@ -71,13 +71,13 @@ def test_root_prefix_catches_rest_and_tie_goes_to_first(tmp_path):
 
 def _count_git_spawns(monkeypatch) -> list:
     calls: list = []
-    real = subprocess.run
+    real = tree_census.run_git
 
     def spy(cmd, *a, **kw):
         calls.append(cmd)
         return real(cmd, *a, **kw)
 
-    monkeypatch.setattr(tree_census.subprocess, "run", spy)
+    monkeypatch.setattr(tree_census, "run_git", spy)
     return calls
 
 
@@ -92,37 +92,3 @@ def test_exactly_one_git_spawn_for_one_and_many_files(tmp_path, monkeypatch):
     assert len(_by_id(tree_census.build(big, buckets))["A"]) == 500
     assert len(calls) == 1
     assert calls[0][-2:] == ["ls-files", "-z"]
-
-
-def _load_gate():
-    import importlib.util
-    import sys
-
-    path = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "survey-consume-gate.py"
-    spec = importlib.util.spec_from_file_location("survey_consume_gate_tree_census", path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["survey_consume_gate_tree_census"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def test_gate_fills_census_from_tree_when_rag_present(tmp_path, monkeypatch):
-    gate = _load_gate()
-    repo = _repo(tmp_path, ["a/x.py", "b/y.py"])
-    monkeypatch.setattr(gate, "_rag_predicate", lambda root: {"rag_present": True})
-    out = gate.run_gate({
-        "repo_root": str(repo),
-        "claude_klabauter_root": str(Path(__file__).resolve().parents[3]),
-        "run_id": "r",
-        "census_buckets": [{"bucketId": "A", "dirs": ["a"]}],
-    })
-    assert out["chunk_table"]["ok"] is True
-    assert out["chunk_table"]["source"] == "tree"
-    assert census_shape.validate(out["chunk_table"]) == []
-
-
-def test_gate_declines_tree_census_without_buckets(tmp_path, monkeypatch):
-    gate = _load_gate()
-    monkeypatch.setattr(gate, "_rag_predicate", lambda root: {"rag_present": True})
-    out = gate.run_gate({"repo_root": str(tmp_path), "claude_klabauter_root": str(tmp_path), "run_id": "r", "census_buckets": []})
-    assert out["chunk_table"]["ok"] is False

@@ -1,6 +1,6 @@
 """Tree-walk census: one `git ls-files` bucketed by the atlas's census_buckets.
 
-The example-retrieval-repo-absent producer of the census-shaped payload; `census_shape` pins the shape.
+The census-shaped producer the consume gate uses when example-retrieval-repo is present; `census_shape` pins the shape.
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from coordinator_core.architecture_survey import census_shape
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 
 def _prefix(raw: str) -> str:
@@ -41,13 +41,10 @@ def build(repo_root: str | Path, census_buckets: list[dict[str, Any]]) -> dict[s
     longest match across every bucket wins; ties go to the first-supplied bucket.
     `loc` is None and `oversized` False for every file (no oversized signal on this path).
     """
-    proc = subprocess.run(
-        ["git", "-C", str(repo_root), "ls-files", "-z"],
-        capture_output=True,
-        check=True,
-        **no_console_creationflags(),
-    )
-    paths = [p.decode("utf-8", "surrogateescape") for p in proc.stdout.split(b"\0") if p]
+    proc = run_git(["-C", str(repo_root), "ls-files", "-z"], binary=True)
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, "git ls-files", proc.stdout, proc.stderr)
+    paths = [p.decode("utf-8", "surrogateescape") for p in proc.stdout_bytes.split(b"\0") if p]
 
     files_by_bucket: dict[str, list[dict[str, Any]]] = {}
     owners: dict[str, str] = {}

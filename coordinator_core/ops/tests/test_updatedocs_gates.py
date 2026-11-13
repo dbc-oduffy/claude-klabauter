@@ -232,7 +232,7 @@ def test_fresh_scaffold_probe_spawns_nothing_when_an_index_exists(tmp_path, monk
     (tmp_path / "DIRECTORY.md").write_text("x")
     (tmp_path / "tasks").mkdir()
     calls = []
-    monkeypatch.setattr(udg.subprocess, "run", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(udg, "run_git", lambda *a, **k: calls.append(a))
     result = udg._gate_fresh_scaffold_probe(tmp_path, tmp_path, {})
     assert result.verdict == udg.GateVerdict.CLEAN
     assert calls == []
@@ -254,13 +254,13 @@ def _git_repo_with_tasks(tmp_path, files, ignore_tasks=False):
 def test_tasks_markdown_found_when_untracked_nested_one_spawn(tmp_path, monkeypatch):
     tasks = _git_repo_with_tasks(tmp_path, ["tasks/a/b/note.md"])
     calls = []
-    real = udg.subprocess.run
+    real = udg.run_git
 
     def counting(argv, *a, **k):
         calls.append(argv)
         return real(argv, *a, **k)
 
-    monkeypatch.setattr(udg.subprocess, "run", counting)
+    monkeypatch.setattr(udg, "run_git", counting)
     assert udg._tasks_holds_markdown(tmp_path, tasks) is True
     assert len(calls) == 1 and "ls-files" in calls[0]
 
