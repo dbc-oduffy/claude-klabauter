@@ -89,7 +89,12 @@ def test_no_leg_rewrites_with_detached_launch_and_asks(home):
 
 def test_current_leg_leaves_command_alone(home, ls_server):
     write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
-    assert pre.decide(run_payload(), 4242) == {"decision": "ask"}
+    assert_bare_ask(pre.decide(run_payload(), 4242))
+
+
+def assert_bare_ask(out):
+    """An ask that carries no rewrite; the guard's degrade advisory text may ride along."""
+    assert out["decision"] == "ask" and "overwrite" not in out
 
 
 @posix_rewrite
@@ -125,7 +130,7 @@ def test_dead_leg_pid_is_rewritten(home, ls_server, monkeypatch):
     "text",
 ])
 def test_non_rewrite_inputs_pass_without_overwrite(home, payload):
-    assert pre.decide(payload, 4242) == {"decision": "ask"}
+    assert_bare_ask(pre.decide(payload, 4242))
 
 
 def stub_guard(monkeypatch, answer):
@@ -157,7 +162,7 @@ def test_guard_ask_with_current_leg_keeps_guard_reason_without_overwrite(home, l
 
 def test_guard_down_current_leg_is_bare_ask(home, ls_server):
     write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
-    assert pre.decide(run_payload(), 4242, str(home / "no-engine")) == {"decision": "ask"}
+    assert_bare_ask(pre.decide(run_payload(), 4242, str(home / "no-engine")))
 
 
 @posix_rewrite
@@ -806,3 +811,56 @@ def test_no_rewrite_text_carries_a_json_literal_or_unquoted_payload(home):
 def test_process_cmdline_reads_a_real_process():
     line = REAL_CMDLINE(os.getpid())
     assert line and ("python" in line.lower() or "pytest" in line.lower())
+
+
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked guard holds the hook before the wall answers, a wait CPU time cannot see")
+def test_blocked_guard_answers_open_within_the_wall_and_records_hook_wall(home, monkeypatch, capsys):
+    import threading
+    import time
+    release = threading.Event()
+    monkeypatch.setattr(pre, "run_guard", lambda raw, root: release.wait(30) or dict(PASS_ASK))
+    monkeypatch.setattr(pre, "HOOK_WALL_SECS", 0.3)
+    exits = []
+    monkeypatch.setattr(pre, "_hard_exit", exits.append)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload(name="read_file"))))
+    t0 = time.monotonic()
+    try:
+        assert pre.main() == 0
+    finally:
+        release.set()
+    assert time.monotonic() - t0 < 0.3 + 0.2
+    out = json.loads(capsys.readouterr().out)
+    assert out["decision"] == "ask" and out["reason"]
+    assert exits == [0]
+    rows = [json.loads(line) for line in
+            (home / "host-hooks" / "host-guard-degrades.jsonl").read_text().splitlines()]
+    assert [r["cause"] for r in rows] == ["hook_wall"] and rows[0]["host"] == "agy"
+
+
+def test_prompt_guard_does_not_trip_the_wall(home, monkeypatch, capsys):
+    stub_guard(monkeypatch, {"decision": "deny", "reason": "blocked"})
+    exits = []
+    monkeypatch.setattr(pre, "_hard_exit", exits.append)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload(name="read_file"))))
+    assert pre.main() == 0
+    assert json.loads(capsys.readouterr().out)["decision"] == "deny"
+    assert exits == [] and not (home / "host-hooks").exists()
+
+
+def test_windows_warm_decide_spawns_only_the_debounced_launcher(home, monkeypatch):
+    as_windows(monkeypatch, pre)
+    stub_guard(monkeypatch, {"decision": "ask"})
+    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
+    spawned = []
+    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: spawned.append(cmd))
+    pre.decide(run_payload(), 4242)
+    pre.decide(run_payload(), 4242)
+    assert len(spawned) == 1 and Path(spawned[0][1]) == pre.LAUNCH
+
+
+def test_siblings_are_executed_once_per_process(monkeypatch):
+    monkeypatch.setattr(pre, "_SIBLINGS", {})
+    assert pre.load_sibling("unimatrix-roster") is pre.load_sibling("unimatrix-roster")
+
+
+PASS_ASK = {"decision": "ask"}

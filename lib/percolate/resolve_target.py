@@ -233,12 +233,10 @@ def resolve_machine_local_bin(root: Path) -> Optional[str]:
 # running process, not to skip re-reading the registry on the next process.
 _dump_cache: dict[str, dict[str, str]] = {}
 
-#: Wall-clock bound on the one `machine-local dump` spawn: 2.0s cost term (an
-#: interpreter start plus a small registry read) + 10.0s scheduling headroom.
-#: Must equal `percolate-round.py :: _REGISTRY_CLI_TIMEOUT_SECS`, which this
-#: self-contained library cannot import (pinned by
-#: `test_percolate_round.py :: test_resolve_target_dump_bound_matches_round_family`).
-_REGISTRY_CLI_TIMEOUT_SECS = 2.0 + 10.0
+#: Kill ceiling on the one `machine-local dump` spawn (== coordinator_core
+#: .machine_local_spawn.ML_SPAWN_TIMEOUT_S, which this self-contained library cannot
+#: import). No scheduling headroom: a dump that outlives it is killed and reaped.
+_REGISTRY_CLI_TIMEOUT_SECS = 2.0
 
 
 def _dump_registry(machine_local_bin: str) -> dict[str, str]:

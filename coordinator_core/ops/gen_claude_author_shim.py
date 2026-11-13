@@ -365,23 +365,15 @@ def main(argv: List[str]) -> int:
             doe_resolved = bool(_registry_get("repos.content_root"))
             if not doe_resolved:
                 import shutil
-                import subprocess
 
                 ml_bin = resolve_machine_local_cli()
                 if ml_bin is not None:
-                    try:
-                        from coordinator_core.win_portability import no_console_creationflags
+                    from coordinator_core.machine_local_spawn import run_bounded
 
-                        result = subprocess.run(
-                            [ml_bin, "get", "repos.content_root"],
-                            capture_output=True,
-                            text=True,
-                            check=False,
-                            **no_console_creationflags(),
-                        )
-                        doe_resolved = result.returncode == 0 and bool(result.stdout.strip())
-                    except OSError:
-                        doe_resolved = False
+                    result = run_bounded([ml_bin, "get", "repos.content_root"])
+                    doe_resolved = (
+                        result is not None and result.returncode == 0 and bool(result.stdout.strip())
+                    )
         if not doe_resolved:
             print(
                 "claude_shim: skipped (DoE clone unresolved — "

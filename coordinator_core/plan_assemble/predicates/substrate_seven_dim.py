@@ -73,6 +73,7 @@ from typing import Any
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.ops.doc_content_verify import _doc_relative_checker, verify_doc
+from coordinator_core.prior_art_recall.search_log import validate_sidecar
 from coordinator_core.session.machinery_paths import plan_sidecars_dir as _plan_sidecars_dir
 from coordinator_core import sizing_assemble as _sizing_assemble
 from coordinator_core.plan_assemble.predicates import PredicateContext, undetermined
@@ -136,6 +137,13 @@ def seven_dim_no_duplicate(context: PredicateContext) -> dict[str, Any]:
             f"no prior-art-checker dispatch sidecar found at "
             f"{sidecar_path.relative_to(context.repo_root).as_posix()}"
         )
+    try:
+        text = sidecar_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return undetermined(f"prior-art-checker sidecar unreadable: {exc}")
+    refusals = validate_sidecar(text, context.plan_body)
+    if refusals:
+        return undetermined("prior-art-checker sidecar refused: " + "; ".join(refusals[:3]))
     return True
 
 

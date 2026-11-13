@@ -1,9 +1,11 @@
-"""Behavior pins for the Klabauter host-guard client: neutral fallback per host, bounded wall, deny pass-through."""
+"""Behavior pins for the Klabauter host-guard client: open answer per host, bounded wall, no child, deny pass-through."""
 import importlib.util
 import json
 import subprocess
 import sys
+import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ import pytest
 pytestmark = pytest.mark.complete
 
 BIN = Path(__file__).resolve().parents[1]
+REPO = BIN.parents[1]
 SCRIPT = BIN / "unimatrix-host-guard.py"
 BUDGET = 0.5
 CODEX_PAYLOAD = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash",
@@ -38,6 +41,7 @@ GROK_DENY = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDe
 def settings_home(tmp_path, monkeypatch):
     home = tmp_path / "settings-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    monkeypatch.setenv("COORDINATOR_WARM_RUNTIME_BASE", str(tmp_path / "warm-runtime"))
     return home
 
 
@@ -46,7 +50,23 @@ def degrade_records(home):
     return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
+def assert_open(host, answer):
+    """The host's open answer; agy additionally carries a non-empty advisory reason."""
+    assert {k: v for k, v in answer.items() if k != "reason"} == NEUTRAL[host]
+    if host == "agy":
+        assert isinstance(answer.get("reason"), str) and answer["reason"]
+    else:
+        assert "reason" not in answer
+
+
+def stub_shim(monkeypatch, answer=None, run=None):
+    """Seam the shim import: guard() calls `run(host, stdin)` on its walled thread, no engine tree needed."""
+    fn = run or (lambda host, text: answer)
+    monkeypatch.setattr(hg, "_load_shim", lambda root: types.SimpleNamespace(run=fn))
+
+
 def make_engine(tmp_path, shim_src):
+    """A stub engine tree on disk, for the CLI tests that run the guard script in its own interpreter."""
     root = tmp_path / "engine"
     pkg = root / "coordinator_core" / "host_hooks"
     pkg.mkdir(parents=True)
@@ -56,93 +76,127 @@ def make_engine(tmp_path, shim_src):
     return str(root)
 
 
-ECHO_SHIM = """
-import sys
-def main():
-    sys.stdin.read()
-    {body}
-main()
-"""
-
-
-def shim(body):
-    return ECHO_SHIM.format(body=body)
+def shim_src(body):
+    return "import sys\n\ndef run(host, stdin_text):\n    " + body + "\n"
 
 
 @pytest.mark.parametrize("host", ["agy", "codex"])
-def test_no_engine_root_is_neutral_degraded(host):
-    assert hg.guard(host, CODEX_PAYLOAD, None) == (NEUTRAL[host], "degraded")
-    assert hg.guard(host, CODEX_PAYLOAD, "/no/such/dir") == (NEUTRAL[host], "degraded")
+def test_no_engine_root_is_open_degraded(host):
+    for root in (None, "/no/such/dir"):
+        answer, state = hg.guard(host, CODEX_PAYLOAD, root)
+        assert state == "degraded"
+        assert_open(host, answer)
 
 
 @pytest.mark.parametrize("host", ["agy", "codex"])
-def test_shim_raising_is_neutral(tmp_path, host):
-    root = make_engine(tmp_path, "raise RuntimeError('boom')\n")
-    assert hg.guard(host, CODEX_PAYLOAD, root) == (NEUTRAL[host], "degraded")
+def test_shim_load_failure_is_open_import_error(tmp_path, monkeypatch, settings_home, host):
+    def boom(root):
+        raise ImportError("no shim")
+
+    monkeypatch.setattr(hg, "_load_shim", boom)
+    answer, state = hg.guard(host, CODEX_PAYLOAD, str(tmp_path))
+    assert state == "degraded"
+    assert_open(host, answer)
+    assert [r["cause"] for r in degrade_records(settings_home)] == ["import_error"]
+
+
+@pytest.mark.parametrize("host", ["agy", "codex"])
+def test_shim_run_raising_is_open_degraded(tmp_path, monkeypatch, host):
+    def boom(h, t):
+        raise RuntimeError("boom")
+
+    stub_shim(monkeypatch, run=boom)
+    answer, state = hg.guard(host, CODEX_PAYLOAD, str(tmp_path))
+    assert state == "degraded"
+    assert_open(host, answer)
 
 
 @pytest.mark.parametrize("host", ["agy", "codex"])
 @pytest.mark.parametrize("stdin", ["", "not json", "[1, 2]", "{"])
-def test_malformed_stdin_is_neutral(tmp_path, host, stdin):
-    root = make_engine(tmp_path, shim("print('{\"decision\": \"deny\", \"reason\": \"r\"}')"))
-    assert hg.guard(host, stdin, root) == (NEUTRAL[host], "degraded")
+def test_malformed_stdin_is_open(tmp_path, monkeypatch, host, stdin):
+    stub_shim(monkeypatch, {"decision": "deny", "reason": "r"})
+    answer, state = hg.guard(host, stdin, str(tmp_path))
+    assert state == "degraded"
+    assert_open(host, answer)
 
 
-@pytest.mark.deliberate_wall_clock(reason="bounds how long a blocking shim holds the guard before the budget deadline answers neutral, a wait CPU time cannot see")
-@pytest.mark.parametrize("src", ["import time\ntime.sleep(60)\n", None])
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a blocking shim holds the guard before the budget deadline answers open, a wait CPU time cannot see")
 @pytest.mark.parametrize("host", ["agy", "codex"])
-def test_blocking_shim_returns_neutral_within_budget(tmp_path, host, src):
-    body = src or shim("import time; time.sleep(60)")
-    root = make_engine(tmp_path, body)
-    start = time.monotonic()
-    result = hg.guard(host, CODEX_PAYLOAD, root, budget_secs=BUDGET)
-    assert time.monotonic() - start < BUDGET + 0.5
-    assert result == (NEUTRAL[host], "degraded")
+def test_blocking_shim_returns_open_within_budget_recording_timeout(tmp_path, monkeypatch, settings_home, host):
+    release = threading.Event()
+    stub_shim(monkeypatch, run=lambda h, t: release.wait(60))
+    wall0, cpu0 = time.monotonic(), time.process_time()
+    try:
+        answer, state = hg.guard(host, CODEX_PAYLOAD, str(tmp_path), budget_secs=BUDGET)
+    finally:
+        release.set()
+    assert time.monotonic() - wall0 < BUDGET + 0.5
+    assert time.process_time() - cpu0 < 0.1
+    assert state == "degraded"
+    assert_open(host, answer)
+    (rec,) = degrade_records(settings_home)
+    assert rec["cause"] == "timeout" and rec["host"] == host and rec["budget_secs"] == BUDGET
+    assert isinstance(rec["cpu_secs"], float) and rec["cpu_secs"] >= 0
+    assert "child_cpu_secs" not in rec
 
 
-def test_timed_out_child_is_killed_and_reaped(tmp_path, monkeypatch):
-    root = make_engine(tmp_path, shim("import time; time.sleep(60)"))
-    spawned = []
-    real = subprocess.Popen
+def test_agy_degrade_advisory_names_the_cause(tmp_path):
+    answer, _ = hg.guard("agy", CODEX_PAYLOAD, None)
+    assert answer == {"decision": "ask", "reason": "Klabauter guard unavailable (no_engine_root); proceeding open"}
 
-    def spy(*a, **k):
-        p = real(*a, **k)
-        spawned.append(p)
-        return p
 
-    monkeypatch.setattr(hg.subprocess, "Popen", spy)
-    assert hg.guard("codex", CODEX_PAYLOAD, root, budget_secs=0.3)[1] == "degraded"
-    assert len(spawned) == 1 and spawned[0].poll() is not None
+def test_guard_hot_path_spawns_no_python_child_and_a_cold_engine_answers_open(monkeypatch, settings_home):
+    """Real shim from the real repo root, warm dial forced to a miss, Popen armed to raise."""
+    monkeypatch.syspath_prepend(str(REPO))
+    from coordinator_core.warm import client
+
+    spawns = []
+
+    def no_spawn(*a, **k):
+        spawns.append(a)
+        raise AssertionError("the guard hot path spawned a child process")
+
+    monkeypatch.setattr(client, "try_warm_dispatch", lambda *a, **k: None)
+    monkeypatch.setattr(subprocess, "Popen", no_spawn)
+    for host, payload in (("codex", CODEX_PAYLOAD), ("agy", AGY_PAYLOAD)):
+        answer, state = hg.guard(host, payload, str(REPO))
+        assert state in ("neutral-unknown", "degraded"), (host, answer, state)
+        assert_open(host, answer)
+        assert state != "engine"
+    assert spawns == []
+
+
+def test_guard_module_carries_no_subprocess_use():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "subprocess" not in text and "sys.executable" not in text
 
 
 @pytest.mark.parametrize("host", ["agy", "codex"])
-@pytest.mark.parametrize("body", [
-    "print('')",
-    "sys.stdout.write('{\"decision\": \"den')",
-    "print('not json')",
-    "print('{}'); print('{}')",
-    "print('[1]')",
-    "sys.exit(3)",
+@pytest.mark.parametrize("answer", [
+    None,
+    "",
+    "not a dict",
+    [1],
+    {"unknown": True},
 ])
-def test_bad_stdout_is_neutral_degraded(tmp_path, host, body):
-    root = make_engine(tmp_path, shim(body))
-    assert hg.guard(host, CODEX_PAYLOAD, root) == (NEUTRAL[host], "degraded")
+def test_bad_shim_answer_is_open_degraded(tmp_path, monkeypatch, settings_home, host, answer):
+    stub_shim(monkeypatch, answer)
+    got, state = hg.guard(host, CODEX_PAYLOAD, str(tmp_path))
+    assert state == "degraded"
+    assert_open(host, got)
+    assert degrade_records(settings_home)[-1]["cause"] == "invalid_answer"
 
 
-def test_agy_answer_without_decision_is_degraded(tmp_path):
-    root = make_engine(tmp_path, shim("print('{}')"))
-    assert hg.guard("agy", AGY_PAYLOAD, root) == ({"decision": "ask"}, "degraded")
+def test_agy_answer_without_decision_is_degraded(tmp_path, monkeypatch):
+    stub_shim(monkeypatch, {})
+    answer, state = hg.guard("agy", AGY_PAYLOAD, str(tmp_path))
+    assert state == "degraded"
+    assert_open("agy", answer)
 
 
-def test_codex_bare_empty_object_is_neutral_unknown_never_engine(tmp_path):
-    root = make_engine(tmp_path, shim("print('{}')"))
-    assert hg.guard("codex", CODEX_PAYLOAD, root) == ({}, "neutral-unknown")
-
-
-def test_codex_internal_error_style_neutral_is_not_engine(tmp_path):
-    root = make_engine(tmp_path, shim("sys.stderr.write('caught internal error\\n'); print('{}')"))
-    answer, state = hg.guard("codex", CODEX_PAYLOAD, root)
-    assert answer == {} and state != "engine"
+def test_codex_bare_empty_object_is_neutral_unknown_never_engine(tmp_path, monkeypatch):
+    stub_shim(monkeypatch, {})
+    assert hg.guard("codex", CODEX_PAYLOAD, str(tmp_path)) == ({}, "neutral-unknown")
 
 
 GOOD_INNER = {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "no"}
@@ -163,28 +217,52 @@ GOOD_INNER = {"hookEventName": "PreToolUse", "permissionDecision": "deny", "perm
     {"hookSpecificOutput": GOOD_INNER, "decision": "deny"},
     {"unknown": True},
 ])
-def test_malformed_codex_output_is_neutral_degraded(tmp_path, bad):
-    root = make_engine(tmp_path, shim(f"print({json.dumps(json.dumps(bad))})"))
-    assert hg.guard("codex", CODEX_PAYLOAD, root) == ({}, "degraded")
+def test_malformed_codex_output_is_open_degraded(tmp_path, monkeypatch, bad):
+    stub_shim(monkeypatch, bad)
+    assert hg.guard("codex", CODEX_PAYLOAD, str(tmp_path)) == ({}, "degraded")
+
+
+CODEX_ADVISORY = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "XS budget spent"}}
+CODEX_ADVISORY_ALLOW = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                                "additionalContext": "XS budget spent"}}
+
+
+@pytest.mark.parametrize("advisory", [CODEX_ADVISORY, CODEX_ADVISORY_ALLOW])
+def test_codex_advisory_reaches_output_intact_as_neutral_unknown(tmp_path, monkeypatch, advisory):
+    assert hg._valid_answer("codex", advisory) is True
+    stub_shim(monkeypatch, advisory)
+    assert hg.guard("codex", CODEX_PAYLOAD, str(tmp_path)) == (advisory, "neutral-unknown")
+
+
+@pytest.mark.parametrize("bad", [
+    {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": ""}},
+    {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": 3}},
+    {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "x"}},
+    {"hookSpecificOutput": {**CODEX_ADVISORY_ALLOW["hookSpecificOutput"], "permissionDecision": "deny"}},
+    {"hookSpecificOutput": {**CODEX_ADVISORY_ALLOW["hookSpecificOutput"], "permissionDecisionReason": "r"}},
+    {"hookSpecificOutput": {**CODEX_ADVISORY["hookSpecificOutput"], "extra": 1}},
+    {**CODEX_ADVISORY, "continue": False},
+])
+def test_codex_malformed_advisory_degrades(bad):
+    assert hg._valid_answer("codex", bad) is False
 
 
 def test_stray_stderr_never_reaches_stdout(tmp_path):
-    root = make_engine(tmp_path, shim("sys.stderr.write('noise\\n'); print('{\"decision\": \"ask\"}')"))
+    root = make_engine(tmp_path, shim_src("sys.stderr.write('noise\\n'); return {'decision': 'ask'}"))
     proc = subprocess.run([sys.executable, str(SCRIPT), "--host", "agy", "--engine-root", root],
                           input=AGY_PAYLOAD, capture_output=True, text=True)
     assert proc.stdout.strip() == '{"decision": "ask"}'
     assert "noise" not in proc.stdout
 
 
-def test_stub_deny_passes_through_untouched(tmp_path):
+def test_stub_deny_passes_through_untouched(tmp_path, monkeypatch):
     deny = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                    "permissionDecisionReason": "no"}}
-    root = make_engine(tmp_path, shim(f"print({json.dumps(json.dumps(deny))})"))
-    assert hg.guard("codex", CODEX_PAYLOAD, root) == (deny, "engine")
+    stub_shim(monkeypatch, deny)
+    assert hg.guard("codex", CODEX_PAYLOAD, str(tmp_path)) == (deny, "engine")
     agy_deny = {"decision": "deny", "reason": "no"}
-    (tmp_path / "b").mkdir()
-    root2 = make_engine(tmp_path / "b", shim(f"print({json.dumps(json.dumps(agy_deny))})"))
-    assert hg.guard("agy", AGY_PAYLOAD, root2) == (agy_deny, "engine")
+    stub_shim(monkeypatch, agy_deny)
+    assert hg.guard("agy", AGY_PAYLOAD, str(tmp_path)) == (agy_deny, "engine")
 
 
 @pytest.mark.parametrize("host,payload", [("agy", AGY_PAYLOAD), ("codex", CODEX_PAYLOAD), ("codex", "garbage"), ("agy", "")])
@@ -194,11 +272,12 @@ def test_cli_one_json_line_exit_zero(tmp_path, host, payload):
                           input=payload, capture_output=True, text=True)
     assert proc.returncode == 0
     lines = proc.stdout.splitlines()
-    assert len(lines) == 1 and json.loads(lines[0]) == NEUTRAL[host]
+    assert len(lines) == 1
+    assert_open(host, json.loads(lines[0]))
     assert proc.stderr.strip() == "degraded"
 
 
-def test_cli_without_args_is_neutral_exit_zero():
+def test_cli_without_args_is_open_exit_zero():
     proc = subprocess.run([sys.executable, str(SCRIPT)], input="", capture_output=True, text=True)
     assert proc.returncode == 0
     assert len(proc.stdout.splitlines()) == 1 and json.loads(proc.stdout) == {}
@@ -229,42 +308,41 @@ def test_real_codex_adapter_renders_nested_deny():
 
 
 @pytest.mark.parametrize("decision", ["allow", "ask", "force_ask"])
-def test_agy_engine_non_deny_never_passes_allow_through(tmp_path, decision):
+def test_agy_engine_non_deny_never_passes_allow_through(tmp_path, monkeypatch, decision):
     # The warm engine answers a neutral agy command with "allow"; the guard must answer ask instead.
-    root = make_engine(tmp_path, shim(f"print(json.dumps({{'decision': '{decision}'}}))"))
-    answer, state = hg.guard("agy", AGY_PAYLOAD, root)
-    assert answer == {"decision": "ask"} and state != "engine"
+    stub_shim(monkeypatch, {"decision": decision})
+    answer, state = hg.guard("agy", AGY_PAYLOAD, str(tmp_path))
+    assert answer["decision"] == "ask" and state != "engine"
+    if decision != "force_ask":
+        assert answer == {"decision": "ask"}
 
 
-def test_agy_ask_with_advisory_reason_reaches_output_intact_never_allow(tmp_path):
+def test_agy_ask_with_advisory_reason_reaches_output_intact_never_allow(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO))
     from coordinator_core.host_hooks.agy_adapter import AgyAdapter
     rendered = AgyAdapter().render(
         AgyAdapter().adapt_event({"toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}}),
         {"decision": "allow", "additionalContext": "advisory nag"})
-    root = make_engine(tmp_path, shim(f"print({json.dumps(json.dumps(rendered))})"))
-    answer, state = hg.guard("agy", AGY_PAYLOAD, root)
+    stub_shim(monkeypatch, rendered)
+    answer, state = hg.guard("agy", AGY_PAYLOAD, str(tmp_path))
     assert answer == {"decision": "ask", "reason": "advisory nag"} and state == hg.NEUTRAL_UNKNOWN
 
 
-def test_timeout_degrade_records_cause_and_child_cpu(tmp_path, settings_home):
-    root = make_engine(tmp_path, shim("import time; time.sleep(60)"))
-    assert hg.guard("codex", CODEX_PAYLOAD, root, budget_secs=0.3) == ({}, "degraded")
-    (rec,) = degrade_records(settings_home)
-    assert rec["cause"] == "timeout" and rec["host"] == "codex" and rec["budget_secs"] == 0.3
-    assert rec["child_cpu_secs"] is None or rec["child_cpu_secs"] >= 0
-
-
-def test_other_degrade_causes_are_distinguishable(tmp_path, settings_home):
+def test_other_degrade_causes_are_distinguishable(tmp_path, monkeypatch, settings_home):
     hg.guard("codex", CODEX_PAYLOAD, None)
-    hg.guard("codex", "not json", make_engine(tmp_path, shim("print('{}')")))
-    hg.guard("codex", CODEX_PAYLOAD, make_engine(tmp_path / "a", "raise RuntimeError('boom')\n"))
-    hg.guard("codex", CODEX_PAYLOAD, make_engine(tmp_path / "b", shim("print('[1]')")))
+    stub_shim(monkeypatch, {})
+    hg.guard("codex", "not json", str(tmp_path))
+    stub_shim(monkeypatch, [1])
+    hg.guard("codex", CODEX_PAYLOAD, str(tmp_path))
+    monkeypatch.setattr(hg, "_load_shim", lambda root: (_ for _ in ()).throw(ImportError("x")))
+    hg.guard("codex", CODEX_PAYLOAD, str(tmp_path))
     assert [r["cause"] for r in degrade_records(settings_home)] == [
-        "no_engine_root", "bad_stdin", "nonzero_exit", "invalid_answer"]
+        "no_engine_root", "bad_stdin", "invalid_answer", "import_error"]
 
 
-def test_engine_answer_and_neutral_unknown_record_nothing(tmp_path, settings_home):
-    hg.guard("codex", CODEX_PAYLOAD, make_engine(tmp_path, shim("print('{}')")))
+def test_engine_answer_and_neutral_unknown_record_nothing(tmp_path, monkeypatch, settings_home):
+    stub_shim(monkeypatch, {})
+    hg.guard("codex", CODEX_PAYLOAD, str(tmp_path))
     assert degrade_records(settings_home) == []
 
 
@@ -280,7 +358,7 @@ def test_default_budget_is_half_a_second():
 
 
 def test_cli_timeout_at_default_budget_records_and_stays_exit_zero(tmp_path, settings_home):
-    root = make_engine(tmp_path, shim("import time; time.sleep(60)"))
+    root = make_engine(tmp_path, "import time\n\ndef run(host, stdin_text):\n    time.sleep(60)\n")
     r = subprocess.run([sys.executable, str(SCRIPT), "--host", "codex", "--engine-root", root],
                        input=CODEX_PAYLOAD, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0 and json.loads(r.stdout) == {} and r.stderr.strip() == "degraded"
@@ -288,13 +366,10 @@ def test_cli_timeout_at_default_budget_records_and_stays_exit_zero(tmp_path, set
     assert rec["cause"] == "timeout" and rec["budget_secs"] == 0.5
 
 
-def test_grok_neutral_is_the_no_change_answer_and_agrees_with_contract():
+def test_grok_neutral_is_the_no_change_answer_and_agrees_with_contract(monkeypatch):
     assert hg._neutral("grok") == {}
-    sys.path.insert(0, str(BIN.parents[1]))
-    try:
-        from coordinator_core.host_hooks import contract
-    finally:
-        sys.path.pop(0)
+    monkeypatch.syspath_prepend(str(REPO))
+    from coordinator_core.host_hooks import contract
     assert "grok" in contract.HOSTS
     expected = {k: v for k, v in contract.neutral_fallback("grok").items() if k != "reason"}
     assert hg.NEUTRAL["grok"] == expected
@@ -316,12 +391,12 @@ def test_grok_invalid_answer_shapes(answer):
     assert hg._valid_answer("grok", answer) is False
 
 
-@pytest.mark.parametrize("body", [
-    "print('{}')",
-    "print('{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"allow\"}}')"])
-def test_grok_neutral_or_allow_is_neutral_unknown_never_engine(tmp_path, body):
-    root = make_engine(tmp_path, shim(body))
-    answer, state = hg.guard("grok", GROK_PAYLOAD, root)
+@pytest.mark.parametrize("answer", [
+    {},
+    {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}])
+def test_grok_neutral_or_allow_is_neutral_unknown_never_engine(tmp_path, monkeypatch, answer):
+    stub_shim(monkeypatch, answer)
+    _, state = hg.guard("grok", GROK_PAYLOAD, str(tmp_path))
     assert state == hg.NEUTRAL_UNKNOWN and state != "engine"
 
 
@@ -329,10 +404,10 @@ GROK_ALLOW_ADVISORY = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "pe
                                                "additionalContext": "advisory text"}}
 
 
-def test_grok_allow_with_additional_context_is_valid_and_reaches_output_intact(tmp_path):
+def test_grok_allow_with_additional_context_is_valid_and_reaches_output_intact(tmp_path, monkeypatch):
     assert hg._valid_answer("grok", GROK_ALLOW_ADVISORY) is True
-    root = make_engine(tmp_path, shim(f"print({json.dumps(json.dumps(GROK_ALLOW_ADVISORY))})"))
-    answer, state = hg.guard("grok", GROK_PAYLOAD, root)
+    stub_shim(monkeypatch, GROK_ALLOW_ADVISORY)
+    answer, state = hg.guard("grok", GROK_PAYLOAD, str(tmp_path))
     assert answer == GROK_ALLOW_ADVISORY and state == hg.NEUTRAL_UNKNOWN
 
 
@@ -342,11 +417,11 @@ def test_grok_non_string_additional_context_is_invalid():
     assert hg._valid_answer("grok", bad) is False
 
 
-def test_grok_deny_passes_through_as_engine(tmp_path):
-    root = make_engine(tmp_path, shim(f"print({json.dumps(json.dumps(GROK_DENY))})"))
-    assert hg.guard("grok", GROK_PAYLOAD, root) == (GROK_DENY, "engine")
+def test_grok_deny_passes_through_as_engine(tmp_path, monkeypatch):
+    stub_shim(monkeypatch, GROK_DENY)
+    assert hg.guard("grok", GROK_PAYLOAD, str(tmp_path)) == (GROK_DENY, "engine")
 
 
-def test_grok_invalid_engine_answer_degrades_to_neutral(tmp_path):
-    root = make_engine(tmp_path, shim("print('{\"decision\": \"deny\"}')"))
-    assert hg.guard("grok", GROK_PAYLOAD, root) == ({}, "degraded")
+def test_grok_invalid_engine_answer_degrades_to_neutral(tmp_path, monkeypatch):
+    stub_shim(monkeypatch, {"decision": "deny"})
+    assert hg.guard("grok", GROK_PAYLOAD, str(tmp_path)) == ({}, "degraded")

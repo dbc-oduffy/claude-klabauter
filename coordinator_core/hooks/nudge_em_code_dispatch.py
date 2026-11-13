@@ -81,6 +81,8 @@ from coordinator_core.hooks._em_write_budget import (  # noqa: F401 -- re-bound 
     _SIZED_ADVISORY,
     _budget_core,
     _enclosing_repo_root,
+    _host,
+    sized_advisory,
     _is_bootstrap_or_out_of_repo,
     _is_scratch_or_tmp,
     _session_sizing_state,
@@ -386,19 +388,19 @@ def _is_scratch_py(file_path: str) -> bool:
     return "scratch" in below.replace("\\", "/").split("/")[:-1]
 
 
-def _nag_line(prefix: str, session_id: str, sizing_rel=None) -> str:
+def _nag_line(prefix: str, session_id: str, sizing_rel=None, host=None) -> str:
     """Full prefixed nag on the session's first engine-ask nag; a repeat is the one terse counted line."""
-    nag = nag_text(session_id, sizing_rel)
+    nag = nag_text(session_id, sizing_rel, host=host)
     return nag if nag.startswith(NAG_REPEAT_PREFIX) else prefix + nag
 
 
-def _unsized_advisory(session_id: str) -> str:
-    return _nag_line("[em-code-dispatch nudge] No sizing this session. ", session_id)
+def _unsized_advisory(session_id: str, host=None) -> str:
+    return _nag_line("[em-code-dispatch nudge] No sizing this session. ", session_id, host=host)
 
 
-def _plan_route_advisory(session_id: str) -> str:
+def _plan_route_advisory(session_id: str, host=None) -> str:
     return _nag_line(
-        "[em-code-dispatch nudge] This session's sizing routed to a plan. ", session_id, _SESSION_SIZING
+        "[em-code-dispatch nudge] This session's sizing routed to a plan. ", session_id, _SESSION_SIZING, host
     )
 
 
@@ -538,7 +540,7 @@ def op(payload: dict) -> dict | None:
         from coordinator_core.hooks._em_write_budget import advised_deny_envelope
 
         latched = advised_deny_envelope(
-            _repo_root(payload), _resolve_session_id_op(payload), paths
+            _repo_root(payload), _resolve_session_id_op(payload), paths, _host(payload)
         )
         if latched is not None:
             return latched
@@ -588,7 +590,7 @@ def op(payload: dict) -> dict | None:
         return None
     if not has_sizing:
         # Author box (strict): denied until the session sizes. Consumer (warn): advisory.
-        return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", _unsized_advisory(session_id)))
+        return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", _unsized_advisory(session_id, _host(payload))))
     if plan_pending:
-        return context_only("PreToolUse", _plan_route_advisory(session_id))
-    return context_only("PreToolUse", _SIZED_ADVISORY)
+        return context_only("PreToolUse", _plan_route_advisory(session_id, _host(payload)))
+    return context_only("PreToolUse", sized_advisory(_host(payload)))

@@ -77,7 +77,7 @@ def pin_key_value(roster, run=subprocess.run):
     if not reader.is_file() or not exe:
         return None
     try:
-        r = run([exe, str(reader), "get", PYTHON_KEY], capture_output=True, text=True, timeout=30,
+        r = run([exe, str(reader), "get", PYTHON_KEY], capture_output=True, text=True, timeout=2.0,
                 creationflags=roster.no_window())
     except (OSError, subprocess.SubprocessError):
         return None
@@ -229,7 +229,7 @@ def far_boxes_status(roster, guard=False):
         return [], f"{REGISTRY_KEY} unreadable (machine-local reader missing: {reader}); no supervisors started"
     try:
         r = subprocess.run([pinned_python(roster), str(reader), "get", REGISTRY_KEY],
-                           capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
+                           capture_output=True, text=True, timeout=2.0, creationflags=roster.no_window())
     except (OSError, subprocess.SubprocessError, InterpreterPinError) as ex:
         return [], f"{REGISTRY_KEY} unreadable ({type(ex).__name__}); no supervisors started"
     unset = r.returncode == 1 and (not (r.stderr or "").strip() or "not found in registry" in r.stderr)
@@ -397,7 +397,7 @@ def machine_local_key(roster, alias, run=subprocess.run):
         return None
     try:
         r = run([pinned_python(roster), str(reader), "get", f"{KEYS_PREFIX}{alias}"],
-                capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
+                capture_output=True, text=True, timeout=2.0, creationflags=roster.no_window())
     except (OSError, subprocess.SubprocessError, InterpreterPinError):
         return None
     val = r.stdout.strip() if not r.returncode else ""

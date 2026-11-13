@@ -816,7 +816,6 @@ _NOT_HEAVY = {
     "coordinator/bin/unimatrix-autolink.py": "detached ssh bridge supervisors, network-bound, not a memory-heavy job",
     "coordinator/bin/unimatrix-codex-launch.py": "codex app-server daemon launch, not a memory-heavy job",
     "coordinator/bin/unimatrix-file.py": "ssh relay file leg, network-bound, not a memory-heavy job",
-    "coordinator/bin/unimatrix-host-guard.py": "wall-bounded shim child for a host hook",
     "coordinator/bin/unimatrix-install.py": "claude --version probe, light",
     "coordinator/bin/unimatrix-roster.py": "ssh bridge supervisor, network-bound, not a memory-heavy job",
     "coordinator/bin/validate-fast-and-packageability.py": "wall-budgeted gate (gate_budget)",
@@ -953,3 +952,41 @@ def test_bare_pytest_is_marked(cmd):
 )
 def test_scoped_or_non_pytest_is_not_marked_bare(cmd):
     assert classify(cmd, CWD).bare_pytest is False
+
+
+def _trimming_host(readings_gib, trim_result="system cache 40.0 -> 2.0 GB"):
+    """A fake host whose available memory steps through `readings_gib`, one per memory read."""
+    host, log = _fake_host(avail_gib=readings_gib[0])
+    reads = iter(readings_gib)
+    status_cls = _hcc._load_box_memory_host().MemoryStatus
+    host.read_memory_status = lambda: status_cls(
+        avail_phys=int(next(reads) * _GIB), total_phys=1 << 40, commit_used=0, commit_limit=1 << 50)
+    trims = []
+    host.trim_file_cache = lambda: trims.append(1) or trim_result
+    return host, log, trims
+
+
+def test_a_hold_the_cache_trim_clears_admits():
+    host, log, trims = _trimming_host([3.7, 30.0])
+    v = _hcc.admit_before_spawn("fifa-workflow", 4.0, host=host, register_pid=7)
+    assert v.admitted and trims == [1] and log == [("fifa-workflow", 7, 4.0)]
+
+
+def test_a_hold_still_breached_after_the_trim_refuses_after_one_trim():
+    host, log, trims = _trimming_host([3.7, 3.9])
+    v = _hcc.admit_before_spawn("fifa-workflow", 4.0, host=host, register_pid=7)
+    assert not v.admitted and v.reason.startswith("HOLD fifa-workflow") and trims == [1] and log == []
+
+
+def test_an_admit_never_trims_and_an_unfired_trim_skips_the_remeasure():
+    host, _, trims = _trimming_host([10.0])
+    assert _hcc.admit_before_spawn("k", 4.0, host=host).admitted and trims == []
+    host, _, trims = _trimming_host([3.7], trim_result=None)  # a second read would exhaust the iterator
+    v = _hcc.admit_before_spawn("k", 4.0, host=host)
+    assert not v.admitted and v.reason.startswith("HOLD k") and trims == [1]
+
+
+def test_a_commit_only_hold_does_not_trim():
+    host, _, trims = _trimming_host([30.0])
+    host.admit = lambda peak, st: types.SimpleNamespace(admit=False, need_avail=peak, avail_ok=True)
+    assert not _hcc.admit_before_spawn("k", 4.0, host=host).admitted and trims == []

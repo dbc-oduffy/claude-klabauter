@@ -261,6 +261,9 @@ RAG_INSTALL_TIMEOUT_S = 960
 RAG_INSTALL_BUDGET_S = 420
 RAG_INSTALL_DEFERRED_LOG = Path("/root/example-retrieval-repo-cloud-install.log")
 MACHINE_LOCAL_TIMEOUT_S = 60
+#: Kill ceiling for a direct `machine-local` spawn (== coordinator_core.machine_local_spawn
+#: .ML_SPAWN_TIMEOUT_S). Importable before coordinator_core, so the bound is inline.
+ML_SPAWN_TIMEOUT_S = 2.0
 
 #: Session-start probe (stdlib-only) that names a placeholder PATH in-session.
 PATH_PROBE_REL = ("scripts", "cloud_path_probe.py")
@@ -1007,7 +1010,7 @@ def seed_trust_anchor_keys(report: Report) -> None:
             [*argv, "set", key, value],
             capture_output=True,
             text=True,
-            timeout=MACHINE_LOCAL_TIMEOUT_S,
+            timeout=ML_SPAWN_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
@@ -1032,7 +1035,7 @@ def seed_trust_anchor_keys(report: Report) -> None:
             [*argv, "get", key],
             capture_output=True,
             text=True,
-            timeout=MACHINE_LOCAL_TIMEOUT_S,
+            timeout=ML_SPAWN_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
@@ -2544,7 +2547,7 @@ def register_mounted_sibling_keys(report: Report) -> None:
             [*argv, *args],
             capture_output=True,
             text=True,
-            timeout=MACHINE_LOCAL_TIMEOUT_S,
+            timeout=ML_SPAWN_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
@@ -2609,7 +2612,7 @@ def register_machine_local_repo_keys(report: Report) -> None:
             [*argv, "set", key, root],
             capture_output=True,
             text=True,
-            timeout=MACHINE_LOCAL_TIMEOUT_S,
+            timeout=ML_SPAWN_TIMEOUT_S,
             # stdin explicitly closed, not inherited; see _git_clone's comment.
             stdin=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -2847,7 +2850,7 @@ def register_publish_mirror_keys(report: Report) -> None:
             [*argv, "set", key, str(candidate)],
             capture_output=True,
             text=True,
-            timeout=MACHINE_LOCAL_TIMEOUT_S,
+            timeout=ML_SPAWN_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )

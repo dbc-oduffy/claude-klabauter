@@ -58,12 +58,12 @@ OSS requirement: works for any coordinator-claude installer with zero registered
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
 from typing import Dict, List, Optional
 
+from coordinator_core import machine_local_spawn
 from coordinator_core._settings_home import settings_home
 from coordinator_core.ops.learn_lessons_cutoff import _claude_home
 from coordinator_core.state_root import coordinator_state_root_central
@@ -71,7 +71,7 @@ from coordinator_core.win_portability import is_executable, no_console_creationf
 
 _coordinator_state_root_central = coordinator_state_root_central
 
-_SUBPROCESS_TIMEOUT_SECS = 15
+_SUBPROCESS_TIMEOUT_SECS = 2.0
 _DENYLIST_KEYS = ("coordinator_claude", "deep_research_claude")
 _BEGIN_SENTINEL = "BEGIN learn-lessons-roots"
 _END_SENTINEL = "END learn-lessons-roots"
@@ -119,22 +119,8 @@ def _is_publish_target(
 
 
 def _machine_local_dump_repos(machine_local: str) -> Dict[str, str]:
-    try:
-        proc = subprocess.run(
-            [machine_local, "dump", "--prefix", "repos", "--format", "json"],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT_SECS,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        print(f"skip: _machine_local_dump_repos: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return {}
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return {}
-    try:
-        data = json.loads(proc.stdout)
-    except ValueError:
+    data = machine_local_spawn.dump(machine_local, ("--prefix", "repos", "--format", "json"))
+    if not data:
         return {}
     return {k: v for k, v in data.items() if isinstance(v, str) and v}
 

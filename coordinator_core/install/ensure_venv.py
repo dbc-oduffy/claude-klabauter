@@ -445,7 +445,15 @@ def _resolve_ml_cli(plugin_root: Path) -> Optional[list]:
 
 
 def _ml_get(ml_cli: list, key: str) -> str:
-    return _quiet_output([*ml_cli, "get", key])
+    from coordinator_core.machine_local_spawn import run_bounded
+
+    proc = run_bounded([*ml_cli, "get", key])
+    if proc is None:
+        print(f"ensure-coordinator-venv: {ml_cli[0] if ml_cli else '<empty argv>'} get {key} failed or timed out", file=sys.stderr)
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return (proc.stdout or "").strip()
 
 
 def _ml_set(ml_cli: list, key: str, value: str) -> None:

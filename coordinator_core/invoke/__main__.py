@@ -981,7 +981,16 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
 
                     found = terminal_commit_params_channel.find_existing(args.params_file, cwd)
                     if found is None:
-                        raise
+                        recover_run = terminal_commit_params_channel.canonical_run_id(args.params_file)
+                        recover_root = terminal_commit_params_channel.repo_root_of(args.params_file, cwd)
+                        if recover_run is not None and recover_root is not None:
+                            found = terminal_commit_params_channel.recover_params(recover_root, recover_run)
+                        if found is None:
+                            raise
+                        print(
+                            f"params file for run {recover_run} was absent; recovered it from the run's recorded land params.",
+                            file=sys.stderr,
+                        )
                     params_json_str = found.read_text(encoding="utf-8")
             except FileNotFoundError as exc:
                 from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel

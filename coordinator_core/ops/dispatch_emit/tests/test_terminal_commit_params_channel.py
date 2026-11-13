@@ -302,6 +302,79 @@ def test_missing_file_diagnosis_refuses_other_paths(path):
 _SCRIPT = "scratch/warp/a.workflow.mjs"
 
 
+def _fail_open_env(tmp_path, monkeypatch, lines):
+    import time
+
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    home = tmp_path / "home"
+    (home / "state").mkdir(parents=True)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    run_token.mint(repo, "ask-1", _SCRIPT)
+    minted = run_token.minted_at(repo, "ask-1")
+    assert minted is not None
+    body = "".join(
+        f"ts={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(minted + off))} deadline_ms=1 cause={cause}\n"
+        for off, cause in lines
+    )
+    (home / "state" / "door-fail-open.log").write_text(body, encoding="utf-8")
+    return repo
+
+
+def test_diagnosis_names_a_door_fail_open_logged_since_the_mint(tmp_path, monkeypatch):
+    repo = _fail_open_env(tmp_path, monkeypatch, [(-100, "old one"), (5, "deadline blown")])
+    text = ch.missing_file_diagnosis(str(ch.params_path(repo, "ask-1")))
+    assert "PreToolUse door failed open" in text and "cause=deadline blown" in text
+    assert "old one" not in text and "was not reached" not in text
+
+
+def test_diagnosis_ignores_a_fail_open_older_than_the_mint(tmp_path, monkeypatch):
+    repo = _fail_open_env(tmp_path, monkeypatch, [(-100, "old one"), (-50, "older")])
+    text = ch.missing_file_diagnosis(str(ch.params_path(repo, "ask-1")))
+    assert "failed open" not in text and "run-token writer was not reached" in text
+
+
+def test_diagnosis_prefers_the_refusal_note_over_a_fail_open(tmp_path, monkeypatch):
+    repo = _fail_open_env(tmp_path, monkeypatch, [(5, "x")])
+    path = ch.params_path(repo, "ask-1")
+    path.parent.mkdir(parents=True)
+    path.with_name(ch.REFUSAL_FILE_NAME).write_text("some-leg", encoding="utf-8")
+    text = ch.missing_file_diagnosis(str(path))
+    assert "some-leg" in text and "failed open" not in text
+
+
+def test_fail_open_note_is_none_without_a_live_record_or_log(tmp_path, monkeypatch):
+    repo = _fail_open_env(tmp_path, monkeypatch, [(5, "x")])
+    assert ch.door_fail_open_note(repo, "no-such-run") is None
+    (tmp_path / "home" / "state" / "door-fail-open.log").unlink()
+    assert ch.door_fail_open_note(repo, "ask-1") is None
+
+
+def test_fail_open_note_skips_unparseable_ts(tmp_path, monkeypatch):
+    repo = _fail_open_env(tmp_path, monkeypatch, [(5, "good")])
+    log = tmp_path / "home" / "state" / "door-fail-open.log"
+    log.write_text(log.read_text(encoding="utf-8") + "ts=garbage cause=bad\n", encoding="utf-8")
+    assert "cause=good" in ch.door_fail_open_note(repo, "ask-1")
+
+
+def test_recover_params_rewrites_the_params_file_from_the_land_params(tmp_path):
+    params = {**PARAMS, "run_id": "run-1", "inline_review": {"a": 1}}
+    assert ch.recover_params(tmp_path, "run-1") is None
+    ch.materialize(ch.params_path(tmp_path, "run-1"), params)
+    ch.params_path(tmp_path, "run-1").unlink()
+    recovered = ch.recover_params(tmp_path, "run-1")
+    assert recovered == ch.params_path(tmp_path, "run-1")
+    assert json.loads(recovered.read_text(encoding="utf-8")) == params
+
+
+def test_repo_root_of_strips_the_canonical_tail(tmp_path):
+    assert ch.repo_root_of(str(ch.params_path(tmp_path, "run-1"))) == tmp_path
+    assert ch.repo_root_of("scratch/warp/run-1/" + ch.PARAMS_FILE_NAME, tmp_path) == tmp_path
+    assert ch.repo_root_of("other/x.json") is None
+
+
 def _minted_prompt(repo, run_id="ask-1", extra_block=False):
     from coordinator_core.ops.dispatch_emit import run_token
 

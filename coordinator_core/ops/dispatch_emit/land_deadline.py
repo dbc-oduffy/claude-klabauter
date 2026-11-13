@@ -52,7 +52,7 @@ _QUEUE_WAIT: ContextVar[float] = ContextVar("land_run_queue_wait", default=0.0)
 #: Deadline for the reserved legs (>= `_DEADLINE`); None when unbound.
 _HARD: ContextVar[Optional[float]] = ContextVar("land_run_hard_deadline", default=None)
 
-#: Per-scope ledger of started legs as `(leg, wall_start, cpu_start, spawns_at_start)`; None outside
+#: Per-scope ledger of started legs as `(leg, wall_start, cpu_start, spawns_at_start, bytes_at_start)`; None outside
 #: a scope.
 _LEGS: ContextVar[Optional[list]] = ContextVar("land_run_legs", default=None)
 
@@ -141,6 +141,7 @@ def scope(budget_secs: Optional[float] = None) -> Iterator[None]:
     # Seeded with the scope's own entry: without it, time before the first `check` (imports, token
     # redemption) is in no leg, and a first-leg halt reports `legs: []` (75f803).
     spawn_token = spawn_counter.bind_scope()
+    bytes_token = _bind_byte_counter()
     legs_token = _LEGS.set([_ledger_entry(SCOPE_LEG, _now())])
     open_token = _RESERVED_OPEN.set(False)
     try:
@@ -148,6 +149,7 @@ def scope(budget_secs: Optional[float] = None) -> Iterator[None]:
     finally:
         _RESERVED_OPEN.reset(open_token)
         _LEGS.reset(legs_token)
+        _reset_byte_counter(bytes_token)
         spawn_counter.reset_scope(spawn_token)
         _CEILING.reset(ceiling_token)
         _BOUND_BY.reset(bound_token)
@@ -210,8 +212,26 @@ def mark(leg: str) -> None:
     _record(leg, _now())
 
 
+def _bind_byte_counter():
+    from coordinator_core.git import commit
+
+    return commit.bind_byte_counter()
+
+
+def _reset_byte_counter(token) -> None:
+    from coordinator_core.git import commit
+
+    commit.reset_byte_counter(token)
+
+
+def _bytes_read() -> int:
+    from coordinator_core.git import commit
+
+    return commit.bytes_read_total()
+
+
 def _ledger_entry(leg: str, now: float) -> tuple:
-    return (leg, now, _cpu(), spawn_counter.scope_spawns())
+    return (leg, now, _cpu(), spawn_counter.scope_spawns(), _bytes_read())
 
 
 def _is_reserved(leg: str) -> bool:
@@ -228,22 +248,24 @@ def _reserved_leg_open() -> bool:
 
 def _legs_elapsed(now: float) -> list:
     """Each started leg's cost: its start to the next leg's start, the last to `now`. Entries carry
-    `leg`, wall `elapsed_secs`, thread-CPU `process_time_ms` and `spawns` made in the scope."""
+    `leg`, wall `elapsed_secs`, thread-CPU `process_time_ms`, `spawns` made in the scope and
+    worktree `bytes_read` by `checkin_blob_sha`."""
     ledger = _LEGS.get() or []
-    ends = [entry[1:] for entry in ledger[1:]] + [(now, _cpu(), spawn_counter.scope_spawns())]
+    ends = [entry[1:] for entry in ledger[1:]] + [(now, _cpu(), spawn_counter.scope_spawns(), _bytes_read())]
     return [
         {
             "leg": name,
             "elapsed_secs": max(0.0, end_wall - wall),
             "process_time_ms": round(max(0.0, end_cpu - cpu) * 1000.0, 1),
             "spawns": max(0, end_spawns - spawns),
+            "bytes_read": max(0, end_bytes - nbytes),
         }
-        for (name, wall, cpu, spawns), (end_wall, end_cpu, end_spawns) in zip(ledger, ends)
+        for (name, wall, cpu, spawns, nbytes), (end_wall, end_cpu, end_spawns, end_bytes) in zip(ledger, ends)
     ]
 
 
 def leg_costs() -> list:
-    """The current scope's started legs as `[{leg, elapsed_secs, process_time_ms, spawns}]`, the
+    """The current scope's started legs as `[{leg, elapsed_secs, process_time_ms, spawns, bytes_read}]`, the
     last leg costed up to now; empty outside a scope."""
     return _legs_elapsed(_now())
 

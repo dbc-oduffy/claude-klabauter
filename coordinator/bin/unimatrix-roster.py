@@ -1158,7 +1158,8 @@ def main(argv=None):
         signal.signal(signal.SIGTERM, stopped)
     bridges = {}
     link_path = link_state_path(cfg.remote)
-    link = read_link_state(link_path)
+    # No record yet: None, so the first poll writes one and the G-EM watch sees a new box's first state.
+    link = read_link_state(link_path) if os.path.exists(link_path) else None
     failures = 0
     try:
         guarded(say, "startup reap", reap_orphaned_mirrors, cfg.remote, say)

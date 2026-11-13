@@ -156,10 +156,14 @@ def _resolve_machine_local_bin(bin_dir: str) -> Optional[str]:
 #: is long-lived, so a registry edit made after a read is not seen until the
 #: engine restarts. Accepted because the registry is install-time
 #: configuration and because `_ml_get` is already best-effort by contract
-#: (15s timeout, any failure yields None, callers must handle None). Bust it
+#: (2s timeout, any failure yields None, callers must handle None). Bust it
 #: with `_ML_GET_CACHE.clear()` if a caller ever re-points the registry
 #: in-process; nothing does today.
 _ML_GET_CACHE: dict = {}
+
+#: Kill ceiling for the machine-local spawn (== coordinator_core.machine_local_spawn
+#: .ML_SPAWN_TIMEOUT_S); subprocess.run kills and reaps the direct child on expiry.
+_ML_SPAWN_TIMEOUT_S = 2.0
 
 
 def _ml_get(ml_bin: Optional[str], key: str) -> Optional[str]:
@@ -173,7 +177,7 @@ def _ml_get(ml_bin: Optional[str], key: str) -> Optional[str]:
             [*resolve_launchable(ml_bin), "get", key],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=_ML_SPAWN_TIMEOUT_S,
             **no_console_creationflags(),
         )
         val = (out.stdout or "").strip()

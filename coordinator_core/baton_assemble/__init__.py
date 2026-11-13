@@ -243,7 +243,7 @@ from coordinator_core.resolve_coordinator_clone import (
     resolve_content_root,
 )
 from coordinator_core.session.claimed_plan import resolve_claimed_plan_path
-from coordinator_core.session.output_tree_layout import is_month_dir, write_rel
+from coordinator_core.session.output_tree_layout import is_month_dir, locate, write_rel
 from coordinator_core.session.touch_record import project_live_claims
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -388,6 +388,12 @@ def _resolve_qualified_path_or_raise(artifact_path: str, root: Path, kind: str =
     """
     from coordinator_core.ops.resolve_swept_baton import _ARCHIVE_SUBDIRS, _find_first_match
 
+    # A cite of a live handoff whose month folder is absent or wrong lives in some month folder.
+    rel = Path(artifact_path).as_posix()
+    if rel.startswith("state/handoffs/"):
+        sharded = root / _live_handoff_rel(root, Path(artifact_path).name)
+        if sharded.is_file():
+            return sharded
     match = _find_first_match(root, Path(artifact_path).name)
     if match is None:
         searched = ", ".join(_ARCHIVE_SUBDIRS)
@@ -444,6 +450,28 @@ def _repo_rel_handoff_path(basename: str) -> str:
     directory component of its own does not belong here.
     """
     return (Path("state") / "handoffs" / basename).as_posix()
+
+
+def _live_handoff_rel(root: Path, basename: str) -> str:
+    """Where a live handoff named only by `basename` sits: flat, its date-derived shard, or any
+    other `state/handoffs/<YYYY-MM>/` folder holding it (a baton can be filed in a month its name's
+    date does not give). The claim ledger records basenames only, so a path rebuilt from one must
+    go through this. Not found anywhere: the date-derived shard, else the flat path."""
+    derived = locate(str(root), _repo_rel_handoff_path(basename))
+    if (root / derived).is_file():
+        return derived
+    live_dir = root / "state" / "handoffs"
+    try:
+        months = sorted(
+            (e.name for e in os.scandir(live_dir) if is_month_dir(e.name) and e.is_dir()),
+            reverse=True,
+        )
+    except OSError:
+        months = []
+    for month in months:
+        if (live_dir / month / basename).is_file():
+            return f"state/handoffs/{month}/{basename}"
+    return derived
 
 
 def _repo_rel_handoff_out_path(basename: str) -> str:
@@ -777,7 +805,7 @@ def _compute_fresh_output_path(
         fs_path = Path(rel)
         if not fs_path.is_absolute():
             fs_path = root / rel
-        if fs_path.exists() or (root / _repo_rel_handoff_path(fs_path.name)).exists():
+        if fs_path.exists() or (root / _live_handoff_rel(root, fs_path.name)).exists():
             return True
         return _archive_has_basename(fs_path.name)
 
@@ -4901,7 +4929,7 @@ def _follow_continued_to_leaf(basename: str, root: Path) -> str:
     from coordinator_core.ops.resolve_swept_baton import _find_first_match
 
     def _locate(name: str) -> Optional[Path]:
-        live = root / "state" / "handoffs" / name
+        live = root / _live_handoff_rel(root, name)
         return live if live.is_file() else _find_first_match(root, name)
 
     current = basename
@@ -5165,7 +5193,7 @@ def _resolve_held_handoff_for_session(
             "ledger -- pass the predecessor path explicitly."
         )
     if len(held_handoffs) == 1:
-        return "state/handoffs/" + _follow_continued_to_leaf(held_handoffs[0], root), [], False
+        return _live_handoff_rel(root, _follow_continued_to_leaf(held_handoffs[0], root)), [], False
 
     sessions_dir = _session_core.sessions_dir(str(root))
     _SENTINEL = "￿"
@@ -5249,8 +5277,8 @@ def _resolve_held_handoff_for_session(
         leaf = _follow_continued_to_leaf(basename, root)
         if leaf not in leaves:
             leaves.append(leaf)
-    primary = "state/handoffs/" + leaves[0]
-    additional = ["state/handoffs/" + basename for basename in leaves[1:]]
+    primary = _live_handoff_rel(root, leaves[0])
+    additional = [_live_handoff_rel(root, basename) for basename in leaves[1:]]
     return primary, additional, degraded
 
 

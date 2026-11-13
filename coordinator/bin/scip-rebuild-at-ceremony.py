@@ -166,7 +166,7 @@ def _resolve_registry_key(key: str) -> tuple[str | None, str | None]:
             capture_output=True,
             text=True,
             check=False,
-            timeout=60,
+            timeout=2.0,
             **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:

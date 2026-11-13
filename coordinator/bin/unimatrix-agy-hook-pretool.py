@@ -35,10 +35,13 @@ import shlex
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 SPAWN_DEBOUNCE_S = 30.0
+HOOK_WALL_SECS = 1.0
+_hard_exit = os._exit
 HERE = Path(__file__).resolve().parent
 LAUNCH = HERE / "unimatrix-agy-hook-launch.py"
 PASS = {"decision": "ask"}
@@ -212,10 +215,7 @@ def agy_print_mode(agy_pid, read=None):
 def pid_alive(pid):
     """True while `pid` runs. os.kill(pid, 0) means CTRL_C_EVENT on Windows, so ask the roster helper there."""
     if os.name == "nt":
-        spec = importlib.util.spec_from_file_location("unimatrix_roster", HERE / "unimatrix-roster.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return bool(mod.pid_alive(pid))
+        return bool(load_sibling("unimatrix-roster").pid_alive(pid))
     try:
         os.kill(pid, 0)
     except PermissionError:
@@ -228,7 +228,7 @@ def pid_alive(pid):
 def ls_reachable(addr):
     host, _, port = (addr or "").rpartition(":")
     try:
-        with socket.create_connection((host or "localhost", int(port)), timeout=0.5):
+        with socket.create_connection((host or "localhost", int(port)), timeout=0.2):
             return True
     except (OSError, ValueError):
         return False
@@ -288,10 +288,17 @@ def spawn_launcher(conv, agy_pid):
         pass
 
 
+_SIBLINGS = {}
+
+
 def load_sibling(name):
-    spec = importlib.util.spec_from_file_location(name.replace("-", "_"), HERE / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    """The sibling script as a module, executed once per process and cached."""
+    mod = _SIBLINGS.get(name)
+    if mod is None:
+        spec = importlib.util.spec_from_file_location(name.replace("-", "_"), HERE / f"{name}.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _SIBLINGS[name] = mod
     return mod
 
 
@@ -408,18 +415,46 @@ def engine_root_arg(argv):
     return None
 
 
-def main(argv=None):
-    """One JSON object with `decision` on stdout and exit 0, whatever stdin or the checks do."""
-    argv = list(sys.argv[1:] if argv is None else argv)
-    out = dict(PASS)
+def _answer(argv, result):
+    """Worker body: the decision into `result["out"]`; any failure is the neutral "ask"."""
     try:
         raw = sys.stdin.read()
-        out = decide(json.loads(raw), agy_ancestor_pid(), engine_root_arg(argv), raw)
+        result["out"] = decide(json.loads(raw), agy_ancestor_pid(), engine_root_arg(argv), raw)
     except Exception:
-        out = dict(PASS)
+        result["out"] = dict(PASS)
+
+
+def _wall_expired():
+    """The advisory ask for a hook that outran HOOK_WALL_SECS, after one hook_wall degrade row."""
+    try:
+        load_sibling("unimatrix-host-guard")._record_degrade("agy", "hook_wall", HOOK_WALL_SECS, None)
+    except Exception:
+        pass
+    return {"decision": "ask", "reason": "coordinator: guard did not finish within the hook wall; engine cold or unreachable"}
+
+
+def main(argv=None):
+    """One JSON object with `decision` on stdout and exit 0, whatever stdin or the checks do.
+
+    decide() runs on a daemon thread joined at HOOK_WALL_SECS; a slow or stuck engine answers the
+    advisory ask and the process exits hard, so no worker can hold it past agy's hook timeout."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    result = {}
+    worker = threading.Thread(target=_answer, args=(argv, result), daemon=True)
+    worker.start()
+    worker.join(HOOK_WALL_SECS)
+    expired = worker.is_alive()
+    out = _wall_expired() if expired else result.get("out", dict(PASS))
     print(json.dumps(out))
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if expired:
+        _hard_exit(0)
     return 0
 
 
 if __name__ == "__main__":
+    if any(_a in ("-h", "--help") for _a in sys.argv[1:]):
+        print("usage: unimatrix-agy-hook-pretool [-h]\nAntigravity PreToolUse hook body; reads hook JSON on stdin, emits a JSON decision")
+        raise SystemExit(0)
     sys.exit(main())

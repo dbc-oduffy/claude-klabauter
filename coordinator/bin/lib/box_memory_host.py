@@ -264,6 +264,33 @@ def read_memory_status() -> MemoryStatus:
     )
 
 
+def _group_em_live() -> bool:
+    """True when a live box-wide group-em holder exists; any failure reads as not live."""
+    try:
+        _host_sampler()  # puts this checkout's root on sys.path when coordinator_core is not installed
+        from coordinator_core.group_em import gem_home
+
+        return gem_home.gem_holder() is not None
+    except Exception:
+        return False
+
+
+def trim_file_cache() -> str | None:
+    """Fire the PM-installed BoxCacheTrim task once (Windows only), gated on a live group-em as the
+    governor's trims are; this run's result line, or None when nothing was fired. Bounded by
+    `file_cache_trim.GOVERNOR_WAIT_SECONDS`. Callers fire it only on a breach, never per admit."""
+    if sys.platform != "win32":
+        return None
+    lib = str(Path(__file__).resolve().parent)
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    try:
+        from file_cache_trim import fire_box_cache_trim
+    except ImportError:
+        return None
+    return fire_box_cache_trim(live_fn=_group_em_live)
+
+
 def nonpaged_pool_bytes() -> int:
     """Kernel nonpaged pool size via GetPerformanceInfo. Windows only."""
     import ctypes

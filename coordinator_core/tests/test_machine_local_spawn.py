@@ -1,0 +1,336 @@
+"""Tests for coordinator_core.machine_local_spawn: bounded spawn, in-process dump, cache, single-flight."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+import pytest
+
+from coordinator_core import locked_write
+from coordinator_core import machine_local_spawn as mls
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+KERNEL = REPO_ROOT / "coordinator" / "templates" / "bin" / "_machine_local.py"
+
+STUB = '''\
+import os, subprocess, sys, time
+
+if __name__ == "__main__":
+    with open(os.environ["STUB_PIDFILE"], "a") as f:
+        f.write(str(os.getpid()) + "\\n")
+    if os.environ.get("STUB_GRANDCHILD"):
+        gc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        with open(os.environ["STUB_GRANDCHILD"], "a") as f:
+            f.write(str(gc.pid) + "\\n")
+    time.sleep(float(os.environ.get("STUB_SLEEP", "0")))
+    print('{"repos.a": "/x/a", "repos.b": null}')
+'''
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    (tmp_path / "settings").mkdir()
+    pidfile = tmp_path / "pids.txt"
+    stub = tmp_path / "_machine_local.py"
+    stub.write_text(STUB, encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.setenv(locked_write.MACHINE_LOCK_ROOT_ENV, str(tmp_path / "locks"))
+    monkeypatch.setenv("STUB_PIDFILE", str(pidfile))
+    monkeypatch.setenv("STUB_SLEEP", "0")
+    mls._CACHE.clear()
+    yield {"reg": reg, "stub": str(stub), "pidfile": pidfile, "tmp": tmp_path}
+    mls._CACHE.clear()
+
+
+def _spawned(pidfile: Path) -> list[int]:
+    if not pidfile.exists():
+        return []
+    return [int(x) for x in pidfile.read_text().split()]
+
+
+def _wait_for(path: Path, timeout: float = 10.0) -> list[int]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pids = _spawned(path)
+        if pids:
+            return pids
+        time.sleep(0.02)
+    return []
+
+
+def _alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        from coordinator_core.bash_guards import _host_probe
+
+        return _host_probe.creation_time(pid) is not None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _wait_dead(pid: int, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _alive(pid):
+            return True
+        time.sleep(0.05)
+    return not _alive(pid)
+
+
+def test_run_bounded_timeout_returns_none_and_reaps_child(env, monkeypatch):
+    monkeypatch.setenv("STUB_SLEEP", "30")
+    monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 0.6)
+    t0 = time.monotonic()
+    result = mls.run_bounded([sys.executable, env["stub"], "dump"])
+    assert result is None
+    assert time.monotonic() - t0 < 8
+    (pid,) = _spawned(env["pidfile"])
+    assert _wait_dead(pid)
+
+
+def test_run_bounded_clamps_a_larger_timeout(env, monkeypatch):
+    monkeypatch.setenv("STUB_SLEEP", "30")
+    monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 0.5)
+    t0 = time.monotonic()
+    assert mls.run_bounded([sys.executable, env["stub"], "dump"], timeout=60) is None
+    assert time.monotonic() - t0 < 8
+
+
+def test_run_bounded_success_returns_completed_process(env):
+    cp = mls.run_bounded([sys.executable, env["stub"], "dump"])
+    assert cp is not None and cp.returncode == 0
+    assert '"repos.a"' in cp.stdout
+
+
+def test_run_bounded_unstartable_argv_returns_none(tmp_path):
+    assert mls.run_bounded([str(tmp_path / "no-such-binary")]) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="group kill is the POSIX path")
+def test_run_bounded_timeout_kills_the_grandchild_too(env, monkeypatch):
+    gc_file = env["tmp"] / "gc.txt"
+    monkeypatch.setenv("STUB_SLEEP", "30")
+    monkeypatch.setenv("STUB_GRANDCHILD", str(gc_file))
+    monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 1.0)
+    assert mls.run_bounded([sys.executable, env["stub"], "dump"]) is None
+    (gc_pid,) = _wait_for(gc_file)
+    assert _wait_dead(gc_pid)
+
+
+def test_no_second_spawn_after_a_timeout(env, monkeypatch):
+    monkeypatch.setenv("STUB_SLEEP", "30")
+    monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 0.6)
+    assert mls.dump(env["stub"], in_process=False) is None
+    assert mls.dump(env["stub"], in_process=False) is None
+    mls._CACHE.clear()
+    assert mls.dump(env["stub"], in_process=False) is None
+    assert len(_spawned(env["pidfile"])) == 1
+
+
+def test_py_impl_dumps_in_process_with_zero_spawns(tmp_path, monkeypatch):
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    (reg / "registry.local.toml").write_text('alpha = "one"\nbeta = ""\n', encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+
+    def boom(*a, **k):
+        raise AssertionError("dump() spawned a process")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    payload = mls.dump(str(KERNEL))
+    assert payload == {"alpha": "one", "beta": ""}
+    assert mls.dump(str(KERNEL), ("--prefix", "alpha")) == {"alpha": "one"}
+    assert mls.dump(str(KERNEL), ()) == {"alpha": "one", "beta": ""}
+
+
+def test_format_json_dump_still_reads_in_process(tmp_path, monkeypatch):
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    (reg / "registry.local.toml").write_text('alpha = "one"\n', encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawned"))
+    )
+    assert mls.dump(str(KERNEL), ("--prefix", "alpha", "--format", "json")) == {"alpha": "one"}
+    assert mls._parse_dump_args(("--format", "sh")) is None
+
+
+def test_in_process_dump_matches_the_spawned_dump(tmp_path, monkeypatch):
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    (reg / "registry.local.toml").write_text('alpha = "one"\nbeta = ""\n', encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.setenv(locked_write.MACHINE_LOCK_ROOT_ENV, str(tmp_path / "locks"))
+    mls._CACHE.clear()
+    in_proc = mls.dump(str(KERNEL))
+    spawned = mls.dump(str(KERNEL), in_process=False)
+    assert in_proc is not None and in_proc == spawned
+
+
+def test_get_serves_from_the_dump_and_reads_absence_in_process(tmp_path, monkeypatch):
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    (reg / "registry.local.toml").write_text('alpha = "one"\n', encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawned"))
+    )
+    assert mls.get(str(KERNEL), "alpha") == ("one", True)
+    assert mls.get(str(KERNEL), "nothing.here") == (None, True)
+
+
+def test_get_falls_back_to_one_bounded_spawn(env, monkeypatch):
+    monkeypatch.setenv("STUB_SLEEP", "30")
+    monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 0.6)
+    assert mls.get(env["stub"], "repos.zzz", in_process=False) == (None, False)
+    assert len(_spawned(env["pidfile"])) == 2  # one dump, one get: each bounded, neither retried
+    assert mls.get(env["stub"], "repos.zzz", in_process=False) == (None, False)
+    assert len(_spawned(env["pidfile"])) == 2  # the failed get is cached, not re-spawned
+
+
+def test_concurrent_threads_start_exactly_one_child(env, monkeypatch):
+    monkeypatch.setenv("STUB_SLEEP", "0.3")
+    results: list = []
+
+    def call():
+        results.append(mls.dump(env["stub"], in_process=False))
+
+    threads = [threading.Thread(target=call) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert len(_spawned(env["pidfile"])) == 1
+    assert results == [{"repos.a": "/x/a", "repos.b": None}] * 4
+
+
+def test_waiter_behind_slow_dump_gives_up_inside_wait_ceiling(env, monkeypatch):
+    monkeypatch.setenv("STUB_SLEEP", "1.5")
+    results: list = []
+    threads = [
+        threading.Thread(target=lambda: results.append(mls.dump(env["stub"], in_process=False)))
+        for _ in range(3)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert len(_spawned(env["pidfile"])) == 1
+    assert results.count(None) == 2 and len(results) == 3
+
+
+def test_concurrent_processes_start_exactly_one_child(env, monkeypatch):
+    monkeypatch.setenv("STUB_SLEEP", "1.0")
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]);"
+        "from coordinator_core import machine_local_spawn as m;"
+        "print(m.dump(sys.argv[2], in_process=False))"
+    )
+    procs = [
+        subprocess.Popen(
+            [sys.executable, "-c", code, str(REPO_ROOT), env["stub"]],
+            stdout=subprocess.PIPE,
+            text=True,
+            env=dict(os.environ),
+        )
+        for _ in range(3)
+    ]
+    outs = [p.communicate(timeout=60)[0].strip() for p in procs]
+    assert len(_spawned(env["pidfile"])) == 1
+    assert outs == ["{'repos.a': '/x/a', 'repos.b': None}"] * 3
+
+
+def test_shared_cache_serves_a_fresh_process_without_spawning(env):
+    assert mls.dump(env["stub"], in_process=False) is not None
+    mls._CACHE.clear()
+    assert mls.dump(env["stub"], in_process=False) == {"repos.a": "/x/a", "repos.b": None}
+    assert len(_spawned(env["pidfile"])) == 1
+
+
+def test_registry_mtime_change_invalidates_both_caches(env):
+    (env["reg"] / "registry.toml").write_text('x = "1"\n', encoding="utf-8")
+    mls.dump(env["stub"], in_process=False)
+    mls.dump(env["stub"], in_process=False)
+    assert len(_spawned(env["pidfile"])) == 1
+    local = env["reg"] / "registry.local.toml"
+    local.write_text('y = "2"\n', encoding="utf-8")
+    os.utime(local, ns=(1_000_000_000, 1_000_000_000))
+    mls.dump(env["stub"], in_process=False)
+    assert len(_spawned(env["pidfile"])) == 2
+
+
+def test_lock_wait_timeout_returns_none_and_never_spawns(env, monkeypatch):
+    monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 0.3)
+    target = Path(os.path.abspath(str(env["reg"])))
+    with locked_write.held_lock(target, timeout=2.0):
+        assert mls.dump(env["stub"], in_process=False) is None
+    assert _spawned(env["pidfile"]) == []
+
+
+def test_missing_settings_home_still_reads_through_the_bounded_spawn(env, monkeypatch):
+    from coordinator_core import environment
+
+    monkeypatch.setattr(environment, "_settings_home", lambda _env: None)
+    assert mls.dump(env["stub"], in_process=False) == {"repos.a": "/x/a", "repos.b": None}
+    mls._CACHE.clear()
+    assert mls.dump(env["stub"], in_process=False) is not None
+    assert len(_spawned(env["pidfile"])) == 2
+
+
+def test_windows_kill_walks_the_tree_and_still_kills_the_child():
+    from coordinator_core.bash_guards._heavy_admission_contract import ProcRow
+
+    rows = [
+        ProcRow(pid=10, ppid=1, ctime=5, name="parent"),
+        ProcRow(pid=20, ppid=10, ctime=6, name="stub"),
+        ProcRow(pid=30, ppid=20, ctime=7, name="grandchild"),
+        ProcRow(pid=40, ppid=1, ctime=5, name="unrelated"),
+    ]
+    killed: list = []
+
+    class Kill:
+        def terminate_verified(self, pid, ctime):
+            killed.append(pid)
+            return True
+
+        def command_line(self, pid, ctime):
+            return None
+
+    class FakeProc:
+        pid = 20
+        direct_kill = False
+
+        def kill(self):
+            FakeProc.direct_kill = True
+
+    mls._kill_tree_windows(FakeProc(), snapshot=lambda: rows, kill=Kill())
+    assert sorted(killed) == [20, 30]
+    assert FakeProc.direct_kill
+
+
+def test_windows_kill_survives_an_unreadable_process_table():
+    class FakeProc:
+        pid = 20
+        direct_kill = False
+
+        def kill(self):
+            FakeProc.direct_kill = True
+
+    mls._kill_tree_windows(FakeProc(), snapshot=lambda: None, kill=object())
+    assert FakeProc.direct_kill

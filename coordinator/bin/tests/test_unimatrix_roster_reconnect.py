@@ -22,6 +22,9 @@ class Stop(Exception):
 def drive(mod, monkeypatch, tmp_path, outcomes, reap=None):
     """Run main() through `outcomes` (True = far answers, False = rc=255); returns (log text, sleeps)."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+    links = tmp_path / "home" / "unimatrix" / "link-state"  # a known box: a missing record is a first link
+    links.mkdir(parents=True)
+    (links / "example-fleet-pro.json").write_text(json.dumps({"state": "up"}), encoding="utf-8")
     monkeypatch.setattr(mod, "inbound_names", lambda: set())
     synced = []
     monkeypatch.setattr(mod, "sync", lambda *a, **k: synced.append(1))

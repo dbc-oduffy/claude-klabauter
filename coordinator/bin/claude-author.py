@@ -632,13 +632,14 @@ def _resolve_doe_clone(cli_content_root: str = "") -> str | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            timeout=2.0,
             **_no_console_kw(),
         )
         if result.returncode != 0:
             ml_get_failed = True
         else:
             resolved = result.stdout.strip()
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         ml_get_failed = True
 
     if not ml_get_failed and resolved:
@@ -654,11 +655,12 @@ def _resolve_doe_clone(cli_content_root: str = "") -> str | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            timeout=2.0,
             **_no_console_kw(),
         )
         if result_fb.returncode == 0:
             resolved_fallback = result_fb.stdout.strip()
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         pass
 
     if resolved_fallback:

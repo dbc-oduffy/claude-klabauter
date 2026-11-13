@@ -31,6 +31,11 @@ RESTART_MIN_INTERVAL_SECS = 90.0
 HANG_RESTART_LOG_FILENAME = "hang-restarts.log"
 _LOG_TAIL_BYTES = 16384
 _DUMPS_NAMED = 5
+# Header token a stall record carries when its holders are blocked on I/O rather than hung; the
+# writer imports this so the two sides cannot drift.
+IO_WAIT_STALL_CLASS = "io-wait"
+IO_WAIT_HEADER = f"stall-class: {IO_WAIT_STALL_CLASS}"
+_HEADER_LINES = 6
 _STAMP_FMT = "%Y%m%dT%H%M%SZ"
 _LINE_STAMP_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -54,14 +59,26 @@ def _stamp_epoch(name: str) -> Optional[int]:
         return None
 
 
+def _is_io_wait_record(path: Path) -> bool:
+    """True when the record's header carries `stall-class: io-wait`; unreadable reads as hung."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            head = [fh.readline() for _ in range(_HEADER_LINES)]
+    except OSError:
+        return False
+    return any(line.strip() == IO_WAIT_HEADER for line in head)
+
+
 def _recent_dumps(stall_dir: Path, since: float) -> list:
-    """`(epoch, path)` of stall records stamped at or after `since`, oldest first."""
+    """`(epoch, path)` of hung-stall records stamped at or after `since`, oldest first.
+
+    Recycle records and io-wait records are not hang evidence."""
     found = []
     for path in stall_dir.glob("*.txt"):
         if path.name.endswith("-recycle.txt"):
             continue
         epoch = _stamp_epoch(path.name)
-        if epoch is not None and epoch >= since:
+        if epoch is not None and epoch >= since and not _is_io_wait_record(path):
             found.append((epoch, path))
     found.sort()
     return found

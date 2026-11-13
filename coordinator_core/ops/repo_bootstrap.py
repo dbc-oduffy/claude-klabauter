@@ -100,7 +100,7 @@ from coordinator_core.ipc import register_op
 
 _CREATIONFLAGS = no_console_creationflags()
 
-_MACHINE_LOCAL_TIMEOUT_SECS = 15
+_MACHINE_LOCAL_TIMEOUT_SECS = 2.0
 
 
 class RepoBootstrapError(RuntimeError):

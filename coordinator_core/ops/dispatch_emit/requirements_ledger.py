@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -822,6 +823,12 @@ def _reopened(text: str, rows: Sequence[Mapping]) -> str:
     return text if satisfied else _SHIPPED_STATUS_LINE.sub("status: routed", text, count=1)
 
 
+#: Total wall time `_mutate_register` keeps retrying a lock timeout (sidecar open stall or held
+#: lock) before it refuses; each attempt is itself bounded by `locked_write`'s own deadlines.
+SIDECAR_RETRY_BUDGET_SECS: float = 4.0
+SIDECAR_RETRY_PAUSE_SECS: float = 0.05
+
+
 def _mutate_register(root: Path, sizing_rel: str, edit, *, unrelated: Sequence[Mapping] = ()) -> list[dict]:
     """Apply `edit(rows) -> rows | None` to the sizing's register under the file lock; None or an
     unchanged list writes nothing. `unrelated` entries (`{turn, reason}`) join the register's
@@ -857,12 +864,19 @@ def _mutate_register(root: Path, sizing_rel: str, edit, *, unrelated: Sequence[M
         out["rows"] = new_rows
         return new.replace("\n", "\r\n") if crlf else new
 
-    try:
-        locked_rmw(path, mutate, repo_root=Path(root))
-    except MutateAbort as exc:
-        raise LedgerRefused(str(exc.args[0]) if exc.args else "register write refused") from exc
-    except LockTimeout as exc:
-        raise LedgerRefused(f"timed out waiting for the lock on {sizing_rel}: {exc}") from exc
+    started = time.monotonic()
+    while True:
+        try:
+            locked_rmw(path, mutate, repo_root=Path(root))
+            break
+        except MutateAbort as exc:
+            raise LedgerRefused(str(exc.args[0]) if exc.args else "register write refused") from exc
+        except LockTimeout as exc:
+            # A timeout ran before any read or write, so a retry is exact; one transient stall
+            # must not cost the run.
+            if time.monotonic() - started + SIDECAR_RETRY_PAUSE_SECS >= SIDECAR_RETRY_BUDGET_SECS:
+                raise LedgerRefused(f"timed out waiting for the lock on {sizing_rel}: {exc}") from exc
+            time.sleep(SIDECAR_RETRY_PAUSE_SECS)
     return out["rows"]
 
 

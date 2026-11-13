@@ -2398,6 +2398,7 @@ _DECLARED_LEG_BOUNDS = {
     "_GIT_PLUMBING_TIMEOUT_SECS",
     "_GIT_PUSH_TIMEOUT_SECS",
     "_REGISTRY_CLI_TIMEOUT_SECS",
+    "_MACHINE_LOCAL_DUMP_TIMEOUT_SECS",
     "_ROUND_SCAN_LEG_TIMEOUT_SECS",
     "_PUBLISH_LEG_TIMEOUT_SECS",
 }
@@ -2498,7 +2499,7 @@ def test_every_leg_bound_comes_from_a_declared_family(tmp_path, monkeypatch):
 
 
 def test_resolve_target_dump_bound_matches_round_family():
-    assert _resolve_target._REGISTRY_CLI_TIMEOUT_SECS == _mod._REGISTRY_CLI_TIMEOUT_SECS
+    assert _resolve_target._REGISTRY_CLI_TIMEOUT_SECS == _mod._MACHINE_LOCAL_DUMP_TIMEOUT_SECS
 
 
 def test_dump_registry_timeout_is_a_transport_failure_and_not_cached(monkeypatch):

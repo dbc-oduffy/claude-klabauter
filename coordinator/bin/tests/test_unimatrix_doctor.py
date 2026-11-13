@@ -41,6 +41,7 @@ class Net:
         self.peer_snapshot = {}  # remote -> bytes returned by `membership get`
         self.cmds = []
         self.kex, self.scan_ok, self.timeout = set(), set(), set()
+        self.wrong_host = set()  # ssh targets whose host key does not match HostKeyAlias
         self.far_log = {}  # remote -> bytes the unprivileged far-log read returns
 
     def run(self, cmd, **kw):
@@ -57,6 +58,8 @@ class Net:
             log = self.far_log.get(cmd[-2])
             return subprocess.CompletedProcess(cmd, 0 if log else 1, log or b"", b"")
         remote = cmd[-3] if cmd[-2:] == ["membership", "get"] else cmd[-2]
+        if remote in self.wrong_host:
+            return subprocess.CompletedProcess(cmd, 255, b"", b"Host key verification failed.")
         if remote in self.kex:
             return subprocess.CompletedProcess(
                 cmd, 255, b"", b"kex_exchange_identification: Connection closed by remote host")
@@ -98,6 +101,7 @@ def box(tmp_path, monkeypatch):
     liveness = al._liveness()
     monkeypatch.setattr(roster, "pid_alive", lambda pid: pid in live)
     monkeypatch.setattr(roster, "proc_start", lambda pid: f"start-{pid}")
+    monkeypatch.setattr(al, "pin_key_value", lambda r, run=subprocess.run: sys.executable)
 
     class B:
         pass
@@ -189,6 +193,17 @@ def test_default_run_flags_unsigned_line_dead_alias_and_ip_pinned_alias_and_buil
     assert all(line.startswith(("problem:", "info:")) for line in out.splitlines())
 
 
+def test_reserved_ip_pin_is_accepted_and_an_undeclared_one_is_still_flagged(box):
+    (box.home / "bin" / "_machine_local.py").write_text(
+        "import sys\nk = sys.argv[-1]\n"
+        "print({'unimatrix.far_boxes': 'resbox,ipbox', 'unimatrix.reserved_ips': '10.0.0.116, 10.0.0.174'}.get(k, ''))\n"
+        "sys.exit(0 if k in ('unimatrix.far_boxes', 'unimatrix.reserved_ips') else 1)\n")
+    box.net.alias_host = {"resbox": "10.0.0.116", "ipbox": "192.168.1.9"}
+    out = box.main()[1]
+    assert "resbox: far_boxes alias is pinned to IP" not in out
+    assert "ipbox: far_boxes alias is pinned to IP 192.168.1.9" in out
+
+
 def test_signed_line_and_healthy_link_exit_zero_and_print_the_pin_fingerprint(box):
     snap = box.adopt("me", "machine-a")
     box.ak.write_text(box.relay_line(box.relay[1]) + "\n")
@@ -231,7 +246,58 @@ def test_each_failed_leg_of_a_link_is_named_and_stops_the_later_legs(box):
     assert "nodns: nodns.local does not resolve" in out
     assert "norefuse: norefuse.local refuses TCP 22" in out
     assert "noroster: relay key does not answer `roster`" in out and "rc=255" in out
-    assert "nodns: " in out and "nodns: bridge" not in out
+    assert "nodns: no relay key" not in out and "nodns: relay key" not in out and "nodns: peer" not in out
+
+
+def _lists(**by_key):
+    return lambda key: by_key.get(key, "")
+
+
+def test_primary_name_down_but_a_listed_address_answers_is_not_a_problem(box):
+    box.adopt("me", "hop")
+    box.net.dead_dns = {"hop.local"}
+    box.net.refuse = {"10.0.0.1"}
+    rc, out = box.main(read_key=_lists(**{"unimatrix.addresses.hop": "10.0.0.1, 10.0.0.2"}))
+    assert "hop: hop.local does not resolve" not in out
+    assert "box answers at 10.0.0.2" in out
+    assert any(c[-2:] == ["kim@10.0.0.2", "roster"] and "HostKeyAlias=hop" in c and "StrictHostKeyChecking=yes" in c
+               for c in box.net.cmds)
+
+
+def test_listed_address_held_by_another_machine_is_not_this_box_and_never_accepted(box):
+    box.adopt("me", "hop")
+    box.net.dead_dns = {"hop.local"}
+    box.net.wrong_host = {"kim@10.0.0.3"}
+    rc, out = box.main(read_key=_lists(**{"unimatrix.addresses.hop": "10.0.0.3"}))
+    assert rc == 1
+    assert "hop: hop.local does not resolve" in out
+    assert "10.0.0.3 answers with a different host key (not this box)" in out
+    assert "box answers at" not in out
+
+
+def test_primary_down_with_no_address_list_keeps_the_original_problem_unchanged(box):
+    box.adopt("me", "hop")
+    box.net.refuse = {"hop.local"}
+    rc, out = box.main(read_key=_lists())
+    assert rc == 1
+    assert "hop: hop.local refuses TCP 22" in out and "not this box" not in out
+    assert not any("HostKeyAlias=hop" in c for c in box.net.cmds)
+
+
+def test_pinned_hostkey_must_match_the_known_hosts_entry_for_the_box_alias(box, tmp_path):
+    box.adopt("me", "hop")
+    kh_key = keygen(tmp_path / "hostkey")[1]
+    fp = subprocess.run(["ssh-keygen", "-lf", str(tmp_path / "hostkey.pub")], capture_output=True, text=True,
+                        check=True).stdout.split()[1]
+    kh = tmp_path / "known_hosts"
+    kh.write_text(f"hop {kh_key}\n")
+    good = box.main(read_key=_lists(**{"unimatrix.hostkey.hop": fp}), known_hosts=kh)[1]
+    assert "HostKeyAlias hop" not in good
+    bad = box.main(read_key=_lists(**{"unimatrix.hostkey.hop": "SHA256:notthekey"}), known_hosts=kh)[1]
+    assert "known_hosts key for HostKeyAlias hop" in bad and "differs from the pinned SHA256:notthekey" in bad
+    kh.write_text("")
+    missing = box.main(read_key=_lists(**{"unimatrix.hostkey.hop": fp}), known_hosts=kh)[1]
+    assert "no known_hosts entry for HostKeyAlias hop" in missing
 
 
 def _link_lines(out):
@@ -346,6 +412,29 @@ def test_peer_without_a_snapshot_and_dead_supervisors_are_named(box):
     assert rc == 1
     assert "machine-a: peer holds no membership snapshot" in out
     assert "machine-a: bridge supervisor is not alive" in out and "machine-a: inbox supervisor is not alive" in out
+
+
+def test_each_far_box_prints_a_bridge_and_an_inbox_line_with_pid_when_alive_and_remedy_when_dead(box):
+    snap = box.adopt("me", "machine-a", "bishop")
+    box.ak.write_text(box.relay_line(box.relay[1]) + "\n")
+    box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap), "kim@bishop.local": peer_blob(box, snap)}
+    box.seed_live("kim@machine-a.local")
+    rc, out = box.main()
+    assert "info: machine-a: bridge supervisor (unimatrix-roster.py) alive, pid 7001" in out
+    assert "info: machine-a: inbox supervisor (unimatrix-mirror-all.py) alive, pid 7002" in out
+    assert "machine-a: bridge supervisor" not in "".join(l for l in out.splitlines() if l.startswith("problem:"))
+    dead = [l for l in out.splitlines() if l.startswith("problem: bishop:") and "supervisor" in l]
+    assert len(dead) == 2 and all("is not alive (" in l and "remedy:" in l for l in dead)
+    assert any("bridge" in l for l in dead) and any("inbox" in l for l in dead)
+
+
+def test_unset_python_pin_is_a_problem_line_and_a_set_one_is_silent(box, monkeypatch):
+    assert "unimatrix.python" not in box.main()[1]
+    monkeypatch.setattr(box.al, "pin_key_value", lambda r, run=subprocess.run: None)
+    out = box.main()[1]
+    assert "problem: unimatrix.python is unset in machine-local" in out and "remedy:" in out
+    monkeypatch.setattr(box.al, "pin_key_value", lambda r, run=subprocess.run: str(box.tmp / "nope.exe"))
+    assert "names a missing interpreter" in box.main()[1]
 
 
 def test_signed_member_with_no_live_link_is_named_and_a_live_one_is_not(box):
@@ -618,6 +707,15 @@ def test_replaced_code_is_judged_against_the_installed_copy_not_the_checkout(box
     newer = _ps(box, (302, 100, stamp + 500))
     assert "pid 301" in box.main(platform="linux", relay_ps=lambda: older)[1]
     assert "relay session" not in box.main(platform="linux", relay_ps=lambda: newer)[1]
+
+
+def test_a_far_boxes_alias_reads_its_address_list_and_pin_under_its_box_id():
+    dr = load("unimatrix-doctor")
+    read = []
+    ctx = {"read_key": lambda k: read.append(k) or "", "roster": None, "run": None}
+    assert dr.address_fallback("me@192.0.2.33", "me@192.0.2.33", "k", ctx) == (None, [])
+    assert dr.hostkey_problems("me@macmini.local", ctx) == []
+    assert read == ["unimatrix.addresses.192.0.2.33", "unimatrix.hostkey.macmini"]
 
 
 def test_stale_relay_session_remedy_names_the_checkout_install_command(box):

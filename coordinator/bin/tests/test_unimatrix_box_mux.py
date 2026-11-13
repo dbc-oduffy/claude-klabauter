@@ -135,8 +135,67 @@ def test_an_ip_literal_remote_with_no_member_name_stays_on_the_ip_with_the_ip_as
 
 def test_an_ip_remote_with_a_member_name_is_addressed_by_that_name(mux):
     ch = mux.for_remote("me@192.168.4.7", key="k", ip_hosts={"192.168.4.7": "example-fleet-pro.local"}, direct=True,
-                        mux_options=lambda h: [])
+                        mux_options=lambda h: [], connect=lambda h: True)
     assert ch.host == "me@example-fleet-pro.local" and ch.box == "example-fleet-pro"
+
+
+def _fallback(mux, *, answering, reads=None, statuses=None):
+    """for_remote with an unreachable name; `answering` are the addresses that pass TCP, `statuses` their verify result."""
+    mux._VERIFIED.clear()
+    probed, read = [], []
+
+    def read_key(name):
+        read.append(name)
+        return "192.0.2.1, 192.0.2.2, 192.0.2.3" if reads is None else reads
+
+    def verify(target):
+        probed.append(target)
+        return (statuses or {}).get(target.rpartition("@")[2], ("ok", ""))
+
+    ch = mux.for_remote("me@farbox.local", key="k", ip_hosts={}, direct=True, mux_options=lambda h: [],
+                        connect=lambda h: h in answering, read_key=read_key, verify=verify)
+    return ch, probed, read
+
+
+def test_a_reachable_host_name_is_dialled_with_no_key_read_and_no_probe(mux):
+    mux._VERIFIED.clear()
+    read, probed = [], []
+    ch = mux.for_remote("me@farbox.local", key="k", ip_hosts={}, direct=True, mux_options=lambda h: [],
+                        connect=lambda h: True, read_key=lambda n: read.append(n), verify=lambda t: probed.append(t))
+    assert ch.host == "me@farbox.local" and read == [] and probed == []
+
+
+def test_an_unreachable_name_dials_the_first_verified_listed_address_with_the_box_host_key_alias(mux):
+    ch, probed, read = _fallback(mux, answering={"192.0.2.2", "192.0.2.3"})
+    assert read == ["unimatrix.addresses.farbox"]
+    assert ch.host == "me@192.0.2.2" and ch.box == "farbox" and probed == ["me@192.0.2.2"]
+    seen = []
+    import unittest.mock as m
+    with m.patch.object(mux.subprocess, "run", lambda a, **kw: seen.append(a) or subprocess.CompletedProcess(a, 0, b"sent", b"")):
+        r = ch.run("send hello")
+    assert r.returncode == 0 and r.stdout == b"sent"
+    assert "HostKeyAlias=farbox" in seen[0] and seen[0][-2:] == ["me@192.0.2.2", "send hello"]
+
+
+def test_an_address_held_by_a_different_machine_is_never_the_box(mux):
+    ch, probed, _ = _fallback(mux, answering={"192.0.2.1", "192.0.2.3"},
+                              statuses={"192.0.2.1": ("not-this-box", "key mismatch")})
+    assert probed == ["me@192.0.2.1", "me@192.0.2.3"] and ch.host == "me@192.0.2.3"
+    ch, _, _ = _fallback(mux, answering={"192.0.2.1"}, statuses={"192.0.2.1": ("not-this-box", "key mismatch")})
+    assert ch.host == "me@farbox.local"
+
+
+def test_an_unreachable_name_with_no_list_or_no_answering_address_keeps_the_name(mux):
+    assert _fallback(mux, answering=set(), reads="")[0].host == "me@farbox.local"
+    ch, probed, _ = _fallback(mux, answering=set())
+    assert ch.host == "me@farbox.local" and probed == []
+
+
+def test_a_verified_address_is_cached_so_the_next_dial_does_not_probe_again(mux):
+    ch, probed, read = _fallback(mux, answering={"192.0.2.2"})
+    again = mux.for_remote("me@farbox.local", key="k", ip_hosts={}, direct=True, mux_options=lambda h: [],
+                           connect=lambda h: False, read_key=lambda n: read.append(n) or "", verify=lambda t: probed.append(t))
+    assert again.host == "me@192.0.2.2" and len(read) == 1 and probed == ["me@192.0.2.2"]
 
 
 def test_a_test_home_refuses_a_real_box_and_a_foreign_key_and_spawns_nothing(world, mux):

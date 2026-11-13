@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path, PurePath
 from typing import BinaryIO, Optional
 
@@ -72,6 +73,15 @@ def canonical_run_id(path: object) -> Optional[str]:
     return _canonical_run_id(path) if isinstance(path, str) else None
 
 
+def repo_root_of(path: str, cwd: object = None) -> Optional[Path]:
+    """The repo root a canonical params path sits under (the typed path resolved against `cwd`
+    with its canonical tail stripped), or None for a non-canonical path. Pure path arithmetic."""
+    if canonical_run_id(path) is None:
+        return None
+    typed = Path(path) if cwd is None else Path(cwd, path)
+    return typed.parents[len(PurePath(RUN_DIR_ROOT).parts) + 1]
+
+
 def note_refusal(params_path: str, leg: str) -> None:
     """Record the guard's refusal leg beside a canonical params path; best effort, never raises.
 
@@ -127,12 +137,63 @@ def find_existing(path: str, cwd: object = None) -> Optional[Path]:
     return None
 
 
+def _fail_open_ts(line: str) -> Optional[float]:
+    for field in line.split():
+        if field.startswith("ts="):
+            try:
+                stamp = datetime.strptime(field[3:], "%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                return None
+            return stamp.replace(tzinfo=timezone.utc).timestamp()
+    return None
+
+
+def door_fail_open_note(repo_root: object, run_id: object) -> Optional[str]:
+    """`<ts> cause=<...>` of the newest door fail-open logged at or after the run token's mint, or None.
+
+    Reads the last `READ_CAP_BYTES` of `<settings home>/state/door-fail-open.log`; the lines carry
+    no run id, so the match is by time only. None with no live token record, no settings home,
+    an unreadable log or no such line. Never raises; spawns nothing.
+    """
+    try:
+        minted = run_token.minted_at(Path(str(repo_root)), str(run_id))
+        if minted is None:
+            return None
+        from coordinator_core._settings_home import settings_home
+
+        with open(settings_home() / "state" / "door-fail-open.log", "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - READ_CAP_BYTES))
+            tail = fh.read(READ_CAP_BYTES).decode("utf-8", errors="replace")
+    except Exception:
+        return None
+    for line in reversed(tail.splitlines()):
+        ts = _fail_open_ts(line)
+        if ts is not None and ts + 1 >= minted:  # log stamps truncate to whole seconds
+            stamp = next(f for f in line.split() if f.startswith("ts="))[3:]
+            cause = line.partition("cause=")[2].strip()
+            return f"{stamp} cause={cause}"
+    return None
+
+
+def recover_params(repo_root: object, run_id: object) -> Optional[Path]:
+    """Re-materialize the run's params file from its recorded product params; the path, else None."""
+    recorded = recorded_land_params(repo_root, run_id)
+    if recorded is None:
+        return None
+    target = params_path(repo_root, run_id)
+    if target is None or not materialize(target, recorded):
+        return None
+    return target
+
+
 def missing_file_diagnosis(path: str, cwd: object = None) -> Optional[str]:
     """Message naming the params file's writer when `path` is a run's canonical params path.
 
     One path parse, one existence check (`find_existing`; None when the file is there, so the
     message never claims absence of a present file) and one best-effort read of the refusal
-    note `note_refusal` left beside it. None for any other path.
+    note `note_refusal` left beside it, then of the door fail-open log when no note exists.
+    None for any other path.
     """
     run_id = _canonical_run_id(path)
     if run_id is None:
@@ -143,9 +204,15 @@ def missing_file_diagnosis(path: str, cwd: object = None) -> Optional[str]:
         leg = Path(path).with_name(REFUSAL_FILE_NAME).read_text(encoding="utf-8").strip()[:200]
     except OSError:
         leg = ""
+    fail_open = None if leg else door_fail_open_note(repo_root_of(path, cwd), run_id)
     cause = (
         f"The guard last refused this run's params with {leg}."
         if leg
+        else (
+            f"The PreToolUse door failed open ({fail_open}) after this run's token was minted, so "
+            "`block_subagent_commit`'s run-token writer leg was likely skipped (the log carries no run id)."
+        )
+        if fail_open
         else (
             "No refusal note exists, so `block_subagent_commit`'s run-token writer was not "
             "reached on this Bash call: that leg did not run or refused this command. "

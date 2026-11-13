@@ -142,6 +142,31 @@ def render_result_line(sha: str, export: str, why: str | None, runner_exit: int 
     )
 
 
+#: Handoffs a parent binds to its own pid (`<pid>=<payload>` entries joined by os.pathsep); the
+#: receiver honours only entries stamped by its TRUE parent. This trampoline sits between them
+#: (percolate-round's clean-export retry), so it re-stamps entries its own parent stamped, and
+#: only those. Trap: without this the child drops the round's publish-slot token, takes the slot
+#: itself (same session is reclaimable) and releases it on exit, leaving the round slot-less.
+_PID_BOUND_INHERIT_ENVS = ("PUBLISH_SLOT_INHERITED", "PERCOLATE_ROUND_INHERITED_LOCK_ROOTS")
+
+
+def _rebind_pid_bound_inherits(env: dict[str, str]) -> None:
+    parent, me = str(os.getppid()), str(os.getpid())
+    for key in _PID_BOUND_INHERIT_ENVS:
+        raw = env.get(key)
+        if not raw:
+            continue
+        kept = []
+        for entry in raw.split(os.pathsep):
+            pid, sep, rest = entry.partition("=")
+            if sep and pid == parent:
+                kept.append(f"{me}={rest}")
+        if kept:
+            env[key] = os.pathsep.join(kept)
+        else:
+            env.pop(key)
+
+
 def export_env(root: PurePath | str, base: dict[str, str] | None = None, *, shared: bool = False) -> dict[str, str]:
     """Environment for a process running inside the export `root`: git discovery cannot climb to an
     enclosing repository (ceiling = root's parent) and no inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_COMMON_DIR.
@@ -149,6 +174,7 @@ def export_env(root: PurePath | str, base: dict[str, str] | None = None, *, shar
     env = dict(os.environ if base is None else base)
     for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
         env.pop(key, None)
+    _rebind_pid_bound_inherits(env)
     env["GIT_CEILING_DIRECTORIES"] = os.fspath(Path(root).parent)
     if shared:
         env["PYTHONDONTWRITEBYTECODE"] = "1"

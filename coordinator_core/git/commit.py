@@ -73,7 +73,9 @@ import hashlib
 import os
 import re
 import shlex
+import threading
 import time
+from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
 
@@ -555,13 +557,50 @@ def checkin_form(root: Path, rel: str, data: bytes) -> Optional[bytes]:
         return None
 
 
+class ByteCounter:
+    """Worktree bytes `checkin_blob_sha` has read under one binding; thread-safe because pool
+    legs run in `copy_context` workers that share the box."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.total = 0
+
+    def add(self, n: int) -> None:
+        with self._lock:
+            self.total += n
+
+
+#: The byte counter of the innermost counting scope; None = not counting.
+_BYTES_READ: ContextVar[Optional[ByteCounter]] = ContextVar("checkin_bytes_read", default=None)
+
+
+def bind_byte_counter() -> Optional[Token]:
+    """Start counting `checkin_blob_sha` reads in this context; returns the token for
+    `reset_byte_counter`, or None when an enclosing scope already counts (its box is shared)."""
+    if _BYTES_READ.get() is not None:
+        return None
+    return _BYTES_READ.set(ByteCounter())
+
+
+def reset_byte_counter(token: Optional[Token]) -> None:
+    if token is not None:
+        _BYTES_READ.reset(token)
+
+
+def bytes_read_total() -> int:
+    """Bytes read so far under the bound counter; 0 when not counting."""
+    box = _BYTES_READ.get()
+    return 0 if box is None else box.total
+
+
 def checkin_blob_sha(root: Path, rel: str) -> Optional[str]:
     """The blob sha `git add` would record for the worktree file `rel`, or None.
 
     Hash-only: sha1(b"blob <len>\\0" + `_checkin_bytes` output). Writes no object and
     spawns nothing. None for every shape `_checkin_bytes` refuses with `FilterUnsupported`
     (clean filter, CR bytes under a text pin, an `[attr]` macro, CR bytes under a
-    not-true autocrlf) and for an unreadable file.
+    not-true autocrlf) and for an unreadable file. Adds the bytes it read to the bound
+    byte counter, if any.
 
     `git_state.py` forbids re-opening the RAW-bytes question (hashing worktree bytes
     directly measured wrong on 326 of 400 files under `autocrlf=true`). This hashes
@@ -573,6 +612,9 @@ def checkin_blob_sha(root: Path, rel: str) -> Optional[str]:
         data = (base / rel).read_bytes()
     except OSError:
         return None
+    box = _BYTES_READ.get()
+    if box is not None:
+        box.add(len(data))
     out = checkin_form(base, rel, data)
     if out is None:
         return None

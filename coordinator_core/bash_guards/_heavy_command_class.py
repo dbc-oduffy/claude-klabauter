@@ -640,6 +640,18 @@ def _load_box_memory_host() -> Any:
     raise ImportError("box_memory_host.py not found under coordinator/bin/lib or bin/lib")
 
 
+def _trim_file_cache(host: Any) -> Optional[str]:
+    """The host's file-cache trim result line, or None when the host has no trim, it did not fire,
+    or it raised. A None means nothing changed, so the caller skips the re-measure."""
+    trim = getattr(host, "trim_file_cache", None)
+    if trim is None:
+        return None
+    try:
+        return trim()
+    except Exception:
+        return None
+
+
 def _wait_for_slot(key: str, peak_gib: float, session_id: str, wait_kw: dict) -> Optional[dict]:
     """The Group EM slot wait for a HOLD on a step over the slot threshold; None when the peak is
     at or under it or no session resolves (the HOLD stands)."""
@@ -756,7 +768,12 @@ def admit_before_spawn(
     `register_pid` registers that pid on admit. `host` is a test seam for the host module.
     `wait_kw` (None = refuse at once) is the `slot_wait.request_and_wait` deadline kwargs: on a
     HOLD for a peak over the slot threshold with a resolvable `session_id`, the Group EM's slot
-    grant is awaited and admits; a missing grant keeps the refusal."""
+    grant is awaited and admits; a missing grant keeps the refusal.
+
+    A HOLD on the available-memory clause first fires the host's file-cache trim (once, never
+    looped) and re-measures: active system file cache is not counted as available on Windows, and
+    a 40 GiB cache once refused every launch on a box a trim restored at once. Only the breach
+    path pays the trim; an admit never does."""
     try:
         return _admit_local(key, default_peak_gib, host, register_pid, wait_kw, session_id)
     except PermissionError:
@@ -779,22 +796,34 @@ def _admit_local(
         adm_path = host.admission_file()
         recorded = host.read_recorded_peak(adm_path, key)
         peak_gib = max(peak_gib, recorded or 0.0)
-        status = host.read_memory_status()
-        # TRAP: with a pid to register, the reservation read and the START write share one lock,
-        # or two callers both read zero reservations and both admit.
-        # A host without `admission_lock` (older box_memory_host) degrades to no lock, not a refusal.
-        lock = getattr(host, "admission_lock", None) if register_pid is not None else None
-        with (lock(adm_path) if lock is not None else contextlib.nullcontext()):
-            reserved = host.reserved_bytes(adm_path)
-            status = dataclasses.replace(
-                status,
-                avail_phys=max(0, status.avail_phys - reserved),
-                commit_used=status.commit_used + reserved,
-            )
-            verdict = host.admit(int(peak_gib * host.GIB), status)
-            if verdict.admit and register_pid is not None:
-                if not register_spawn(key, peak_gib, register_pid, host):
-                    return SpawnAdmission(False, "memory reservation write failed", key, peak_gib)
+
+        def decide():
+            status = host.read_memory_status()
+            # TRAP: with a pid to register, the reservation read and the START write share one lock,
+            # or two callers both read zero reservations and both admit.
+            # A host without `admission_lock` (older box_memory_host) degrades to no lock, not a refusal.
+            lock = getattr(host, "admission_lock", None) if register_pid is not None else None
+            with (lock(adm_path) if lock is not None else contextlib.nullcontext()):
+                reserved = host.reserved_bytes(adm_path)
+                status = dataclasses.replace(
+                    status,
+                    avail_phys=max(0, status.avail_phys - reserved),
+                    commit_used=status.commit_used + reserved,
+                )
+                verdict = host.admit(int(peak_gib * host.GIB), status)
+                if verdict.admit and register_pid is not None:
+                    if not register_spawn(key, peak_gib, register_pid, host):
+                        return None, status
+            return verdict, status
+
+        verdict, status = decide()
+        # The trim runs outside the admission lock: it can wait seconds on the task, and the lock
+        # serialises every peer's admit.
+        if verdict is not None and not verdict.admit and getattr(verdict, "avail_ok", None) is not True:
+            if _trim_file_cache(host) is not None:
+                verdict, status = decide()
+        if verdict is None:
+            return SpawnAdmission(False, "memory reservation write failed", key, peak_gib)
     except PermissionError:
         raise
     except Exception as exc:

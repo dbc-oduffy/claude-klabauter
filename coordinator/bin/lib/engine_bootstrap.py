@@ -65,7 +65,10 @@ _REGISTRY_READ_TIMEOUT_TOKEN = "machine-local registry read timed out"
 
 _ENGINE_ROOT_NEW_VAR = "COORDINATOR_ENGINE_ROOT"
 
-_MACHINE_LOCAL_READ_TIMEOUT_SECS = 10
+#: Kill ceiling for a machine-local spawn (== coordinator_core.machine_local_spawn
+#: .ML_SPAWN_TIMEOUT_S). This module is a sibling of coordinator_core by design, so it
+#: carries the bound inline; subprocess.run kills and reaps the direct child on expiry.
+_MACHINE_LOCAL_READ_TIMEOUT_SECS = 2.0
 
 
 class _RegistryReadTimeout(RuntimeError):

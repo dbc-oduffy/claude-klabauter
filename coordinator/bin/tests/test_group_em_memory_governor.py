@@ -1805,7 +1805,7 @@ _PYTEST_TREE = [
 
 def _stuck(procs, *, ticks=3, **kw):
     lines, killed = [], []
-    gov.run(_args(max_pauses=0, **kw.pop("args", {})), emit=lines.append, sample=lambda: True,
+    gov.run(_args(max_pauses=0, **kw.pop("args", {})), emit=lines.append, sample=kw.pop("sample", lambda: True),
             procs_fn=lambda: procs, signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=ticks,
             kill_fn=lambda pids: killed.append(sorted(pids)), **kw)
     return lines, killed
@@ -1837,3 +1837,32 @@ def test_kill_is_not_attempted_while_a_victim_is_pausable():
             signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=2,
             kill_fn=lambda pids: killed.append(pids))
     assert killed == []
+
+
+def _stuck_with_trim(monkeypatch, readings):
+    """Stuck on Windows with a trim that fires; `readings` are the critical verdicts after the first."""
+    monkeypatch.setattr(gov.sys, "platform", "win32")
+    verdicts = iter([True, True, True] + readings)
+    fired = []
+    lines, killed = _stuck(PROCS + _PYTEST_TREE, sample=lambda: next(verdicts),
+                           trim_fn=lambda: fired.append(1) or "system cache 40.0 -> 2.0 GB")
+    return lines, killed, fired
+
+
+def test_a_floor_the_cache_trim_clears_is_not_killed(monkeypatch):
+    lines, killed, fired = _stuck_with_trim(monkeypatch, [False])
+    assert killed == [] and len(fired) == 2  # the first critical sample's trim, then one before the kill
+    assert "GOVERNOR KILL-AVERTED cache trim cleared the floor" in lines
+    assert not any(line.startswith("GOVERNOR KILLED") for line in lines)
+
+
+def test_a_floor_still_breached_after_the_trim_is_killed(monkeypatch):
+    lines, killed, fired = _stuck_with_trim(monkeypatch, [True])
+    assert killed == [[500, 501, 502]] and len(fired) == 2  # one trim before the kill, never a loop
+    assert any(line.startswith("GOVERNOR KILLED pid=500") for line in lines)
+
+
+def test_a_trim_that_does_not_fire_leaves_the_kill_unchanged(monkeypatch):
+    monkeypatch.setattr(gov.sys, "platform", "win32")
+    lines, killed = _stuck(PROCS + _PYTEST_TREE, trim_fn=lambda: None)
+    assert killed == [[500, 501, 502]]

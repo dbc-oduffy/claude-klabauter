@@ -29,6 +29,8 @@ RESTART_FLOOR_SECONDS = 20.0
 BROKER_START_WAIT_SECONDS = 8.0
 _IP_HOSTS = {}
 IP_HOSTS_TTL_SECONDS = 300.0
+ADDRESS_TTL_SECONDS = 30.0
+_VERIFIED = {}
 
 
 def _no_window():
@@ -247,9 +249,54 @@ def channel(box, *, key, host, home=None, extra=(), direct=False, mux_options=No
     return BrokerChannel(box, key, host, home or _roster().settings_home(), extra, spawn_broker)
 
 
-def for_remote(remote, *, key, ip_hosts=None, **kw):
-    """`channel` for an ssh `remote` (alias or user@host): an IP remote is mapped to its member host name first."""
+def _far_addresses():
+    return _sibling(Path(__file__).resolve().parent / "unimatrix_far_addresses.py", "unimatrix_far_addresses")
+
+
+def machine_local_value(name):
+    """The machine-local value of `name` (one reader spawn), '' when the reader is missing or fails."""
+    reader = _roster().settings_home() / "bin" / "_machine_local.py"
+    if not reader.is_file():
+        return ""
+    try:
+        r = subprocess.run([sys.executable, str(reader), "get", name], capture_output=True, text=True, timeout=30,
+                           creationflags=_no_window())
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout.strip() if not r.returncode else ""
+
+
+def verified_host(host, box, key, *, connect=None, read_key=None, verify=None, now=time.monotonic):
+    """`host` while its name accepts a TCP connection; else `user@<address>` of the first listed address of `box`
+    whose host key verifies, else `host`. A reachable name spawns nothing; either outcome of a failed name is cached
+    for ADDRESS_TTL_SECONDS so repeated dials neither re-probe nor re-read the list. The caller keeps `box` as the channel's box id (HostKeyAlias)."""
+    far = _far_addresses()
+    user, _, name = host.rpartition("@")
+    connect = connect or far.tcp_connect
+    if is_ip_literal(name):
+        return host
+    hit = _VERIFIED.get((box, user))
+    if hit and now() < hit[1]:
+        return hit[0]
+    if connect(name):
+        return host
+    addresses = far.box_addresses(box, read_key or machine_local_value)
+    address = None
+    if addresses:
+        address, _skipped = far.first_answering(box, user, addresses, connect=connect,
+                                                verify=verify or far.make_verify(box, key))
+    found = far.target_for(user, address) if address else host
+    _VERIFIED[(box, user)] = (found, now() + ADDRESS_TTL_SECONDS)
+    return found
+
+
+def for_remote(remote, *, key, ip_hosts=None, connect=None, read_key=None, verify=None, **kw):
+    """`channel` for an ssh `remote` (alias or user@host): an IP remote is mapped to its member host name first.
+
+    When that host name fails a TCP connect, the channel dials the box's first host-key-verified listed address
+    (`verified_host`) with the box id, so HostKeyAlias, unchanged."""
     host, box = resolve_remote(remote, ip_hosts)
+    host = verified_host(host, box, key, connect=connect, read_key=read_key, verify=verify)
     return channel(box, key=key, host=host, **kw)
 
 

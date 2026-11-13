@@ -14,15 +14,18 @@ never touches 1Password: the membership snapshot is verified offline against the
 Checks, per link target (every verified member except this box; each `unimatrix.far_boxes` alias only when
 no snapshot is stored, the one case autolink dials them):
 the name resolves, TCP 22 connects, the relay key answers `roster`, the peer's own snapshot lists this box
-at the same epoch (members only), and both bridge supervisors are alive. A mesh is symmetric: a member
-direction whose relay key is absent, refused, or not authorized here is also `asymmetric: <from> -> <to>
-missing`. Locally: every authorized_keys line
+at the same epoch (members only). Per far box one bridge and one inbox supervisor line (pid when alive,
+remedy when not; one of each per box is the design). A mesh is symmetric: a member direction whose relay
+key is absent, refused, or not authorized here is also `asymmetric: <from> -> <to> missing`. Locally: the
+machine-local unimatrix.python pin is set; every authorized_keys line
 that forces unimatrix-relay.py must carry a key that belongs to a verified member and an absolute interpreter
 equal to autolink's pinned one; on macOS both autolink launchd labels at once, and on POSIX each orphaned
 or replaced-code relay session, are problems too. The Windows
 administrators_authorized_keys file is reported, never read. Network probes are injectable (run=, resolve=,
 connect=); remote round trips are outside the 500ms bar, the local verify path is not.
 """
+import base64
+import hashlib
 import importlib.util
 import json
 import os
@@ -344,6 +347,119 @@ def pwsh_alias_first_problems(environ, platform):
             "remedy: install PowerShell 7 to %ProgramFiles%\\PowerShell\\7 or move its dir ahead of WindowsApps in PATH"]
 
 
+def make_read_key(ctx):
+    """A cached `read_key(key) -> str` over the machine-local reader, every spawn routed through the injected run."""
+    al, roster = ctx["autolink"], ctx["roster"]
+    cache = ctx.setdefault("read_key_cache", {})
+
+    def read_key(key):
+        if key in cache:
+            return cache[key]
+        val = ""
+        reader = roster.settings_home() / "bin" / "_machine_local.py"
+        if reader.is_file():
+            try:
+                r = ctx["run"]([al.pinned_python(roster), str(reader), "get", key], capture_output=True, text=True,
+                               timeout=30, creationflags=roster.no_window())
+                val = r.stdout.strip() if not r.returncode and isinstance(r.stdout, str) else ""
+            except (OSError, subprocess.SubprocessError, al.InterpreterPinError):
+                val = ""
+        cache[key] = val
+        return val
+
+    return read_key
+
+
+def _box_id(name, ctx):
+    """The box id the address keys and HostKeyAlias use: a far_boxes alias `user@host` maps through box_of, as roster and box_mux do."""
+    mux = ctx.get("box_mux") or _load("unimatrix_box_mux", "lib/unimatrix_box_mux.py")
+    ctx["box_mux"] = mux
+    return mux.box_of(name)
+
+
+def address_fallback(remote, name, key, ctx):
+    """(address | None, skipped) over the box's ordered address list; each candidate is verified strictly
+    (HostKeyAlias=<box>, StrictHostKeyChecking=yes) with one `roster` ssh, so another machine's IP is not-this-box."""
+    far = ctx.setdefault("far", None) or _load("unimatrix_far_addresses", "lib/unimatrix_far_addresses.py")
+    ctx["far"] = far
+    roster, run = ctx["roster"], ctx["run"]
+    box = _box_id(name, ctx)
+    addresses = far.box_addresses(box, ctx["read_key"] if ctx.get("read_key") else make_read_key(ctx))
+    if not addresses:
+        return None, []
+
+    def connect(address):
+        try:
+            ctx["connect"]((address.split("%", 1)[0], 22), timeout=TCP_SECONDS).close()
+        except OSError:
+            return False
+        return True
+
+    def verify(target):
+        cmd = ["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", f"HostKeyAlias={box}",
+               "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=3", target, "roster"]
+        try:
+            r = run(cmd, capture_output=True, timeout=15, creationflags=roster.no_window())
+        except (OSError, subprocess.SubprocessError) as ex:
+            return far.UNREACHABLE, type(ex).__name__
+        return far.classify(r.returncode, r.stderr)
+
+    return far.first_answering(box, remote.rpartition("@")[0], addresses, connect=connect, verify=verify)
+
+
+def failed_primary(remote, name, key, ctx, line):
+    """[] with a note when a listed address answers as this box; else `line` plus any not-this-box addresses."""
+    address, skipped = address_fallback(remote, name, key, ctx)
+    if address is not None:
+        ctx.setdefault("address_notes", []).append(f"{name}: primary name failed; box answers at {address} (host key verified)")
+        return []
+    line = line() if callable(line) else line
+    foreign = [a for a, why in skipped if why == "not-this-box"]
+    if foreign:
+        line += f"; address {', '.join(foreign)} answers with a different host key (not this box)"
+    return [line]
+
+
+def known_hosts_fingerprints(box, ctx):
+    """The SHA256 fingerprints of known_hosts entries for HostKeyAlias `box` (empty when none)."""
+    kh = ctx.get("known_hosts") or Path.home() / ".ssh" / "known_hosts"
+    if not Path(kh).is_file():
+        return set()
+    try:
+        r = ctx["run"](["ssh-keygen", "-F", box, "-f", str(kh)], capture_output=True, text=True, timeout=15,
+                       creationflags=ctx["roster"].no_window())
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    out = set()
+    for line in (r.stdout or "").splitlines():
+        parts = line.split()
+        if line.startswith("#") or len(parts) < 3:
+            continue
+        try:
+            out.add("SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(parts[2])).digest()).decode().rstrip("="))
+        except ValueError:
+            continue
+    return out
+
+
+def hostkey_problems(name, ctx):
+    """A problem when the pinned `unimatrix.hostkey.<box>` fingerprint is not among known_hosts' entries for that box."""
+    far = ctx.get("far") or _load("unimatrix_far_addresses", "lib/unimatrix_far_addresses.py")
+    ctx["far"] = far
+    name = _box_id(name, ctx)
+    pinned = far.pinned_hostkey(name, ctx["read_key"] if ctx.get("read_key") else make_read_key(ctx))
+    if not pinned:
+        return []
+    seen = known_hosts_fingerprints(name, ctx)
+    if not seen:
+        return [f"{name}: no known_hosts entry for HostKeyAlias {name}; the address resolver fails closed; "
+                f"remedy: ssh once with -o HostKeyAlias={name} and confirm the key is {pinned}"]
+    if pinned not in seen:
+        return [f"{name}: known_hosts key for HostKeyAlias {name} ({', '.join(sorted(seen))}) differs from the pinned {pinned}; "
+                "remedy: remove the stale known_hosts entry, or correct the pin if the box was reinstalled"]
+    return []
+
+
 def check_target(remote, name, host, key, ctx, peer_epoch_check, outbound=None):
     """Problem lines for one link target. `remote` is the dialled token, `name` the box or alias, `host` the DNS name.
 
@@ -356,13 +472,13 @@ def check_target(remote, name, host, key, ctx, peer_epoch_check, outbound=None):
     try:
         ctx["resolve"](host, 22)
     except OSError as ex:
-        return [f"{name}: {host} does not resolve ({type(ex).__name__})"]
+        return failed_primary(remote, name, key, ctx, f"{name}: {host} does not resolve ({type(ex).__name__})")
     try:
         ctx["connect"]((host, 22), timeout=TCP_SECONDS).close()
     except TimeoutError as ex:
-        return [classify_link(remote, name, host, ctx, type(ex).__name__)]
+        return failed_primary(remote, name, key, ctx, lambda: classify_link(remote, name, host, ctx, type(ex).__name__))
     except OSError as ex:
-        return [f"{name}: {host} refuses TCP 22 ({type(ex).__name__})"]
+        return failed_primary(remote, name, key, ctx, f"{name}: {host} refuses TCP 22 ({type(ex).__name__})")
     if not Path(key).is_file():
         probs.extend(gone(f"{name}: no relay key (looked for {key})"))
     else:
@@ -382,11 +498,54 @@ def check_target(remote, name, host, key, ctx, peer_epoch_check, outbound=None):
             return probs + gone(f"{name}: relay key does not answer `roster` ({why})")
         if peer_epoch_check:
             probs.extend(peer_epoch_check(remote, key, name))
-    rec = al.read_record(al.state_dir(roster) / f"autolink-{al.slug(remote)}.json")
-    for role, _ in al.SUPERVISORS:
-        if not al.supervisor_live(roster, rec.get(role) or {}):
-            probs.append(f"{name}: {role} supervisor is not alive")
     return probs
+
+
+def supervisor_lines(name, remote, ctx):
+    """(problems, infos) for one far box: one line per supervisor role. Autolink runs one bridge and one inbox
+    supervisor per far box, so N far boxes show N of each; a live one reports its recorded pid."""
+    al, roster = ctx["autolink"], ctx["roster"]
+    rec = al.read_record(al.state_dir(roster) / f"autolink-{al.slug(remote)}.json")
+    probs, infos = [], []
+    for role, script in al.SUPERVISORS:
+        entry = rec.get(role) or {}
+        if al.supervisor_live(roster, entry):
+            infos.append(f"{name}: {role} supervisor ({script}) alive, pid {entry['pid']}")
+        else:
+            probs.append(f"{name}: {role} supervisor is not alive ({script}); "
+                         "remedy: run unimatrix-autolink.py to respawn it, or unimatrix-autolink.py restart")
+    return probs, infos
+
+
+def python_pin_problems(ctx):
+    """A problem line when the machine-local `unimatrix.python` pin is unset or names a missing file."""
+    al, roster = ctx["autolink"], ctx["roster"]
+    val = al.pin_key_value(roster, run=ctx["run"])
+    if val is None:
+        return [f"{al.PYTHON_KEY} is unset in machine-local (or the reader or a console python is unavailable); supervisors fall back to an unpinned interpreter; "
+                f"remedy: python {roster.settings_home() / 'bin' / '_machine_local.py'} set {al.PYTHON_KEY} <absolute console python path>"]
+    if not os.path.isfile(val):
+        return [f"{al.PYTHON_KEY} names a missing interpreter: {val}; remedy: set it to an existing console python"]
+    return []
+
+
+RESERVED_IPS_KEY = "unimatrix.reserved_ips"
+
+
+def reserved_ips(ctx):
+    """The IPs the PM declared DHCP-reserved in machine-local `unimatrix.reserved_ips` (comma/space separated);
+    empty when unset or unreadable, so an undeclared IP pin stays a problem."""
+    al, roster = ctx["autolink"], ctx["roster"]
+    reader = roster.settings_home() / "bin" / "_machine_local.py"
+    if not reader.is_file():
+        return set()
+    try:
+        r = ctx["run"]([al.pinned_python(roster), str(reader), "get", RESERVED_IPS_KEY], capture_output=True,
+                       text=True, timeout=30, creationflags=roster.no_window())
+    except (OSError, subprocess.SubprocessError, al.InterpreterPinError):
+        return set()
+    raw = r.stdout.strip() if not r.returncode and isinstance(r.stdout, str) else ""
+    return {t for t in re.split(r"[,\s]+", raw) if t}
 
 
 def _host_key(name):
@@ -500,6 +659,7 @@ def diagnose(ctx):
         probs.extend(relay_session_problems((ctx["relay_ps"] or sessions.ps_snapshot)(), roster.pid_alive, sessions,
                                             script_dir=installed if installed.is_dir() else HERE))
     probs.extend(interpreter_split_problems(ctx))
+    probs.extend(python_pin_problems(ctx))
     probs.extend(pwsh_alias_first_problems(ctx.get("environ", os.environ), ctx["platform"]))
 
     mine = {"epoch": epoch}
@@ -512,10 +672,15 @@ def diagnose(ctx):
         seen.add(remote)
         host = remote.rpartition("@")[2]
         probs.extend(check_target(remote, box, host, relay_key(ctx, box, host), ctx, checker, outbound=ctx.get("self_label")))
+        probs.extend(hostkey_problems(box, ctx))
+        sp, si = supervisor_lines(box, remote, ctx)
+        probs.extend(sp)
+        notes.extend(si)
         rec = al.read_record(al.state_dir(roster) / f"autolink-{al.slug(remote)}.json")
         if not all(al.supervisor_live(roster, rec.get(role) or {}) for role, _ in al.SUPERVISORS):
             probs.append(f"{box}: no live link path: this box holds no live link to a signed member")
     aliases = al.far_boxes_status(roster)[0] if status == "none" else []
+    reserved = reserved_ips(ctx) if aliases else set()
     for alias in aliases:
         if alias in seen:
             continue
@@ -523,10 +688,15 @@ def diagnose(ctx):
         if host is None:
             probs.append(f"{alias}: far_boxes alias does not resolve in ssh config")
             continue
-        if mem.is_ip_literal(host):
+        if mem.is_ip_literal(host) and host not in reserved:
             probs.append(f"{alias}: far_boxes alias is pinned to IP {host}; a DHCP change breaks it; "
                          f"remedy: point the alias at a hostname (HostName <name>.local, AddressFamily inet)")
         probs.extend(check_target(alias, alias, host, relay_key(ctx, alias), ctx, None))
+        probs.extend(hostkey_problems(alias, ctx))
+        sp, si = supervisor_lines(alias, alias, ctx)
+        probs.extend(sp)
+        notes.extend(si)
+    notes.extend(ctx.get("address_notes", []))
     return list(dict.fromkeys(probs)), notes
 
 
@@ -617,8 +787,8 @@ def confirm(name, ctx, out, sessions_dir=None, deliveries=None, channel=None):
 
 def main(argv=None, run=subprocess.run, resolve=socket.getaddrinfo, connect=socket.create_connection,
          authorized_keys=None, self_names=None, platform=None, out=None, roster=None,
-         autolink=None, far_sshd_log=None, launchctl_list=None, relay_ps=None, environ=None,
-         sessions_dir=None, deliveries=None, channel=None):
+         autolink=None, far_sshd_log=None, launchctl_list=None, relay_ps=None, environ=None, read_key=None,
+         known_hosts=None, sessions_dir=None, deliveries=None, channel=None):
     out = out or sys.stdout
     al = autolink or _load("unimatrix_autolink", "unimatrix-autolink.py")
     roster = roster or al._roster()
@@ -636,7 +806,7 @@ def main(argv=None, run=subprocess.run, resolve=socket.getaddrinfo, connect=sock
            "authorized_keys": Path(authorized_keys) if authorized_keys else Path.home() / ".ssh" / "authorized_keys",
            "self_names": self_names, "admin_file": admin, "far_sshd_log": far_sshd_log, "platform": plat,
            "launchctl_list": launchctl_list or run_launchctl_list, "relay_ps": relay_ps,
-           "environ": os.environ if environ is None else environ}
+           "environ": os.environ if environ is None else environ, "read_key": read_key, "known_hosts": known_hosts}
     probs, notes = diagnose(ctx)
     for p in probs:
         print(f"problem: {p}", file=out)

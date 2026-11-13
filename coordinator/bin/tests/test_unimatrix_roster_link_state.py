@@ -57,8 +57,8 @@ def test_down_then_up_writes_once_each(monkeypatch, tmp_path):
     real = mod.write_json_atomic
     monkeypatch.setattr(mod, "write_json_atomic", lambda p, d: (writes.append(d["state"]), real(p, d)))
     text = run_main(mod, monkeypatch, tmp_path, [True, False, False, False, False, True, True])
-    assert writes == ["down", "up"]
-    assert text.count("LINK-DOWN") == 1 and text.count("LINK-UP") == 1
+    assert writes == ["up", "down", "up"]  # the first record, then one per transition
+    assert text.count("LINK-DOWN") == 1 and text.count("LINK-UP") == 2
     rec = record(tmp_path)
     assert rec["state"] == "up" and rec["alias"] == "example-fleet-pro" and rec["since"].endswith("Z")
 
@@ -70,11 +70,23 @@ def test_still_down_record_carries_reason(monkeypatch, tmp_path):
     assert rec["state"] == "down" and "rc=255" in rec["reason"]
 
 
-def test_steady_up_writes_nothing(monkeypatch, tmp_path):
+def test_steady_up_writes_the_first_record_once_then_nothing(monkeypatch, tmp_path):
+    # A box with no record gets one, so the G-EM watch sees a new box's first state (watch.link_tick).
     mod = load()
+    writes = []
+    real = mod.write_json_atomic
+    monkeypatch.setattr(mod, "write_json_atomic", lambda p, d: (writes.append(d["state"]), real(p, d)))
+    text = run_main(mod, monkeypatch, tmp_path, [True, True, True, True])
+    assert writes == ["up"] and text.count("LINK-UP") == 1 and record(tmp_path)["state"] == "up"
+
+
+def test_steady_up_with_a_record_writes_nothing(monkeypatch, tmp_path):
+    mod = load()
+    d = tmp_path / "home" / "unimatrix" / "link-state"
+    d.mkdir(parents=True)
+    (d / "example-fleet-pro.json").write_text(json.dumps({"state": "up"}), encoding="utf-8")
     text = run_main(mod, monkeypatch, tmp_path, [True, True, True])
     assert "LINK-" not in text
-    assert not (tmp_path / "home" / "unimatrix" / "link-state").exists()
 
 
 def test_restart_after_recorded_down_reports_up(monkeypatch, tmp_path):

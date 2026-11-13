@@ -79,9 +79,23 @@ def test_seven_dim_no_duplicate_true_when_sidecar_present(tmp_path):
     plan_path.write_text("---\ntitle: x\n---\nbody", encoding="utf-8")
     sidecar_dir = tmp_path / ".coordinator-local" / "plan-sidecars"
     sidecar_dir.mkdir(parents=True)
-    (sidecar_dir / "my-plan.prior-art-check.md").write_text("x", encoding="utf-8")
-    ctx = _ctx(tmp_path, plan_path=plan_path)
+    from coordinator_core.prior_art_recall.tests.test_search_log import make_log, render
+
+    (sidecar_dir / "my-plan.prior-art-check.md").write_text(render(make_log()), encoding="utf-8")
+    ctx = _ctx(tmp_path, plan_path=plan_path, plan_body="body")
     assert m.seven_dim_no_duplicate(ctx) is True
+
+
+def test_seven_dim_no_duplicate_refuses_sidecar_without_search_log(tmp_path):
+    plan_path = tmp_path / "docs" / "plans" / "my-plan.md"
+    plan_path.parent.mkdir(parents=True)
+    plan_path.write_text("---\ntitle: x\n---\nbody", encoding="utf-8")
+    sidecar_dir = tmp_path / ".coordinator-local" / "plan-sidecars"
+    sidecar_dir.mkdir(parents=True)
+    (sidecar_dir / "my-plan.prior-art-check.md").write_text("x", encoding="utf-8")
+    result = m.seven_dim_no_duplicate(_ctx(tmp_path, plan_path=plan_path))
+    assert result["undetermined"] is True
+    assert "refused" in str(result)
 
 
 def test_seven_dim_no_duplicate_undetermined_when_sidecar_absent(tmp_path):

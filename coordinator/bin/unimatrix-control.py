@@ -97,7 +97,7 @@ def resolve_repo_key(key):
         return None
     try:
         r = subprocess.run([sys.executable, str(reader), "get", f"repos.{key}"], capture_output=True,
-                           text=True, timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                           text=True, timeout=2.0, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError):
         return None
     path = os.path.expanduser(r.stdout.strip()) if not r.returncode else ""

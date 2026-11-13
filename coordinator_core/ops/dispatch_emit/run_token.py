@@ -229,6 +229,15 @@ def _read_rec(repo_root: Path, run_id: str, **kind: bool) -> Optional[dict]:
     return record if record is not None else _read_legacy(repo_root, run_id, **kind)
 
 
+def minted_at(repo_root: Path, run_id: str) -> Optional[float]:
+    """Epoch seconds the run's live token record was minted, or None (no live record). Never raises."""
+    try:
+        value = (_read_rec(repo_root, run_id) or {}).get("minted_at")
+    except Exception:
+        return None
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def _present(repo_root: Path, run_id: str, **kind: bool) -> bool:
     path = _record_path(repo_root, run_id, **kind)
     return (path is not None and path.exists()) or _read_legacy(repo_root, run_id, **kind) is not None

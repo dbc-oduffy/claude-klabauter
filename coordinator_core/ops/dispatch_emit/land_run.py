@@ -82,7 +82,9 @@ from coordinator_core.ops.dispatch_emit.refire_inherited_scope import (
     inherited_scope,
     withheld_of as _withheld_of,
 )
-from coordinator_core.ops.dispatch_emit import land_deadline, land_leg_record, landing_halted_view, review_floor
+from coordinator_core.ops.dispatch_emit import (
+    land_byte_gate, land_deadline, land_leg_record, landing_halted_view, review_floor,
+)
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 
 _PARAM_FIELDS = (
@@ -246,6 +248,19 @@ def _dispatch(params: dict, repo_root: Optional[Path]) -> dict:
     # A halt landing is the run leaving its record in the tree; the leg budget refusing it strands
     # run state uncommitted, so only the dispatcher and server-window clamps bound it.
     budget = float("inf") if mode == "halted" else None
+    run_id = params.get("run_id")
+    try:
+        with land_byte_gate.admit(root, holder_label=run_id if isinstance(run_id, str) else ""):
+            return _dispatch_admitted(mode, root, repo_root, params, budget)
+    except land_byte_gate.LandAdmissionTimeout as exc:
+        return _error(
+            f"landing queued: {exc}; nothing committed, retry the landing", refused="queued",
+            waited_secs=round(exc.waited_secs, 1),
+        )
+
+
+def _dispatch_admitted(mode: str, root: Path, repo_root: Path, params: dict, budget: Optional[float]) -> dict:
+    """The landing body, run while this process holds the repo's byte gate: the land clock starts here."""
     retried = False
     while True:
         try:
@@ -930,20 +945,48 @@ def _readmitted_reviewed(root: Path, run_id: object, token: str, script_path: ob
 # ---- in-process tree reads --------------------------------------------------------------------
 
 
-def _worktree_blob(root: Path, rel: str) -> Optional[str]:
-    """The blob sha ``git add`` would write for ``rel``'s worktree bytes; ``"?"`` when its checkin
-    filter cannot be reproduced (it then counts as differing); None when the file is absent."""
-    from coordinator_core.git.commit import FilterUnsupported, _checkin_bytes
+def _hashed_blob(root: Path, rel: str) -> Optional[str]:
+    """The check-in blob sha of ``rel``'s worktree bytes (one read); ``_FILTERED`` when the file
+    exists but its checkin filter cannot be reproduced (it then counts as differing); None when
+    the file is absent."""
+    from coordinator_core.git.commit import checkin_blob_sha
 
     try:
-        data = (root / rel).read_bytes()
-    except OSError:
-        return None
+        sha = checkin_blob_sha(root, rel)
+    except Exception:  # noqa: BLE001 -- unreadable bytes are settled below, never raised
+        sha = None
+    if sha is not None:
+        return sha
+    return _FILTERED if os.path.lexists(root / rel) else None
+
+
+def _index_identities(root: Path, literals: Sequence[str]) -> dict:
+    """``{path: IndexIdentity}`` for ``literals`` from one in-process index walk (no spawn); ``{}``
+    when the index cannot be parsed, which sends every literal down the hash path."""
+    from coordinator_core.git import git_index
+
     try:
-        body = _checkin_bytes(root, rel, data)
-    except FilterUnsupported:
-        return _FILTERED
-    return hashlib.sha1(b"blob %d\0" % len(body) + body).hexdigest()
+        return git_index.parse_index_identity(root, wanted=literals)
+    except (git_index.IndexParseError, OSError):
+        return {}
+
+
+def _stat_first_blob(root: Path, rel: str, identity) -> Optional[str]:
+    """``_hashed_blob``'s answer, reading no bytes when ``identity`` (the path's index entry) matches
+    the worktree stat on size and nanosecond mtime: git's own hash of those bytes then stands in.
+    A stat mismatch, a zero stored nanosecond field or a missing entry is always hashed."""
+    if identity is not None and identity.mtime_nsec:
+        try:
+            st = os.stat(root / rel)
+        except OSError:
+            return None
+        if (
+            st.st_size & 0xFFFFFFFF == identity.size
+            and st.st_mtime_ns // 1_000_000_000 == identity.mtime
+            and st.st_mtime_ns % 1_000_000_000 == identity.mtime_nsec
+        ):
+            return identity.sha
+    return _hashed_blob(root, rel)
 
 
 _HEAD_SPINES = landing_halted_view._SPINES
@@ -973,10 +1016,11 @@ def _dirty_among(root: Path, paths: Sequence[str]) -> tuple[set, set, dict]:
     literals = list(dict.fromkeys(p for p in paths if p))
     head = _head_entries(root, literals)
     changed: set = set()
+    index = _index_identities(root, literals)
     for p in literals:
         if (root / p).is_dir():
             continue
-        now = _worktree_blob(root, p)
+        now = _stat_first_blob(root, p, index.get(p))
         entry = head.get(p)
         if now is None:
             if entry is not None:
@@ -1233,8 +1277,9 @@ def _withheld_pending(root: Path, declared: Sequence[str], withheld: dict) -> bo
     if not pending:
         return False
     head = _head_entries(root, pending)
+    index = _index_identities(root, pending)
     for p in pending:
-        now = _worktree_blob(root, p)
+        now = _stat_first_blob(root, p, index.get(p))
         entry = head.get(p)
         if now is None:
             if entry is not None:

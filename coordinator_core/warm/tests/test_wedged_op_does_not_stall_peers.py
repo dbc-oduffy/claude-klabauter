@@ -165,6 +165,66 @@ def test_recycling_the_stalled_heavy_pool_leaves_an_in_flight_guard_op_alone(tmp
         old_guard.shutdown(wait=False, cancel_futures=True)
 
 
+def _wait_for_records(stall_dir, count=1, secs=5.0):
+    end = time.monotonic() + secs
+    while time.monotonic() < end:
+        found = sorted(stall_dir.glob("*.txt")) if stall_dir.exists() else []
+        if len(found) >= count:
+            return found
+        time.sleep(0.01)
+    return []
+
+
+def _accept_stall(tmp_path, monkeypatch, phase):
+    marks = []
+    monkeypatch.setattr(server, "_note_stall_in_memory", lambda stall_dir: marks.append(stall_dir))
+    stall_dir = tmp_path / "stall"
+    disarm = server._arm_accept_stall(stall_dir, 0.02, None, "k1", [phase])
+    try:
+        records = _wait_for_records(stall_dir)
+    finally:
+        disarm()
+    return marks, records
+
+
+def test_an_accept_stall_in_the_gate_phase_adds_no_mark_but_still_writes_an_io_wait_record(tmp_path, monkeypatch):
+    marks, records = _accept_stall(tmp_path, monkeypatch, "gate")
+    assert marks == []
+    assert records and "stall-class: io-wait" in records[0].read_text(encoding="utf-8").splitlines()[0]
+
+
+def test_an_accept_stall_in_the_submit_phase_still_marks_and_stays_unclassed(tmp_path, monkeypatch):
+    marks, records = _accept_stall(tmp_path, monkeypatch, "submit")
+    assert len(marks) == 1
+    assert records and "stall-class" not in records[0].read_text(encoding="utf-8")
+
+
+def _worker_stall(tmp_path, monkeypatch, probe_ms):
+    marks = []
+    stall_dir = tmp_path / "stall"
+    monkeypatch.setattr(server, "_WORKER_STALL_DIR", stall_dir)
+    monkeypatch.setattr(server, "_note_stall_in_memory", lambda d: marks.append(d))
+    monkeypatch.setattr(server, "_holder_drive_probe_ms", lambda root: probe_ms)
+    disarm = server._arm_stall_dump(0.02, repo_root=tmp_path)
+    try:
+        records = _wait_for_records(stall_dir)
+    finally:
+        disarm()
+    return marks, records
+
+
+def test_a_worker_stalled_on_a_slow_drive_is_not_marked_and_its_record_says_io_wait(tmp_path, monkeypatch):
+    marks, records = _worker_stall(tmp_path, monkeypatch, server._SLOW_DRIVE_PROBE_MS + 1)
+    assert marks == []
+    assert records and records[0].read_text(encoding="utf-8").splitlines()[0] == "stall-class: io-wait"
+
+
+def test_a_worker_stalled_on_a_healthy_drive_is_marked_and_unclassed(tmp_path, monkeypatch):
+    marks, records = _worker_stall(tmp_path, monkeypatch, 1.0)
+    assert len(marks) == 1
+    assert records and "stall-class" not in records[0].read_text(encoding="utf-8")
+
+
 def test_a_context_without_a_guard_pool_keeps_one_shared_pool(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_pool_dispatch_worker_body", lambda msg, caller: {"jsonrpc": "2.0", "id": 1, "result": {"pool": threading.current_thread().name}})
     ctx = _ctx(tmp_path, 2)

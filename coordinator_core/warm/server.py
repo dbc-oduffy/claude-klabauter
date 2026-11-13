@@ -1040,6 +1040,27 @@ STALL_DUMP_SECS = 10.0
 #: Consecutive saturated-by-stalled-holders checks before the pool is recycled.
 _STALL_RECYCLE_CHECKS = 2
 
+#: After a recycle, heavy admission is paced for this long ...
+_POST_RECYCLE_BACKOFF_SECS = 30.0
+
+#: ... releasing at most one heavy grant per this interval, so peers' retries do not re-saturate.
+_POST_RECYCLE_ADMIT_SPACING_SECS = 2.0
+
+#: A repo-drive probe slower than this marks the drive slow: a stalled holder on it is waiting on I/O.
+_SLOW_DRIVE_PROBE_MS = 100.0
+
+#: A stalled holder older than this classifies hung whatever its drive probe says: the probe is
+#: drive-wide, so the ceiling keeps a wedged holder from hiding behind a slow drive.
+_IO_WAIT_MAX_SECS = 120.0
+
+
+def _is_io_wait(probe_ms: Optional[float], age_secs: float) -> bool:
+    """True when a holder `age_secs` old on a drive that probed `probe_ms` is blocked on I/O, not hung:
+    a slow probe and an age under `_IO_WAIT_MAX_SECS`. The one predicate behind the recycle
+    classifier and the worker stall record."""
+    return probe_ms is not None and probe_ms > _SLOW_DRIVE_PROBE_MS and age_secs < _IO_WAIT_MAX_SECS
+
+
 _CLAIMS_DIRNAME = "dispatch-claims"
 
 
@@ -1132,6 +1153,28 @@ class _AdmissionGate:
         self._mutating: "collections.deque[threading.Event]" = collections.deque()
         self._reading: "collections.deque[threading.Event]" = collections.deque()
         self._hooks: "collections.deque[threading.Event]" = collections.deque()
+        self._recycled_at: Optional[float] = None
+        self._next_heavy_at = 0.0
+        self._pace = threading.Event()
+
+    def note_recycle(self) -> None:
+        """Stamp a pool recycle: heavy admission is paced for `_POST_RECYCLE_BACKOFF_SECS`."""
+        with self._lock:
+            self._recycled_at = time.monotonic()
+            self._next_heavy_at = 0.0
+
+    def _reserve_pace_slot(self, timeout: float) -> Optional[float]:
+        """Seconds a heavy caller must wait for its paced admission slot (0.0 outside the
+        post-recycle window), or None when that wait would outlast `timeout`."""
+        with self._lock:
+            now = time.monotonic()
+            if self._recycled_at is None or now - self._recycled_at >= _POST_RECYCLE_BACKOFF_SECS:
+                return 0.0
+            slot = max(now, self._next_heavy_at)
+            if slot - now >= timeout:
+                return None
+            self._next_heavy_at = slot + _POST_RECYCLE_ADMIT_SPACING_SECS
+            return slot - now
 
     def _grant_waiters_locked(self) -> None:
         while self._free > 0:
@@ -1154,7 +1197,20 @@ class _AdmissionGate:
     def acquire(
         self, mutating: bool, timeout: float, hook: bool = False, light: bool = False
     ) -> Optional[float]:
-        """Seconds waited for a slot (0.0 when one was free), or None when `timeout` elapsed."""
+        """Seconds waited for a slot (0.0 when one was free), or None when `timeout` elapsed.
+        Heavy callers (neither `hook` nor `light`) are paced after a recycle; the pacing wait
+        counts against `timeout`."""
+        paced = 0.0
+        if not hook and not light:
+            t_pace = time.monotonic()
+            delay = self._reserve_pace_slot(timeout)
+            if delay is None:
+                self._pace.wait(max(0.0, timeout))
+                return None
+            if delay > 0.0:
+                self._pace.wait(delay)
+                paced = time.monotonic() - t_pace
+                timeout = max(0.0, timeout - paced)
         granted = threading.Event()
         queue = (
             self._hooks
@@ -1169,13 +1225,13 @@ class _AdmissionGate:
             queue.append(granted)
             self._grant_waiters_locked()
             if granted.is_set():
-                return 0.0
+                return paced
         t0 = time.monotonic()
         if granted.wait(max(0.0, timeout)):
-            return time.monotonic() - t0
+            return paced + time.monotonic() - t0
         with self._lock:
             if granted.is_set():
-                return time.monotonic() - t0
+                return paced + time.monotonic() - t0
             for q in (self._light, self._mutating, self._reading, self._hooks):
                 if granted in q:
                     q.remove(granted)
@@ -1208,7 +1264,8 @@ def _pool_dispatch_worker(
     if claim is not None and not _take_claim(claim, os.getpid()):
         return {_NOT_DISPATCHED_MARKER: True}
     _declare_queue_wait(stamp, msg.get("method") if isinstance(msg, dict) else None)
-    disarm = _arm_stall_dump(stall_secs, claim, _op_repo_root(msg))
+    probe_root, probe_source = _stall_probe_root(msg)
+    disarm = _arm_stall_dump(stall_secs, claim, probe_root, probe_source)
     dispatch_fence.hold(claim_dir, dispatch_key if claim is not None else None)
     try:
         out = _pool_dispatch_worker_body(msg, caller)
@@ -1447,6 +1504,25 @@ def _op_repo_root(msg) -> Optional[Path]:
         return None
 
 
+def _stall_probe_root(msg) -> "tuple[Optional[Path], str]":
+    """`(root, source)` for the stall dump's drive probe: the op worktree, else the
+    envelope's raw `repo_root`/`repo` field (read raw, never `Path.resolve()`), else
+    `(None, "engine-root")` for `_write_stall_record` to fill. Never raises."""
+    root = _op_repo_root(msg)
+    if root is not None:
+        return root, "op-worktree"
+    try:
+        params = msg.get("params")
+        for holder in (msg, params if isinstance(params, dict) else {}):
+            for field in ("repo_root", "repo"):
+                raw = holder.get(field)
+                if raw and isinstance(raw, str):
+                    return Path(raw), "envelope-repo-field"
+    except Exception:  # noqa: BLE001 -- diagnostics never stop an op
+        pass
+    return None, "engine-root"
+
+
 def _repo_drive_probe_ms(repo_root) -> str:
     """Milliseconds to list `repo_root` and read a byte of its `.git` entry, `unavailable`
     when no root is known, or `error:<errno>`. Read-only and spawn-free: a create in the
@@ -1556,6 +1632,19 @@ def _drive_verdict(repo_root) -> Optional[dict]:
             _drive_ok_until[key] = time.monotonic() + _DRIVE_VERDICT_TTL_SECS
             return None
     except Exception:  # noqa: BLE001 -- a failing check never fails an op
+        return None
+
+
+def _holder_drive_probe_ms(repo_root) -> Optional[float]:
+    """Milliseconds the drive of `repo_root` takes to answer: infinity when `_drive_verdict` reports
+    it stalled, None when unknown, full, or erroring (not a slow-drive signal). Spawn-free, never
+    raises."""
+    try:
+        verdict = _drive_verdict(repo_root)
+        if verdict is not None:
+            return float("inf") if verdict.get("case") == "drive_stall" else None
+        return float(_repo_drive_probe_ms(repo_root))
+    except Exception:  # noqa: BLE001 -- "unavailable" / "error:<errno>" is no verdict
         return None
 
 
@@ -1730,10 +1819,13 @@ def _write_stall_record(
     cpu_delta: Optional[float] = None,
     repo_root=None,
     full: Optional[bool] = None,
+    repo_root_source: str = "op-worktree",
+    stall_class: Optional[str] = None,
 ) -> Optional[Path]:
     """One file per stall: sink line, blocked leg json, fs probe, repo-drive probe
     (`repo_root`, the op's repo), op timing, every
     thread's stack (temp + `os.replace`), then keep the newest `STALL_DUMP_KEEP`.
+    `stall_class` leads the record as a `stall-class:` header line (full record and stub alike).
     `key`/`leg` name a record that has no claim (an accept-side hang). `full` is the caller's
     `_claim_stall_episode` verdict (None claims here); False writes a stub with no stacks or
     probes. Returns the record path, or None when nothing was written. Never raises."""
@@ -1742,7 +1834,7 @@ def _write_stall_record(
             full = _claim_stall_episode(stall_dir)
         if not full:
             try:
-                stub = _write_stall_stub(stall_dir, claim, key=key, leg=leg)
+                stub = _write_stall_stub(stall_dir, claim, key=key, leg=leg, stall_class=stall_class)
             except Exception:  # noqa: BLE001 -- diagnostics never stop an op
                 stub = None
             _restart_check(stall_dir)
@@ -1765,6 +1857,8 @@ def _write_stall_record(
         stall_dir = Path(stall_dir)
         stall_dir.mkdir(parents=True, exist_ok=True)
         probe = _fs_probe_ms(stall_dir)
+        if not repo_root:
+            repo_root, repo_root_source = _engine_clone_root(), "engine-root"
         repo_probe = _repo_drive_probe_ms(repo_root)
         if key is None:
             key = claim.name if claim is not None else "nokey"
@@ -1772,7 +1866,8 @@ def _write_stall_record(
         final = stall_dir / f"{stamp}-{os.getpid()}-{key}.txt"
         tmp = final.with_name(final.name + ".tmp")
         tmp.write_text(
-            f"sinks: {sinks}\nleg: {leg}\nfs-probe-ms: {probe}\nrepo-drive-probe-ms: {repo_probe}\n"
+            f"{_stall_class_line(stall_class)}sinks: {sinks}\nleg: {leg}\nfs-probe-ms: {probe}\nrepo-drive-probe-ms: {repo_probe}\n"
+            f"repo-drive-probe-root: {repo_root_source} {repo_root}\n"
             f"{_stall_timing_lines(op_ident, elapsed, cpu_delta)}--- threads ---\n{threads}",
             encoding="utf-8",
             newline="\n",
@@ -1800,7 +1895,18 @@ def _restart_check(stall_dir) -> None:
         pass
 
 
-def _write_stall_stub(stall_dir, claim: Optional[Path], *, key: Optional[str], leg: Optional[str]) -> Optional[Path]:
+def _stall_class_line(stall_class: Optional[str]) -> str:
+    return f"stall-class: {stall_class}\n" if stall_class else ""
+
+
+def _write_stall_stub(
+    stall_dir,
+    claim: Optional[Path],
+    *,
+    key: Optional[str],
+    leg: Optional[str],
+    stall_class: Optional[str] = None,
+) -> Optional[Path]:
     """Light record for a stall inside an episode whose full dump exists: names the episode's
     full record and this stall's key/leg. Counts toward the hang restart like a full record."""
     stall_dir = Path(stall_dir)
@@ -1815,7 +1921,7 @@ def _write_stall_stub(stall_dir, claim: Optional[Path], *, key: Optional[str], l
     final = stall_dir / f"{stamp}-{os.getpid()}-{key}.txt"
     tmp = final.with_name(final.name + ".tmp")
     tmp.write_text(
-        f"stub: full dump written by the episode's first stall\nepisode-full-dump: {episode or 'pending'}\n"
+        f"{_stall_class_line(stall_class)}stub: full dump written by the episode's first stall\nepisode-full-dump: {episode or 'pending'}\n"
         f"leg: {leg or ''}\n",
         encoding="utf-8",
         newline="\n",
@@ -1835,7 +1941,10 @@ def _note_stall_in_memory(stall_dir) -> None:
 
 
 def _arm_stall_dump(
-    stall_secs: float, claim: Optional[Path] = None, repo_root=None
+    stall_secs: float,
+    claim: Optional[Path] = None,
+    repo_root=None,
+    repo_root_source: str = "op-worktree",
 ) -> Callable[[], None]:
     """Dump every thread's stack to the worker stderr log once `stall_secs`
     pass, and (with a `claim`) write the op thread's blocked leg beside it; the
@@ -1862,11 +1971,17 @@ def _arm_stall_dump(
     def _watch() -> None:
         if done.wait(stall_secs):
             return
+        stall_class = None
         if stall_dir is not None:
-            _note_stall_in_memory(stall_dir)
+            # Fires once, at ~`stall_secs` (< `_IO_WAIT_MAX_SECS`): a wedge on a slow drive is
+            # io-wait here by construction and reaches recovery via the pool recycle ceiling only.
+            if _is_io_wait(_holder_drive_probe_ms(repo_root or _engine_clone_root()), time.monotonic() - t0):
+                stall_class = hang_restart.IO_WAIT_STALL_CLASS
+            else:
+                _note_stall_in_memory(stall_dir)
         trace = _LegTrace()
         trace.note(time.monotonic() - t0, _sample_leg(op_ident))
-        record = _emit()
+        record = _emit(stall_class)
         for _ in range(_LEG_SAMPLES_MAX):
             if done.wait(_LEG_SAMPLE_SECS):
                 break
@@ -1874,7 +1989,7 @@ def _arm_stall_dump(
         trace.close(time.monotonic() - t0)
         _append_legs(record, trace)
 
-    def _emit() -> Optional[Path]:
+    def _emit(stall_class: Optional[str] = None) -> Optional[Path]:
         record = None
         if claim is not None:
             _write_blocked_leg(
@@ -1891,6 +2006,8 @@ def _arm_stall_dump(
                 cpu_delta=time.process_time() - cpu0,
                 repo_root=repo_root,
                 full=full,
+                repo_root_source=repo_root_source,
+                stall_class=stall_class,
             )
         if stderr is None or not full:
             return record
@@ -1949,7 +2066,7 @@ def _arm_accept_stall(
     def _watch() -> None:
         if done.wait(stall_secs):
             return
-        if phase[0] != "result":
+        if phase[0] not in ("result", "gate"):
             _note_stall_in_memory(stall_dir)
         try:
             if claim is not None and claim.exists():
@@ -1977,6 +2094,7 @@ def _arm_accept_stall(
                 elapsed=time.monotonic() - t0,
                 cpu_delta=time.process_time() - cpu0,
                 repo_root=repo_root,
+                stall_class=hang_restart.IO_WAIT_STALL_CLASS if phase[0] == "gate" else None,
             )
         except Exception:  # noqa: BLE001 -- diagnostics never stop an op
             pass
@@ -2373,15 +2491,21 @@ _POOL_SATURATED_MESSAGE = (
 )
 
 
-def _pool_saturated_envelope(msg: dict, holders: list, stall_dump) -> dict:
+def _pool_saturated_envelope(
+    msg: dict, holders: list, stall_dump, hung: Optional[list] = None, io_wait: Optional[list] = None
+) -> dict:
     """Determinate refusal (INTERNAL_ERROR, never indeterminate): the request was
-    never submitted. `holders` names the ops pinning the workers."""
+    never submitted. `holders` names the ops pinning the workers; `hung` / `io_wait`, when given,
+    split them by class."""
     diagnosis: dict = {
         "phase": "saturated",
         "op": msg.get("method"),
         "pool_size": DISPATCH_PROCESS_POOL_SIZE,
         "holders": holders,
     }
+    if hung is not None or io_wait is not None:
+        diagnosis["hung"] = list(hung or [])
+        diagnosis["io_wait"] = list(io_wait or [])
     if stall_dump:
         diagnosis["stall_dump"] = str(stall_dump)
     return {
@@ -3537,19 +3661,22 @@ def _serve_line(
         _write_and_release(_untrusted_caller_response(request_id))
         return
 
-    # A publish swap window: refuse (no eviction, no drain, no exit record) so the caller goes
-    # cold and parks; eviction proceeds after the round. Ordered after the trust check. The
+    # A publish swap window: this pair keeps evaluating the requests bound to its own generation
+    # until the successor answers; the copy raising the source axis never evicts it. A request
+    # bound to another generation is refused (no eviction, no drain, no exit record) so the caller
+    # goes cold and parks; eviction proceeds after the round. Ordered after the trust check. The
     # publish's own stop ask (engine.stop_probe, deliberately skewed token) takes the skew
     # eviction below: respond, close listener, drain, exit.
-    if (
+    in_swap_window = (
         engine_root is not None
         and msg.get("method") != _STOP_PROBE_METHOD
-        and _engine_landing.swap_in_progress(engine_root)
-    ):
-        _write_and_release(skew.build_skew_response(request_id, server_sha, client_token))
-        return
-
-    if version_state.is_skewed(client_token):
+        and _swap_window_open(engine_root)
+    )
+    if in_swap_window:
+        if version_state.is_token_skewed(client_token):
+            _write_and_release(skew.build_skew_response(request_id, server_sha, client_token))
+            return
+    elif version_state.is_skewed(client_token):
         axes = getattr(version_state, "last_skew_axes", ())
         record_exit(
             telemetry.EXIT_REASON_SKEW,
@@ -3707,8 +3834,26 @@ def _serve_line(
             "id": request_id,
             "error": {"code": INTERNAL_ERROR, "message": f"internal error: {exc!r}"},
         }
+    if (
+        in_swap_window
+        and isinstance(response, dict)
+        and (response.get("error") or {}).get("code") == INTERNAL_ERROR
+    ):
+        # An evaluation that failed over a partly copied tree is refused so the caller goes cold.
+        response = skew.build_skew_response(request_id, server_sha, client_token)
     record_invocation(True)
     _write_and_release(response)
+
+
+def _swap_window_open(engine_root: Path) -> bool:
+    """True while a hand-land holds the landing marker or a publish round holds the publish marker
+    for `engine_root`. A miss costs two stats; an unresolvable svc dir reads False."""
+    if _engine_landing.swap_in_progress(engine_root):
+        return True
+    try:
+        return breadcrumb.publish_marker_held(breadcrumb.svc_dir(engine_root))
+    except OSError:
+        return False
 
 
 def _handle_connection(
@@ -4303,12 +4448,13 @@ class _ServerContext:
         op: Optional[str],
         dispatch_key: Optional[str] = None,
         guard: bool = False,
+        repo_root: Any = None,
     ) -> None:
-        """Record `future` (op, submit time, dispatch key) until it resolves; feeds
+        """Record `future` (op, submit time, dispatch key, repo root) until it resolves; feeds
         `_stalled_holders` and `_recycle_stalled_pool`. A `guard` future runs in the guard pool and is
         invisible to both: a stalled heavy op neither counts it as a holder nor recycles it away."""
         tasks = self.__dict__.setdefault("_pool_tasks", {})
-        tasks[future] = (op, time.monotonic(), dispatch_key)
+        tasks[future] = (op, time.monotonic(), dispatch_key, repo_root)
         future.add_done_callback(lambda f: tasks.pop(f, None))
         if guard:
             guard_futs = self.__dict__.setdefault("_guard_futs", set())
@@ -4317,13 +4463,36 @@ class _ServerContext:
 
     def _stalled_holders(self) -> list:
         """Ops of unresolved heavy-pool tasks older than `STALL_DUMP_SECS`."""
+        return [op for op, _started, _root in self._stalled_rows()]
+
+    def _stalled_rows(self) -> list:
+        """`(op, started, repo_root)` of unresolved heavy-pool tasks older than `STALL_DUMP_SECS`."""
         now = time.monotonic()
         guard_futs = self.__dict__.get("_guard_futs", ())
         return [
-            op
-            for fut, (op, started, _key) in list(self.__dict__.get("_pool_tasks", {}).items())
+            (op, started, root)
+            for fut, (op, started, _key, root) in list(self.__dict__.get("_pool_tasks", {}).items())
             if now - started > STALL_DUMP_SECS and fut not in guard_futs
         ]
+
+    def _classify_stalled_holders(self) -> tuple:
+        """`(hung_ops, io_wait_ops)` over the set `_stalled_holders` returns. A holder is io-wait when
+        its repo drive probes slower than `_SLOW_DRIVE_PROBE_MS` and it is younger than
+        `_IO_WAIT_MAX_SECS`; else hung. One probe per drive root per call, uncached: on a slow drive
+        that probe is itself the slow call, on the accept path."""
+        now = time.monotonic()
+        probes: dict = {}
+        hung: list = []
+        io_wait: list = []
+        for op, started, root in self._stalled_rows():
+            if root is None or now - started >= _IO_WAIT_MAX_SECS:
+                hung.append(op)
+                continue
+            key = os.fspath(root)
+            if key not in probes:
+                probes[key] = _holder_drive_probe_ms(root)
+            (io_wait if _is_io_wait(probes[key], now - started) else hung).append(op)
+        return hung, io_wait
 
     def _saturation_confirmed(self, saturated: bool) -> bool:
         """True on the `_STALL_RECYCLE_CHECKS`-th consecutive saturated check; any
@@ -4353,6 +4522,7 @@ class _ServerContext:
             keys = [row[2] for _fut, row in heavy if row[2] is not None]
             for fut, _row in heavy:
                 tasks.pop(fut, None)
+        self._admission_gate().note_recycle()
         _ack_store.reconcile_restarted(keys)
         procs = list((getattr(stuck_pool, "_processes", None) or {}).values())
         try:
@@ -4527,14 +4697,16 @@ class _ServerContext:
                 pool = self._ensure_guard_pool()
             else:
                 pool = self._ensure_dispatch_pool()
-                holders = self._stalled_holders()
+                hung, io_wait = self._classify_stalled_holders()
+                holders = hung + io_wait
                 saturated = len(holders) >= DISPATCH_PROCESS_POOL_SIZE
-                if self._saturation_confirmed(saturated) and self._retired_workers_alive() < _MAX_RETIRED_WORKERS:
-                    self._recycle_stalled_pool(pool, holders)
+                recyclable = len(hung) >= DISPATCH_PROCESS_POOL_SIZE
+                if self._saturation_confirmed(recyclable) and self._retired_workers_alive() < _MAX_RETIRED_WORKERS:
+                    self._recycle_stalled_pool(pool, hung)
                     pool = self._ensure_dispatch_pool()
                 elif saturated and not (_is_hook_lane(_eff) or _is_light_mutating(_eff)):
                     return _pool_saturated_envelope(
-                        msg, holders, getattr(self, "_worker_stderr_dir", None)
+                        msg, holders, getattr(self, "_worker_stderr_dir", None), hung=hung, io_wait=io_wait
                     )
             claim = (
                 None
@@ -4595,9 +4767,13 @@ class _ServerContext:
                 raise
             future.add_done_callback(lambda _f: gate.release(_hook, _light))
             if _guard_class:
-                self._track_pool_task(future, msg.get("method"), dispatch_key, guard=True)
+                self._track_pool_task(future, msg.get("method"), dispatch_key, guard=True, repo_root=_drive_root)
             else:
-                self._track_pool_task(future, msg.get("method"), dispatch_key)
+                # The holder's root must match the stall record's probe root, or an op naming its
+                # repo only in the envelope classifies hung on a slow drive and recycles the pool.
+                self._track_pool_task(
+                    future, msg.get("method"), dispatch_key, repo_root=_stall_probe_root(msg)[0]
+                )
             self._pool_outstanding.enter()
             future.add_done_callback(lambda _f: self._pool_outstanding.exit())
             if dispatch_key is not None:

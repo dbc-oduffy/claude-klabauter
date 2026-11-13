@@ -607,6 +607,52 @@ def link_transitions(
     return out
 
 
+def signed_members(home: Optional[str] = None) -> Optional[list[dict]]:
+    """Members of the stored membership snapshot once `unimatrix-membership` has verified it; None when none is.
+
+    Verified means `verified.json` names the snapshot's epoch and is no older than the snapshot and its
+    signature, so a snapshot replaced after the last verify reads as unverified. Never raises.
+    """
+    if home is None:
+        from coordinator_core._settings_home import settings_home
+
+        home = str(settings_home())
+    d = os.path.join(home, "unimatrix", "membership")
+    paths = [os.path.join(d, n) for n in ("snapshot.json", "snapshot.sig", "verified.json")]
+    try:
+        with open(paths[0], "r", encoding="utf-8") as fh:
+            snap = json.load(fh)
+        with open(paths[2], "r", encoding="utf-8") as fh:
+            verified = json.load(fh)
+        fresh = os.path.getmtime(paths[2]) >= max(os.path.getmtime(paths[0]), os.path.getmtime(paths[1]))
+        members = snap.get("members")
+        if not fresh or verified.get("epoch") != snap.get("epoch") or not isinstance(members, list):
+            return None
+        return [m for m in members if isinstance(m, dict)]
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _is_member(alias: str, members: list[dict]) -> bool:
+    """True when `alias` (`user@host`) names a member by its host, or by its box id (the host's first label)."""
+    host = alias.rpartition("@")[2].lower()
+    label = host.split(".")[0]
+    for m in members:
+        m_host = str(m.get("host") or "").lower()
+        if host == m_host or label in (m_host.split(".")[0], str(m.get("box") or "").lower()):
+            return True
+    return False
+
+
+def _admission_note(alias: str, members: Optional[list[dict]], first: bool) -> str:
+    """'' for a member; else why the G-EM must look: the box is linked but not admitted by the signed snapshot.
+
+    With no verified snapshot only a box's first record is flagged: every transition would otherwise carry it."""
+    if members is None:
+        return "no signed membership snapshot is stored" if first else ""
+    return "" if _is_member(alias, members) else "not in the signed membership snapshot"
+
+
 def link_tick(
     prev: Optional[Mapping[str, str]],
     emit: Callable[[str], None],
@@ -614,15 +660,29 @@ def link_tick(
 ) -> Optional[dict[str, str]]:
     """Emit one LINK-DOWN/LINK-UP line per link-state change; return the new `{alias: state}` map.
 
+    A LINK-UP for a box the signed membership snapshot does not admit names that, and such a box's
+    first `up` record gets one line of its own, so the G-EM learns of an unadmitted box coming up.
     Never raises. An unreadable state dir returns `prev` unchanged so the next tick diffs
     against the last good read.
     """
     try:
         records = read_link_states(home)
         cur = {alias: rec["state"] for alias, rec in records.items()}
+        member_memo: list = []
+
+        def note(alias: str, first: bool = False) -> str:
+            if not member_memo:
+                member_memo.append(signed_members(home))
+            return _admission_note(alias, member_memo[0], first)
+
         for alias, state in link_transitions(prev, cur):
-            reason = records[alias]["reason"]
-            emit(f"LINK-{state.upper()} {alias}" + (f": {reason}" if reason else ""))
+            parts = [records[alias]["reason"], note(alias) if state == "up" else ""]
+            text = "; ".join(p for p in parts if p)
+            emit(f"LINK-{state.upper()} {alias}" + (f": {text}" if text else ""))
+        for alias in sorted(a for a, s in cur.items() if s == "up" and prev is not None and a not in prev):
+            why = note(alias, first=True)  # a far box's first record: only a non-member is worth a line
+            if why:
+                emit(f"LINK-UP {alias}: first link; {why}")
         if prev is not None:
             # A record that vanished keeps its last state so its reappearance is not a transition.
             for alias, state in prev.items():

@@ -92,3 +92,45 @@ def test_tick_once_carries_link_state_across_wakes(tmp_path, monkeypatch):
     assert wake() == 0 and wake() == 0
     link_lines = [ln for ln in out.text.splitlines() if ln.startswith("LINK-")]
     assert link_lines == ["LINK-DOWN far: boom", "LINK-UP far"]
+
+
+def _members(home, members, *, verified=True):
+    d = os.path.join(str(home), "unimatrix", "membership")
+    os.makedirs(d, exist_ok=True)
+    for name, body in (("snapshot.json", json.dumps({"epoch": 3, "members": members})), ("snapshot.sig", "sig")):
+        with open(os.path.join(d, name), "w", encoding="utf-8") as fh:
+            fh.write(body)
+    if verified:
+        with open(os.path.join(d, "verified.json"), "w", encoding="utf-8") as fh:
+            json.dump({"key": "k", "epoch": 3}, fh)
+
+
+def test_link_up_of_a_box_outside_the_signed_snapshot_names_it_and_a_member_does_not(tmp_path):
+    _members(tmp_path, [{"box": "macmini", "host": "macmini.local", "user": "u"}])
+    _write(tmp_path, "u@macmini", "down", "timed out")
+    _write(tmp_path, "u@192.0.2.33", "down", "timed out")
+    lines = []
+    prev = _ticks(tmp_path, 2, None, lines)
+    _write(tmp_path, "u@macmini", "up")
+    _write(tmp_path, "u@192.0.2.33", "up")
+    _ticks(tmp_path, 3, prev, lines)
+    assert lines[-2:] == ["LINK-UP u@192.0.2.33: not in the signed membership snapshot", "LINK-UP u@macmini"]
+
+
+def test_a_new_box_first_up_record_reaches_the_watch_once_only_when_unadmitted(tmp_path):
+    _members(tmp_path, [{"box": "macmini", "host": "macmini.local", "user": "u"}])
+    lines = []
+    prev = _ticks(tmp_path, 2, None, lines)
+    _write(tmp_path, "u@macmini", "up")
+    _write(tmp_path, "u@192.0.2.33", "up")
+    _ticks(tmp_path, 4, prev, lines)
+    assert lines == ["LINK-UP u@192.0.2.33: first link; not in the signed membership snapshot"]
+
+
+def test_an_unverified_snapshot_admits_no_one(tmp_path):
+    _members(tmp_path, [{"box": "macmini", "host": "macmini.local", "user": "u"}], verified=False)
+    lines = []
+    prev = _ticks(tmp_path, 2, None, lines)
+    _write(tmp_path, "u@macmini", "up")
+    _ticks(tmp_path, 2, prev, lines)
+    assert lines == ["LINK-UP u@macmini: first link; no signed membership snapshot is stored"]

@@ -67,6 +67,19 @@ def test_recycle_lines_do_not_count(tmp_path):
     assert out is None and exits == []
 
 
+def test_io_wait_records_do_not_count_but_hung_records_still_restart(tmp_path):
+    stall = tmp_path / "stall-dumps"
+    stall.mkdir()
+    header = f"pid: 1\nstall-class: {hang_restart.IO_WAIT_STALL_CLASS}\n"
+    for i in range(hang_restart.HANG_DUMP_THRESHOLD):
+        (stall / f"{_stamp(NOW - i)}-1-io{i}.txt").write_text(header + "body")
+    out, exits, log = _run(tmp_path)
+    assert out is None and exits == [] and not log.exists()
+    _dumps(stall, hang_restart.HANG_DUMP_THRESHOLD, pid=2)
+    out, exits, _ = _run(tmp_path)
+    assert out == "restart" and exits == [777]
+
+
 def test_second_trigger_inside_rate_limit_is_suppressed_without_exit(tmp_path):
     _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD)
     _run(tmp_path)
@@ -239,7 +252,7 @@ def test_accept_stall_watcher_counts_before_it_touches_the_filesystem(tmp_path, 
             blocked.set()
             return True
 
-    disarm = server._arm_accept_stall(tmp_path / "stall-dumps", 0.05, _Claim(), "k", ["gate"])
+    disarm = server._arm_accept_stall(tmp_path / "stall-dumps", 0.05, _Claim(), "k", ["submit"])
     assert blocked.wait(5)
     disarm()
     assert seen == [tmp_path / "stall-dumps"]

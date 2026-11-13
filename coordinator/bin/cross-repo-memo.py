@@ -569,24 +569,34 @@ def _machine_local_dump() -> "dict | None":
     if cached is not _CACHE_MISS:
         return cached
 
-    impl = _machine_local_impl()
-    python = _resolve_python()
-    if impl.endswith(".py") or impl.endswith(".py3"):
-        cmd = [python, impl, "dump", "--include-unset"]
-    else:
-        cmd = [impl, "dump", "--include-unset"]
-
-    payload = None
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, **_no_console_kw())
-        if result.returncode == 0:
-            parsed = json.loads(result.stdout or "{}")
-            if isinstance(parsed, dict):
-                payload = parsed
-    except (OSError, ValueError):
-        payload = None
+    ml = _bind_machine_local_spawn()
+    payload = ml.dump(_machine_local_impl()) if ml is not None else None
     _MACHINE_LOCAL_CACHE[("dump", ck)] = payload
     return payload
+
+
+_machine_local_spawn_impl = None
+
+
+def _bind_machine_local_spawn():
+    """The engine's bounded machine-local reader, or None when the engine is not importable.
+
+    Every `_machine_local.py` spawn in this file goes through it: a hard kill
+    ceiling that reaps the child, no retry. None means the read is unanswerable
+    and callers take their existing failure branch, never a second spawn.
+    """
+    global _machine_local_spawn_impl
+    if _machine_local_spawn_impl is None:
+        try:
+            import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+            import cc_invoke
+
+            cc_invoke.ensure_engine_on_path(__file__)
+            from coordinator_core import machine_local_spawn as _impl
+        except Exception:
+            return None
+        _machine_local_spawn_impl = _impl
+    return _machine_local_spawn_impl
 
 
 def _resolve_python() -> str:
@@ -713,14 +723,9 @@ def _machine_local_get_detail_uncached(key: str) -> "tuple[str | None, bool, str
         # Mock stub: executable script (test mode).
         cmd = [impl, "get", key]
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            **_no_console_kw(),
-        )
-    except OSError:
+    ml = _bind_machine_local_spawn()
+    result = ml.run_bounded(cmd) if ml is not None else None
+    if result is None:
         return None, False, ""
     stderr = (result.stderr or "").strip()
     if result.returncode == 0:
@@ -829,11 +834,9 @@ def _machine_local_repos_keys() -> "list[str] | None":
         cmd = [python, impl, "keys"]
     else:
         cmd = [impl, "keys"]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, **_no_console_kw())
-    except OSError:
-        return None
-    if result.returncode != 0:
+    ml = _bind_machine_local_spawn()
+    result = ml.run_bounded(cmd) if ml is not None else None
+    if result is None or result.returncode != 0:
         return None
     return [
         line.strip()

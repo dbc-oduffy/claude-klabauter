@@ -54,6 +54,7 @@ def test_halt_reply_legs_carry_process_time_and_spawns(clocks):
     assert set(legs) == {land_deadline.SCOPE_LEG, "a", "b"}
     assert legs[land_deadline.SCOPE_LEG] == {
         "leg": land_deadline.SCOPE_LEG, "elapsed_secs": 0.5, "process_time_ms": 100.0, "spawns": 0,
+        "bytes_read": 0,
     }
     assert legs["a"]["process_time_ms"] == 250.0 and legs["a"]["spawns"] == 3
     assert legs["a"]["elapsed_secs"] == pytest.approx(1.0)

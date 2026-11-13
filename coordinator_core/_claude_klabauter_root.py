@@ -29,7 +29,7 @@ from coordinator_core._settings_home import settings_home
 _MACHINE_LOCAL_IMPL_ENV = "MACHINE_LOCAL_IMPL"
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
 
-_MACHINE_LOCAL_TIMEOUT = 5
+_MACHINE_LOCAL_TIMEOUT = 2.0
 
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

@@ -81,6 +81,68 @@ def test_relative_path_absent_everywhere_still_says_never_written(tmp_path):
     assert "was never written" in _message(stderr)
 
 
+def _land_params(run_id):
+    return {"run_id": run_id, "run_token": "t" * 8, "script_path": "s.mjs", "inline_review": {"k": 1}}
+
+
+def test_absent_params_file_is_recovered_from_the_land_params(tmp_path):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    target = chan.params_path(tmp_path, "ask-1")
+    chan.materialize(target, _land_params("ask-1"))
+    target.unlink()
+    stdout, stderr, exit_code = _dispatch_argv(
+        ["ping", "--params-file", str(target)], str(tmp_path), allow_warm=False
+    )
+    assert exit_code == 0, stderr
+    assert "recovered" in stderr and "ask-1" in stderr
+    assert target.is_file()
+
+
+def test_absent_relative_params_file_is_recovered_against_cwd(tmp_path):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    target = chan.params_path(tmp_path, "ask-1")
+    chan.materialize(target, _land_params("ask-1"))
+    target.unlink()
+    _, stderr, exit_code = _dispatch_argv(["ping", "--params-file", _REL], str(tmp_path), allow_warm=False)
+    assert exit_code == 0, stderr
+    assert target.is_file()
+
+
+def test_relative_path_from_below_the_root_is_not_recovered(tmp_path):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    target = chan.params_path(tmp_path, "ask-1")
+    chan.materialize(target, _land_params("ask-1"))
+    target.unlink()
+    deep = tmp_path / "sub"
+    deep.mkdir()
+    _, stderr, exit_code = _dispatch_argv(["ping", "--params-file", _REL], str(deep), allow_warm=False)
+    assert exit_code == 1
+    assert "was never written" in _message(stderr)
+    assert not target.exists()
+
+
+def test_missing_params_file_without_land_params_names_the_door_fail_open(tmp_path, monkeypatch):
+    import time
+
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    home = tmp_path / "home"
+    (home / "state").mkdir(parents=True)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    run_token.mint(repo, "ask-1", "s.mjs")
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 5))
+    (home / "state" / "door-fail-open.log").write_text(f"ts={stamp} cause=wedged\n", encoding="utf-8")
+    _, stderr, exit_code = _dispatch_argv(["ping", "--params-file", _REL], str(repo), allow_warm=False)
+    assert exit_code == 1
+    message = _message(stderr)
+    assert "PreToolUse door failed open" in message and "cause=wedged" in message
+
+
 def test_present_canonical_file_still_dispatches(tmp_path):
     path = tmp_path / "scratch" / "warp" / "ask-1" / "terminal-commit-params.json"
     path.parent.mkdir(parents=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 
 import pytest
@@ -20,6 +21,13 @@ def repo(tmp_path, monkeypatch):
     subprocess.run(["git", "init", "-q"], cwd=str(tmp_path), check=True, **no_console_creationflags())
     monkeypatch.setattr("coordinator_core.lifecycle.main_worktree_root", lambda repo_root: tmp_path)
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _lock_namespace(tmp_path_factory, monkeypatch):
+    """Keep the byte gate's lock sidecar out of the operator's home."""
+    locks = tmp_path_factory.mktemp("locks")
+    monkeypatch.setattr("coordinator_core.locked_write._machine_lock_dir", lambda: locks)
 
 
 @pytest.fixture
@@ -88,6 +96,70 @@ def test_landed_call_leaves_the_ledger_and_no_dirt(repo, clock, monkeypatch):
     assert record["outcome"] == "landed" and record["leg"] is None
     assert [entry["leg"] for entry in record["legs"]][-1] == "land_run.commit"
     assert "land-legs.json" not in _untracked(repo)
+
+
+STAT_DIRTY = 6
+CONTENT_CHANGED = 2
+STAT_CLEAN = 12
+
+
+def _git(root, *args) -> None:
+    subprocess.run(["git", *args], cwd=str(root), check=True, capture_output=True, **no_console_creationflags())
+
+
+@pytest.fixture
+def dirty_tree(repo):
+    """Committed files with old mtimes: `STAT_CLEAN` untouched, `STAT_DIRTY` touched forward with the
+    same bytes, `CONTENT_CHANGED` rewritten at a new size. Returns `(literals, stat_dirty_bytes)`."""
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "config", "core.autocrlf", "false")
+    names = [f"src/f{i:02d}.txt" for i in range(STAT_CLEAN + STAT_DIRTY + CONTENT_CHANGED)]
+    old_ns = 1_600_000_000 * 10**9 + 123_456_789  # a zero nanosecond field is always hashed
+    for i, rel in enumerate(names):
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"base {i}\n" * (20 + i), encoding="utf-8", newline="\n")
+        os.utime(path, ns=(old_ns, old_ns))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    touched = names[STAT_CLEAN : STAT_CLEAN + STAT_DIRTY]
+    changed = names[STAT_CLEAN + STAT_DIRTY :]
+    for rel in touched:
+        os.utime(repo / rel, ns=(old_ns, old_ns + 7 * 10**9))
+    for rel in changed:
+        (repo / rel).write_text("rewritten " * 30 + rel, encoding="utf-8", newline="\n")
+    return names, sum((repo / rel).stat().st_size for rel in touched + changed)
+
+
+def _scan_body(root, literals):
+    def body():
+        land_deadline.check("land_run.script_read")
+        land_deadline.mark("land_run.dirty_scan")
+        changed, _ignored, _head = land_run._dirty_among(root, literals)
+        land_deadline.mark("land_run.superseded_scan")
+        assert len(changed) == CONTENT_CHANGED
+        land_deadline.check("land_run.commit")
+        return {"committed": True, "sha": "b" * 40}
+
+    return body
+
+
+def test_product_landing_ledger_counts_bytes_of_stat_dirty_paths_only(repo, clock, monkeypatch, dirty_tree):
+    literals, dirty_bytes = dirty_tree
+    _mode(monkeypatch, _scan_body(repo, literals))
+
+    reply = land_run._dispatch({"run_id": RUN}, repo)
+
+    assert reply["committed"] is True
+    record = json.loads(_legs_file(repo).read_text(encoding="utf-8"))
+    assert record["outcome"] == "landed"
+    legs = {entry["leg"]: entry for entry in record["legs"]}
+    for entry in record["legs"]:
+        assert {"elapsed_secs", "bytes_read"} <= set(entry)
+    assert legs["land_run.dirty_scan"]["bytes_read"] == dirty_bytes
+    assert sum(entry["bytes_read"] for entry in record["legs"]) == dirty_bytes
+    assert legs["land_run.commit"]["bytes_read"] == 0
 
 
 def test_uncommitted_reply_writes_no_ledger(repo, clock, monkeypatch):

@@ -67,17 +67,27 @@ _DEVOPS_FILENAME_RE = re.compile(
 _SESSION_SIZING = "<this session's sizing path>"
 
 
-def _fire(sizing_rel: str | None = None) -> str:
-    return f"Call `{fire_command(sizing_rel)}`, once."
+def _fire(sizing_rel: str | None = None, host: str | None = None) -> str:
+    return f"Call `{fire_command(sizing_rel, host)}`, once."
 
-_SIZED_ADVISORY = (
-    "[em-code-dispatch nudge] EM edits route through the warp run. "
-    + _fire(_SESSION_SIZING)
-)
 
-_ROUTE_UNFIRED_DENY = (
-    "Sized S or larger; its engine run has not fired. " + _fire(_SESSION_SIZING)
-)
+def _host(payload: object) -> str | None:
+    """The hook payload's `host` ("codex", "agy", "grok"; absent for Claude), or None."""
+    host = payload.get("host") if isinstance(payload, dict) else None
+    return host if isinstance(host, str) and host else None
+
+
+def sized_advisory(host: str | None = None) -> str:
+    return "[em-code-dispatch nudge] EM edits route through the warp run. " + _fire(_SESSION_SIZING, host)
+
+
+def route_unfired_deny(host: str | None = None) -> str:
+    return "Sized S or larger; its engine run has not fired. " + _fire(_SESSION_SIZING, host)
+
+
+_SIZED_ADVISORY = sized_advisory()
+
+_ROUTE_UNFIRED_DENY = route_unfired_deny()
 
 
 def _bootstrap_dirs() -> list[str]:
@@ -264,8 +274,8 @@ def shell_write_budget(
     return result if handled else None
 
 
-def _closed_text(rec: dict) -> str:
-    return f"XS hand edits closed. {_fire()} Put `git diff {rec['base_sha'][:12]}` in the ask."
+def _closed_text(rec: dict, host: str | None = None) -> str:
+    return f"XS hand edits closed. {_fire(host=host)} Put `git diff {rec['base_sha'][:12]}` in the ask."
 
 
 class _Unprojectable(Exception):
@@ -281,8 +291,8 @@ def _strict() -> bool:
         return False
 
 
-def _latched_text() -> str:
-    return "XS hand edits closed until engine-ask fires. " + _fire()
+def _latched_text(host: str | None = None) -> str:
+    return "XS hand edits closed until engine-ask fires. " + _fire(host=host)
 
 
 def _latch(xlb, root, session_id: str, unmeasured_path: str | None = None) -> None:
@@ -311,7 +321,7 @@ def arm_advised(root, session_id) -> None:
         pass
 
 
-def advised_deny_envelope(root, session_id, paths: tuple = ()) -> dict | None:
+def advised_deny_envelope(root, session_id, paths: tuple = (), host: str | None = None) -> dict | None:
     """The PreToolUse deny when the lane is advised, engine-ask has not fired, and (given `paths`)
     one is a product path under `root`; else None. Passes through `apply_guard_level`."""
     try:
@@ -326,7 +336,7 @@ def advised_deny_envelope(root, session_id, paths: tuple = ()) -> dict | None:
             return None
         if paths and not any(_em_post_fire.is_product_path(p, root, session_id) for p in paths):
             return None
-        text = "Product writes closed until engine-ask fires. " + _fire()
+        text = "Product writes closed until engine-ask fires. " + _fire(host=host)
         return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", text)) or None
     except Exception:
         return None
@@ -386,6 +396,7 @@ def _budget_core(
     root = _repo_root(payload)
     if root is None or not session_id:
         return False, None
+    host = _host(payload)
     opened_here = False
     try:
         s_plus = xlb.touched_s_or_larger(session_id, root)
@@ -410,22 +421,22 @@ def _budget_core(
     except Exception:
         return False, None
     if unfired:
-        return True, _budget_deny(_ROUTE_UNFIRED_DENY)
+        return True, _budget_deny(route_unfired_deny(host))
     if rec is None:
         return False, None
     kind = rec.get("kind")
     if s_plus:
         return False, None
-    over_text = lambda u: _budget_text("XS budget spent (projected):", u) + " Size S or larger. " + _fire()
+    over_text = lambda u: _budget_text("XS budget spent (projected):", u) + " Size S or larger. " + _fire(host=host)
     if rec.get("corrupt"):
         return True, _budget_deny(over_text(xlb.Usage(0, 0, True)))
     if xlb.deny_count(rec) >= xlb.GOLF_DENY_LIMIT:
-        return True, _budget_deny(_closed_text(rec))
+        return True, _budget_deny(_closed_text(rec, host))
     try:
         usage = xlb.measure(root, rec, file_path, project())
     except Exception as exc:
         reason = str(exc) if isinstance(exc, _Unprojectable) else f"{type(exc).__name__}: {exc}"
-        text = f"Budget unmeasurable ({reason}).{_trajectory(xlb, root, rec, file_path)} Size S or larger. {_fire()}"
+        text = f"Budget unmeasurable ({reason}).{_trajectory(xlb, root, rec, file_path)} Size S or larger. {_fire(host=host)}"
         if shell and _strict():
             _latch(xlb, root, session_id, file_path)
             _charge_unmeasured(xlb, root, session_id, file_path)
@@ -441,10 +452,10 @@ def _budget_core(
             except Exception:
                 denies = 0
             if denies >= xlb.GOLF_DENY_LIMIT:
-                return True, _budget_deny(_closed_text(rec))
+                return True, _budget_deny(_closed_text(rec, host))
         return True, _budget_deny(over_text(usage) + ("" if opened_here else _applied_text(xlb, root, rec)))
     if _strict() and xlb.is_advised(rec):
-        return True, _budget_deny(_latched_text())
+        return True, _budget_deny(_latched_text(host))
     try:
         xlb.add_path(root, session_id, file_path)
     except Exception:

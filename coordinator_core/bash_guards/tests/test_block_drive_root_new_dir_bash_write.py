@@ -166,6 +166,43 @@ def test_relative_out_flag_inside_or_existing_is_allowed(world, cmd):
     assert _enveloped(guard.check)(_payload(cmd, "Bash", work)) is None
 
 
+@pytest.mark.parametrize(
+    "tool,tmpl",
+    [
+        ("Bash", "PYTEST_DEBUG_TEMPROOT={r}/new python -m pytest x"),
+        ("Bash", "TMPDIR={r}/new python -m pytest x"),
+        ("Bash", "TEMP={r}/new TMP={r}/new python -m pytest x"),
+        ("Bash", "export TMPDIR={r}/new && python -m pytest x"),
+        ("Bash", "env TMPDIR={r}/new python -m pytest x"),
+        ("Bash", "TMPDIR='{r}/new' pytest x"),
+        ("PowerShell", "$env:TEMP='{r}/new'; python -m pytest x"),
+        ("PowerShell", "$env:PYTEST_DEBUG_TEMPROOT = '{r}/new'; pytest x"),
+        ("PowerShell", "python -m pytest --basetemp={rw}/new x"),
+        ("PowerShell", "python -m pytest --basetemp {rw}/new x"),
+    ],
+)
+def test_pytest_temp_root_route_into_a_new_root_entry_is_denied(world, tool, tmpl):
+    root, _, work = world
+    cmd = tmpl.format(r=root.as_posix(), rw=str(root))
+    assert _denied(_enveloped(guard.check)(_payload(cmd, tool, work)))
+
+
+@pytest.mark.parametrize(
+    "tool,tmpl",
+    [
+        ("Bash", "TMPDIR={r}/existing/t python -m pytest x"),
+        ("Bash", "TMPDIR=scratch/tmp python -m pytest x"),
+        ("Bash", "TMP=$HOME_NOT_SET/x python -m pytest x"),
+        ("Bash", "echo TMPDIR_NOTE=1"),
+        ("PowerShell", "$env:TEMP='{r}/existing/t'; pytest x"),
+        ("PowerShell", "python -m pytest --basetemp=scratch/x"),
+    ],
+)
+def test_pytest_temp_root_route_inside_or_existing_is_allowed(world, tool, tmpl):
+    root, _, work = world
+    assert _enveloped(guard.check)(_payload(tmpl.format(r=root.as_posix()), tool, work)) is None
+
+
 def test_delete_of_top_level_entry_is_not_a_creation(world, monkeypatch):
     monkeypatch.setattr(sinks, "_host_is_windows", lambda: True)
     monkeypatch.setattr(guard, "_host_is_windows", lambda: True)
@@ -260,6 +297,101 @@ def test_prepass_admits_new_and_root_and_cwd_root(world, counters):
     before = counters[0].calls
     assert _denied(_enveloped(guard.check)(_payload("mkdir new", "Bash", root)))
     assert counters[0].calls > before
+
+
+_PM_DIRS = ("ptbase-c1", "tmp-c2", "ps7-c5-tmp", "pytest-reverify-warp-2026-11-12-x-0035cb", "_agent-work")
+
+
+@pytest.mark.parametrize("name", _PM_DIRS)
+@pytest.mark.parametrize(
+    "tool,tmpl",
+    [
+        ("Bash", "pytest --basetemp {r}/{n}"),
+        ("Bash", "pytest --basetemp={r}/{n} -q"),
+        ("Bash", "TMP={r}/{n} pytest"),
+        ("Bash", "FOO=1 TEMP={r}/{n} pytest"),
+        ("Bash", "export TMPDIR={r}/{n}"),
+        ("Bash", 'export TMP="{r}/{n}" && pytest'),
+        ("Bash", "env TEMP={r}/{n} pytest"),
+        ("PowerShell", "pytest --basetemp {r}/{n}"),
+        ("PowerShell", "TMP={r}/{n} pytest"),
+        ("PowerShell", "$env:TEMP='{r}/{n}'"),
+        ("PowerShell", "$env:TMP = '{r}/{n}'; pytest"),
+        ("PowerShell", "Set-Item env:TMPDIR {r}/{n}"),
+        ("PowerShell", "Set-Item -Path env:TEMP -Value {r}/{n}"),
+        ("PowerShell", "[Environment]::SetEnvironmentVariable('TMP','{r}/{n}')"),
+    ],
+)
+def test_basetemp_and_temp_env_to_new_root_entry_is_denied(world, tool, tmpl, name):
+    root, _, work = world
+    assert _denied(_enveloped(guard.check)(_payload(tmpl.format(r=root.as_posix(), n=name), tool, work)))
+
+
+@pytest.mark.parametrize(
+    "tool,tmpl",
+    [
+        ("Bash", "pytest --basetemp {r}/existing/t"),
+        ("Bash", "TMP={r}/existing/t pytest"),
+        ("Bash", "export TMPDIR={r}/existing"),
+        ("Bash", "TMP=tmp/x pytest"),
+        ("Bash", "TMP=/tmp/x pytest"),
+        ("PowerShell", "$env:TEMP='{r}/existing/t'"),
+        ("PowerShell", "Set-Item env:TMP {r}/existing"),
+        ("PowerShell", "$env:TMP = 'relative/x'; pytest"),
+    ],
+)
+def test_basetemp_and_temp_env_to_existing_or_nonroot_is_allowed(world, tool, tmpl):
+    root, _, work = world
+    assert _enveloped(guard.check)(_payload(tmpl.format(r=root.as_posix()), tool, work)) is None
+
+
+@pytest.mark.parametrize(
+    "tool,cmd,denied",
+    [
+        ("Bash", 'echo "TMP={r}/newroot"', False),
+        ("Bash", "printf 'TEMP={r}/newroot\n'", False),
+        ("PowerShell", 'Write-Host "$env:TMP={r}/newroot"', False),
+        ("Bash", 'echo hi; TMP={r}/newroot pytest', True),
+        ("Bash", 'echo "x" && TMP={r}/newroot pytest', True),
+        ("Bash", 'bash -c "TMP={r}/newroot pytest"', True),
+    ],
+)
+def test_quoted_print_text_is_not_a_temp_route(world, tool, cmd, denied):
+    root, _, work = world
+    result = _enveloped(guard.check)(_payload(cmd.format(r=root.as_posix()), tool, work))
+    assert bool(_denied(result)) is denied
+
+
+def test_managed_temp_layout_basetemp_and_env_pass(world):
+    import tempfile
+    from pathlib import Path
+
+    _, _, work = world
+    managed = (Path(tempfile.gettempdir()) / "coordinator" / "repo" / "pytest").as_posix()
+    check = _enveloped(guard.check)
+    for tool, cmd in (
+        ("Bash", f"pytest --basetemp {managed}"),
+        ("Bash", f"TMP={managed} pytest"),
+        ("PowerShell", f"$env:TEMP='{managed}'"),
+    ):
+        assert check(_payload(cmd, tool, work)) is None, cmd
+
+
+def test_msys_and_native_spellings_of_drive_root_basetemp_and_temp_env(world, monkeypatch):
+    monkeypatch.setattr(sinks, "_host_is_windows", lambda: True)
+    monkeypatch.setattr(guard, "_host_is_windows", lambda: True)
+    monkeypatch.delenv("COORDINATOR_DRIVE_ROOTS", raising=False)
+    cwd = "Z:/work"  # abs-path-ok: fake drive letter, never touched on disk
+    check = _enveloped(guard.check)
+    for tool, cmd in (
+        ("Bash", "pytest --basetemp /zz-ptbase-c1"),
+        ("Bash", "export TMPDIR=/zz-x"),
+        ("Bash", "TMP=/zz-tmp-c2 pytest"),
+        ("PowerShell", r"$env:TEMP='Z:\zz-ps7-c5-tmp'"),
+        ("PowerShell", "pytest --basetemp Z:/zz-ptbase-c1"),
+    ):
+        assert _denied(check(_payload(cmd, tool, cwd))), cmd
+    assert check(_payload("TMP=/tmp/x pytest", "Bash", cwd)) is None
 
 
 def test_malformed_payload_is_allowed(world):

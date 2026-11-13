@@ -119,10 +119,7 @@ Negative-spec (do NOT "fix" while porting):
 
 from __future__ import annotations
 
-import json
 import os
-import subprocess
-from coordinator_core.win_portability import no_console_creationflags
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -369,25 +366,10 @@ def _tracked_toml_files(ml_dir: Path) -> List[Path]:
 def _ladder_snapshot(machine_local_bin: Path) -> Optional[Dict[str, str]]:
     if not machine_local_bin.is_file():
         return None
-    try:
-        result = subprocess.run(
-            [str(machine_local_bin), "dump", "--prefix", "repos", "--format", "json"],
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=10,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        print(f"skip: _ladder_snapshot: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0 or not (result.stdout or "").strip():
-        return None
-    try:
-        data = json.loads(result.stdout)
-    except ValueError:
-        return None
-    if not isinstance(data, dict):
+    from coordinator_core import machine_local_spawn
+
+    data = machine_local_spawn.dump(str(machine_local_bin), ("--prefix", "repos", "--format", "json"))
+    if not data:
         return None
     return {k: v for k, v in data.items() if isinstance(v, str) and v}
 

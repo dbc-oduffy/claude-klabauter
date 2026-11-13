@@ -76,24 +76,29 @@ def test_same_set_as_stalled_holders_guard_and_young_excluded(monkeypatch):
     assert sorted(hung + io_wait) == sorted(ctx._stalled_holders()) == ["old"]
 
 
-def test_four_holders_on_one_drive_probe_once_and_cost_under_a_millisecond(monkeypatch):
+def test_four_holders_on_one_drive_probe_once_and_spawn_nothing(monkeypatch):
     ctx = _ctx()
     for i in range(4):
         _track(ctx, f"op{i}", "root-c", server.STALL_DUMP_SECS + 5)
     calls = _probe(monkeypatch, {"root-c": 500.0})
     spawned = []
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: spawned.append(a))
-    t0 = time.process_time()
     hung, io_wait = ctx._classify_stalled_holders()
-    cost = time.process_time() - t0
     assert (hung, len(io_wait)) == ([], 4)
     assert calls == ["root-c"] and spawned == []
-    assert cost < 0.001
 
 
 def test_real_probe_on_a_tmp_dir_is_healthy(tmp_path):
     ms = server._holder_drive_probe_ms(tmp_path)
     assert ms is not None and ms < server._SLOW_DRIVE_PROBE_MS
+
+
+def test_real_probe_cost_on_a_healthy_drive_stays_inside_the_brightline(tmp_path):
+    server._holder_drive_probe_ms(tmp_path)
+    t0 = time.perf_counter()
+    for _ in range(5):
+        server._holder_drive_probe_ms(tmp_path)
+    assert (time.perf_counter() - t0) / 5 < 0.05
 
 
 def test_drive_verdict_stall_reads_as_infinitely_slow(monkeypatch):

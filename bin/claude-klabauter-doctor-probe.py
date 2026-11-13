@@ -599,7 +599,7 @@ def _is_machine_local_available() -> bool:
             [cmd, "--version"],
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=2.0,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return r.returncode == 0

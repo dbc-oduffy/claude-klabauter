@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
 """Never-fail client for the Klabauter host-hook shim (Codex and agy PreToolUse guard).
 
-guard() runs `python -m coordinator_core.host_hooks.shim --host <host>` in a killable child under one
-outer wall, so import, engine dial, the shim's engine-free backstop and telemetry are all bounded. Any
-miss (no engine root, launch or import failure, timeout, non-zero exit, empty, partial, invalid or
-multi-object stdout, or a Codex object that is neither {} nor the exact nested PreToolUse deny) answers the
-host's neutral fallback with state "degraded". A Codex bare {} is state "neutral-unknown": the shim cannot
-yet tell a real neutral verdict from a warm miss or caught error. Only a verified deny (or valid agy
-answer) is "engine"; "degraded" and "neutral-unknown" never satisfy an enforcement check.
-The timeout bounds communicate(), not Popen setup; a timed-out child's kill-and-reap adds up to 2s.
+guard() imports coordinator_core.host_hooks.shim from the engine root into this interpreter and runs
+shim.run(host, stdin) on a daemon thread joined at one wall, so import, the warm-socket dial, the shim's
+engine-free backstop and telemetry are all bounded and no second interpreter starts. Any miss (no engine
+root, import failure, timeout, empty or invalid answer, or a Codex object that is neither {} nor the exact
+nested PreToolUse deny) answers the host's open answer with state "degraded"; agy carries an advisory reason.
+A Codex bare {} is state "neutral-unknown": the shim cannot yet tell a real neutral verdict from a warm miss
+or caught error. Only a verified deny (or valid agy answer) is "engine"; "degraded" and "neutral-unknown"
+never satisfy an enforcement check. A cold or unreachable warm engine is answered by the shim itself and
+recorded in warm/degrade.jsonl, not in this module's log.
 
-Every degrade appends one record {ts, host, cause, budget_secs, child_cpu_secs} to degrade_log_path(); cause
-"timeout" carries the child's CPU seconds (None without psutil), so a timed-out guard is distinguishable from an
-absent nag. A write failure never alters the answer. The log is append-only and unrotated; the A7 reader owns truncation.
+Every degrade appends one record {ts, host, cause, budget_secs, cpu_secs} to degrade_log_path(); cpu_secs is the
+process CPU the guard spent. A write failure never alters the answer. The log is append-only and unrotated; the
+A7 reader owns truncation.
 
 CLI: unimatrix-host-guard.py --host codex|agy|grok [--engine-root PATH]
   stdin: one hook payload. stdout: exactly one JSON line. stderr: `state`. Exit 0 always.
 """
 import json
 import os
-import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -28,15 +29,19 @@ NEUTRAL = {"agy": {"decision": "ask"}, "codex": {}, "grok": {}}
 NEUTRAL_UNKNOWN = "neutral-unknown"
 DEFAULT_BUDGET_SECS = 0.5
 DEGRADE_LOG_NAME = "host-guard-degrades.jsonl"
-SHIM_MODULE = "coordinator_core.host_hooks.shim"
 
 
 def _neutral(host):
     return dict(NEUTRAL.get(host, {}))
 
 
-def _no_console_flags():
-    return getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+def _load_shim(engine_root):
+    """Import coordinator_core.host_hooks.shim with engine_root first on sys.path. Test seam."""
+    root = str(engine_root)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from coordinator_core.host_hooks import shim
+    return shim
 
 
 CODEX_DENY_KEYS = {"hookEventName", "permissionDecision", "permissionDecisionReason"}
@@ -50,6 +55,20 @@ def _is_codex_deny(obj):
     return (isinstance(inner, dict) and set(inner) == CODEX_DENY_KEYS
             and inner["hookEventName"] == "PreToolUse" and inner["permissionDecision"] == "deny"
             and isinstance(inner["permissionDecisionReason"], str))
+
+
+CODEX_ADVISORY_KEYS = {"hookEventName", "permissionDecision", "additionalContext"}
+
+
+def _is_codex_advisory(obj):
+    """True for the nested PreToolUse advisory {event[, allow|ask], non-empty additionalContext}; never a deny."""
+    if not isinstance(obj, dict) or set(obj) != {"hookSpecificOutput"}:
+        return False
+    inner = obj["hookSpecificOutput"]
+    return (isinstance(inner, dict) and {"hookEventName", "additionalContext"} <= set(inner)
+            and set(inner) <= CODEX_ADVISORY_KEYS and inner["hookEventName"] == "PreToolUse"
+            and inner.get("permissionDecision", "allow") in ("allow", "ask")
+            and isinstance(inner["additionalContext"], str) and bool(inner["additionalContext"]))
 
 
 GROK_PERMISSION_DECISIONS = ("allow", "deny", "ask")
@@ -77,7 +96,7 @@ def _valid_answer(host, obj):
         return obj.get("decision") in ("deny", "ask", "allow")
     if host == "grok":
         return _is_grok_decision(obj)
-    return obj == {} or _is_codex_deny(obj)
+    return obj == {} or _is_codex_deny(obj) or _is_codex_advisory(obj)
 
 
 def _parse_single_object(text):
@@ -98,32 +117,38 @@ def degrade_log_path():
     return home / "host-hooks" / DEGRADE_LOG_NAME
 
 
-def _child_cpu_secs(pid):
-    """User+system CPU seconds the still-live child has used, or None; read before the kill. Process time, not wall."""
-    try:
-        import psutil
-        t = psutil.Process(pid).cpu_times()
-        return round(t.user + t.system, 4)
-    except Exception:
-        return None
-
-
-def _record_degrade(host, cause, budget_secs, child_cpu_secs):
+def _record_degrade(host, cause, budget_secs, cpu_secs):
     """Append one JSON line naming why the guard degraded; never raises."""
     try:
         path = degrade_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         rec = {"ts": round(time.time(), 3), "host": host, "cause": cause, "budget_secs": budget_secs,
-               "child_cpu_secs": child_cpu_secs}
+               "cpu_secs": cpu_secs}
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec) + "\n")
     except Exception:
         pass
 
 
-def _degrade(host, cause, budget_secs, child_cpu_secs=None):
-    _record_degrade(host, cause, budget_secs, child_cpu_secs)
-    return _neutral(host), "degraded"
+def _degrade(host, cause, budget_secs, cpu_secs=None):
+    """Record the degrade and answer open; agy carries an advisory reason, never a bare ask."""
+    _record_degrade(host, cause, budget_secs, cpu_secs)
+    answer = _neutral(host)
+    if host == "agy":
+        answer["reason"] = "Klabauter guard unavailable (%s); proceeding open" % cause
+    return answer, "degraded"
+
+
+def _run_shim(host, stdin_text, engine_root, box):
+    try:
+        shim = _load_shim(engine_root)
+    except Exception:
+        box["cause"] = "import_error"
+        return
+    try:
+        box["answer"] = shim.run(host, stdin_text)
+    except Exception:
+        box["cause"] = "run_error"
 
 
 def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS):
@@ -136,26 +161,21 @@ def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS):
         return _degrade(host, "no_engine_root", budget_secs)
     if not isinstance(_parse_single_object(stdin_text or ""), dict):
         return _degrade(host, "bad_stdin", budget_secs)
-    env = dict(os.environ)
-    prior = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = str(engine_root) + (os.pathsep + prior if prior else "")
-    proc = None
+    cpu0 = time.process_time()
+    box = {}
+    worker = threading.Thread(target=_run_shim, args=(host, stdin_text, engine_root, box), daemon=True)
     try:
-        proc = subprocess.Popen(
-            [sys.executable, "-m", SHIM_MODULE, "--host", host],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            env=env, cwd=str(engine_root), creationflags=_no_console_flags(),
-        )
-        try:
-            out, _ = proc.communicate(stdin_text.encode("utf-8"), timeout=budget_secs)
-        except subprocess.TimeoutExpired:
-            return _degrade(host, "timeout", budget_secs, _child_cpu_secs(proc.pid))
-        if proc.returncode != 0:
-            return _degrade(host, "nonzero_exit", budget_secs)
-        answer = _parse_single_object(out.decode("utf-8", "replace"))
+        worker.start()
+        worker.join(budget_secs)
+        cpu_secs = round(time.process_time() - cpu0, 4)
+        if worker.is_alive():
+            return _degrade(host, "timeout", budget_secs, cpu_secs)
+        if "cause" in box:
+            return _degrade(host, box["cause"], budget_secs, cpu_secs)
+        answer = box.get("answer")
         if not _valid_answer(host, answer):
-            return _degrade(host, "invalid_answer", budget_secs)
-        if host == "codex" and answer == {}:
+            return _degrade(host, "invalid_answer", budget_secs, cpu_secs)
+        if host == "codex" and (answer == {} or _is_codex_advisory(answer)):
             return answer, NEUTRAL_UNKNOWN
         if host == "grok" and answer.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
             return answer, NEUTRAL_UNKNOWN
@@ -169,17 +189,7 @@ def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS):
             return _neutral(host), NEUTRAL_UNKNOWN
         return answer, "engine"
     except Exception:
-        return _degrade(host, "launch_error", budget_secs)
-    finally:
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            try:
-                proc.communicate(timeout=2)
-            except Exception:
-                pass
+        return _degrade(host, "run_error", budget_secs)
 
 
 def _argv_value(argv, flag):

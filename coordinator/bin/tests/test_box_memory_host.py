@@ -595,3 +595,15 @@ def test_admit_and_register_holds_on_unregistered_grant(tmp_path):
     verdict, reserved = host.admit_and_register(adm, "k", 7, 20.0, status, now_fn=lambda: 1000.0)
     assert reserved == 19 * GIB and not verdict.admit
     assert not adm.exists()
+
+
+def test_trim_file_cache_is_windows_only_and_reuses_the_governor_fire(monkeypatch):
+    monkeypatch.setattr(host.sys, "platform", "darwin")
+    assert host.trim_file_cache() is None
+    monkeypatch.setattr(host.sys, "platform", "win32")
+    import file_cache_trim  # host.trim_file_cache puts bin/lib on sys.path; the test does too
+
+    seen = []
+    monkeypatch.setattr(file_cache_trim, "fire_box_cache_trim",
+                        lambda live_fn: seen.append(live_fn) or "trimmed")
+    assert host.trim_file_cache() == "trimmed" and seen == [host._group_em_live]

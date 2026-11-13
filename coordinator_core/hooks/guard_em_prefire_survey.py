@@ -31,14 +31,14 @@ DENY_PREFIX = "[em-prefire-survey]"
 _ADVISORY_MARK = "\x00advisory\x00"  # _decide's text carries it when the leg warns instead of denying
 
 
-def prefire_advisory_text(n: int, budget: int, session_id: str = "") -> str:
+def prefire_advisory_text(n: int, budget: int, session_id: str = "", host: Optional[str] = None) -> str:
     """Full text on the session's first nag; a repeat is the one terse counted line. No session id: full."""
     if not session_id:
         return (
             f"{DENY_PREFIX} {n} exploratory calls since the last turn, budget {budget} (all). "
-            + fire_step() + " Add em_context."
+            + fire_step(host=host) + " Add em_context."
         )
-    nag = nag_text(session_id)
+    nag = nag_text(session_id, host=host)
     if nag.startswith(NAG_REPEAT_PREFIX):
         return nag
     return (
@@ -184,7 +184,9 @@ def _decide(payload: dict) -> Optional[str]:
         from coordinator_core.hooks._em_write_budget import arm_advised
 
         arm_advised(root, sid)
-        return _ADVISORY_MARK + prefire_advisory_text(pre_n, PREFIRE_EXPLORATORY_CALLS_MAX, sid)
+        return _ADVISORY_MARK + prefire_advisory_text(
+            pre_n, PREFIRE_EXPLORATORY_CALLS_MAX, sid, field(payload, "host") or None
+        )
     if phase in (ers.PHASE_LANDED_GREEN, ers.PHASE_HALTED) and phase.run_id:
         landings = dict(state.get("landings") or {})
         rec = landings.get(phase.run_id)

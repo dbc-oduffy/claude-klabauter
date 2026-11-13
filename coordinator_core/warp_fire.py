@@ -36,15 +36,28 @@ def is_submit_name(name: object) -> bool:
     )
 
 
-def fire_command(sizing_rel: Optional[str] = None) -> str:
-    """The submit call: from a routed sizing when one exists, else from the PM's ask."""
+#: Hosts with no `Workflow` tool; they submit through the CLI door instead.
+NO_WORKFLOW_HOSTS = frozenset({"codex", "agy", "grok"})
+
+#: The non-Claude route; the same text as the agy allow rule (`unimatrix-install.AGY_ALLOW_RULE`).
+INVOKE_SUBMIT_COMMAND = "coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json"
+
+
+def fire_command(sizing_rel: Optional[str] = None, host: Optional[str] = None) -> str:
+    """The submit call: from a routed sizing when one exists, else from the PM's ask.
+
+    A host in `NO_WORKFLOW_HOSTS` gets `INVOKE_SUBMIT_COMMAND` (the params file carries the args);
+    any other host, or none, keeps the `Workflow({...})` call.
+    """
+    if host in NO_WORKFLOW_HOSTS:
+        return INVOKE_SUBMIT_COMMAND
     args = {"sizing": sizing_rel} if sizing_rel else {"ask": _ASK_PLACEHOLDER}
     return f"Workflow({{name: {json.dumps(SUBMIT_WORKFLOW_NAME)}, args: {json.dumps(args)}}})"
 
 
-def fire_step(sizing_rel: Optional[str] = None) -> str:
+def fire_step(sizing_rel: Optional[str] = None, host: Optional[str] = None) -> str:
     """One sentence: make the submit call, once."""
-    return f"Next step, the only one: call `{fire_command(sizing_rel)}`, once."
+    return f"Next step, the only one: call `{fire_command(sizing_rel, host)}`, once."
 
 
 NAG_REPEAT_PREFIX = "[engine-ask nag"
@@ -76,9 +89,10 @@ def nag_text(
     session_id: str,
     sizing_rel: Optional[str] = None,
     state_dir: Optional[Path] = None,
+    host: Optional[str] = None,
 ) -> str:
     """The session's nag: full `fire_step` first, then a one-line `[engine-ask nag #N]`. Never empty."""
     n = _bump(session_id or "", state_dir)
     if n <= 1:
-        return fire_step(sizing_rel)
-    return f"{NAG_REPEAT_PREFIX} #{n}] call `{fire_command(sizing_rel)}`, once."
+        return fire_step(sizing_rel, host)
+    return f"{NAG_REPEAT_PREFIX} #{n}] call `{fire_command(sizing_rel, host)}`, once."

@@ -4,8 +4,9 @@ root or directly below the home dir.
 
 Targets come from the parse-only sink extractors plus a local supplement (PowerShell
 ``mkdir``/``md``/``ni``, ``New-Item -Path/-Name``, and the ``-o``/``--out`` family for absolute
-values only); the predicate and deny text live in ``write_guards._drive_root``. A single regex
-lifts path-shaped candidates ahead of tokenising and one ``lexists`` per candidate decides whether
+values only) and values assigned to TMP/TEMP/TMPDIR/PYTEST_DEBUG_TEMPROOT in either dialect; the
+predicate and deny text live in ``write_guards._drive_root``. A single regex lifts path-shaped
+candidates ahead of tokenising and one ``lexists`` per candidate decides whether
 the command can create anything new at all; only then is it tokenised. The pre-pass never denies
 by itself. Spawns no process. Never fails closed. A shell-parsed target set cannot see writes made
 inside a script, an interpreter body or ``xargs`` (DR-258): a speedbump, the Stop-time leg stays
@@ -105,6 +106,51 @@ def _judge(raw: str, cwd: Optional[str], dialect: Optional[Dialect], env: Option
     return new_top_level_entry(target, cwd, bare_slash_is_drive_root=bare, env=env)
 
 
+_ENV_VALUE = r"""("[^"]*"|'[^']*'|[^\s;&|()'"]+)"""
+_TEMP_VARS = r"(?:TMP|TEMP|TMPDIR|PYTEST_DEBUG_TEMPROOT)"
+# Bash `[export|env] TMP=v` (the tokenizer peels inline assignments, so this reads the text) and
+# the PowerShell `$env:TMP = v`, `Set-Item env:TMP v`, `SetEnvironmentVariable('TMP','v')` shapes.
+_TEMP_ENV_RES = (
+    re.compile(r"(?<![\w$:.\-/\\])" + _TEMP_VARS + r"=" + _ENV_VALUE, re.IGNORECASE),
+    re.compile(r"\$\{?env:" + _TEMP_VARS + r"\}?\s*=\s*" + _ENV_VALUE, re.IGNORECASE),
+    re.compile(
+        r"(?<![\w-])(?:set-item|si|set-content|sc|new-item|ni)\s+(?:-path\s+)?env:" + _TEMP_VARS
+        + r"\s+(?:-value\s+)?" + _ENV_VALUE,
+        re.IGNORECASE,
+    ),
+    re.compile(r"SetEnvironmentVariable\(\s*['\"]" + _TEMP_VARS + r"['\"]\s*,\s*" + _ENV_VALUE, re.IGNORECASE),
+)
+
+
+_PRINT_HEAD_RE = re.compile(r"^\s*(?:echo|printf|write-host|write-output)\b", re.IGNORECASE)
+_SEGMENT_SPLIT_RE = re.compile(r"[;&|\n]")
+
+
+def _in_printed_text(cmd: str, pos: int) -> bool:
+    """True when `pos` sits inside a quote opened by an echo/printf-style segment: text, not an assignment."""
+    segment = _SEGMENT_SPLIT_RE.split(cmd[:pos])[-1]
+    return bool(_PRINT_HEAD_RE.match(segment)) and (segment.count('"') % 2 == 1 or segment.count("'") % 2 == 1)
+
+
+def _temp_env_values(cmd: str) -> Iterable[str]:
+    """Values assigned to TMP/TEMP/TMPDIR that are absolute, home-spelled or `..`-climbing."""
+    for pattern in _TEMP_ENV_RES:
+        for m in pattern.finditer(cmd):
+            if _in_printed_text(cmd, m.start()):
+                continue
+            value = m.group(1).strip("\"'")
+            if _is_judgeable(value):
+                yield value
+
+
+def _has_temp_env(cmd: str) -> bool:
+    return any(p.search(cmd) for p in _TEMP_ENV_RES)
+
+
+def _is_judgeable(value: str) -> bool:
+    return bool(_ABSOLUTE_VALUE_RE.match(value) or ".." in value.replace("\\", "/").split("/"))
+
+
 def _bash_targets(cmd: str) -> Iterable[str]:
     for rc in resolve_command_positions(cmd, preserve_windows_backslashes=_host_is_windows()):
         if rc.confidence == ResolutionConfidence.UNRESOLVED or not rc.tokens:
@@ -112,6 +158,7 @@ def _bash_targets(cmd: str) -> Iterable[str]:
         tokens = rc.tokens
         yield from extract_write_sink_targets_for_segment(tokens, normalize_executable_basename(tokens[0]))
         yield from _out_flag_values(tokens)
+    yield from _temp_env_values(cmd)
 
 
 def _powershell_targets(cmd: str) -> Iterable[str]:
@@ -124,6 +171,8 @@ def _powershell_targets(cmd: str) -> Iterable[str]:
         if head in _PS_DIR_HEADS:
             yield from _ps_dir_target(tokens[1:])
         yield from _out_flag_values(tokens)
+    yield from _ps_out_eq_values(cmd)
+    yield from _temp_env_values(cmd)
 
 
 _SEARCH_HEADS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack"})
@@ -150,7 +199,20 @@ def _out_flag_values(tokens: List[str]) -> Iterable[str]:
         else:
             continue
         value = value.strip("\"'")
-        if _ABSOLUTE_VALUE_RE.match(value) or ".." in value.replace("\\", "/").split("/"):
+        if _is_judgeable(value):
+            yield value
+
+
+_OUT_EQ_RE = re.compile(
+    r"(?<![\w-])(?:" + "|".join(re.escape(f) for f in sorted(_OUT_FLAGS - {"-o"})) + r")=" + _ENV_VALUE,
+)
+
+
+def _ps_out_eq_values(cmd: str) -> Iterable[str]:
+    """`--basetemp=<drive>:\\x`: the PowerShell tokenizer splits at the drive colon, so read the text."""
+    for m in _OUT_EQ_RE.finditer(cmd):
+        value = m.group(1).strip("\"'")
+        if _is_judgeable(value):
             yield value
 
 
@@ -189,7 +251,7 @@ def _cwd_is_root(cwd: Optional[str], env: Optional[Mapping[str, str]]) -> bool:
 
 def _can_create_new(cmd: str, cwd: Optional[str], dialect: Optional[Dialect], env: Optional[Mapping[str, str]]) -> bool:
     """Existence pre-pass: False only when no candidate can be new and nothing is root-relative."""
-    if _cwd_is_root(cwd, env) or (_CLIMB_RE.search(cmd) and _OUT_FLAG_RE.search(cmd)):
+    if _cwd_is_root(cwd, env) or (_CLIMB_RE.search(cmd) and (_OUT_FLAG_RE.search(cmd) or _has_temp_env(cmd))):
         return True
     for cand in _CAND_RE.findall(cmd):
         if _is_root_spelling(cand, env) or _judge(cand, cwd, dialect, env):

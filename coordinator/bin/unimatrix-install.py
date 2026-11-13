@@ -152,9 +152,7 @@ def resolve_claude():
 
 def _is_executable(path):
     """Windows has no exec bit: any file counts; POSIX asks the mode."""
-    if sys.platform == "win32":
-        return True
-    return os.access(path, os.X_OK)
+    return sys.platform == "win32" or os.access(path, os.X_OK)
 
 
 def probe_claude_version():
