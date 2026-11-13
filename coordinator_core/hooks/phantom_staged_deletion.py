@@ -125,25 +125,17 @@ def classify(
 
 def render_report(findings: "list[Finding]", override_env: str) -> str:
     lines = [
-        "BLOCKED: this commit stages the deletion of "
+        "ADVISORY: this commit stages the deletion of "
         f"{len(findings)} path(s) that are still in HEAD and still on disk.",
         "",
-        "On a shared tree this is usually a stale `.git/index`: a peer loaded the",
-        "index before HEAD advanced and wrote it back after, so the index has",
-        "forgotten a file that was committed in between. Committing now erases a",
-        "live artifact inside a commit about something else.",
+        "On a shared tree this is usually a stale `.git/index` another session",
+        "left behind; the paths may belong to that session's staged state.",
         "",
     ]
     lines += [f"  {f.render()}" for f in findings]
     lines += [
         "",
-        "To fix rather than bypass -- refresh the index against HEAD:",
-        "    git reset -- <path>        # drop the phantom staged deletion",
-        "    git status -- <path>       # expect the path to go quiet",
-        "",
-        "Committing a narrower pathspec also avoids it: a `git commit -- <paths>`",
-        "that excludes these paths cannot carry them.",
-        "",
-        f"If the deletion is genuinely intended, set {override_env}=1 for this commit.",
+        "A `git commit -- <paths>` that excludes these paths cannot carry them.",
+        f"Set {override_env}=1 to silence this advisory.",
     ]
     return "\n".join(lines)

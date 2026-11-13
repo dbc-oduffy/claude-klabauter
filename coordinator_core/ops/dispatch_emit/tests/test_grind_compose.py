@@ -1856,6 +1856,64 @@ def test_fixstage_script_carries_out_of_root_check_before_follow_edge():
     assert "outside repo_root" in fix_fn
 
 
+def _fence_run(declared, fix_reply):
+    seen = []
+    verdicts = {"r0": {"verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": "", "declared_files": declared}}
+    script_by_kind = {
+        "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
+        "fix": lambda rid: (seen.append("fix"), fix_reply)[1],
+        "verify": lambda rid: (seen.append("verify"), {"outcome": "pass"})[1],
+        "commit": lambda _unit: (seen.append("commit"), {"committed": True})[1],
+    }
+    result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
+    return seen, result
+
+
+@pytest.mark.parametrize("escaping", ["/abs/sibling/f.py", "C:\\sib\\f.py", "//srv/share/f.py", "../sib/f.py"])
+def test_declared_file_outside_repo_root_hands_back_before_the_fix_agent_runs(escaping):
+    seen, result = _fence_run(["a/ok.py", escaping], {"outcome": "done", "touched_files": ["a/ok.py"]})
+    assert seen == []
+    hb = [h for h in result["handed_back"] if h["type"] == "needs-judgment"]
+    assert len(hb) == 1 and escaping in hb[0]["reason"] and "no fix applied" in hb[0]["reason"]
+    assert "a/ok.py" not in hb[0]["reason"].split("cross-repo change): ")[1]
+
+
+def test_in_root_declared_files_still_reach_the_fix_agent():
+    seen, result = _fence_run(["a/ok.py", "./b/../c.py"], {"outcome": "done", "touched_files": ["a/ok.py"]})
+    assert seen[0] == "fix"
+    assert not any("no fix applied" in h["reason"] for h in result["handed_back"])
+
+
+def test_widened_extra_file_outside_repo_root_hands_back_without_a_second_fix_call():
+    seen, result = _fence_run(
+        ["a/ok.py"], {"outcome": "NEEDS_WIDER_SCOPE", "extra_files": ["a/more.py", "/sib/repo/g.py"]}
+    )
+    assert seen == ["fix"]
+    hb = [h for h in result["handed_back"] if h["type"] == "needs-judgment"]
+    assert len(hb) == 1 and "/sib/repo/g.py" in hb[0]["reason"] and "no fix applied" in hb[0]["reason"]
+
+
+def test_widened_in_root_extra_files_keep_the_one_widen_retry():
+    seen, result = _fence_run(["a/ok.py"], {"outcome": "NEEDS_WIDER_SCOPE", "extra_files": ["a/more.py"]})
+    assert seen == ["fix", "fix"]
+    assert any(h["type"] == "widen-exhausted" for h in result["handed_back"])
+
+
+def test_fixstage_script_fences_declared_and_widened_files_before_the_fix_call():
+    script = _compose()
+    fix_fn = script[script.index("async function _fixStage"): script.index("async function _verifyStage")]
+    assert fix_fn.index("_outOfRootPaths(row.declaredFiles)") < fix_fn.index("withLock(")
+    assert fix_fn.index("_outOfRootPaths(result.extra_files") < fix_fn.index("row.declaredFiles.concat(")
+    assert gc._PRE_FIX_FENCE_HEAD in fix_fn
+
+
+def test_fix_brief_names_the_repo_root_fence():
+    import coordinator_core.ops.dispatch_emit.grind_stages as stages
+
+    call = stages.compose_fix_call(label="fix", phase_title="Fix")
+    assert "Every write stays inside the repo root" in call and "NEEDS_WIDER_SCOPE" in call
+
+
 def test_fix_prompt_withholds_close_when_tradeoff_reported():
     """A fixer that reports a tradeoff must not archive the row: the
     adjudicator edits `pm_ruling` on the row in place, and

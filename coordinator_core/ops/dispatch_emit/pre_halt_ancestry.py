@@ -7,7 +7,7 @@ cited sha, else base); change both together."""
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Optional, Sequence
 
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.dispatch_emit.pre_halt_credit import sha_tokens
@@ -85,6 +85,18 @@ def cited_at_or_before(
         return credited
     except Exception:
         return {}
+
+
+def landed_met_credit(
+    root: Path, items: Sequence[object], ids: Iterable[str], detail: Optional[dict] = None
+) -> frozenset[str]:
+    """The subset of `ids` whose met verdict item has a met_by naming a commit reachable from HEAD,
+    whether it landed before or after the halt base. Nothing is credited when `detail` already
+    holds CITED_DETAIL_KEY (the at-or-before-base landing stands). Never raises; no git spawn when
+    no row cites a token."""
+    if isinstance(detail, dict) and CITED_DETAIL_KEY in detail:
+        return frozenset()
+    return frozenset(cited_at_or_before(root, "HEAD", items, ids))
 
 
 def verified_post_commit_credit(

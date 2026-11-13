@@ -962,6 +962,8 @@ def compose_fix_call(
             "Never write a historical record -- any path under "
             + ", ".join(f"`{p}`" for p in HISTORICAL_RECORD_PREFIXES)
             + ": a fix that needs one is NEEDS_WIDER_SCOPE. "
+            "Every write stays inside the repo root; a fix that needs a file outside it "
+            "(a sibling repo, an absolute path, a `..` escape) is NEEDS_WIDER_SCOPE, never a write. "
             + _FIX_COVERED_CLAUSE +
             "Otherwise, fix the row, "
             + ("" if targeted_runner else "run its tests, ")

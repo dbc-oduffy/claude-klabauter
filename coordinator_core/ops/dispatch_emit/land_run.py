@@ -1551,6 +1551,12 @@ def _unchanged_since_halt(
                 if landed:
                     detail["landed_sha"] = landed
                     detail["landed_paths"] = list(paths)
+    from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import landed_met_credit
+
+    landed = landed_met_credit(root, items, judged, detail)
+    judged = [i for i in judged if i not in landed]
+    if not judged:
+        return []
     detail.update(base=base, base_source=source if base else None, outcome=outcome)
     return [{"id": i, "reason": UNCHANGED_SINCE_HALT_REASON} for i in judged]
 

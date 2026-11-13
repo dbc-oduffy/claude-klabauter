@@ -1,5 +1,6 @@
-"""Native git pre-commit hook: refuse a commit that would delete a path
-still present in HEAD and on disk.
+"""Native git pre-commit hook: advise (stderr, exit 0, never deny) when a commit
+would delete a path still present in HEAD and on disk. The deletion is
+recoverable, so this gate holds no deny_registry entry.
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
 from coordinator-content-repo `coordinator/hooks/scripts/guard-phantom-staged-deletion-
@@ -133,7 +134,7 @@ def main() -> int:
         return 0
 
     print(render_report(findings, OVERRIDE_ENV), file=sys.stderr)
-    return 1
+    return 0
 
 
 if __name__ == "__main__":

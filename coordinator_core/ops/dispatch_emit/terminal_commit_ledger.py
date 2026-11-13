@@ -28,6 +28,7 @@ from coordinator_core.ops.dispatch_emit.halt_landing import (
 )
 from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import (
     cited_at_or_before,
+    landed_met_credit,
     CITED_DETAIL_KEY,
     verified_post_commit_credit,
 )
@@ -346,6 +347,10 @@ def _unchanged_since_halt_failures(
                         detail["landed_paths"] = list(paths)
         else:
             outcome = f"git-exit-{result.returncode}"
+    landed = landed_met_credit(worktree_root, items, judged, detail)
+    judged = [i for i in judged if i not in landed]
+    if not judged:
+        return []
     if detail is not None:
         detail.update(base=base, base_source=source, outcome=outcome)
     return [{"id": i, "reason": UNCHANGED_SINCE_HALT_REASON} for i in judged]

@@ -422,6 +422,7 @@ _UNDO_FAILED_HEAD = "undo-failed: verify rejected the fix twice and its edits ma
 _UNDO_FAILED_TAIL = " -- the row stays open; restore the touched files by hand"
 _NOT_UNDONE_PEER = "not undone (a peer's edits sit on these paths)"
 _NOT_UNDONE_OUT_OF_ROOT = "not undone (outside repo_root, left dirty)"
+_PRE_FIX_FENCE_HEAD = "no fix applied, declared or widened files outside repo_root (route the need via cross-repo-memo; the G-EM decides a cross-repo change): "
 _HISTORICAL_UNDO_FAILED_HEAD = "undo-failed: the fix wrote historical records and its edits may remain in the tree"
 _COVERED_UNDO_FAILED_HEAD = "undo-failed: the row was found already covered and its fix edits may remain in the tree"
 
@@ -1051,6 +1052,10 @@ def run_admission(
                 + ", ".join(overlap) + "; its ledger is left for the next grind",
             )
             return
+        fenced = _out_of_root_paths(row.declared_files)
+        if fenced:
+            _handback_row(row, "needs-judgment", _PRE_FIX_FENCE_HEAD + ", ".join(fenced))
+            return
         prior_node = row.node
         result = _record_call("fix", row.row_id) or {}
         tradeoff = result.get("tradeoff", "") if result.get("has_tradeoff") else ""
@@ -1087,6 +1092,9 @@ def run_admission(
         if outcome == "NEEDS_WIDER_SCOPE":
             if not row.widened:
                 row.widened = True
+                fenced = _out_of_root_paths(result.get("extra_files"))
+                if fenced:
+                    _handback_row(row, "needs-judgment", _PRE_FIX_FENCE_HEAD + ", ".join(fenced))
                 return
             _handback_row(row, "widen-exhausted", "second NEEDS_WIDER_SCOPE")
             return
@@ -2666,6 +2674,8 @@ def compose_grind_script(
         "  const row = _rows[rowId];\n"
         "  const _overlap = row.declaredFiles.filter((p) => _runDirty.has(p));\n"
         "  if (_overlap.length) { row.done = true; _handBack(rowId, 'overlap-deferred', 'declared files overlap rows queued for the terminal commit: ' + _overlap.join(', ') + '; its ledger is left for the next grind'); return; }\n"
+        "  const _fenced = _outOfRootPaths(row.declaredFiles);\n"
+        "  if (_fenced.length) { await _handBackRow(rowId, 'needs-judgment', '" + _PRE_FIX_FENCE_HEAD + "' + _fenced.join(', ')); return; }\n"
         "  const lockKeys = _lockKeysFor(row, rowId);\n"
         "  const _priorNode = row.node;\n"
         "  const result = await _issue(row.batchId, rowId, () => withLock(lockKeys, async () => _fixCall(row)));\n"
@@ -2689,7 +2699,12 @@ def compose_grind_script(
         "  if (outcome === 'PEER_DIRTY') { await _handBackRow(rowId, 'peer-dirty', 'fix reported PEER_DIRTY'); return; }\n"
         "  if (outcome === 'MANIFEST_STALE') { await _handBackRow(rowId, 'manifest-stale', 'fix reported MANIFEST_STALE'); return; }\n"
         "  if (outcome === 'NEEDS_WIDER_SCOPE') {\n"
-        "    if (!row.widened) { row.widened = true; row.declaredFiles = row.declaredFiles.concat(result.extra_files || []); return; }\n"
+        "    if (!row.widened) {\n"
+        "      row.widened = true;\n"
+        "      const _fencedExtra = _outOfRootPaths(result.extra_files || []);\n"
+        "      if (_fencedExtra.length) { await _handBackRow(rowId, 'needs-judgment', '" + _PRE_FIX_FENCE_HEAD + "' + _fencedExtra.join(', ')); return; }\n"
+        "      row.declaredFiles = row.declaredFiles.concat(result.extra_files || []); return;\n"
+        "    }\n"
         "    await _handBackRow(rowId, 'widen-exhausted', 'second NEEDS_WIDER_SCOPE'); return;\n"
         "  }\n"
         "  const _escaped = _outOfRootPaths((result.touched_files || []).concat(result.created_files || []));\n"
