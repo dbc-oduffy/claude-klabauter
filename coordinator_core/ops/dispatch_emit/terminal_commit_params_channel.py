@@ -67,6 +67,11 @@ def _canonical_run_id(path: str) -> Optional[str]:
     return run_id if run_token._RUN_ID_RE.match(run_id) else None
 
 
+def canonical_run_id(path: object) -> Optional[str]:
+    """The run id of a canonical params path, else None (including a non-string `path`)."""
+    return _canonical_run_id(path) if isinstance(path, str) else None
+
+
 def note_refusal(params_path: str, leg: str) -> None:
     """Record the guard's refusal leg beside a canonical params path; best effort, never raises.
 

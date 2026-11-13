@@ -170,7 +170,8 @@ def _manifest_ledger_paths(run_dir: Path) -> list[str]:
 
 
 def record_run_ledgers(main_root: Path, profile: str, run_id: str, run_dir: Path) -> list[str]:
-    """Record into the run's `minted.jsonl` every `<profile>` ledger file with a line citing this run's evidence dir.
+    """Record into the run's `minted.jsonl` every `<profile>` ledger file with a line citing this run's evidence dir,
+    plus every file under that evidence dir itself, so both ride the terminal commit instead of stranding.
 
     `grind-row append` writes ledgers without a manifest, so the run's ledgers are found by the
     `/evidence/<run_id>/` path each line carries; another run's ledger is never named. Recorded
@@ -188,6 +189,12 @@ def record_run_ledgers(main_root: Path, profile: str, run_id: str, run_dir: Path
             continue
         if cites:
             found.append(f"{LEDGER_ROOT}{profile}/{ledger.name}")
+    evidence_dir = ledger_dir / "evidence" / run_id
+    if evidence_dir.is_dir():
+        found += [
+            f"{LEDGER_ROOT}{profile}/evidence/{run_id}/{f.relative_to(evidence_dir).as_posix()}"
+            for f in sorted(evidence_dir.rglob("*")) if f.is_file()
+        ]
     if found:
         minted_records.record(run_dir, [{"path": p, "created": False} for p in found])
     return found

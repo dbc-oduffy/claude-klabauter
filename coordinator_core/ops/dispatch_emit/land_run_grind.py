@@ -180,6 +180,12 @@ def _reopen_held_rows(main_root: Path, repo_root: Path, held_plans: list) -> lis
     return reopened
 
 
+def _is_run_evidence(path: str, profile: str, run_id: str) -> bool:
+    """True for a file under this run's own ``<LEDGER_ROOT><profile>/evidence/<run_id>/`` dir; another run's stays out."""
+    prefix = f"{LEDGER_ROOT}{profile}/evidence/{run_id}/"
+    return path.startswith(prefix) and ".." not in path[len(prefix):].split("/")
+
+
 def _land(
     main_root: Path, repo_root: Path, grind: dict, deliverable_id: object, run_id: str,
     ledger_paths: Sequence[str] = (),
@@ -189,12 +195,19 @@ def _land(
 
     dropped: list = []
     plans: list = []
+    own_evidence: list = []
     for row in grind["rows"]:
         row_id = row["row_id"]
         paths, gone = partition_ledger_paths(list(row.get("paths") or []))
         deleted, gone_deleted = partition_ledger_paths(list(row.get("deleted_paths") or []))
-        dropped += [{"row_id": row_id, "path": p, "reason": DROP_LEDGER_ROOT} for p in gone + gone_deleted]
+        own = [p for p in gone if _is_run_evidence(p, grind["profile"], run_id)]
+        own_evidence += own
+        dropped += [
+            {"row_id": row_id, "path": p, "reason": DROP_LEDGER_ROOT}
+            for p in gone + gone_deleted if p not in own
+        ]
         plans.append((row, paths, deleted))
+    ledger_paths = [*ledger_paths, *own_evidence]
 
     from coordinator_core.backlog_grind_assemble.grind_rows import _ledger_path
 

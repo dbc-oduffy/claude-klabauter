@@ -7049,8 +7049,8 @@ def _checkout_of(path: str) -> Optional[str]:
 def _run_root(typed_path: Optional[str], repo_operand: Optional[str], git_root: str, session_id: str) -> str:
     """The checkout whose run token the params-file commit is checked in: the typed params file's
     checkout R when it differs from the cwd git root and this session holds a run there (or the
-    command pins `--repo R` and the token check then admits or finds the spent receipt there);
-    else the cwd git root.
+    command pins `--repo R` and the token check then admits or finds the spent receipt there, or R
+    holds a session-less grind token record for the run id the typed canonical path names); else the cwd git root.
 
     Trap: ownership comes from the engine-minted token record in R, never from the typed path alone.
     """
@@ -7063,8 +7063,12 @@ def _run_root(typed_path: Optional[str], repo_operand: Optional[str], git_root: 
 
     from coordinator_core.ops.dispatch_emit import run_token
 
-    if run_token.session_holds_run(Path(root), session_id) or (
-        repo_operand is not None and _same_path(repo_operand, root)
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    if (
+        run_token.session_holds_run(Path(root), session_id)
+        or (repo_operand is not None and _same_path(repo_operand, root))
+        or run_token.holds_grind_run_record(Path(root), chan.canonical_run_id(typed_path))
     ):
         return root
     return git_root

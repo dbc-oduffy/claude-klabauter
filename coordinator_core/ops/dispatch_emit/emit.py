@@ -2765,7 +2765,7 @@ def _vitest_cap_clause() -> str:
 
 def _test_runner_clause(repo_root: Optional[str | Path] = None) -> str:
     """The skip-report rule, the vitest cap when the box sets one, and the target repo's interpreter clause."""
-    from coordinator_core.ops.dispatch_emit.test_interpreter import interpreter_clause
+    from coordinator_core.ops.dispatch_emit.interpreter_pin import interpreter_clause
 
     cap = _vitest_cap_clause()
     base = f"{_SKIP_REPORT_CLAUSE} {cap}" if cap else _SKIP_REPORT_CLAUSE
@@ -3922,7 +3922,7 @@ def _launcher_interpreter(repo_root: Optional[Path]) -> str:
     if repo_root is None:
         return "python3"
     root = Path(repo_root)
-    from coordinator_core.ops.dispatch_emit.test_interpreter import resolve_targeted_test_python
+    from coordinator_core.ops.dispatch_emit.interpreter_pin import resolve_targeted_test_python
 
     if (root / "coordinator_core" / "testing" / "scoped_pytest.py").is_file():
         pinned = resolve_targeted_test_python(root)
@@ -4855,6 +4855,7 @@ def _row_state_decls_js(
             "  const _blockedChunks = [];",
             "  const _unansweredBriefs = [];",
             "  const _stoppedBy = [];",
+            "  const _stoppedText = {};",
             "  const _notStarted = [];",
             f"  const {PLAN_HELD_VAR} = {{}};",
             f"  const {CHUNK_REASON_VAR} = {{}};",
@@ -5290,6 +5291,7 @@ def _run_row_helper_js(
         "    }\n"
         f"    if (_rowFailed || ({_STOP_RULE_JS_RE}.test(_text) && !{_ROW_LOCAL_BLOCK_JS_RE}.test(_text))) {{\n"
         "      _stoppedBy.push(id);\n"
+        "      _stoppedText[id] = _text;\n"
         "      const _haltWhy = _rowFailed ? _rowFailReason : id;\n"
         "      if (plan) {\n"
         "        _haltedPlans.add(plan);\n"

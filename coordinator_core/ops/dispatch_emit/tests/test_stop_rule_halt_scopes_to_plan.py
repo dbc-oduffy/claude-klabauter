@@ -50,7 +50,7 @@ def test_single_plan_compose_declares_empty_plan_tables_and_the_global_halt():
     assert "const _haltedPlans = new Set();" in script
     assert "const _haltedPlanReasons = new Map();" in script
     assert "let _halted = null;" in script
-    assert "_halted = id;" in script
+    assert "_halted = _haltWhy;" in script
 
 
 def test_single_plan_compose_unaffected_by_a_wave_row_with_no_spec_line():
@@ -87,7 +87,7 @@ def test_multi_plan_compose_scopes_halt_to_the_stopping_rows_plan():
     assert "'P2-C1': 'docs/plans/p2.md'" in script
     assert "const _haltedPlans = new Set();" in script
     assert "_haltedPlans.add(plan);" in script
-    assert "_haltedPlanReasons.set(plan, id);" in script
+    assert "_haltedPlanReasons.set(plan, _haltWhy);" in script
     assert "_skipIfHalted" not in script
 
     assert "_rows['P1-C1'] = _runRow('P1-C1'," in script

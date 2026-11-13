@@ -1242,6 +1242,24 @@ def session_holds_run(repo_root: Path, session_id: str) -> bool:
         return False
 
 
+def holds_grind_run_record(repo_root: Path, run_id: object) -> bool:
+    """True when `repo_root` holds a live, claimed or spent session-less `kind="grind"` record for `run_id`.
+
+    Record presence only: it admits nothing by itself (the caller still checks the token and
+    script). Names the repo a queue-grind run minted in, whose mint carries no session; a
+    session-owned record never qualifies. One to three record reads; no spawn; never raises."""
+    if not isinstance(run_id, str) or not _RUN_ID_RE.match(run_id):
+        return False
+    try:
+        for kind in ({}, {"claimed": True}, {"spent": True}):
+            record = _read_rec(Path(repo_root), run_id, **kind)
+            if record is not None and record.get("kind") == "grind" and not record.get("session_id"):
+                return True
+        return False
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def token_params_from_command(raw_cmd: str) -> Optional[dict]:
     """`{run_id, run_token, script_path}` from a `dispatch.land_run` (or legacy
     `dispatch.terminal_commit`) command line's JSON

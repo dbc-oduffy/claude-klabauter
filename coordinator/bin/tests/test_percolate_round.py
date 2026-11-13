@@ -3469,9 +3469,13 @@ def test_refresh_rewritten_stat_clears_stat_only_dirt_from_an_lf_rewrite(tmp_pat
     assert _git_head(repo, "status", "--porcelain").stdout == ""
 
 
-def test_refresh_rewritten_stat_failure_never_ends_the_round(tmp_path, capsys):
-    """A peer holding `.git/index.lock` makes the refresh fail; the round
-    reports it and carries on, with dest exactly as the sync left it."""
+def test_refresh_rewritten_stat_failure_never_ends_the_round(tmp_path, capsys, monkeypatch):
+    """A peer holding `.git/index.lock` open makes the refresh fail; the round
+    reports it and carries on, with dest exactly as the sync left it. (An
+    ownerless lock nobody holds open is reclaimed, not a peer's.)"""
+    from coordinator_core.git import index_write  # noqa: PLC0415
+
+    monkeypatch.setattr(index_write, "_lock_held_open", lambda p: True)
     repo = _init_head_repo(tmp_path, {"same.md": "x\n"})
     os.utime(repo / "same.md", (1_000_000_000, 1_000_000_000))
     index_before = (repo / ".git" / "index").read_bytes()

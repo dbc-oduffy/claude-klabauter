@@ -16,6 +16,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 RUN = "20261015T000000Z"
 PROFILE = "bug"
 EVIDENCE = f"state/queue-grind/{PROFILE}/evidence/{RUN}/r1.done.md"
+OTHER_EVIDENCE = f"state/queue-grind/{PROFILE}/evidence/20200101T000000Z/r1.done.md"
 
 
 def _git(args, cwd: Path) -> str:
@@ -156,23 +157,34 @@ def test_dropped_deletion_carries_an_unlanded_trailer(repo):
     assert "Row-Unlanded: r1 state/bug-backlog/r1.yaml deletion-git-cannot-see" in _message(repo)
 
 
-def test_ledger_root_path_is_dropped_named_and_stays_untracked(repo):
+def test_another_runs_ledger_root_path_is_dropped_named_and_stays_untracked(repo):
+    evidence = repo / OTHER_EVIDENCE
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("done\n", encoding="utf-8")
+    out = _call(repo, [_row("r1", ["a.py", OTHER_EVIDENCE])])
+    assert out["committed"] is True
+    assert {"row_id": "r1", "path": OTHER_EVIDENCE, "reason": "ledger-root"} in out["dropped"]
+    assert f"Row-Unlanded: r1 {OTHER_EVIDENCE} ledger-root" in _message(repo)
+    assert _status(repo)[OTHER_EVIDENCE] == "??"
+
+
+def test_this_runs_evidence_rides_the_commit_instead_of_stranding(repo):
     evidence = repo / EVIDENCE
     evidence.parent.mkdir(parents=True)
     evidence.write_text("done\n", encoding="utf-8")
     out = _call(repo, [_row("r1", ["a.py", EVIDENCE])])
     assert out["committed"] is True
-    assert {"row_id": "r1", "path": EVIDENCE, "reason": "ledger-root"} in out["dropped"]
-    assert f"Row-Unlanded: r1 {EVIDENCE} ledger-root" in _message(repo)
-    assert _status(repo)[EVIDENCE] == "??"
+    assert out["dropped"] == [] and out["stranded"] == []
+    assert EVIDENCE in _head_files(repo)
+    assert "Row-Unlanded" not in _message(repo)
 
 
 def test_dropped_path_of_a_row_that_lands_nothing_is_still_named(repo):
-    out = _call(repo, [_row("r1", ["a.py"]), _row("r2", [EVIDENCE])])
+    out = _call(repo, [_row("r1", ["a.py"]), _row("r2", [OTHER_EVIDENCE])])
     assert out["committed"] is True
     assert [r["row_id"] for r in out["rows"]] == ["r1"]
-    assert f"Row-Unlanded: r2 {EVIDENCE} ledger-root" in _message(repo)
-    assert out["stranded"] == [{"row_id": "r2", "path": EVIDENCE, "reason": "ledger-root"}]
+    assert f"Row-Unlanded: r2 {OTHER_EVIDENCE} ledger-root" in _message(repo)
+    assert out["stranded"] == [{"row_id": "r2", "path": OTHER_EVIDENCE, "reason": "ledger-root"}]
 
 
 def test_tracked_deletion_lands_with_removal_phrase(repo):

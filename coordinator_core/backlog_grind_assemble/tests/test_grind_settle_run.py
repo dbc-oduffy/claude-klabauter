@@ -100,7 +100,7 @@ def test_evidence_reconstruction_lands_declared_and_archive_and_drops_unlandable
     assert f"{ARCHIVE}/r1.yaml" not in status and "a.py" not in status
     assert "b.py" in status and "other.py" in status
     assert not (repo / f"state/queue-grind/{PROFILE}/r1.jsonl").exists()
-    assert f"{EVIDENCE}/r1.done.md" in status
+    assert f"{EVIDENCE}/r1.done.md" not in status
 
 
 def test_reconstruction_picks_only_rows_with_done_evidence_and_on_disk_archive(repo, tmp_path):
@@ -184,8 +184,21 @@ def test_ledger_root_path_is_dropped_not_refused(repo, tmp_path, capsys):
     )
     code, reply = _run(capsys, _argv(tmp_path, repo, "--rows-file", str(rows_file)))
     assert code == 0 and reply["committed"] is True
-    assert [d["reason"] for d in reply["dropped"]] == ["ledger-root"]
-    assert f"{EVIDENCE}/r1.done.md" in _status(repo)
+    assert reply["dropped"] == [] and reply["stranded"] == []
+    assert f"{EVIDENCE}/r1.done.md" in _git(["ls-files"], repo).split()
+
+
+def test_default_settle_run_lands_the_run_evidence_and_not_another_runs(repo, tmp_path, capsys):
+    _finish_row(repo, "r1")
+    _write(repo, f"state/queue-grind/{PROFILE}/evidence/{RUN}/sub/r1.verify.md")
+    other = f"state/queue-grind/{PROFILE}/evidence/20200101T000000Z/x.done.md"
+    _write(repo, other)
+    _triage(repo, {"r1": ["a.py"]})
+    code, reply = _run(capsys, _argv(tmp_path, repo))
+    assert code == 0 and reply["committed"] is True and reply["stranded"] == []
+    tracked = _git(["ls-files"], repo).split()
+    assert f"{EVIDENCE}/r1.done.md" in tracked and f"{EVIDENCE}/sub/r1.verify.md" in tracked
+    assert other not in tracked
 
 
 def test_a_row_whose_archive_is_already_committed_lands_nothing(repo, tmp_path, capsys):
