@@ -195,6 +195,7 @@ def test_21_row_emit_at_standard_ceiling_admits_16_and_names_5(tmp_path):
     assert not_admitted["count"] == 5
     assert not_admitted["row_ids"] == run_order[16:]
     assert not_admitted["arithmetic"]["admitted_count"] == 16
+    assert emission.receipt_extras["admitted_count"] == 16
     assert _batched_row_ids(emission.script) == run_order[:16]
 
 
@@ -202,6 +203,7 @@ def test_21_row_emit_under_a_ceiling_that_covers_all_admits_all(tmp_path):
     profile_dir = _profile_dir_with_max_agent_calls(tmp_path / "profiles", 67)
     emission = _emit(tmp_path, n_rows=21, profile_dir=profile_dir)
     assert emission.receipt_extras["not_admitted"]["count"] == 0
+    assert emission.receipt_extras["admitted_count"] == 21
     assert len(_batched_row_ids(emission.script)) == 21
 
 

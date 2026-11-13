@@ -24,7 +24,9 @@ Wire shape:
     path's parent (the caller -- `op.py` -- derives it from the already
     path-guarded script path, never from a raw caller string).
 
-`QueueEmission.receipt_extras` carries `queue`, `profile`, `profile_digest`
+`QueueEmission.receipt_extras` carries `queue`, `admitted_count` (rows admitted
+into the script; top-level twin of `not_admitted.arithmetic.admitted_count`),
+`profile`, `profile_digest`
 (sha256 of the loaded profile's own source bytes -- a distinct fact from
 `triage_policy_sha256`, which digests only the inlined `triage_policy` text,
 not the whole profile), `appetite`, `resolved_knobs`, `manifest_digest`
@@ -264,6 +266,7 @@ def emit_queue_script(
         "appetite": appetite,
         "resolved_knobs": dict(resolved_knobs),
         "manifest_digest": manifest.digest,
+        "admitted_count": len(admission.admitted),
         "unselected": {"count": len(manifest.unselected), "row_ids": list(manifest.unselected)},
         "claimed": {
             "count": len(manifest.claimed),
