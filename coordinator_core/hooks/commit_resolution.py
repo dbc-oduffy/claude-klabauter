@@ -3,8 +3,9 @@
 One commit runs several hook processes; each used to spawn its own
 `git diff --cached`. `staged_raw` runs ONE `git diff --cached --raw -z -M` per
 (index identity, HEAD) and persists it under the git dir, so later hooks of the
-same commit read a file instead of spawning. Stdlib only: this is imported on
-the commit hot path and must not pull in the engine.
+same commit read a file instead of spawning. Imported on the commit hot path:
+beyond the stdlib it needs only `coordinator_core.git.run`, so a by-file-path
+loader must put the checkout root on sys.path first.
 
 Invariants:
 - The index is `$GIT_INDEX_FILE` when set, else `<git_dir>/index`. A pathspec
@@ -24,8 +25,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 from typing import NamedTuple, Optional
+
+from coordinator_core.git.run import run_git
 
 _CACHE_PREFIX = "coordinator-commit-resolution-"
 _CACHE_SUFFIX = ".json"
@@ -50,24 +52,13 @@ class RawRecord(NamedTuple):
     orig_path: Optional[str]
 
 
-def _no_console() -> dict:
-    flag = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    return {"creationflags": flag} if flag else {}
-
-
 def _run_git(args: "list[str]", timeout: Optional[float]) -> bytes:
-    try:
-        proc = subprocess.run(
-            ["git", "--no-optional-locks", *args],
-            capture_output=True,
-            timeout=timeout,
-            **_no_console(),
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ResolutionError(f"git {args[0]}: {exc}") from exc
-    if proc.returncode != 0:
-        raise ResolutionError(f"git {args[0]} rc={proc.returncode}")
-    return proc.stdout
+    res = run_git(["--no-optional-locks", *args], timeout=timeout, binary=True)
+    if res.timed_out:
+        raise ResolutionError(f"git {args[0]}: timed out")
+    if res.returncode != 0:
+        raise ResolutionError(f"git {args[0]} rc={res.returncode}")
+    return res.stdout_bytes
 
 
 def _index_path(git_dir: str) -> str:
@@ -247,9 +238,8 @@ def staged_raw(git_dir: str, timeout: Optional[float] = None) -> "list[RawRecord
 
 
 def name_status(git_dir: str, timeout: Optional[float] = None) -> "list[tuple[str, str]]":
-    """Rename-free `(status_letter, path)` rows, as `git diff --cached
-    --name-status` without `-M` reports them: an `R` yields `D` for the old
-    path and `A` for the new one, a `C` yields `A` for the copy."""
+    """Rename-expanded `(status_letter, path)` rows: an `R` yields `D` for the
+    old path and `A` for the new one, a `C` yields `A` for the copy."""
     rows: "list[tuple[str, str]]" = []
     for rec in staged_raw(git_dir, timeout):
         letter = rec.status[:1]
@@ -264,8 +254,8 @@ def name_status(git_dir: str, timeout: Optional[float] = None) -> "list[tuple[st
 
 
 def names(git_dir: str, timeout: Optional[float] = None) -> "list[str]":
-    """Every staged path, rename-free (an `R` contributes both its paths), in
-    `git diff --cached --name-only` (no `-M`) order."""
+    """Every staged path (an `R` contributes both its paths), in `-M` raw-record
+    order, an `R` as old path then new path."""
     return [path for _status, path in name_status(git_dir, timeout)]
 
 

@@ -102,6 +102,9 @@ function routeCoveredRetire(cur) {
   }
   return null;
 }
+function _isCoveredRetire(id) {
+  return ['dedupe', 'discard'].some((v) => { const r = routeAfterTriage(v, null, ''); return r.kind === 'node' && r.value === id && !_reachesFix(r.value, new Set()); });
+}
 function followEdge(nodeId, outcome, row) {
   const node = ROUTING[nodeId];
   const target = node.edges[outcome];
@@ -239,6 +242,8 @@ const VERIFY_SPEC = {"verify": {"P0": {"mode": "op", "op": "lessons.verify_extra
 const VERIFY_PRE_FIX = [];
 
 const VERIFY_HAND_BACK = [];
+
+const VERIFY_RETIRE = [];
 
 let _callCount = 0;
 
@@ -392,7 +397,7 @@ function _coveredIsOwnEdit(row, cb) {
   const _p = _normRel(String(cb).trim()).replace(/:\d+(?:[-:]\d+)*$/, '');
   return (row.fixReported ? row.touchedFiles : []).concat(row.createdFiles || []).some((w) => _normRel(w) === _p);
 }
-async function _closeCovered(row, rowId, cb) {
+async function _closeCovered(row, rowId, cb, verified) {
   const _route = routeCoveredRetire(row.node);
   if (_route === null) { await _handBackRow(rowId, 'needs-judgment', 'already covered at ' + cb + '; no retire route in this profile avoids fix'); return; }
   if (_hasWrites(row) && _undoPaths(row).length > 0) {
@@ -402,6 +407,7 @@ async function _closeCovered(row, rowId, cb) {
   }
   row.touchedFiles = []; row.createdFiles = []; row.removedFiles = []; row.fixReported = false;
   row.dedupeFlipped = true; row.verifyRetried = true; row.origin = 'triage:dedupe'; row.evidence = 'already covered at ' + cb; row.node = _route;
+  if (verified && ROUTING[_route].kind === 'verify') { await _applyRouteRow(row, rowId, followEdge(_route, 'pass', row), 'already-covered flip'); }
 }
 async function _undoUnfinished() {
   if (!_grindErr) return;
@@ -732,6 +738,7 @@ async function _verifyStage(rowId) {
   const lockKeys = _lockKeysFor(row, rowId);
   const result = await _issue(row.batchId, rowId, () => withLock(lockKeys, async () => _verifyCall(row)));
   if (result.outcome === 'fail') {
+    if (result.covered_by && _isCoveredRetire(row.node)) { await _applyRouteRow(row, rowId, followEdge(row.node, 'pass', row), 'covered artifact confirms the retire verdict'); return; }
     if (result.covered_by && VERIFY_PRE_FIX.includes(row.node) && !row.dedupeFlipped && row.origin !== 'triage:dedupe') {
       const _flip = routeCoveredRetire(row.node);
       if (_flip !== null) {
@@ -740,11 +747,12 @@ async function _verifyStage(rowId) {
         row.origin = 'triage:dedupe';
         row.evidence = 'already covered at ' + result.covered_by;
         row.node = _flip;
+        if (ROUTING[_flip].kind === 'verify') { await _applyRouteRow(row, rowId, followEdge(_flip, 'pass', row), 'already-covered flip'); }
         return;
       }
       if (routeAfterTriage('dedupe', null, '').kind === 'node') { row.done = true; _handBack(rowId, 'needs-judgment', 'already covered at ' + result.covered_by + '; no retire route in this profile avoids fix'); return; }
     } else if (result.covered_by && !VERIFY_PRE_FIX.includes(row.node) && !row.dedupeFlipped && row.origin !== 'triage:dedupe' && !row.verifyRetried && !_coveredIsOwnEdit(row, result.covered_by)) {
-      await _closeCovered(row, rowId, result.covered_by); return;
+      await _closeCovered(row, rowId, result.covered_by, true); return;
     }
     if (!row.verifyRetried) {
       row.verifyRetried = true;

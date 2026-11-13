@@ -56,10 +56,15 @@ Negative-spec:
 
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W2-C5.
 
-Never imports `coordinator_core` on the guard path: it runs with no engine-root bootstrap,
-so it keeps its own git spawns and is exempt from the shared git runner
+Standalone contract: runs standalone as a hook body and resolves on its own when no shared
+per-commit resolution is available. Never imports `coordinator_core` itself on the guard
+path: the only reach is `_load_commit_resolution`, a guarded load by file path (checkout
+root appended to sys.path) whose failure falls back. It runs with no engine-root bootstrap,
+so it keeps its own fallback git spawns and is exempt from the shared git runner
 (`coordinator_core/tests/test_shared_git_runner.py :: _CONTRACT_EXEMPT_MODULES`).
 Only ``--install-hook`` imports it, after putting this checkout's engine root on sys.path.
+The staged set comes from `hooks/commit_resolution.py`, loaded by file path and shared
+with the other hooks of the same commit; its own spawn is only the load-failure fallback.
 
 ``--install-hook`` (run in the target repo) is the sanctioned install and repair of this
 repo's ``.git/hooks/pre-commit``: absent -> write the self-resolving hook body; already
@@ -104,10 +109,68 @@ def _git(args: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(["git", *args], 124, "", "git timed out")
 
 
+def _hook_git_dir() -> str:
+    """The hook's git dir with no spawn: `$GIT_DIR`, else `./.git` (a directory, or a
+    `gitdir:` file for a linked worktree). git runs hooks with cwd at the worktree root.
+    "" when underivable."""
+    try:
+        env_git_dir = os.environ.get("GIT_DIR", "").strip()
+        if env_git_dir:
+            return env_git_dir
+        cwd = os.getcwd()
+        dotgit = os.path.join(cwd, ".git")
+        if os.path.isdir(dotgit):
+            return dotgit
+        if os.path.isfile(dotgit):
+            with open(dotgit, encoding="utf-8") as fh:
+                first_line = fh.readline().strip()
+            if first_line.startswith("gitdir:"):
+                target = first_line[len("gitdir:"):].strip()
+                if target and not os.path.isabs(target):
+                    target = os.path.normpath(os.path.join(cwd, target))
+                return target
+    except Exception:
+        pass
+    return ""
+
+
+def _load_commit_resolution():
+    """Load the shared-resolution module by file path from this checkout. It imports
+    `coordinator_core.git.run`, so this checkout's root joins sys.path (appended, lowest
+    precedence). None when absent or broken."""
+    try:
+        import importlib.util
+
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        if root not in sys.path:
+            sys.path.append(root)
+        path = os.path.join(root, "coordinator_core", "hooks", "commit_resolution.py")
+        spec = importlib.util.spec_from_file_location("_corpus_guard_commit_resolution", path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        return None
+
+
 def _staged_paths() -> list[str]:
     """Paths introducing new content: added, modified, renamed. Deletes introduce no blob.
     A rename counts -- `git mv` then `git add -f` records as R, and the destination is a
-    real blob that would be pushed."""
+    real blob that would be pushed.
+
+    Reads the per-commit shared resolution (one `git diff --cached` across every hook of
+    the commit); falls back to its own spawn only when that module or the git dir is
+    unavailable."""
+    resolution = _load_commit_resolution()
+    git_dir = _hook_git_dir() if resolution is not None else ""
+    if resolution is not None and git_dir:
+        try:
+            return resolution.names_filtered(git_dir, "AMR", 15)
+        except Exception as exc:
+            print(f"[corpus-artifact-guard] could not read the staged set ({exc}); allowing", file=sys.stderr)
+            return []
     proc = _git(["diff", "--cached", "--name-only", "--diff-filter=AMR"])
     if proc.returncode != 0:
         return []

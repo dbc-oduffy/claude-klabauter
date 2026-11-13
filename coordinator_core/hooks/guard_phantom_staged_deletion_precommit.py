@@ -61,8 +61,9 @@ variable, is a documented concurrent-EM hazard around `GIT_INDEX_FILE`;
 nothing here changes directory.
 
 NEVER TAKES `.git/index.lock`. Every git call here is a read
-(`diff --cached`, `cat-file`) and passes `--no-optional-locks` so none of
-them opportunistically refreshes the index. A detector that serialises
+(the staged set comes from `commit_resolution`, `cat-file` from here) and
+passes `--no-optional-locks` so none of them opportunistically refreshes the
+index. A detector that serialises
 commits on a tree this busy would be worse than the bug it prevents.
 
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C7
@@ -74,14 +75,20 @@ import os
 import sys
 from pathlib import Path
 
+from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.git.run import GitResult, run_git
+from coordinator_core.hooks import commit_resolution
 from coordinator_core.hooks.phantom_staged_deletion import (
     classify,
-    parse_name_status_z,
     render_report,
 )
 
 OVERRIDE_ENV = "COORDINATOR_OVERRIDE_PHANTOM_STAGED_DELETION"
+
+
+def _hook_git_dir() -> str:
+    """The commit's git dir with no spawn: `$GIT_DIR` when git exports it, else the cwd's."""
+    return os.environ.get("GIT_DIR") or str(resolve_git_dir(Path.cwd()))
 
 
 def _git(*args: str) -> GitResult:
@@ -92,16 +99,16 @@ def main() -> int:
     if os.environ.get(OVERRIDE_ENV):
         return 0
 
-    staged = _git("diff", "--cached", "--name-status", "-z")
-    if staged.returncode != 0:
+    try:
+        rows = commit_resolution.name_status(_hook_git_dir())
+    except Exception as exc:
         print(
             "[phantom-deletion-guard] could not read the staged set "
-            f"(git exited {staged.returncode}); allowing the commit",
+            f"({exc}); allowing the commit",
             file=sys.stderr,
         )
         return 0
 
-    rows = parse_name_status_z(staged.stdout_bytes.decode("utf-8", "surrogateescape"))
     if not any(status == "D" for status, _ in rows):
         return 0
 

@@ -201,7 +201,17 @@ _COVERED_BY_CLAUSE = (
     "report fail and set `covered_by` to that artifact as `path:line`; set `covered_by` for no other failure."
 )
 
-_COVERED_BY_LEDGER_CLAUSE = " When you set `covered_by`, pass `--verdict dedupe` in that command."
+#: Brief for a routing verify at a node where a `dedupe` or `discard` verdict enters: a covering artifact
+#: confirms the verdict, so it is never a fail.
+_RETIRE_VERIFY_CLAUSE = (
+    "Judge the retire verdict only: does the artifact the triage evidence cites exist at HEAD and state what "
+    "the row claims? Read the row and that artifact. Report pass if it does; report fail, with the reason, "
+    "only if the artifact is missing or does not cover the claim. Do not ask whether a fix landed and do not "
+    "require any change on disk. You are read-only: do not edit any file. "
+    + _NO_STAGING_CLAUSE
+)
+
+_COVERED_BY_LEDGER_CLAUSE =" When you set `covered_by`, pass `--verdict dedupe` in that command."
 
 _TRIAGE_COVERED_CLAUSE = (
     "A row whose rule is already stated at HEAD gets a retire verdict (`discard`), never a fix verdict: "
@@ -1086,8 +1096,11 @@ def compose_verify_agent_call(
     routing: bool = False,
     digest_js: Optional[str] = None,
     hand_back: bool = False,
+    retire: bool = False,
 ) -> str:
-    """The `verify` agent call. With ``digest_js`` the verifier records every `fail` -- the check, what it
+    """The `verify` agent call. ``retire`` (routing only) is the node a `dedupe`/`discard` verdict enters: the
+    brief asks only whether the cited artifact exists and covers the claim, and carries no report-fail-on-covered
+    clause. With ``digest_js`` the verifier records every `fail` -- the check, what it
     expected, what it saw -- as a ledger line and returns the same text as `reason`. With ``undo_paths_js`` (and ``final_js``) the verifier also runs the undo
     op on the row's final verification when its own verdict is `fail`, and returns the result as `undo`.
     ``routing`` swaps the post-fix brief for the routing brief (no fix has run: judge the triage verdict and
@@ -1142,7 +1155,7 @@ def compose_verify_agent_call(
             _shq_part(repo_root_js),
             ("lit", "`."),
         ]
-        if routing:
+        if routing and not retire:
             fail_record.append(("lit", _COVERED_BY_LEDGER_CLAUSE))
     schema = {
         "type": "object",
@@ -1193,7 +1206,7 @@ def compose_verify_agent_call(
         parts = [
             ("lit", ". No fix has run for this row and none is expected. Triage evidence: "),
             ("expr", evidence_js) if evidence_js else ("lit", "(none)"),
-            ("lit", ". " + _ROUTING_VERIFY_CLAUSE + _COVERED_BY_CLAUSE),
+            ("lit", ". " + (_RETIRE_VERIFY_CLAUSE if retire else _ROUTING_VERIFY_CLAUSE + _COVERED_BY_CLAUSE)),
         ]
         if targeted_runner:
             parts.append(("lit", _ROUTING_VERIFY_RUNNER_CLAUSE))

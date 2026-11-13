@@ -56,22 +56,21 @@ def _run(verify_replies, routing=_ROUTING):
     return calls, result
 
 
-def test_covered_by_flips_to_dedupe_and_runs_the_close_verify_once_instead_of_the_retry():
+def test_covered_by_flips_to_dedupe_and_passes_over_the_close_verify_instead_of_the_retry():
     calls, result = _run([
         {"outcome": "fail", "reason": "covered", "covered_by": "wiki/x.md:12"},
-        {"outcome": "pass"},
     ])
-    assert calls.count("verify") == 2 and "fix" not in calls
+    assert calls.count("verify") == 1 and "fix" not in calls
     assert "rejected-after-retry" not in [h["type"] for h in result["handed_back"] if h["row"] == "r0"]
 
 
-def test_the_flip_is_bounded_a_failing_close_verify_is_handed_back_not_looped():
+def test_the_flip_is_terminal_the_close_verify_never_re_judges_a_covered_row():
     calls, result = _run([
         {"outcome": "fail", "covered_by": "wiki/x.md:12"},
         {"outcome": "fail", "covered_by": "wiki/x.md:12"},
     ])
-    assert calls.count("verify") == 2 and "fix" not in calls
-    assert [h["type"] for h in result["handed_back"] if h["row"] == "r0"] == ["rejected-after-retry"]
+    assert calls.count("verify") == 1 and "fix" not in calls
+    assert "rejected-after-retry" not in [h["type"] for h in result["handed_back"] if h["row"] == "r0"]
 
 
 def test_a_fail_without_covered_by_still_retries_once():

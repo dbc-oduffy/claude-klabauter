@@ -11,7 +11,7 @@ Git hook signature (prepare-commit-msg):
   argv[3]  SHA1          (optional: present only for --amend / squash)
 
 Behaviour:
-  1. Resolve the git dir once (``git rev-parse --git-dir``, ONE subprocess —
+  1. Resolve the git dir once (``_resolve_git_dir``, ZERO subprocesses —
      needed for locating ``session-shape.json``) and the current session-id
      via the three-tier env ladder (KS-6, 2026-08-07 — widened to match
      ``coordinator_core.session.core.SESSION_ENV_PRECEDENCE``, the canonical
@@ -38,8 +38,8 @@ Behaviour:
      tiers uniformly.
   3a. Deliverable-Id tier 0 (artifact-first, 2026-08-04): before any
      session-keyed tier below, derive this commit's own staged pathspec
-     (``git diff --cached --name-only``, ONE subprocess, only spawned when a
-     Deliverable-Id trailer is actually missing) and check whether any
+     (``commit_resolution.names``, the staged set shared across the commit's
+     hooks, only read when a Deliverable-Id trailer is actually missing) and check whether any
      staged artifact carries its own ``deliverable_id`` frontmatter — see
      ``_resolve_deliverable_id_from_paths`` below for the multi-baton-session
      defect this closes (2026-08-04 cross-repo memo, example-market-data-repo-em
@@ -424,19 +424,15 @@ def _resolve_deliverable_id_at(git_dir: str, session_id: str) -> str:
     return ""
 
 
-# Outside any worktree `git diff --cached` is parsed as `--no-index` and exits
-# 129 (usage): there is no stage, so nothing can be lost.
-_GIT_NOT_A_REPO_RC = 129
-
-
-def _resolve_staged_paths(timeout: float = 10.0) -> list:
-    """``git diff --cached --name-only``, ONE subprocess — derived here
-    because this hook, unlike ``git_native.commit_scoped()``'s callers,
-    receives no pathspec argument of its own (git invokes ``prepare-commit-
-    msg`` with only the commit-message-file path; the staged set is never
-    handed to it). Windows-safe (``creationflags``/``stdin=DEVNULL``) and
-    BOUNDED (``timeout``) — this runs on the commit hot path, so a hang here
-    is strictly worse than a missing trailer.
+def _resolve_staged_paths(timeout: float = 10.0) -> "list | None":
+    """Staged paths via ``commit_resolution.names`` (one shared
+    ``git diff --cached`` per commit across every hook; no git dir means no
+    repo, so ``[]``). Derived here because this hook, unlike
+    ``git_native.commit_scoped()``'s callers, receives no pathspec argument
+    of its own (git invokes ``prepare-commit-msg`` with only the
+    commit-message-file path; the staged set is never handed to it). BOUNDED
+    (``timeout``) — this runs on the commit hot path, so a hang here is
+    strictly worse than a missing trailer.
 
     Never raises. A genuinely empty stage returns ``[]``; a derivation
     failure (unresolvable claude-klabauter checkout, git unavailable, spawn error,
@@ -470,15 +466,13 @@ def _resolve_staged_paths(timeout: float = 10.0) -> list:
             "commit.\n"
         )
         return None
+    git_dir = _resolve_git_dir()
+    if not git_dir:
+        return []
     try:
-        out = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            stdin=subprocess.DEVNULL,
-            **_no_console_creationflags(),
-        )
+        from coordinator_core.hooks import commit_resolution
+
+        return [p for p in commit_resolution.names(git_dir, timeout) if p.strip()]
     except Exception as exc:
         sys.stderr.write(
             "coordinator-prepare-commit-msg: staged-path derivation failed "
@@ -486,16 +480,6 @@ def _resolve_staged_paths(timeout: float = 10.0) -> list:
             "commit.\n"
         )
         return None
-    if out.returncode == _GIT_NOT_A_REPO_RC:
-        return []
-    if out.returncode != 0:
-        sys.stderr.write(
-            "coordinator-prepare-commit-msg: staged-path derivation failed "
-            f"(git diff --cached exited {out.returncode}); tier-0 "
-            "Deliverable-Id resolution skipped for this commit.\n"
-        )
-        return None
-    return [line for line in (out.stdout or "").splitlines() if line.strip()]
 
 
 class _StagedPathsLost(Exception):

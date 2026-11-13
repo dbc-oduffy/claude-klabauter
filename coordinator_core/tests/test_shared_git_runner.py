@@ -1003,7 +1003,6 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator/bin/break_glass.py", "check_claude_sync(timeout)"),
         ("coordinator/bin/check-install-divergence.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator/bin/coordinator-safe-commit.py", "_BLANKET_ADD_TIMEOUT_S"),
-        ("coordinator/bin/coordinator-prepare-commit-msg.py", "_resolve_staged_paths(timeout)"),
         ("coordinator/bin/lib/workday_ceremony_lib.py", "git(timeout)"),
         ("coordinator/bin/parallel-review-gate-decision.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator/bin/percolate-round.py", "_GIT_PUSH_TIMEOUT_SECS"),
@@ -1081,7 +1080,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
 _PINNED_RUNNER_CEILING = 189
-_PINNED_DIAL_CEILING = 71
+_PINNED_DIAL_CEILING = 70
 
 #: Frozen inventory of destructive-verb call sites (plan AC2/AC3). FROZEN
 #: 2026-09-19 over a full run of `collect_destructive_verb_sites()` across
@@ -1130,7 +1129,6 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
         ("coordinator_core/group_em/gem_home_sync.py", "push_leg", "push"),
         ("coordinator_core/merge_assemble/__init__.py", "compute_version_bump_proposal", "tag"),
         ("coordinator_core/ops/ceremony/detached_render_commit.py", "commit_own_artifact", "add"),
-        ("coordinator_core/ops/dispatch_emit/clean_overlay_verify.py", "verify", "checkout"),
         ("coordinator_core/ops/fleet_machinery_sweep.py", "_git_rm_cached", "rm"),
         ("coordinator_core/ops/git_maintenance.py", "run_tier", "prune"),
         ("coordinator_core/ops/propagate_body.py", "_commit_delivery", "add"),
@@ -1152,7 +1150,7 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
 #: reason `_PINNED_RUNNER_CEILING` is (see that constant's comment) --
 #: importing the value under test would make this file agree with any
 #: register whatsoever and assert nothing.
-_PINNED_VERB_CEILING = 44
+_PINNED_VERB_CEILING = 43
 
 
 def _runner_message(sites: list) -> str:

@@ -24,18 +24,40 @@ _HOOK_PATH = _BIN_DIR / "coordinator-prepare-commit-msg.py"
 _NO_WINDOW = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 _SITECUSTOMIZE = """
-import os, subprocess
-_real_run = subprocess.run
+import os, subprocess, sys
+_RealPopen = subprocess.Popen
 _mode = os.environ.get("FORCE_DIFF_CACHED", "")
 
-def _run(args, *a, **kw):
-    if _mode and list(args)[:3] == ["git", "diff", "--cached"]:
-        if _mode == "timeout":
-            raise subprocess.TimeoutExpired(args, kw.get("timeout", 10.0))
-        return subprocess.CompletedProcess(args, 128, "", "fatal: forced")
-    return _real_run(args, *a, **kw)
 
-subprocess.run = _run
+class _TimingOut:
+    returncode = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def communicate(self, input=None, timeout=None):
+        raise subprocess.TimeoutExpired("git diff --cached", timeout or 0)
+
+    def kill(self):
+        pass
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def _popen(args, *a, **kw):
+    argv = [x for x in list(args) if x != "--no-optional-locks"]
+    if _mode and argv[1:3] == ["diff", "--cached"]:
+        if _mode == "timeout":
+            return _TimingOut()
+        return _RealPopen([sys.executable, "-c", "import sys; sys.exit(128)"], *a[:0], **kw)
+    return _RealPopen(args, *a, **kw)
+
+
+subprocess.Popen = _popen
 """
 
 
@@ -75,7 +97,7 @@ def _run_hook(root: Path, shim: Path, message: str, mode: str):
     return proc, msg.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("mode,cause", [("timeout", "timed out"), ("nonzero", "exited 128")])
+@pytest.mark.parametrize("mode,cause", [("timeout", "timed out"), ("nonzero", "rc=128")])
 def test_failed_derivation_without_trailer_refuses_loudly(repo, mode, cause):
     root, shim = repo
     proc, _ = _run_hook(root, shim, "subject\n", mode)

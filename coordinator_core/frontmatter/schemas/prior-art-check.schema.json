@@ -2,13 +2,24 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/prior-art-check.schema.json",
   "x-schema-name": "prior-art-check",
-  "x-schema-version": "1.1.0",
+  "x-schema-version": "1.2.0",
+  "x-bump-class": "additive",
+  "x-bump-note": "1.1.0 -> 1.2.0 relaxes top-level `required: [plan]` to a conditional: a research-mode check (carries `verdict`) precedes any plan and names none, so `plan` is required only when `verdict` is absent. Adds optional `reviewer` and `verdict`. Every 1.1.0 document still validates.",
   "applies_to": "state/plan-sidecars/*.prior-art-check.md",
   "kinds": ["prior-art-check"],
   "description": "Prior-art-check sidecar — records conflicts/compatible/silent counts from a pre-review prior-art sweep. Lives at the plan-derivable state/plan-sidecars/<plan-stem>.prior-art-check.md home (moved out of docs/plans/ by docs/plans/2026-07-24-g2-plan-pipeline-sidecar-contract.md C11/D0). applies_to covers both canonical *.prior-art-check.md and legacy *.md.prior-art-check.md forms. status is NOT enumerated — legacy values like 'reviewed'/'complete' vary on disk.",
   "type": "object",
-  "required": ["plan"],
+  "if": {"required": ["verdict"]},
+  "else": {"required": ["plan"]},
   "properties": {
+    "reviewer": {
+      "type": "string",
+      "description": "Agent that ran a research-mode prior-art check."
+    },
+    "verdict": {
+      "type": "string",
+      "description": "Research-mode outcome (e.g. DEGRADED). Its presence marks a check that precedes any plan, so `plan` is not required."
+    },
     "plan": {
       "type": "string",
       "description": "Repo-relative path to the plan this prior-art check covers."

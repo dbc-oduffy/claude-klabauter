@@ -89,10 +89,38 @@ def _types(result):
 def test_pre_fix_covered_row_closes_through_discard_without_a_verify_retry():
     calls, result, _ = _run(_LESSONS, verify=[
         {"outcome": "fail", "reason": "covered", "covered_by": "docs/wiki/x.md:12"},
-        {"outcome": "pass"},
     ])
-    assert calls.count("verify") == 2 and "fix" not in calls and "refute-close" in calls
+    assert calls.count("verify") == 1 and "fix" not in calls and "refute-close" in calls
     assert _types(result) == []
+
+
+def test_a_covered_flip_is_terminal_the_retire_verify_never_re_judges_it():
+    routing = {**_LESSONS, "triage": {**_LESSONS["triage"], "edges": {**_LESSONS["triage"]["edges"], "wiki-new": "verify-routing-fix"}}}
+    covered = {"outcome": "fail", "reason": "covered", "covered_by": "docs/wiki/x.md:12"}
+    calls, result, _ = _run(routing, verify=[covered, covered], verdict="wiki-new")
+    assert calls.count("verify") == 1 and "refute-close" in calls and "fix" not in calls
+    assert "rejected-after-retry" not in _types(result)
+
+
+def test_a_discard_row_whose_retire_verify_finds_it_covered_closes_in_exactly_one_verify_call():
+    calls, result, _ = _run(_LESSONS, verdict="discard", verify=[
+        {"outcome": "fail", "reason": "Triage is right: already covered", "covered_by": "docs/wiki/x.md:12"},
+    ])
+    assert calls.count("verify") == 1 and "refute-close" in calls and "fix" not in calls
+    assert _types(result) == []
+
+
+def test_a_discard_row_whose_retire_verify_fails_without_a_cover_still_retries_then_hands_back():
+    calls, result, _ = _run(_LESSONS, verdict="discard", verify=[
+        {"outcome": "fail", "reason": "claim not covered"}, {"outcome": "fail", "reason": "claim not covered"},
+    ])
+    assert calls.count("verify") == 2 and _types(result) == ["rejected-after-retry"]
+
+
+def test_a_fix_less_discard_node_is_a_retire_node_and_a_routing_verify_in_front_of_fix_is_not():
+    assert gc.is_covered_retire_node(_LESSONS, "triage", "verify-routing-discard")
+    assert not gc.is_covered_retire_node(_LESSONS, "triage", "verify-routing-fix")
+    assert not gc.is_covered_retire_node(_NO_RETIRE, "triage", "verify")
 
 
 def test_post_fix_covered_verify_undoes_the_fix_and_closes_without_a_second_fix():
@@ -103,10 +131,9 @@ def test_post_fix_covered_verify_undoes_the_fix_and_closes_without_a_second_fix(
             {"outcome": "pass"},
             {"outcome": "fail", "reason": "covered", "covered_by": "docs/wiki/x.md:3"},
             {"undo": _UNDONE},
-            {"outcome": "pass"},
         ],
     )
-    assert calls.count("fix") == 1 and calls.count("verify") == 4
+    assert calls.count("fix") == 1 and calls.count("verify") == 3 and "refute-close" in calls
     assert sink == [{"row": "r0", "paths": ["lib/a.py"]}]
     assert _types(result) == []
 
@@ -208,8 +235,11 @@ def test_emitted_script_twins_the_retire_route_and_its_stage_branches():
     from .test_grind_compose import _compose
 
     script = _compose()
-    for name in ("function routeCoveredRetire(", "function _reachesFix(", "async function _closeCovered("):
+    for name in ("function routeCoveredRetire(", "function _reachesFix(", "async function _closeCovered(", "function _isCoveredRetire("):
         assert name in script
+    stage = script[script.index("async function _verifyStage"):script.index("async function _commitStage")]
+    assert "result.covered_by && _isCoveredRetire(row.node)" in stage
+    assert "ROUTING[_flip].kind === 'verify'" in stage and "_closeCovered(row, rowId, result.covered_by, true)" in stage
     verify_stage = script[script.index("async function _verifyStage"):script.index("async function _commitStage")]
     assert "routeCoveredRetire(row.node)" in verify_stage and "_closeCovered(row, rowId" in verify_stage
     fix_stage = script[script.index("async function _fixStage"):script.index("async function _verifyStage")]

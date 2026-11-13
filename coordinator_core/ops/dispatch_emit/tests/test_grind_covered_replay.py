@@ -55,6 +55,38 @@ def test_a_post_fix_verify_of_the_fix_covered_row_reports_covered_with_an_undo_a
     assert probe._verify_reply("r5", "verify-routing-fix", _LESSONS) == {"outcome": "pass"}
 
 
+def test_a_wiki_new_row_covered_at_verify_routing_closes_without_rejected_after_retry_in_two_calls():
+    """Live F10 sequence on the real lessons routing: triage wiki-new, verify-routing-fix fails with covered_by,
+    the retire route's own verify also fails with covered_by. A covered flip is terminal."""
+    routing = {**_LESSONS, "triage": {**_LESSONS["triage"], "edges": {**_LESSONS["triage"]["edges"], "wiki-new": "verify-routing-fix"}}}
+    out = probe.replay_covered_flip(routing)
+    handed = [h["type"] for h in out["result"]["handed_back"] if h["row"] == "r0"]
+    assert "rejected-after-retry" not in handed
+    assert handed == []
+    assert len(out["calls_after_triage"]) <= 2
+
+
+def test_a_discard_row_whose_routing_verify_agrees_it_is_covered_closes_in_exactly_one_verify_call():
+    calls = []
+
+    def agent(kind, unit):
+        calls.append(kind)
+        if kind == "triage":
+            return [{"row": "r0", "verdict": "discard", "tshirt_size": "S", "tradeoff": ""}]
+        if kind == "verify":
+            return {"outcome": "pass", "covered_by": probe.COVERED_BY}
+        if kind == "refute-close":
+            return {"confirmed": [{"row": "r0", "new_path": "archive/r0"}]}
+        return {}
+
+    result = probe.gc.run_admission(
+        [("b0", ["r0"])], _LESSONS, "triage", reserve=probe.gc.batch_reserve(1),
+        max_agent_calls=None, budget=probe._Budget(), agent=agent,
+    )
+    assert calls.count("verify") == 1
+    assert not [h for h in result["handed_back"] if h["row"] == "r0" and h["type"] != "commit-failed"]
+
+
 def test_main_prints_the_report_as_json_and_exits_zero(monkeypatch, capsys):
     monkeypatch.setattr(probe, "lessons_routing", lambda: _LESSONS)
     assert probe.main() == 0

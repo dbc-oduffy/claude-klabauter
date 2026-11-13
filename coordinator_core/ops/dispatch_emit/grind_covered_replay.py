@@ -50,13 +50,13 @@ class _Budget:
 
 def _engine_local(name: str) -> Any:
     """``name`` from the nearest engine frame above the stub: ``row`` in a row stage, ``proposal_ids`` in the close.
-    Trap: couples to those local names in ``run_admission``; a rename there silently yields None."""
+    Trap: couples to those local names in ``run_admission``; a rename there raises LookupError, never a vacuous None."""
     frame = sys._getframe(2)
     while frame is not None:
         if name in frame.f_locals:
             return frame.f_locals[name]
         frame = frame.f_back
-    return None
+    raise LookupError(f"engine frame local {name!r} not found: run_admission renamed it; update the replay probe")
 
 
 def _verify_reply(row_id: str, node: Optional[str], routing: Mapping[str, dict]) -> dict:
@@ -89,7 +89,7 @@ def replay(routing: Mapping[str, dict]) -> dict:
         if kind == "triage":
             return [{"row": rid, "verdict": verdict, "tshirt_size": "S", "tradeoff": ""} for rid in row_ids]
         if kind == "refute-close":
-            proposals = _engine_local("proposal_ids") or []
+            proposals = _engine_local("proposal_ids")
             return {"confirmed": [{"row": rid, "new_path": f"archive/{rid}"} for rid in proposals]}
         if kind == "fix":
             if unit in FIX_COVERED:
@@ -123,6 +123,32 @@ def replay(routing: Mapping[str, dict]) -> dict:
         },
         "agent_calls_by_kind": dict(result["spend"]["agent_calls_by_stage_kind"]),
     }
+
+
+def replay_covered_flip(routing: Mapping[str, dict]) -> dict:
+    """One ``wiki-new`` row whose every pre-fix verify fails with ``covered_by``, even at the discard node
+    (the live F10 sequence); returns the engine result and the row's own agent kinds called after triage
+    (batch-shared refute-close, commit and sweep calls are not the row's)."""
+    calls: list[str] = []
+
+    def agent(kind: str, unit: str) -> Any:
+        if unit == "r0":
+            calls.append(kind)
+        if kind == "commit":
+            return {"committed": True, "sha": "0" * 40}
+        if kind == "triage":
+            return [{"row": "r0", "verdict": "wiki-new", "tshirt_size": "S", "tradeoff": ""}]
+        if kind == "verify":
+            return {"outcome": "fail", "reason": "covered", "covered_by": COVERED_BY}
+        if kind == "refute-close":
+            return {"confirmed": [{"row": "r0", "new_path": "archive/r0"}]}
+        return {}
+
+    result = gc.run_admission(
+        [("b0", ["r0"])], routing, TRIAGE_NODE, reserve=gc.batch_reserve(1),
+        max_agent_calls=None, budget=_Budget(), agent=agent,
+    )
+    return {"result": result, "calls_after_triage": [k for k in calls if k != "triage"]}
 
 
 def lessons_routing() -> dict[str, dict]:

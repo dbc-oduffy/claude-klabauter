@@ -186,6 +186,7 @@ def _assert_hooks_really_ran(rig, proc) -> None:
     body = _real_git(["log", "-1", "--format=%B"], rig.repo).stdout
     assert "Session-Id:" in body, "prepare-commit-msg did not run"
     assert rig.log.exists() and rig.log.read_text(encoding="utf-8").strip(), "shim saw no hook git spawn"
+    assert not (rig.repo / ".git" / "hooks" / "commit-msg").exists(), "a commit-msg hook is installed"
 
 
 def test_default_commit_resolves_staged_set_once(rig):

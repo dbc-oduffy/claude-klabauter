@@ -139,6 +139,8 @@ __all__ = [
     "build_routing_table",
     "pre_fix_verify_nodes",
     "dedupe_flip_route",
+    "covered_retire_route",
+    "is_covered_retire_node",
     "route_after_triage",
     "triage_fix_verdict",
     "triage_fix_target",
@@ -229,6 +231,16 @@ def covered_retire_route(routing: Mapping[str, dict], triage_node_id: str, curre
         if action[0] == "node" and action[1] != current_node and not _reaches_fix(routing, action[1]):
             return action[1]
     return None
+
+
+def is_covered_retire_node(routing: Mapping[str, dict], triage_node_id: str, node_id: Optional[str]) -> bool:
+    """Whether ``node_id`` is where a ``dedupe`` or ``discard`` verdict enters and no fix node is reachable
+    from it: a covering artifact there confirms the verdict. Twin: ``_isCoveredRetire``."""
+    for verdict in ("dedupe", "discard"):
+        action = route_after_triage(routing, triage_node_id, verdict, None, "")
+        if action[0] == "node" and action[1] == node_id and not _reaches_fix(routing, node_id):
+            return True
+    return False
 
 
 def _covered_path(covered_by: Any) -> str:
@@ -1006,14 +1018,18 @@ def run_admission(
         written = {_norm_rel(p) for p in _union(row.touched_files if row.fix_reported else [], row.created_files)}
         return _covered_path(covered) in written
 
-    def _flip_covered(row: Row, covered: str, route: str) -> None:
+    def _flip_covered(row: Row, covered: str, route: str, verified: bool = False) -> None:
+        """Flip to the retire route. ``verified``: a verifier already found the covering artifact, so a verify
+        node there is passed over, never run a second time. Twin: the flip in ``_verifyStage``/``_closeCovered``."""
         row.dedupe_flipped = True
         row.verify_retried = True
         row.origin = "triage:dedupe"
         row.evidence = f"already covered at {covered}"
         row.node = route
+        if verified and routing[route]["kind"] == "verify":
+            _apply_route_row(row, follow_edge(routing, route, "pass", row), "already-covered flip")
 
-    def _close_covered(row: Row, covered: str) -> None:
+    def _close_covered(row: Row, covered: str, verified: bool = False) -> None:
         """Close an already-covered row after the fix stage at a retire node that never re-enters fix, undoing
         the fix's edits first; no retire route hands it back needs-judgment. Twin: ``_closeCovered``."""
         route = covered_retire_route(routing, triage_node_id, row.node)
@@ -1024,7 +1040,7 @@ def run_admission(
             if not _undo_written(row):
                 return
         row.touched_files, row.created_files, row.removed_files, row.fix_reported = [], [], [], False
-        _flip_covered(row, covered, route)
+        _flip_covered(row, covered, route, verified)
 
     def _fix_row(row: Row) -> None:
         overlap = [p for p in row.declared_files if p in run_dirty]
@@ -1112,17 +1128,20 @@ def run_admission(
         outcome = result.get("outcome")
         if outcome == "fail":
             covered = result.get("covered_by")
+            if covered and is_covered_retire_node(routing, triage_node_id, row.node):
+                _apply_route_row(row, follow_edge(routing, row.node, "pass", row), "covered artifact confirms the retire verdict")
+                return
             if covered and not row.dedupe_flipped and row.origin != "triage:dedupe":
                 if row.node in pre_fix_verify:
                     flip_to = covered_retire_route(routing, triage_node_id, row.node)
                     if flip_to is not None:
-                        _flip_covered(row, covered, flip_to)
+                        _flip_covered(row, covered, flip_to, True)
                         return
                     if dedupe_flip_route(routing, triage_node_id) is not None:
                         _handback(row, "needs-judgment", f"already covered at {covered}; no retire route in this profile avoids fix")
                         return
                 elif not row.verify_retried and not _covered_is_own_edit(row, covered):
-                    _close_covered(row, covered)
+                    _close_covered(row, covered, True)
                     return
             if not row.verify_retried:
                 row.verify_retried = True
@@ -1508,6 +1527,9 @@ _ROUTING_HELPERS = (
     "    if (r.kind === 'node' && r.value !== cur && !_reachesFix(r.value, new Set())) return r.value;\n"
     "  }\n"
     "  return null;\n"
+    "}\n"
+    "function _isCoveredRetire(id) {\n"
+    "  return ['dedupe', 'discard'].some((v) => { const r = routeAfterTriage(v, null, ''); return r.kind === 'node' && r.value === id && !_reachesFix(r.value, new Set()); });\n"
     "}\n"
     "function followEdge(nodeId, outcome, row) {\n"
     "  const node = ROUTING[nodeId];\n"
@@ -2054,6 +2076,7 @@ def compose_grind_script(
     }
     pre_fix_nodes = sorted(pre_fix_verify_nodes(routing_table))
     hand_back_nodes = [n for n in pre_fix_nodes if n in stages.ROUTING_VERIFY_HAND_BACK_NODES]
+    retire_nodes = [n for n in pre_fix_nodes if is_covered_retire_node(routing_table, triage_node_id, n)]
     verify_node_ids = [node_id for node_id, kind in node_kind.items() if kind == "verify"]
     verify_spec_by_node: dict[str, dict[str, dict[str, Any]]] = {
         node_id: {
@@ -2138,6 +2161,7 @@ def compose_grind_script(
     lines.append("const VERIFY_SPEC = " + json.dumps(verify_spec_by_node, sort_keys=True) + ";")
     lines.append("const VERIFY_PRE_FIX = " + json.dumps(pre_fix_nodes) + ";")
     lines.append("const VERIFY_HAND_BACK = " + json.dumps(hand_back_nodes) + ";")
+    lines.append("const VERIFY_RETIRE = " + json.dumps(retire_nodes) + ";")
 
     lines.append("let _callCount = 0;")
     lines.append("const _agentCallsByStageKind = {};")
@@ -2319,7 +2343,7 @@ def compose_grind_script(
         "  const _p = _normRel(String(cb).trim()).replace(/:\\d+(?:[-:]\\d+)*$/, '');\n"
         "  return (row.fixReported ? row.touchedFiles : []).concat(row.createdFiles || []).some((w) => _normRel(w) === _p);\n"
         "}\n"
-        "async function _closeCovered(row, rowId, cb) {\n"
+        "async function _closeCovered(row, rowId, cb, verified) {\n"
         "  const _route = routeCoveredRetire(row.node);\n"
         "  if (_route === null) { await _handBackRow(rowId, 'needs-judgment', 'already covered at ' + cb + '; no retire route in this profile avoids fix'); return; }\n"
         "  if (_hasWrites(row) && _undoPaths(row).length > 0) {\n"
@@ -2329,6 +2353,7 @@ def compose_grind_script(
         "  }\n"
         "  row.touchedFiles = []; row.createdFiles = []; row.removedFiles = []; row.fixReported = false;\n"
         "  row.dedupeFlipped = true; row.verifyRetried = true; row.origin = 'triage:dedupe'; row.evidence = 'already covered at ' + cb; row.node = _route;\n"
+        "  if (verified && ROUTING[_route].kind === 'verify') { await _applyRouteRow(row, rowId, followEdge(_route, 'pass', row), 'already-covered flip'); }\n"
         "}\n"
         "async function _undoUnfinished() {\n"
         "  if (!_grindErr) return;\n"
@@ -2365,6 +2390,15 @@ def compose_grind_script(
         agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
         targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
         routing=True, digest_js="row.digest", hand_back=True,
+    )
+    verify_routing_retire_raw = stages.compose_verify_agent_call(
+        models=stage_models,
+        label="verify-routing-retire", phase_title="Grind",
+        row_id_js="row.rowId", row_path_js="row.path", touched_files_js="row.touchedFiles",
+        evidence_js="row.evidence", fix_plan_js="row.fixPlan",
+        agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
+        targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
+        routing=True, digest_js="row.digest", retire=True,
     )
     _runner_fail = json.dumps([
         o for o in stages.RUNNER_FAIL_OUTCOMES if profile.name == "bug" or o != "no-runner"
@@ -2406,6 +2440,19 @@ def compose_grind_script(
         + "\n  }\n"
         + (
             "  if (VERIFY_PRE_FIX.includes(row.node)) {\n"
+            + (
+                "    if (VERIFY_RETIRE.includes(row.node)) {\n"
+                + _indent_block(
+                    _capture(
+                        verify_routing_retire_raw, "verify",
+                        tail=verify_agent_tail if targeted_runner else None,
+                    ),
+                    "    ",
+                )
+                + "\n    }\n"
+                if retire_nodes
+                else ""
+            )
             + (
                 "    if (VERIFY_HAND_BACK.includes(row.node)) {\n"
                 + _indent_block(
@@ -2670,6 +2717,7 @@ def compose_grind_script(
         "  const lockKeys = _lockKeysFor(row, rowId);\n"
         "  const result = await _issue(row.batchId, rowId, () => withLock(lockKeys, async () => _verifyCall(row)));\n"
         "  if (result.outcome === 'fail') {\n"
+        "    if (result.covered_by && _isCoveredRetire(row.node)) { await _applyRouteRow(row, rowId, followEdge(row.node, 'pass', row), 'covered artifact confirms the retire verdict'); return; }\n"
         "    if (result.covered_by && VERIFY_PRE_FIX.includes(row.node) && !row.dedupeFlipped && row.origin !== 'triage:dedupe') {\n"
         "      const _flip = routeCoveredRetire(row.node);\n"
         "      if (_flip !== null) {\n"
@@ -2678,11 +2726,12 @@ def compose_grind_script(
         "        row.origin = 'triage:dedupe';\n"
         "        row.evidence = 'already covered at ' + result.covered_by;\n"
         "        row.node = _flip;\n"
+        "        if (ROUTING[_flip].kind === 'verify') { await _applyRouteRow(row, rowId, followEdge(_flip, 'pass', row), 'already-covered flip'); }\n"
         "        return;\n"
         "      }\n"
         "      if (routeAfterTriage('dedupe', null, '').kind === 'node') { row.done = true; _handBack(rowId, 'needs-judgment', 'already covered at ' + result.covered_by + '; no retire route in this profile avoids fix'); return; }\n"
         "    } else if (result.covered_by && !VERIFY_PRE_FIX.includes(row.node) && !row.dedupeFlipped && row.origin !== 'triage:dedupe' && !row.verifyRetried && !_coveredIsOwnEdit(row, result.covered_by)) {\n"
-        "      await _closeCovered(row, rowId, result.covered_by); return;\n"
+        "      await _closeCovered(row, rowId, result.covered_by, true); return;\n"
         "    }\n"
         "    if (!row.verifyRetried) {\n"
         "      row.verifyRetried = true;\n"
