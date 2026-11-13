@@ -79,17 +79,6 @@ class BuildCost:
 
 PathLike = Union[str, Path]
 
-FRESHNESS_NOT_APPLICABLE: "dict[str, Any]" = {
-    "status": "not_applicable",
-    "files_reextracted": 0,
-    "queued": [],
-    "blocked_on": "example-retrieval-repo OKR run ask-20261113T131322-7e8139",
-    "gaps": [
-        "a: example-retrieval-repo serves no Python docstring/has_docstring (doc_comment NULL for Python symbols)",
-        "b: no in-process per-file staleness/body-hash read from example-retrieval-repo",
-    ],
-}
-
 
 def flag_symbols(common_dir: PathLike, sha: str, graph_db: PathLike) -> "list[FlaggedSymbol]":
     """Public symbols whose spans the commit *sha* changed, read in-process against the SCIP symtab
@@ -102,12 +91,7 @@ def flag_symbols(common_dir: PathLike, sha: str, graph_db: PathLike) -> "list[Fl
 def freshness(root: PathLike, sha: str) -> "dict[str, Any]":
     """Re-extract only the files commit *sha* changed and queue tier-1 descriptions for changed
     symbols whose docstring is empty; returns ``{files_reextracted, queued, ...}``. COMPUTE_ONLY."""
-    try:
-        from coordinator_core.symbol_knowledge.freshness import freshness as impl
-    except ModuleNotFoundError as exc:
-        if exc.name != "coordinator_core.symbol_knowledge.freshness":
-            raise
-        return {k: list(v) if isinstance(v, list) else v for k, v in FRESHNESS_NOT_APPLICABLE.items()}
+    from coordinator_core.symbol_knowledge.freshness import freshness as impl
 
     return impl(root, sha)
 

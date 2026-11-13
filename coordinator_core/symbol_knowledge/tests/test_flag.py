@@ -173,6 +173,32 @@ def test_root_commit_has_no_parent(tmp_path):
     assert flagged == [] and "no parent" in detail
 
 
+def test_changed_paths_lists_added_and_modified_files_not_deletions(repo, monkeypatch):
+    root, _graph_db = repo
+    (root / "pkg" / "mod.py").write_text(PARENT_SRC + "# edit\n", encoding="utf-8", newline="\n")
+    (root / "pkg" / "other.txt").unlink()
+    (root / "deep" / "er").mkdir(parents=True)
+    (root / "deep" / "er" / "new.md").write_text("n\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "mixed")
+    sha = _git(root, "rev-parse", "HEAD")
+    spawns = _NoSpawn(monkeypatch)
+    paths, detail = flag.changed_paths(root / ".git", sha)
+    assert spawns.count == 0
+    assert paths == ["deep/er/new.md", "pkg/mod.py"] and "2 path(s)" in detail
+
+
+def test_changed_paths_root_commit_has_no_parent(tmp_path):
+    root = tmp_path / "r"
+    root.mkdir()
+    _git(root, "init", "-q")
+    (root / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "first")
+    paths, detail = flag.changed_paths(root / ".git", _git(root, "rev-parse", "HEAD"))
+    assert paths == [] and "no parent" in detail
+
+
 @pytest.mark.parametrize(
     "symbol, expected",
     [

@@ -237,7 +237,9 @@ def _claim_once(session_dir: Path, session_id: str, name: str) -> bool:
 
 
 def _count_grep_after_nudge(session_dir: Path, suffix: str) -> None:
-    """Best-effort meter (concurrent Greps may undercount): bump the per-agent count of Greps made after the nudge fired. Never denies; any failure is silence. No in-repo reader of the count file yet (speculative: the DoE-side consumer is unnamed)."""
+    """Best-effort meter (concurrent Greps may undercount): bump the per-agent count of Greps
+    made after the nudge fired. Never denies; any failure is silence. No in-repo reader of the
+    count file yet (speculative: the DoE-side consumer is unnamed)."""
     try:
         counter = session_dir / (_GREP_AFTER_NUDGE_COUNT + suffix)
         try:

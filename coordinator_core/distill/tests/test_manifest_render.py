@@ -154,3 +154,31 @@ def test_render_empty_rows_no_crash():
     rendered = render_disposal_manifest(manifest)
     assert "No candidates scanned" in rendered
     assert "**Scanned:** 0" in rendered
+
+
+def test_render_row_symbols_carry_sym_tag_only_when_resolved():
+    row = _schema.make_disposal_row(
+        path="archive/handoffs/a.md", artifact_class="handoff", guards_run=[], eligible=True, log_row="x"
+    )
+    row["symbols"] = [
+        {"qualified_name": "pkg.mod.fn", "sym": "scip-python python p 0.1 `pkg.mod`/fn()."},
+        {"qualified_name": "pkg.mod.gone"},
+    ]
+    rendered = render_disposal_manifest(_manifest([row]))
+    assert "pkg.mod.fn [sym: scip-python python p 0.1 `pkg.mod`/fn().]" in rendered
+    assert "pkg.mod.gone |" in rendered and "pkg.mod.gone [sym" not in rendered
+
+
+def test_anchor_manifest_attaches_resolved_symbols_to_py_rows_only(tmp_path):
+    from coordinator_core.distill.manifest_render import anchor_manifest
+    from coordinator_core.symbol_knowledge.tests.test_anchors import _store
+
+    _store(tmp_path, [("pkg/m.py", "fn", "function", "", "scip fn")])
+    py = _schema.make_disposal_row(path="pkg/m.py", artifact_class="code", guards_run=[], eligible=True, log_row="x")
+    md = _schema.make_disposal_row(path="docs/a.md", artifact_class="doc", guards_run=[], eligible=True, log_row="x")
+    manifest = _manifest([py, md])
+    anchored = anchor_manifest(tmp_path, manifest)
+    assert anchored["rows"][0]["symbols"] == [{"path": "pkg/m.py", "qualified_name": "fn", "sym": "scip fn"}]
+    assert "symbols" not in anchored["rows"][1] and "symbols" not in manifest["rows"][0]
+    assert "fn [sym: scip fn]" in render_disposal_manifest(anchored)
+    assert "[sym" not in render_disposal_manifest(manifest)

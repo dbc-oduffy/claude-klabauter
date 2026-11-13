@@ -1152,17 +1152,29 @@ async def _delete_tracked_and_append_log(
             main_env_restore = _make_git_env()
             revert_failed_paths: set[str] = set()
             restore_watermark()
-            for p_str in commit_paths:
-                revert_rc, _revert_out, revert_err = await _run_git(
-                    "checkout", "HEAD", "--", p_str, cwd=worktree_root, env=main_env_restore
+            # One batched checkout; per-path only when the batch fails (git aborts the whole
+            # checkout on one unmatched pathspec, e.g. a log file absent from HEAD), so a
+            # healthy revert costs one spawn for any N. Amplification gate shape 3d.
+            batch_rc, _batch_out, _batch_err = (
+                await _run_git(
+                    "checkout", "HEAD", "--", *commit_paths,
+                    cwd=worktree_root, env=main_env_restore,
                 )
-                if revert_rc != 0:
-                    revert_failed_paths.add(p_str)
-                    _LOG.error(
-                        "distill.apply_disposal: revert checkout failed for %s after "
-                        "commit failure: %s",
-                        p_str, revert_err.decode(errors="replace").strip(),
+                if commit_paths
+                else (0, b"", b"")
+            )
+            if batch_rc != 0:
+                for p_str in commit_paths:
+                    revert_rc, _revert_out, revert_err = await _run_git(
+                        "checkout", "HEAD", "--", p_str, cwd=worktree_root, env=main_env_restore
                     )
+                    if revert_rc != 0:
+                        revert_failed_paths.add(p_str)
+                        _LOG.error(
+                            "distill.apply_disposal: revert checkout failed for %s after "
+                            "commit failure: %s",
+                            p_str, revert_err.decode(errors="replace").strip(),
+                        )
             commit_failed = [
                 {
                     "path": rel_id(p, worktree_root),

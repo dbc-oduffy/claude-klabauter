@@ -28,7 +28,20 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["render_disposal_manifest"]
+__all__ = ["anchor_manifest", "render_disposal_manifest"]
+
+MANIFEST_SYMBOLS_PER_ROW = 2
+
+
+def anchor_manifest(root: Any, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Copy of ``manifest`` whose ``.py`` rows carry ``symbols`` (``{path, qualified_name, sym}``, the
+    SCIP ids example-retrieval-repo indexed for the row's file) for the renderer to show; rows with none stay
+    bare. The one store read lives here so ``render_disposal_manifest`` stays pure."""
+    from coordinator_core.symbol_knowledge import anchors
+
+    rows = manifest.get("rows", [])
+    found = anchors.symbols_in(root, [r["path"] for r in rows if str(r["path"]).endswith(".py")], MANIFEST_SYMBOLS_PER_ROW)
+    return {**manifest, "rows": [{**r, "symbols": found[r["path"]]} if r["path"] in found else r for r in rows]}
 
 
 def _escape_cell(value: Any) -> str:
@@ -36,6 +49,11 @@ def _escape_cell(value: Any) -> str:
     text = text.replace("|", "\\|")
     text = text.replace("\r\n", "\n").replace("\n", "<br>")
     return text
+
+
+def _sym_tag(symbol: dict[str, Any]) -> str:
+    """``[sym: <scip id>]`` for a symbol entry that anchors.attach resolved; bare when it did not."""
+    return f" [sym: {symbol['sym']}]" if symbol.get("sym") else ""
 
 
 def _blocking_guard_and_evidence(row: dict[str, Any]) -> tuple[str, str]:
@@ -99,6 +117,9 @@ def render_disposal_manifest(manifest: dict[str, Any]) -> str:
     lines.append("|---|---|---|---|---|")
     for row in rows:
         path = _escape_cell(row["path"])
+        path += "".join(
+            "<br>" + _escape_cell(s["qualified_name"] + _sym_tag(s)) for s in row.get("symbols", ())
+        )
         artifact_class = _escape_cell(row["artifact_class"])
         if row["eligible"]:
             verdict = "ELIGIBLE"

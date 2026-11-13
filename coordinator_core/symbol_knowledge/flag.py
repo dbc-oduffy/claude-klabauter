@@ -37,6 +37,8 @@ from coordinator_core.symbol_knowledge.contract import KIND_ADJUST, KIND_NET_NEW
 SYMTAB_NAME = "scip_python.symtab.sqlite3"
 FLAGGABLE_KINDS = ("function", "method", "class")
 _TREE_MODE = 0o40000
+_TYPE_MASK = 0o170000
+_GITLINK_TYPE = 0o160000
 _IN_CHUNK = 400
 _SEGMENT_SPLIT = re.compile(r"[#./()\[\]:!]+")
 _DESCRIPTOR = re.compile(r"`([^`]*)`/(.*)", re.S)
@@ -205,6 +207,50 @@ def flag_symbols_detail(
     if flagged:
         return flagged, f"{len(flagged)} public symbol(s) flagged; symbols the commit adds appear after the next reindex"
     return [], "no public symbol span overlaps a changed hunk; symbols the commit adds appear after the next reindex"
+
+
+def _added_or_changed(
+    common_dir: Path, old_tree: Optional[str], new_tree: str, prefix: str, out: "List[str]"
+) -> bool:
+    """Append every path that is a blob (submodule links excluded) in *new_tree* and absent from, or
+    different in, *old_tree* (None means empty); False when a tree object is unreadable."""
+    if old_tree == new_tree:
+        return True
+    new = _tree_entries(common_dir, new_tree)
+    old = _tree_entries(common_dir, old_tree) if old_tree is not None else {}
+    if new is None or old is None:
+        return False
+    for name, (new_mode, new_sha) in new.items():
+        prior = old.get(name)
+        if prior is not None and prior[1] == new_sha:
+            continue
+        path = f"{prefix}{name}"
+        if new_mode == _TREE_MODE:
+            sub_old = prior[1] if prior is not None and prior[0] == _TREE_MODE else None
+            if not _added_or_changed(common_dir, sub_old, new_sha, path + "/", out):
+                return False
+        elif new_mode & _TYPE_MASK != _GITLINK_TYPE:
+            out.append(path)
+    return True
+
+
+def changed_paths(common_dir: PathLike, sha: str) -> "Tuple[List[str], str]":
+    """Repo-relative paths commit *sha* added or modified against its first parent (deletions
+    excluded), sorted, plus a one-line detail naming why the list is empty; 0 git spawns."""
+    common = Path(common_dir)
+    meta = commit_meta(common, sha)
+    if meta is None or not meta.get("tree"):
+        return [], "commit unreadable"
+    if not meta.get("parents"):
+        return [], "root commit has no parent to diff"
+    parent = commit_meta(common, meta["parents"][0])
+    if parent is None or not parent.get("tree"):
+        return [], "parent commit unreadable"
+    out: "List[str]" = []
+    if not _added_or_changed(common, parent["tree"], meta["tree"], "", out):
+        return [], "tree object unreadable"
+    out.sort()
+    return out, (f"{len(out)} path(s) changed" if out else "commit adds or modifies no file")
 
 
 def flag_symbols(common_dir: PathLike, sha: str, graph_db: PathLike) -> "List[FlaggedSymbol]":
