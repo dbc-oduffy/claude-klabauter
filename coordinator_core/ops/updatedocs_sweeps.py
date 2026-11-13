@@ -1,8 +1,9 @@
 """
 coordinator_core.ops.updatedocs_sweeps — JSON-RPC "updatedocs.sweeps" operation.
 
-Purpose: apply the two `/update-docs` sweeps that WRITE — 11i (prune resolved-state
-bloat from the queues) and 11j (reap stale subagent-share sidecars). They left
+Purpose: apply the `/update-docs` sweeps that WRITE — 11i (prune resolved-state
+bloat from the queues), 11j (reap stale subagent-share sidecars) and 11k (derive the
+docs/README Wikis table from docs/wiki). They left
 `updatedocs.gates` so that op stays a read-only verdict battery; this op is the
 mutating half and returns the same `{gates, rollup}` shape.
 
@@ -202,9 +203,34 @@ def _gate_reap_stale_sidecars(repo_root: Path, settings_home: Path, overrides: d
     return GateResult("11j-reap-stale-sidecars", GateVerdict.CLEAN, "subagent-share sidecar reap clean (nothing stale)")
 
 
+# ---------------------------------------------------------------------------
+# Sweep 11k: Regenerate the docs/README "Wikis and Guides" table
+# ---------------------------------------------------------------------------
+
+
+def _gate_readme_wikis_table(repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
+    from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
+    from coordinator_core.updatedocs.readme_wikis import sync_readme_wikis
+
+    try:
+        result = sync_readme_wikis(repo_root)
+    except UpdatedocsTargetMissing as exc:
+        return GateResult("11k-readme-wikis-table", GateVerdict.UNAVAILABLE, str(exc))
+    if result.changed:
+        return GateResult(
+            "11k-readme-wikis-table",
+            GateVerdict.FINDING,
+            f"rewrote docs/README.md Wikis table ({result.rows} rows, +{result.added} added, -{result.dropped} dropped)",
+            Severity.INFORMATIONAL,
+            detail={"rows": result.rows, "added": result.added, "dropped": result.dropped},
+        )
+    return GateResult("11k-readme-wikis-table", GateVerdict.CLEAN, "docs/README.md Wikis table already derived")
+
+
 _SWEEPS: dict[str, _GateFn] = {
     "11i-queue-prune-sweep": _gate_queue_prune_sweep,
     "11j-reap-stale-sidecars": _gate_reap_stale_sidecars,
+    "11k-readme-wikis-table": _gate_readme_wikis_table,
 }
 
 

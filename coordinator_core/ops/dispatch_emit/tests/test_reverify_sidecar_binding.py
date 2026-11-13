@@ -56,6 +56,15 @@ def test_persist_is_idempotent_per_head_and_refuses_a_planless_result(tmp_path):
     assert rd.persist_delivery_sidecar(plan_path=None, **kw) is None
 
 
+def test_persist_without_a_session_id_writes_nothing_and_a_session_id_lands_under_its_own_dir(tmp_path):
+    kw = dict(repo_root=tmp_path, plan_path=_PLAN, head_sha="e" * 40, verdict="PASS", unbacked=[])
+    assert rd.persist_delivery_sidecar(session_id="", **kw) is None
+    assert not (tmp_path / ".coordinator-local" / "subagent-share" / "unknown-session").exists()
+    rel = rd.persist_delivery_sidecar(session_id="sess-9", **kw)
+    assert rel.startswith(".coordinator-local/subagent-share/sess-9/")
+    assert (tmp_path / rel).is_file()
+
+
 _UNBOUND = "---\nstatus: complete\ntarget_plan: null\ncommits: []\n---\n\nbody\n"
 
 

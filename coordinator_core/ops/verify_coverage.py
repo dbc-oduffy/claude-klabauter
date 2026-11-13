@@ -276,14 +276,15 @@ EXCLUDED_SUBPATHS: Set[Tuple[str, str]] = {
 run deliveries, roadmap and review-finding records) whose bare basename would
 over-match live trees if excluded by name alone."""
 
-HISTORICAL_PLAN_STATUSES = frozenset({"implemented", "landed", "complete", "superseded", "abandoned"})
+HISTORICAL_PLAN_STATUSES = frozenset({"implemented", "landed", "complete", "superseded", "abandoned", "archived", "deferred"})
 HISTORICAL_PLAN_AGE_DAYS = 90
 _FM_KEY_RE = re.compile(r"^(status|created):\s*['\"]?([^\s'\"#]+)", re.MULTILINE)
 _PLAN_REVIEW_SIDECAR_RE = re.compile(r"^(?P<plan>.+\.md)\.[^./\\]+-review\.md$")
 
 
 def is_historical_plan(file: str, sweep_root: str, content: str, today: Optional[date] = None) -> bool:
-    """True when `file` is a plan under a `docs/plans` tree that is a point-in-time record.
+    """True when `file` is a point-in-time record: any file under a `docs/delivery` tree (run
+    records), or a plan under a `docs/plans` tree meeting the rule below.
 
     Rule, read from the file's own frontmatter head only: `status` is terminal
     (HISTORICAL_PLAN_STATUSES), or `created` is more than HISTORICAL_PLAN_AGE_DAYS days
@@ -301,6 +302,8 @@ def is_historical_plan(file: str, sweep_root: str, content: str, today: Optional
             return False
         return is_historical_plan(sidecar.group("plan"), sweep_root, parent, today)
     parts = [os.path.normcase(p) for p in os.path.relpath(file, sweep_root).split(os.sep)]
+    if any(a == "docs" and b == "delivery" for a, b in zip(parts, parts[1:-1])):
+        return True
     if not any(a == "docs" and b == "plans" for a, b in zip(parts, parts[1:])):
         return False
     if not content.startswith("---"):

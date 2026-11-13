@@ -23,6 +23,12 @@ sessions and a write here would be a shared-substrate defect, not a local one.
 
 Spec backlink: docs/plans/2026-08-20-make-the-atlas-mechanical.md chunk C4.
 
+Historical exemption: a dead-path citation (unresolved-file / misrooted-file) is
+not a finding, but counted in `Report.exempted` and printed, when (a) the page's
+leading banner — a `>` blockquote line within the first 12 non-blank body lines —
+contains the upper-case word HISTORICAL or RETIRED, or (b) its own line carries
+the inline marker `<!-- atlas:historical -->`.
+
 Negative-spec
 -------------
 - Does NOT judge whether a resolved citation is the *correct* target for its
@@ -102,6 +108,9 @@ _FILE_EXT_RE = re.compile(r"\.[A-Za-z0-9]{1,6}$")
 # while the resolver carried unreachable code to handle exactly that shape.
 _LOCATOR_SUFFIX_RE = re.compile(r":\d+(-\d+)?$")
 _ELIDED_TOKENS = {"...", "…"}
+HISTORICAL_MARKER = "<!-- atlas:historical -->"
+_BANNER_WORD_RE = re.compile(r"\b(?:HISTORICAL|RETIRED)\b")
+_BANNER_WINDOW = 12
 _GLOB_MARKERS = ("*", "?")
 # missing-file-index-row emits one Finding for the whole gap, carrying a
 # capped sample rather than one row per file (see Finding 4, rebuild notes).
@@ -132,6 +141,9 @@ class Report:
     # Spans classified as non-citation shapes and deliberately not resolved —
     # every one counted here so "skipped" never means "silently dropped".
     skip_counts: dict[str, int] = field(default_factory=dict)
+    # Dead-path citations on a HISTORICAL/RETIRED-bannered page or an inline-marked
+    # line: not findings, but counted so the exemption is never silent.
+    exempted: int = 0
 
     def add(self, kind: str, page: str, line: int | None, detail: str) -> None:
         self.findings.append(Finding(kind, page, line, detail))
@@ -222,8 +234,28 @@ def classify_backtick_token(token: str) -> str:
     return "skip"
 
 
+def page_is_historical(text: str) -> bool:
+    """True when the page's leading banner declares HISTORICAL or RETIRED: a
+    blockquote line (`> ...`) holding the upper-case word within the first
+    `_BANNER_WINDOW` non-blank lines after the frontmatter."""
+    m = _FRONTMATTER_RE.match(text)
+    body = text[m.end():] if m else text
+    seen = 0
+    for line in body.splitlines():
+        if not line.strip():
+            continue
+        seen += 1
+        if seen > _BANNER_WINDOW:
+            break
+        if line.lstrip().startswith(">") and _BANNER_WORD_RE.search(line):
+            return True
+    return False
+
+
 def check_page_citations(rel_page: str, text: str, repo_root: Path, report: Report) -> None:
+    historical_page = page_is_historical(text)
     for lineno, line in enumerate(text.splitlines(), start=1):
+        exempt = historical_page or HISTORICAL_MARKER in line
         for match in _BACKTICK_RE.finditer(line):
             token = match.group(1)
             if not token or token.startswith("http://") or token.startswith("https://"):
@@ -234,6 +266,9 @@ def check_page_citations(rel_page: str, text: str, repo_root: Path, report: Repo
                 continue
             if resolve_repo_path(repo_root, token) is not None:
                 report.resolved_ok += 1
+                continue
+            if exempt:
+                report.exempted += 1
                 continue
             if resolve_repo_path(repo_root / "coordinator", token) is not None:
                 report.add(
@@ -480,7 +515,9 @@ def main(argv: list[str] | None = None) -> int:
     non_citation_skipped = report.skip_counts.get("skip", 0)
     total_skipped = glob_skipped + elided_skipped + non_citation_skipped
     print(
-        f"\n{report.resolved_ok} span(s) resolved as a file citation; "
+        f"\n{report.exempted} dead-path citation(s) exempted (historical banner or "
+        f"inline marker); "
+        f"{report.resolved_ok} span(s) resolved as a file citation; "
         f"{total_skipped} span(s) not treated as a repo-relative file citation: "
         f"glob/subtree={glob_skipped}, elided={elided_skipped}, "
         f"non-citation-shape={non_citation_skipped} (bare filenames, symbol-shaped "

@@ -87,9 +87,50 @@ def test_sweeps_op_prunes_and_reaps_the_same_fixture(tmp_path, monkeypatch):
     out = uds._updatedocs_sweeps({"repo_root": str(tmp_path), "settings_home": str(tmp_path)})
 
     ids = [g["gate_id"] for g in out["gates"]]
-    assert ids == ["11i-queue-prune-sweep", "11j-reap-stale-sidecars"]
+    assert ids == ["11i-queue-prune-sweep", "11j-reap-stale-sidecars", "11k-readme-wikis-table"]
     assert "rollup" in out
     assert not old.exists()
+
+
+# ---------------------------------------------------------------------------
+# 11k-readme-wikis-table
+# ---------------------------------------------------------------------------
+
+
+def _wikis_fixture(tmp_path: Path) -> Path:
+    docs = tmp_path / "docs"
+    (docs / "wiki").mkdir(parents=True)
+    (docs / "wiki" / "alpha.md").write_text("---\ntitle: Alpha Title\n---\nbody\n", encoding="utf-8")
+    (docs / "wiki" / "beta.md").write_text("# Beta Heading\n", encoding="utf-8")
+    readme = docs / "README.md"
+    readme.write_text(
+        "## Wikis and Guides\n\n| Wiki entry | Topic |\n|---|---|\n"
+        "| [`gone.md`](wiki/gone.md) | hand |\n\n## Plans\n\nkeep\n",
+        encoding="utf-8",
+    )
+    return readme
+
+
+def test_wikis_sweep_rewrites_only_the_table_and_is_idempotent(tmp_path):
+    readme = _wikis_fixture(tmp_path)
+
+    gate = uds._gate_readme_wikis_table(tmp_path, tmp_path, {})
+    text = readme.read_text(encoding="utf-8")
+
+    assert gate.verdict is udg.GateVerdict.FINDING
+    assert "[`alpha.md`](wiki/alpha.md) | Alpha Title |" in text
+    assert "[`beta.md`](wiki/beta.md) | Beta Heading |" in text
+    assert "gone.md" not in text
+    assert text.endswith("\n\n## Plans\n\nkeep\n")
+
+    again = uds._gate_readme_wikis_table(tmp_path, tmp_path, {})
+    assert again.verdict is udg.GateVerdict.CLEAN
+    assert readme.read_text(encoding="utf-8") == text
+
+
+def test_wikis_sweep_without_readme_is_unavailable_not_clean(tmp_path):
+    gate = uds._gate_readme_wikis_table(tmp_path, tmp_path, {})
+    assert gate.verdict is udg.GateVerdict.UNAVAILABLE
 
 
 # ---------------------------------------------------------------------------

@@ -61,7 +61,7 @@ from coordinator_core.ops.dispatch_emit.verdict_supersession import (  # noqa: F
     record_sidecar_value,
     repo_rel,
 )
-from coordinator_core.ops.dispatch_emit.test_interpreter import interpreter_clause
+from coordinator_core.ops.dispatch_emit.interpreter_pin import interpreter_clause
 from coordinator_core.ops.dispatch_emit.wake_digest import stage_schema_literal
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
@@ -892,18 +892,18 @@ def persist_delivery_sidecar(
     """Write the verifier's returned verdict into a provisioned `delivery-verifier` run-report in
     the session share dir, `agent_type` and `target_plan` stamped here: the verifier has no Write
     tool. Exclusive-create per `(plan, head)`; returns the repo-relative path, or `None` when the
-    result names no plan or a segment is unsafe."""
+    result names no plan, no session id, or a segment is unsafe (no shared fallback bucket)."""
     from coordinator_core.session.machinery_paths import share_dir
     from coordinator_core.subagent_sandbox.provision_report import _build_doc_text, _sanitize_segment
 
     stem = _sanitize_segment(Path(plan_path).stem) if plan_path else None
-    session = _sanitize_segment(session_id or "unknown-session")
+    session = _sanitize_segment(session_id) if session_id else None
     if stem is None or session is None:
         return None
     now = datetime.now(timezone.utc)
     doc = _build_doc_text(
         _DELIVERY_SIDECAR_AGENT_TYPE, now.isoformat(), "run-report",
-        lead_session_id=session_id or None, target_plan=plan_path,
+        lead_session_id=session_id, target_plan=plan_path,
     )
     split = split_frontmatter(doc)
     if split is None:

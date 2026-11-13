@@ -129,6 +129,22 @@ def test_plugin_wiki_dev_mirror_exit_5_is_blocking_finding(tmp_path):
     assert result.severity == udg.Severity.BLOCKING
 
 
+def test_plugin_wiki_exit_3_is_finding_carrying_missing_page_output(tmp_path):
+    cli = tmp_path / "sync-plugin-wiki"
+    _write_fake_cli(cli, 3, stdout="WARN: foo.md referenced by plugin file but absent from bundled wiki (/x/foo.md)\nFAIL: 1 cited wiki page(s) missing\n")
+    result = udg._gate_plugin_wiki(tmp_path, tmp_path, {"cli": str(cli)})
+    assert result.verdict == udg.GateVerdict.FINDING
+    assert result.severity == udg.Severity.BLOCKING
+    assert "foo.md" in result.detail["stdout"]
+
+
+def test_plugin_wiki_other_nonzero_exit_stays_unavailable(tmp_path):
+    cli = tmp_path / "sync-plugin-wiki"
+    _write_fake_cli(cli, 1, stdout="")
+    result = udg._gate_plugin_wiki(tmp_path, tmp_path, {"cli": str(cli)})
+    assert result.verdict == udg.GateVerdict.UNAVAILABLE
+
+
 # ---------------------------------------------------------------------------
 # (d) 11h-skill-anchor-links — exit 1 vs exit 2 never collapse
 # ---------------------------------------------------------------------------

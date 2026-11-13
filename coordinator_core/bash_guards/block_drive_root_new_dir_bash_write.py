@@ -126,9 +126,22 @@ def _powershell_targets(cmd: str) -> Iterable[str]:
         yield from _out_flag_values(tokens)
 
 
+_SEARCH_HEADS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack"})
+
+
+def _is_search_command(tokens: List[str]) -> bool:
+    """`grep`/`rg`/`git grep`: their `-o` is only-matching, a boolean, and the next word a pattern.
+    `git` counts when `grep` is among its first three args (`git -C dir grep`)."""
+    head = normalize_executable_basename(tokens[0])
+    return head in _SEARCH_HEADS or (head == "git" and "grep" in tokens[1:4])
+
+
 def _out_flag_values(tokens: List[str]) -> Iterable[str]:
     """Values of `-o`/`--out`/`--basetemp` style flags, when absolute, home-spelled or `..`-climbing."""
+    only_matching = _is_search_command(tokens)
     for i, tok in enumerate(tokens):
+        if only_matching and tok == "-o":
+            continue
         flag, eq, value = tok.partition("=")
         if eq and flag in _OUT_FLAGS:
             pass

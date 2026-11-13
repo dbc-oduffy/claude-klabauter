@@ -635,6 +635,14 @@ def _gate_plugin_wiki(_repo_root: Path, settings_home: Path, overrides: dict) ->
             Severity.BLOCKING,
             detail={"stdout": stdout[-_DETAIL_TAIL_CHARS:]},
         )
+    if proc.returncode == 3:
+        return GateResult(
+            "11g-plugin-wiki",
+            GateVerdict.FINDING,
+            "plugin-cited wiki page(s) absent from the bundled wiki (sync-plugin-wiki exit 3) — see detail.stdout WARN lines",
+            Severity.BLOCKING,
+            detail={"exit_code": 3, "stdout": stdout[-_DETAIL_TAIL_CHARS:], "missing_bundled": missing_count},
+        )
     if proc.returncode != 0:
         return GateResult(
             "11g-plugin-wiki",

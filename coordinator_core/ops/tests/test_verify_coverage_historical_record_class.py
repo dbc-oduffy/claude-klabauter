@@ -48,6 +48,23 @@ def test_historical_classes_exempt_and_live_doc_still_halts(tmp_path, capsys):
     assert flagged == [os.path.join("docs", "live.md")]
 
 
+def test_delivery_records_and_archived_deferred_plans_exempt(tmp_path, capsys):
+    recent = date.today().isoformat()
+    code, flagged = _sweep(tmp_path, {
+        "docs/delivery/ask-1.md": QUOTE,
+        "docs/delivery/sub/warp-2.md": QUOTE,
+        "docs/plans/archived.md": _plan("archived", recent),
+        "docs/plans/deferred.md": _plan("deferred", recent),
+        "docs/plans/live.md": _plan("executing", recent),
+        "docs/live.md": QUOTE,
+    }, capsys)
+    assert code == 1
+    assert flagged == sorted([
+        os.path.join("docs", "live.md"),
+        os.path.join("docs", "plans", "live.md"),
+    ])
+
+
 def test_recent_unfinished_plan_still_halts(tmp_path, capsys):
     code, flagged = _sweep(tmp_path, {
         "docs/plans/live.md": _plan("executing", date.today().isoformat()),

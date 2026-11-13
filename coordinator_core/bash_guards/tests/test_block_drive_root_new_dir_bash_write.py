@@ -93,6 +93,29 @@ def test_existing_or_nonwriting_is_allowed(world, tmpl):
     assert _enveloped(guard.check)(_payload(tmpl.format(r=root.as_posix()), "Bash", work)) is None
 
 
+@pytest.mark.parametrize(
+    "tmpl",
+    [
+        "git grep -o {r}/new f",
+        "git -C x grep -o {r}/new f",
+        "grep -o {r}/new f",
+        "grep -rno {r}/new f",
+        "rg -o {r}/new f",
+        "rg.exe -o {r}/new f",
+    ],
+)
+def test_only_matching_search_with_absolute_pattern_is_allowed(world, tmpl):
+    root, _, work = world
+    assert _enveloped(guard.check)(_payload(tmpl.format(r=root.as_posix()), "Bash", work)) is None
+
+
+def test_curl_output_still_denied_beside_only_matching_search(world):
+    root, _, work = world
+    r = root.as_posix()
+    assert _denied(_enveloped(guard.check)(_payload(f"curl -o {r}/new/f http://u", "Bash", work)))
+    assert _denied(_enveloped(guard.check)(_payload(f"git grep -o x f && curl -o {r}/new/f http://u", "Bash", work)))
+
+
 def test_cwd_at_root(world):
     root, _, _ = world
     assert _denied(_enveloped(guard.check)(_payload("mkdir new", "Bash", root)))
