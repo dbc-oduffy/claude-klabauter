@@ -28,8 +28,10 @@ no sibling status: its halt marker (``halted_run``) is read and rewritten to ``l
 the reply names that tracked path as ``recorded``; a sibling run's still-``halted`` marker is flipped
 the same way. The records the flip writes (``halted.json``, ``run-stage.json``, under ``state/``) are
 committed in the same op as one scoped commit naming the run; the reply carries ``records_commit`` (its
-sha), or ``records_commit_error`` when the commit refused (the landed write stands). No write, no
-commit. Commit existence is an in-process object read, and ancestry and
+sha), or ``records_commit_error`` when the commit refused (the landed write stands). That commit also
+carries ``Checkpoint-Run-Closed:`` for the run's own checkpoint bases (``landing_integrity.closing_bases``: manifest,
+recorded base, halt marker ``run_base_sha``, resumed chain), whether or not the marker names a plan; only after the
+sha was verified an ancestor of HEAD. No write, no commit. Commit existence is an in-process object read, and ancestry and
 abbreviation resolution are at most two batched git spawns; the close legs (``CLOSE_LEGS``) are
 queued in a close-job record paid by one detached launch (``_launch``), never inline. The record is written only when the marker names a ``plan`` and no
 close-job record exists yet.
@@ -217,8 +219,21 @@ def _queue_close(root: Path, run_id: str, sha: str, marker: Optional[dict], sess
     return {"close": close, "blocking_rows": withheld}
 
 
-def _commit_records(root: Path, run_id: str, record_dir: Path, sha: str) -> dict:
+def _closed_trailers(root: Path, run_id: str, record_dir: Path) -> str:
+    """A blank line then one ``Checkpoint-Run-Closed:`` line per own checkpoint base; ``""`` when none resolve. In-process reads."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_closed_trailer_lines
+    from coordinator_core.ops.dispatch_emit.landing_integrity import closing_bases
+
+    marker = halted_run._read(record_dir) or {}
+    lines = run_closed_trailer_lines(closing_bases(root, run_id, {"run_base_sha": marker.get("run_base_sha")}))
+    return "\n\n" + "\n".join(lines) if lines else ""
+
+
+def _commit_records(root: Path, run_id: str, record_dir: Path, sha: str, verified: bool = False) -> dict:
     """Commit the landed flip's record files (halted.json, run-stage.json) in one scoped commit naming *run_id*.
+
+    ``verified`` (the sha was checked an ancestor of HEAD) adds ``Checkpoint-Run-Closed:`` trailers for the run's bases.
 
     Returns ``{"records_commit": sha}``; ``{}`` when nothing changed or the record dir is untracked
     scratch; ``{"records_commit_error": ...}`` on a refusal, which never fails the landed write.
@@ -239,7 +254,9 @@ def _commit_records(root: Path, run_id: str, record_dir: Path, sha: str) -> dict
         return {}
     try:
         outcome = commit_paths(
-            root, rels, f"dispatch.record_halted_run_landed: {run_id} landed at {sha[:12]}",
+            root, rels,
+            f"dispatch.record_halted_run_landed: {run_id} landed at {sha[:12]}"
+            + (_closed_trailers(root, run_id, record_dir) if verified else ""),
         )
     except NothingToCommit:
         return {}
@@ -248,7 +265,7 @@ def _commit_records(root: Path, run_id: str, record_dir: Path, sha: str) -> dict
     return {"records_commit": outcome.sha}
 
 
-def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str]) -> dict:
+def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str], verified: bool = False) -> dict:
     """Flip a still-``halted`` or ``resumed`` marker to landed and commit its records, then queue the close unless a job record exists."""
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run, run_close
 
@@ -262,7 +279,7 @@ def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str]) 
     if marker is not None and marker.get("status") in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
         if halted_run.mark_landed(record_dir, sha, without_verdict=without_verdict):
             out["recorded"] = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
-            out.update(_commit_records(root, run_id, record_dir, sha))
+            out.update(_commit_records(root, run_id, record_dir, sha, verified))
     if marker is None:
         return {**out, "close": {"status": "not-applicable", "detail": _NEVER_HALTED.format(sha=sha[:12])}, "blocking_rows": []}
     if run_close.resolve_close_job_stem(root, run_id) is not None:
@@ -1195,7 +1212,7 @@ def _record_solo(
     return {
         "ok": True, "run_id": run_id, "sha": sha, "written": True, **echo, "recorded": recorded,
         "landed_without_verdict": without_verdict,
-        **_commit_records(root, run_id, record_dir, sha),
+        **_commit_records(root, run_id, record_dir, sha, True),
         **_queue_close(root, run_id, sha, marker, session_id),
     }
 
@@ -1275,5 +1292,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     out: dict = {"ok": True, "run_id": run_id, "sha": sha, "written": True, **echo}
     if reply is not None:
         out["siblings"] = reply
-    out.update(_close_landed(root, run_id, sha, session_id))
+    out.update(_close_landed(root, run_id, sha, session_id, True))
     return out

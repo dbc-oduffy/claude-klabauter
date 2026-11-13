@@ -246,6 +246,20 @@ def test_steering_flattens_and_bounds_carry_forward(tmp_path):
     assert len(text) <= cpp._STEERING_CHAR_CAP
 
 
+def test_steering_carries_design_spec_rule_intact_under_the_cap(tmp_path):
+    rule = ("- List every PM-requested design spec (canvas board or artifact id, design URL, "
+            "harvested docs/design path), each bound to the slice it governs")
+    assert rule in cpp._STEERING_RULES
+    notes = [f"n{i}" + "x" * 400 for i in range(10)]
+    repo, _ = _session_repo(tmp_path, SESSION, notes=notes)
+
+    text = cpp.build_steering(SESSION, str(repo))
+
+    assert len(text) <= cpp._STEERING_CHAR_CAP
+    assert rule in text
+    assert len(cpp._STEERING_RULES) < cpp._STEERING_CHAR_CAP // 2
+
+
 def test_steering_falls_back_to_static_rules_without_journal(tmp_path):
     assert cpp.build_steering(SESSION, str(tmp_path)) == cpp._STEERING_RULES
 

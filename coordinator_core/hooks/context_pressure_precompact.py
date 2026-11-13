@@ -302,7 +302,9 @@ _STEERING_RULES = (
     "in-flight agents and workflow runs (with ids), uncommitted or unpushed changes.\n"
     "- Finished, verified work: one line each. Drop tool-output narration.\n"
     "- Every standing constraint (never/always/do-not rule) cites its source: a "
-    "pm_turns.jsonl turn number or a durable rule/memory file path. Omit any uncited one."
+    "pm_turns.jsonl turn number or a durable rule/memory file path. Omit any uncited one.\n"
+    "- List every PM-requested design spec (canvas board or artifact id, design URL, "
+    "harvested docs/design path), each bound to the slice it governs, verbatim as its own line."
 )
 
 

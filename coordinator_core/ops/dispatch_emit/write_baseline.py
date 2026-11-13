@@ -8,6 +8,7 @@ it was not written by this run, whatever HEAD says. Spawn-free; stdlib, ``kept_w
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Optional
 
@@ -364,6 +365,38 @@ def _recorded_paths(home: Path) -> list:
             if isinstance(listed, list):
                 found.extend(p for p in listed if isinstance(p, str) and p)
     return found
+
+
+_PORCELAIN_PREFIX = re.compile(r"^(?:[MADRCU?!]{1,2})\s+")
+
+
+def prior_attempt_reported(
+    root: Path, plan_rel: Optional[str], rows: Iterable[tuple[str, Iterable[str]]]
+) -> frozenset[str]:
+    """Declared write paths an earlier attempt's executor reported editing: each ``(row id, writes)``
+    row's ``<row id>.prior.md`` dispatch report (a refire sets the earlier report aside under that
+    name) names the path on a line of its own. A refire stages its baseline over the earlier attempt's
+    bytes, so such a path reads unchanged-since-stage; the report is the evidence it was the run's own
+    edit. Only a row's own declared paths are credited, and a path the report never names stays
+    foreign dirt. A fresh run has no ``.prior.md``, so nothing is credited. Spawn-free: bounded file reads."""
+    if not plan_rel:
+        return frozenset()
+    from coordinator_core.ops.dispatch_emit.emit import _dispatch_report_path
+
+    out: set[str] = set()
+    for row_id, writes in rows:
+        declared = {p for p in writes if isinstance(p, str)}
+        try:
+            live = _dispatch_report_path(plan_rel, str(row_id))
+            text = (Path(root) / (live[: -len(".md")] + ".prior.md")).read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            continue
+        named = {
+            _PORCELAIN_PREFIX.sub("", line.strip().lstrip("-*").strip()).strip("`").replace("\\", "/")
+            for line in text.splitlines()
+        }
+        out.update(declared & named)
+    return frozenset(out)
 
 
 def prior_pass_written(root: Path, run_dir: Path, include_predecessors: bool = True) -> frozenset[str]:

@@ -1436,6 +1436,40 @@ def bind(
     return _write_view(root, dir_, run_id)
 
 
+def _note_canvas_conflicts(root: Path, dir_: Path, sizing_rel: Optional[str], note: str) -> list[dict]:
+    """Contradictions between `note` and the PM's words plus the SETTLED.md decisions of the canvases
+    governing the run's footprint; [] when none or a source is unreadable. Pure reads, never raises."""
+    import yaml
+
+    from coordinator_core.canvas_contradiction import contradictions, governing_sources
+
+    sizing = None
+    if sizing_rel:
+        try:
+            loaded = yaml.safe_load(_sizing_path(Path(root), sizing_rel).read_text(encoding="utf-8"))
+            sizing = loaded if isinstance(loaded, dict) else None
+        except (LedgerRefused, OSError, yaml.YAMLError):
+            sizing = None
+    footprint = run_footprint(root, dir_, sizing_rel)
+    paths = sorted(footprint[0]) + footprint[1] if footprint is not None else []
+    return contradictions(note, governing_sources(root, sizing, paths))
+
+
+def _conflict_warning(conflicts: list[dict]) -> str:
+    return " ".join(f"note contradicts {c['source_ref']}: {c['reason']}." for c in conflicts)
+
+
+def _conflict_fields(conflicts: Optional[list[dict]]) -> dict:
+    return {"canvas_conflicts": conflicts, "warning": _conflict_warning(conflicts)} if conflicts else {}
+
+
+def _noted_line(note: str, conflicts: list[dict]) -> bytes:
+    obj = {"note": note.strip(), "at": _now()}
+    if conflicts:
+        obj["canvas_conflicts"] = conflicts
+    return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+
+
 def revise(
     repo_root: Path, run_id: str, *, verbatim: Optional[str] = None, all_of_pm_ask: Optional[bool] = None,
     out_of_scope: Sequence[str] = (), note: Optional[str] = None, sender: Optional[str] = None,
@@ -1672,13 +1706,13 @@ def revise(
             if len(str(note).encode("utf-8")) > VERBATIM_BYTE_CAP:
                 raise LedgerRefused(f"note exceeds {VERBATIM_BYTE_CAP} bytes")
             dir_.mkdir(parents=True, exist_ok=True)
-            append_line(
-                dir_ / NOTES_FILE,
-                (json.dumps({"note": note.strip(), "at": _now()}, ensure_ascii=False) + "\n").encode("utf-8"),
-            )
+            conflicts = _note_canvas_conflicts(root, dir_, None, note)
+            append_line(dir_ / NOTES_FILE, _noted_line(note, conflicts))
             declare_write(dir_ / NOTES_FILE)
             if outcome is not None:
                 outcome["note_queued"] = True
+                if conflicts:
+                    outcome["canvas_conflicts"] = conflicts
             if not text:
                 return Ledger((), False), dir_, None
         for n, queued_entry in enumerate(_inbox(dir_)):
@@ -1766,11 +1800,13 @@ def revise(
     elif has_note:
         from coordinator_core.atomic_append import append_line
 
-        append_line(
-            dir_ / NOTES_FILE,
-            (json.dumps({"note": note.strip(), "at": _now()}, ensure_ascii=False) + "\n").encode("utf-8"),
+        conflicts = _note_canvas_conflicts(
+            root, dir_, run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None, note
         )
+        append_line(dir_ / NOTES_FILE, _noted_line(note, conflicts))
         declare_write(dir_ / NOTES_FILE)
+        if conflicts and outcome is not None:
+            outcome["canvas_conflicts"] = conflicts
     if retraction is not None:
         from coordinator_core.atomic_append import append_line
 
@@ -2282,7 +2318,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     which every later stage of the run reads at its start. Replies `{ok, run_id, item, items,
     all_of_pm_ask, sizing, ledger, run_live}` plus `warning` and `pin_drift` (the drifted row ids)
     when the sizing's plan pinned rows the register no longer matches, and `warning` plus
-    `unclaimed_rows` when its register_claims omit register rows; `item` is the new row id
+    `unclaimed_rows` when its register_claims omit register rows, and `canvas_conflicts` (the flags
+    `{rule, source_ref, source_excerpt, candidate_excerpt, reason}`, stamped on the note) plus `warning`
+    when a `note` contradicts the PM's words or a governing canvas's SETTLED.md decision: the note is
+    still stored, never refused; `item` is the new row id
     (`Q<n>` while a raw ask's sizing is not yet minted), `run_live` is false once the run's commit
     token is redeemed or absent, or the run holds a `halted` marker (nothing will read it: the
     marker is stamped `revised_at` and the reply names the fresh refire). On an emitted research pipeline
@@ -2342,6 +2381,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             held_refused, params["run_id"],
             run_id=params["run_id"], item=added, items=len(ledger.items),
             all_of_pm_ask=False, sizing=None, ledger=None, run_live=False, held=True,
+            **_conflict_fields(outcome.get("canvas_conflicts")),
             note=(
                 "run not emitted yet: the note is queued for the run's start and is read at its first emit."
                 if outcome.get("note_queued") and not added
@@ -2373,6 +2413,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "ledger": (dir_ / LEDGER_VIEW_FILE).relative_to(root.resolve()).as_posix(),
         "run_live": live,
     }
+    if outcome.get("canvas_conflicts"):
+        out["canvas_conflicts"] = outcome["canvas_conflicts"]
     if "research_dropped" in outcome:
         out["research_dropped"] = outcome["research_dropped"]
     if "claimed" in outcome:
@@ -2419,7 +2461,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if named:
         out["withheld"] = [w["id"] for w in ledger.withheld if w["id"] in named]
     plan_rel, drifted = pinned_plan_drift(root, ledger.sizing_rel)
-    warnings = []
+    warnings = [_conflict_warning(outcome["canvas_conflicts"])] if outcome.get("canvas_conflicts") else []
     if drifted:
         out["pin_drift"] = drifted
         warnings.append(

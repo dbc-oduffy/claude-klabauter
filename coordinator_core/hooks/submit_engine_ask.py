@@ -564,6 +564,9 @@ def _caller_budget_s() -> float:
 _ANSWER_SHARE = 0.85
 _SCAN_GRACE_S = 0.8
 _EMIT_FLOOR_S = 0.25
+#: The join a launcher token mint gets once the read budget is spent: a healthy mint lands in
+#: milliseconds, a stalled one detaches rather than holding the hook.
+_SPENT_WINDOW_MINT_JOIN_S = 0.1
 _CALL: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar("submit_call", default=None)  # {"t0", "wall0", "roots", "minted", "gate", "gates", "answered", "session"}
 
 
@@ -764,7 +767,7 @@ def _quick(fn: Callable[[], Any], deadline: float) -> Any:
     return box[0] if box else None
 
 
-def _write_leg(label: str, fn: Callable[[], Any], gated: bool = False) -> tuple[str, Any]:
+def _write_leg(label: str, fn: Callable[[], Any], gated: bool = False, join_s: Optional[float] = None) -> tuple[str, Any]:
     """A record write on a daemon thread joined to the remaining emit window: ("done", value),
     ("raised", exception) or ("detached", None) for a thread still running at the window's end.
     Detached is outcome-unknown (the hook process exiting kills the thread); `gated` cancels a
@@ -784,7 +787,7 @@ def _write_leg(label: str, fn: Callable[[], Any], gated: bool = False) -> tuple[
 
     thread = threading.Thread(target=_in_scope(work), daemon=True)
     thread.start()
-    thread.join(_emit_join_s())
+    thread.join(_emit_join_s() if join_s is None else join_s)
     if box:
         return box[0]
     if gate is not None:
@@ -2856,8 +2859,9 @@ def _ensure_launcher_run_token(root: Path, run_id: str, sizing_rel: str, session
     escrowed nothing, would start a run whose commit presents a spent or absent token. An
     escrowed live token is left alone; otherwise one is minted for the commit leg's script path
     (`carry_prior` keeps a token a running script holds) and escrowed. A mint that cannot bind
-    leaves the run handing its commit back, as before. The check runs inside the gated write leg,
-    which the remaining hook window bounds: a stalled box detaches the mint and still starts the run."""
+    leaves the run handing its commit back, as before. The check runs inside the gated write leg: a
+    spent read budget still mints, joined for `_SPENT_WINDOW_MINT_JOIN_S`; a stalled box detaches the mint and
+    still starts the run."""
     from coordinator_core.ops.dispatch_emit import run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 
@@ -2870,9 +2874,7 @@ def _ensure_launcher_run_token(root: Path, run_id: str, sizing_rel: str, session
         )
         run_token.escrow(root, run_id, token)
 
-    if _wait_ms(None) <= 0:
-        return
-    state, err = _write_leg("run_token.mint", ensure, gated=True)
+    state, err = _write_leg("run_token.mint", ensure, gated=True, join_s=None if _wait_ms(None) > 0 else _SPENT_WINDOW_MINT_JOIN_S)
     if state == "raised" and not isinstance(err, (OSError, ValueError)):
         raise err
 

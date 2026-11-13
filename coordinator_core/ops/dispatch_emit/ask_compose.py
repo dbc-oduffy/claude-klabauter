@@ -2062,6 +2062,20 @@ def _halt_next_action_text_helper_js(sizing_rel: Optional[str]) -> str:
 
 
 _PLAN_SLOT = "PLAN_PATH_SLOT_X"
+#: JS twin of `sizing_fire.flat_plan_edge`.
+_FLAT_PLAN_EDGE_JS = r"((p) => String(p).replace(/^(docs\/plans\/)\d{4}-\d{2}\//, '$1'))"
+
+
+def _located_plan_js(planner_js: str) -> str:
+    """JS expression: the planner's `planPath` string, swapped for the sizing's sharded stage-1 path
+    (`_planPathFor(_sizingRel)`) when the two differ only by the month shard. The script has no
+    disk access, so an engine-resumed plan (`_gate.resume_plan`) is kept as the engine located it."""
+    return (
+        f"((_pp) => (typeof _pp === 'string' && _sizingRel && !(typeof _gate !== 'undefined' && _gate && _gate.resume_plan === _pp) "
+        f"&& {_FLAT_PLAN_EDGE_JS}(_planPathFor(_sizingRel)) === {_FLAT_PLAN_EDGE_JS}(_pp)) ? _planPathFor(_sizingRel) : _pp)({planner_js})"
+    )
+
+
 _RUNTIME_PLAN_PATH_JS = "(_planRel ?? _sizingRel)"
 _EVIDENCE_SLOT = "EVIDENCE_PATH_SLOT_X"
 #: `<plan-stem>.evidence.yaml` beside the run's plan, which is unknown until run time.
@@ -5355,7 +5369,7 @@ def compose_ask_script(
             b.append(
                 "    if (_ready && typeof _ready === 'object' && !_stagedManifest) { await _adoptStageReply(_ready.readyOpReply, true); _adoptReadyError(_ready); }"
             )
-        b.append("    _planRel = (_ready && typeof _ready === 'object') ? _ready.planPath : _ready;")
+        b.append("    _planRel = (_ready && typeof _ready === 'object') ? " + _located_plan_js("_ready.planPath") + " : " + _located_plan_js("_ready") + ";")
         if fold_stage:
             b.append(blitz_stage_read("_ready", "    "))
         b.append("    const _pulledEntry = (_blitz?.pulled ?? []).find((p) => p && p.planPath);")
@@ -5499,7 +5513,7 @@ def compose_ask_script(
             b.append(
                 "      if (_reready && typeof _reready === 'object' && !_stagedManifest) { await _adoptStageReply(_reready.readyOpReply, true); _adoptReadyError(_reready); }"
             )
-        b.append("      _planRel = (_reready && typeof _reready === 'object') ? _reready.planPath : _reready;")
+        b.append("      _planRel = (_reready && typeof _reready === 'object') ? " + _located_plan_js("_reready.planPath") + " : " + _located_plan_js("_reready") + ";")
         if fold_stage:
             b.append(blitz_stage_read("_reready", "      "))
         b.append("      if (!_planRel) { _blitz.regate = _reblitz; }")

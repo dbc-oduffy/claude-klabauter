@@ -15,6 +15,7 @@ from coordinator_core.ops import warp_run_deliverable
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
 from coordinator_core.ops.dispatch_emit.ask_contract import delivery_note_locate, record_dir
+from coordinator_core.session.output_tree_layout import locate
 from coordinator_core.session.record_homes import home_dir
 
 
@@ -92,7 +93,7 @@ _PLAN_EDGE = re.compile(r"^plan:[ \t]*[\"']?([^\"'\r\n#]+?)[\"']?[ \t]*(?:#.*)?$
 
 
 def _plan_evidence(root: Path, run_id: str, sizings: set[str]) -> frozenset[str]:
-    """Evidence paths beside the run's plan: halted.json's `plan` and each sizing's top-level `plan:` edge."""
+    """Evidence paths beside the run's plan: halted.json's `plan` and each sizing's top-level `plan:` edge, each as named and at its located path."""
     plans: set[str] = set()
     try:
         halted = json.loads((record_dir(root, run_id) / "halted.json").read_text(encoding="utf-8"))
@@ -113,6 +114,8 @@ def _plan_evidence(root: Path, run_id: str, sizings: set[str]) -> frozenset[str]
         if pp.is_absolute() or ".." in pp.parts or not pp.name:
             continue
         out.add(str(pp.with_name(pp.stem + ".evidence.yaml")))
+        located = PurePosixPath(locate(str(root), str(pp)))
+        out.add(str(located.with_name(located.stem + ".evidence.yaml")))
     return frozenset(out)
 
 

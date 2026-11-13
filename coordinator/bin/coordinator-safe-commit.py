@@ -3009,6 +3009,14 @@ def do_blanket(session_id: str, args: "Args", cs_core, cs_liveness, cs_claims) -
             )
             sys.exit(0)
 
+    # A clean tree (nothing staged by `git add -A`) is a no-op, not a failure.
+    if _git_diff_cached_is_empty():
+        print(
+            f"INFO: blanket: nothing to commit — working tree clean [session: {session_id or '?'}]",
+            file=sys.stderr,
+        )
+        sys.exit(0)
+
     _blanket_check_destructive_shape(args.subject)
 
     # Sentinel 2: wrap commit call so mid-call failures surface as a FAIL line.

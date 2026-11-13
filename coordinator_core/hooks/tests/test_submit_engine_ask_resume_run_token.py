@@ -130,3 +130,20 @@ def test_a_stalled_mint_on_a_launcher_resume_detaches_and_still_answers_the_enve
         release.set()
     assert result is None and env is not None
     assert run_token.escrowed(root, HALTED_ID) is None
+
+
+def test_a_stalled_mint_with_the_read_budget_spent_detaches_within_the_spent_window_join(tmp_path, seams, monkeypatch):
+    import threading
+    import time
+
+    root = _repo(tmp_path, record=False)
+    release = threading.Event()
+    monkeypatch.setattr(mod, "_wait_ms", lambda deadline_ms: 0.0)
+    monkeypatch.setattr(run_token, "mint", lambda *a, **k: release.wait(5) or None)
+    started = time.perf_counter()
+    try:
+        mod._resume_route(root, SIZING_REL, _payload(root), {}, "s1", lambda r, p, c, s: r / "scratch" / "l.workflow.mjs")
+    finally:
+        release.set()
+    assert time.perf_counter() - started < 2 * mod._SPENT_WINDOW_MINT_JOIN_S + 0.5
+    assert run_token.escrowed(root, HALTED_ID) is None

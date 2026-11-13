@@ -83,7 +83,7 @@ def test_a_launcher_child_stages_and_resumes_with_only_its_emit_leg(env, monkeyp
     assert "runToken" not in reply["fire_args"]
     token = run_token.escrowed(root, run_id)
     assert token is not None and run_token.TOKEN_RE.match(token)
-    assert list(root.rglob(f"escrow/{run_id}.json"))
+    assert run_token._record_path(root, run_id, escrow=True).is_file()
 
     handle = reply_sidecar.write_reply(root, root / f"state/warp/{run_id}/manifest.json", big_manifest(3))
     twin = root / fan_launcher.staged_twin_rel(run_id, handle["sha256"])

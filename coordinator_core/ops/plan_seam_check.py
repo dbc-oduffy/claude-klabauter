@@ -69,6 +69,7 @@ from typing import Dict, List, Optional
 import yaml
 
 from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.canvas_contradiction import contradictions
 from coordinator_core.frontmatter.body_blocks import LocateStatus
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
@@ -103,6 +104,7 @@ _PHASES = ("prep", "fire", "wave-boundary")
 _RANGE_RE = re.compile(r"^([0-9A-Fa-f]{7,64})\.\.([0-9A-Fa-f]{7,64})$")
 
 CAP = "capability-without-ui-consumer"
+CLICK_CONTRA = "click-path-contradicts-governing-source"
 UNDECLARED_CAPS = "capabilities-undeclared"
 EXPORT = "unpromised-export"
 COLLISION = "writes-collision"
@@ -383,6 +385,29 @@ def _parse_params(params: dict, root: Path, *, record: bool = False) -> dict:
     return out
 
 
+def _governing_sources(plan: _Plan, ctx: dict) -> list:
+    """PM words of the plan's `sizing_object` plus the SETTLED decisions of the canvases governing its
+    spine's writes; [] when neither is readable. Pure reads, never raises."""
+    from coordinator_core.canvas_contradiction import governing_sources
+
+    root: Path = ctx["root"]
+    sizing = None
+    so = plan.fm.get("sizing_object")
+    if isinstance(so, str) and so.strip():
+        sp = contained_path(root / so, [root])
+        if sp is not None and sp.is_file():
+            try:
+                doc = yaml.safe_load(sp.read_text(encoding="utf-8", errors="replace"))
+            except yaml.YAMLError:
+                doc = None
+            sizing = doc if isinstance(doc, dict) else None
+    paths: list = []
+    for row in plan.raw_rows:
+        w = row.get("writes") or []
+        paths += [str(x).replace("\\", "/").removeprefix("./") for x in (w if isinstance(w, list) else [w])]
+    return governing_sources(root, sizing, paths)
+
+
 def _capability_findings(plan: _Plan, pset: Dict[str, _Plan], ctx: dict, tree: _Tree, deferred: list) -> list:
     findings: list = []
     if "capabilities" not in plan.fm:
@@ -393,6 +418,7 @@ def _capability_findings(plan: _Plan, pset: Dict[str, _Plan], ctx: dict, tree: _
     caps = plan.fm["capabilities"]
     if not isinstance(caps, list):
         return [_finding(plan.rel, CAP, True, "capabilities is not a list", missing="capabilities")]
+    sources: Optional[list] = None
     for entry in caps:
         if not isinstance(entry, dict):
             findings.append(_finding(plan.rel, CAP, True, "capability entry is not a mapping",
@@ -406,6 +432,13 @@ def _capability_findings(plan: _Plan, pset: Dict[str, _Plan], ctx: dict, tree: _
             findings.append(_finding(plan.rel, CAP, True, "role or click_path is empty",
                                      capability=cap_id, missing=label))
             continue
+        if sources is None:
+            sources = _governing_sources(plan, ctx)
+        ruling = entry.get("contradiction_ruling")
+        ruled = isinstance(ruling, str) and bool(ruling.strip())
+        for flag in contradictions(click, sources):
+            findings.append(_finding(plan.rel, CLICK_CONTRA, flag["rule"] == "surface-kind" and not ruled, flag["reason"],
+                                     capability=cap_id, missing=label))
         if carve is not None:
             if consumer is not None or not isinstance(carve, str) or not carve.strip():
                 findings.append(_finding(plan.rel, CAP, True,

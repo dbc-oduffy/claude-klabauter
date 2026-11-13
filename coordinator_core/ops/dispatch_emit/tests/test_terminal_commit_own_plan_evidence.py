@@ -70,6 +70,17 @@ def test_unproduced_hunks_accepts_own_evidence_and_refuses_other(tmp_path):
     assert found[0].detail.startswith("provenance unreadable")
 
 
+def test_flat_plan_edge_owns_the_sharded_plans_evidence_and_not_another(tmp_path):
+    root = _build(tmp_path)
+    sharded = "docs/plans/2026-10/2026-10-31-my-plan.evidence.yaml"
+    other = "docs/plans/2026-10/2026-10-31-other-plan.evidence.yaml"
+    (root / "docs/plans/2026-10").mkdir()
+    (root / "docs/plans/2026-10/2026-10-31-my-plan.md").write_text("# plan\n", encoding="utf-8")
+    owned = own.own_artifact_paths(root, RUN)
+    assert owned.covers(sharded)
+    assert not owned.covers(other)
+
+
 def test_no_plan_edge_leaves_evidence_refused(tmp_path):
     root = _build(tmp_path, edge=None)
     (root / EVIDENCE).write_text("criterion_evidence: {C6: ok}\n", encoding="utf-8")

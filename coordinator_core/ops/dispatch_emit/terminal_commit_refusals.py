@@ -924,13 +924,17 @@ def _pre_existing_dirt_refusal(
     prior = frozenset()
     if run_dir is not None:
         from coordinator_core.ops.dispatch_emit.plan_residue import own_plan_residue
-        from coordinator_core.ops.dispatch_emit.write_baseline import predecessor_withheld, predecessor_wrote
+        from coordinator_core.ops.dispatch_emit.write_baseline import (
+            predecessor_withheld,
+            predecessor_wrote,
+            prior_attempt_reported,
+        )
 
         prior = _prior_pass_written(worktree_root, run_dir) | predecessor_withheld(
             worktree_root, _cited_sizing(worktree_root, plan_rel), run_dir
         ) | own_plan_residue(worktree_root, run_dir) | predecessor_wrote(
             worktree_root, run_dir, manifest.write_baseline
-        )
+        ) | prior_attempt_reported(worktree_root, plan_rel, [(r.id, r.writes) for r in manifest.rows])
     from coordinator_core.ops.dispatch_emit import terminal_commit as _tc
 
     failures: list = []

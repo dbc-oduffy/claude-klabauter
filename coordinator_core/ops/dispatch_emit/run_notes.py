@@ -61,6 +61,10 @@ def entries(path: Path, run_id: str) -> list[dict]:
             "at": at if isinstance(at, str) else "",
             "run": run_id,
             "retracted": None,
+            "canvas_conflicts": [
+                c.get("source_ref") for c in obj.get("canvas_conflicts") or []
+                if isinstance(c, dict) and isinstance(c.get("source_ref"), str)
+            ] if isinstance(obj.get("canvas_conflicts"), list) else [],
         })
     for e in out:
         e["retracted"] = retractions.get(e["id"])
@@ -150,6 +154,8 @@ def render_section(items: list[dict]) -> list[str]:
         if r is None:
             lines += [f"{e['run']} {e['id']} at {e['at']}:", ""]
             lines += [f"> {part}" if part else ">" for part in e["note"].splitlines() or [""]]
+            if e.get("canvas_conflicts"):
+                lines += ["", f"(flagged: contradicts {', '.join(e['canvas_conflicts'])})"]
             lines.append("")
         else:
             lines += [

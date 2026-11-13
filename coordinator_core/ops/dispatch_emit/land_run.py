@@ -1709,6 +1709,7 @@ def _ledger_gate(
             pre_existing_dirt,
             predecessor_withheld,
             predecessor_wrote,
+            prior_attempt_reported,
             prior_pass_written,
             unwritten,
         )
@@ -1726,6 +1727,9 @@ def _ledger_gate(
                     prior_pass_written(root, run_dir)
                     | predecessor_withheld(root, _cited_sizing(root, plan_rel), run_dir)
                     | predecessor_wrote(root, run_dir, baseline)
+                    | prior_attempt_reported(
+                        root, plan_rel, [(r.get("id"), r.get("writes") or []) for r in mrows]
+                    )
                 )
             return prior_credit[0]
 
