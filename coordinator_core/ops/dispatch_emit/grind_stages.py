@@ -156,7 +156,7 @@ _SIZE_RETRY_NOTE = (
 #: agent-type table.
 STAGE_MODELS: dict[str, str] = {
     "triage": "haiku",
-    "refute-close": "haiku",
+    "refute-close": "sonnet",
     "fix": "sonnet",
     "adjudicate": "sonnet",
     # The drain runs `backlog-grind-assemble`, which the op-runner's spec refuses (it runs
@@ -206,12 +206,13 @@ _COVERED_BY_CLAUSE = (
 _RETIRE_VERIFY_CLAUSE = (
     "Judge the retire verdict only: does the artifact the triage evidence cites exist at HEAD and state what "
     "the row claims? Read the row and that artifact. Report pass if it does; report fail, with the reason, "
-    "only if the artifact is missing or does not cover the claim. Do not ask whether a fix landed and do not "
+    "only if the artifact is missing or does not cover the claim. If the evidence cites no artifact, judge "
+    "whether the stated reason for retiring the row holds instead. Do not ask whether a fix landed and do not "
     "require any change on disk. You are read-only: do not edit any file. "
     + _NO_STAGING_CLAUSE
 )
 
-_COVERED_BY_LEDGER_CLAUSE =" When you set `covered_by`, pass `--verdict dedupe` in that command."
+_COVERED_BY_LEDGER_CLAUSE = " When you set `covered_by`, pass `--verdict dedupe` in that command."
 
 _TRIAGE_COVERED_CLAUSE = (
     "A row whose rule is already stated at HEAD gets a retire verdict (`discard`), never a fix verdict: "

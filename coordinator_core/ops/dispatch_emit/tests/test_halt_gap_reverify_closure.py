@@ -58,3 +58,10 @@ def test_errored_or_indeterminate_record_does_not_close():
 def test_non_node_gap_line_still_needs_gaps_closed():
     gaps = {"R1": {"remaining": ["some prose gap"]}}
     assert _unclosed_halt_gaps(RESUME, VERDICT, gaps, RECORD)
+
+
+def test_not_run_record_closes_no_gap_line():
+    record = {**RECORD, "status_after": None, "status_before": "not_run"}
+    assert closed_by_reverify(LINE, record) is False  # not_run lists the node yet is no green evidence
+    assert closed_by_reverify(LINE, {**record, "status_after": "not_run"}) is False
+    assert _unclosed_halt_gaps(RESUME, VERDICT, GAPS, record)

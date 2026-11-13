@@ -56,6 +56,14 @@ def test_reverify_phase_names_the_op_and_the_test_runner():
     assert "let _reviewReverify = null;" in script
 
 
+def test_composed_reverify_prompt_selects_node_tests_and_never_passes_on_nothing_run():
+    script = _compose()
+    assert "node --test <that file>" in script
+    assert 'status_before \\"not_run\\"' in script or 'status_before "not_run"' in script
+    assert "Never report pass when no test ran" in script
+    assert "status_before pass" not in script
+
+
 def test_return_carries_reverify_under_review():
     assert "reverify: _reviewReverify, receipt:" in _compose()
 

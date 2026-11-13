@@ -908,6 +908,28 @@ _REVERIFY_INDETERMINATE_CLAUSE = (
     "as reverify_error. That is an engine defect, never a test result."
 )
 
+#: Test selection for the consumer repo's node tree (`*.test.js`, outside pytest); node is invoked
+#: only in the consumer repo by the reverify agent, never by claude-klabauter. One file per `node --test`
+#: call from the repo root is coordinator-content-repo's own convention (its distill-harvest test acceptance).
+#: Trap: `node --test` takes a file path from the repo root, never a directory.
+_REVERIFY_NODE_TESTS_CLAUSE = (
+    " A `*.test.js` file among them, or the sibling `tests/*.test.js` of an edited `.js` file, is a node "
+    "test pytest never runs: run each with `node --test <that file>` from the repo root (one file per "
+    "call, never a directory or a bare `node --test`) and report a failing file as its failing id."
+)
+
+#: Names the meaning of `derived_from` in the review.reverify list reply.
+_REVERIFY_DERIVED_CLAUSE = (
+    ' A reply carrying `"derived_from":"run_diff"` lists the run diff in `edited`/`created`, not review changes.'
+)
+
+#: Maps a re-verify where no test ran to a non-pass status instead of pass.
+_REVERIFY_NOTHING_RAN_CLAUSE = (
+    "Never report pass when no test ran: when no test was selected or run, status_before is "
+    '"not_run"; when a selected test could not run (runner missing, errored before any result), it is '
+    f'"{REVERIFY_INDETERMINATE}". pass requires at least one test that ran and passed.'
+)
+
 #: Run-time review sidecar paths of the wave, appended to the re-verify prompt for its `sidecars`.
 _REVERIFY_SIDECARS_JS = (
     "'\\nreview_sidecars: ' + JSON.stringify((Array.isArray(_reviewWave) ? _reviewWave : [])"
@@ -1059,8 +1081,8 @@ def _reverify_phase(
             'variable). When a non-empty `session_id:` value is given in this brief, add it as '
             '`"session_id"` to each. The union of their `edited` and `created` lists is the files '
             "review changed, the union of their `tripwires` lists names the test files whose source "
-            "names one of those files. Return the union as `edited`. If every list is empty, "
-            "return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], status_before pass. "
+            "names one of those files." + _REVERIFY_DERIVED_CLAUSE + " Return the union as `edited`. If every list is empty, "
+            "return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + 'reverted [], status_before "not_run". '
             f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
             "2. Run, and only run, the tests covering those files: the test files among them, every "
             "file in the `tripwires` union, the test files that import an edited module"
@@ -1071,9 +1093,12 @@ def _reverify_phase(
                 else ""
             )
             + ". Name each test file or node id; never a directory, a tier (the fast tier "
-            "included) or the full suite. Report every failing node id as `failing` and set "
-            "status_before to pass when none failed, else fail."
-            f" For every failing node id also give its one-line assertion message: `{FAILING_DETAIL_FIELD}` is a list of {{node_id, message}}, one per failing node id (empty when none failed).\n"
+            "included) or the full suite."
+            + _REVERIFY_NODE_TESTS_CLAUSE
+            + " Report every failing node id as `failing` and set "
+            "status_before to pass when tests ran and none failed, else fail. "
+            + _REVERIFY_NOTHING_RAN_CLAUSE
+            + f" For every failing node id also give its one-line assertion message: `{FAILING_DETAIL_FIELD}` is a list of {{node_id, message}}, one per failing node id (empty when none failed).\n"
             "3. When any failed, measure which were already failing before review, once for every "
             "prefix, each time with the same failing set: call review.reverify with "
             f"`\"probe\":\"open\"`: `{invoke} review.reverify "
@@ -1121,14 +1146,17 @@ def _reverify_phase(
         "prefix moved into a shell variable). When a non-empty `session_id:` value is given in "
         'this brief, add it as `"session_id"`. Its `edited` and `created` lists are the files '
         "review changed. Its `tripwires` list names the test files whose source names one of "
-        "those files. If both are empty, return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], "
-        "status_before pass. "
+        "those files." + _REVERIFY_DERIVED_CLAUSE + " If both are empty, return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], "
+        'status_before "not_run". '
         f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
         "2. Run, and only run, the tests covering those files: the test files among them, every "
         "file in `tripwires`, plus the test files that import an edited module. Name each test file or node id; never a "
-        "directory, a tier (the fast tier included) or the full suite. Report every failing "
-        "node id as `failing` and set status_before to pass when none failed, else fail."
-        f" For every failing node id also give its one-line assertion message: `{FAILING_DETAIL_FIELD}` is a list of {{node_id, message}}, one per failing node id (empty when none failed).\n"
+        "directory, a tier (the fast tier included) or the full suite."
+        + _REVERIFY_NODE_TESTS_CLAUSE
+        + " Report every failing "
+        "node id as `failing` and set status_before to pass when tests ran and none failed, else fail. "
+        + _REVERIFY_NOTHING_RAN_CLAUSE
+        + f" For every failing node id also give its one-line assertion message: `{FAILING_DETAIL_FIELD}` is a list of {{node_id, message}}, one per failing node id (empty when none failed).\n"
         f"3. When any failed, measure which were already failing before review: call review.reverify "
         f"with `\"probe\":\"open\"`: `{invoke} review.reverify "
         f"'{{{base_args}{run_args},\"probe\":\"open\",\"failing\":[<failing node ids>],\"sidecars\":[<the "

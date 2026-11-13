@@ -538,3 +538,48 @@ def test_base_green_red_whose_cause_is_in_the_declared_writes_stays_owned(world,
     })
     out = _revert(root, [_PEER_NODE], failing_at_base=[], run_id="me", failing_output=out_text)
     assert out["foreign_red"] == {} and out["unattributed"] == [_PEER_NODE]
+
+
+def _base_tree(monkeypatch, root, base_bytes):
+    """Pin the manifest base to a 40-hex commit whose tree holds ``base_bytes`` (path -> bytes); returns the sha."""
+    sha = "b" * 40
+    _set_base(root, sha)
+    blobs = {f"{i:040x}": data for i, data in enumerate(base_bytes.values(), 1)}
+    by_path = dict(zip(base_bytes, blobs))
+    monkeypatch.setattr(rr.git_state, "read_commit", lambda _r, s: type("C", (), {"tree": "t" * 40})() if s == sha else None)
+    monkeypatch.setattr(rr, "_leaves", lambda _r, _t, rels: {p: (0o100644, by_path[p]) for p in rels if p in by_path})
+    monkeypatch.setattr(rr, "_blob", lambda _r, entry: blobs[entry[1]])
+    return sha
+
+
+def test_list_mode_derives_edited_and_created_from_the_run_diff_when_review_changed_nothing(world, monkeypatch):
+    root, orig, _ = world
+    path = _manifest_path(root)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    (root / "tests").mkdir(exist_ok=True)
+    (root / "tests/x.test.js").write_bytes(b"test('x', () => {});\n")
+    data["files"]["tests/x.test.js"] = _sha(b"test('x', () => {});\n")
+    path.write_text(json.dumps(data), encoding="utf-8")
+    base = {k: v for k, v in orig.items()}
+    base["pkg/mod.py"] = b"VALUE = 0\n"
+    sha = _base_tree(monkeypatch, root, base)
+    out = rr.review_reverify(root, base=sha, slice_prefix=PREFIX, session_id=SESSION)
+    assert out["edited"] == ["pkg/mod.py"]
+    assert out["created"] == ["tests/x.test.js"]
+    assert out["derived_from"] == "run_diff"
+
+
+def test_list_mode_keeps_review_edits_and_does_not_derive_when_review_changed_something(world, monkeypatch):
+    root, orig, _ = world
+    (root / "pkg/other.py").write_bytes(b"OTHER = 9\n")
+    sha = _base_tree(monkeypatch, root, {**orig, "pkg/mod.py": b"VALUE = 0\n"})
+    out = rr.review_reverify(root, base=sha, slice_prefix=PREFIX, session_id=SESSION)
+    assert out["edited"] == ["pkg/other.py"]
+    assert "derived_from" not in out
+
+
+def test_list_mode_run_diff_is_empty_when_files_match_base(world, monkeypatch):
+    root, orig, _ = world
+    sha = _base_tree(monkeypatch, root, orig)
+    out = rr.review_reverify(root, base=sha, slice_prefix=PREFIX, session_id=SESSION)
+    assert out["edited"] == [] and out["created"] == [] and "derived_from" not in out

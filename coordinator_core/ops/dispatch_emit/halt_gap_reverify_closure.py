@@ -35,7 +35,8 @@ def _run_set(record: Mapping) -> set[str]:
 def closed_by_reverify(line: object, record: object) -> bool:
     """True iff ``line`` parses as a node id that ``record`` lists in its run set and in none of
     ``failing`` / ``pre_existing`` / ``unattributed``. A missing, non-mapping or errored
-    (``reverify_error``, ``indeterminate``) record closes nothing."""
+    (``reverify_error``, ``indeterminate``) record closes nothing; ``not_run`` is no green evidence for a
+    node id and closes nothing."""
     node = node_id_of(line)
     if node is None or not isinstance(record, Mapping):
         return False
@@ -43,7 +44,7 @@ def closed_by_reverify(line: object, record: object) -> bool:
     if isinstance(error, str) and error.strip():
         return False
     after = record.get("status_after")
-    if (after if after is not None else record.get("status_before")) == "indeterminate":
+    if (after if after is not None else record.get("status_before")) in ("indeterminate", "not_run"):
         return False
     red = _ids(record.get("failing")) | _ids(record.get("pre_existing")) | _ids(record.get("unattributed"))
     return node in _run_set(record) and node not in red

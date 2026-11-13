@@ -57,6 +57,8 @@ def test_review_fix_call_sits_under_the_negated_guard_and_logs_when_withheld():
         ({"status_before": "fail", "status_after": "pass", "failing": ["t::a"], "pre_existing": []}, False),
         ({"status_before": "indeterminate", "failing": [], "pre_existing": []}, True),
         ({"status_before": "pass", "failing": [], "pre_existing": []}, False),
+        ({"status_before": "not_run", "failing": [], "pre_existing": []}, False),  # no evidence: never withheld
+        ({"status_before": "not_run", "status_after": "not_run", "failing": []}, False),
     ],
 )
 def test_withhold_guard_spares_only_an_all_pre_existing_fail(verdict, withheld):

@@ -1901,14 +1901,24 @@ def _partial_for_no_tests(text: str) -> bool:
     return bool(clauses) and all(_TESTS_NOT_RUN_RE.search(c) for c in clauses)
 
 
-def _reverify_passed(record: object) -> bool:
-    """The run's re-verify record reads pass with nothing red, indeterminate or errored."""
+def _reverify_clean_at(record: object, status: str) -> bool:
     if not isinstance(record, dict) or str(record.get("reverify_error") or "").strip():
         return False
     after = record.get("status_after")
-    if (after if after is not None else record.get("status_before")) != "pass":
+    if (after if after is not None else record.get("status_before")) != status:
         return False
     return not any(record.get(k) for k in ("failing", "pre_existing", "unattributed", "foreign", "foreign_unverified"))
+
+
+def _reverify_passed(record: object) -> bool:
+    """The run's re-verify record reads pass with nothing red, indeterminate or errored. ``not_run`` is no
+    evidence of green and never reads as pass."""
+    return _reverify_clean_at(record, "pass")
+
+
+def _reverify_no_test_ran(record: object) -> bool:
+    """The re-verify ran no test (``not_run``) and found nothing red: neither green evidence nor a refusal."""
+    return _reverify_clean_at(record, "not_run")
 
 
 def _is_delivered(text: str) -> bool:
@@ -1970,7 +1980,8 @@ def _grade(
         if (
             clean is not None and text is not None and prefix_files is not None and chunk.id not in held
             and _PARTIAL_REPORT_RE.search(text) and not _BLOCKED_REPORT_RE.search(text)
-            and _partial_for_no_tests(text) and _reverify_passed(inline_review.get("reverify"))
+            and _partial_for_no_tests(text)
+            and (_reverify_passed(inline_review.get("reverify")) or _reverify_no_test_ran(inline_review.get("reverify")))
             and (set(chunk.paths) | set(prefix_files)) <= clean
             and (chunk.paths or prefix_files)
         ):

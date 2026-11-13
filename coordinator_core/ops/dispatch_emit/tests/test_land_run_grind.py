@@ -348,3 +348,35 @@ def test_imageless_path_held_by_a_live_peer_is_dropped_and_the_rest_lands(repo, 
     assert out["dropped"] == [{"row_id": "r1", "path": "a.py", "reason": "unattributed-shared"}]
     assert [u["row_id"] for u in out["unlanded"]] == ["r1"]
     assert "Row-Unlanded: r1 a.py unattributed-shared" in _message(repo)
+
+
+def _no_tests_credit(tmp_path, reverify):
+    from types import SimpleNamespace
+
+    from coordinator_core.ops.dispatch_emit import land_run
+    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit
+
+    (tmp_path / "r.md").write_text(
+        "PARTIAL: C1\nNot done: pytest not run; the likeness pytest fence bars the executor from running tests.\n",
+        encoding="utf-8",
+    )
+    chunk = ChunkCommit(id="C1", title="t", paths=("a.py",), report="r.md")
+    review = {
+        "prep": {"slice_files": ["a.py"]}, "integration": {"unresolved": [], "confinement_violations": []},
+        "reverify": reverify,
+    }
+    return land_run._grade(
+        tmp_path, SimpleNamespace(chunks=(chunk,)), {"C1"}, review, None, None, set(), None, None, None, None, {},
+    )
+
+
+def test_not_run_reverify_never_reads_as_pass_but_credits_a_no_tests_partial(tmp_path):
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    not_run = {"status_before": "not_run", "failing": []}
+    assert land_run._reverify_passed(not_run) is False  # never pass
+    assert land_run._reverify_passed({**not_run, "status_after": "not_run"}) is False
+    assert _no_tests_credit(tmp_path, not_run)["C1"].startswith("reverify-covered")
+    assert _no_tests_credit(tmp_path, {**not_run, "failing": ["t.py::x"]}) == {}
+    assert _no_tests_credit(tmp_path, {**not_run, "reverify_error": "boom"}) == {}
+    assert _no_tests_credit(tmp_path, {"status_before": "indeterminate"}) == {}

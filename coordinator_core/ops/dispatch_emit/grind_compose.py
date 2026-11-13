@@ -2882,7 +2882,9 @@ def compose_grind_script(
         # Trap: the terminal commit already landed the rows in runGrind's finally before review
         # started, so "Review fixes" is the only commit review edits reach; a red re-verify
         # verdict stops them here.
-        + "\n  const _reviewFixWithheld = _reviewReverify ? "
+        # Trap: 'not_run' (no runnable test in the diff) is no evidence either way, so it never withholds.
+        + "\n  // status 'not_run' is no evidence of red: review fixes still land\n"
+        + "  const _reviewFixWithheld = _reviewReverify ? "
         + f"(_reviewReverify.status_after ?? _reviewReverify.status_before) === '{REVERIFY_INDETERMINATE}'"
         + " || ((_reviewReverify.status_after ?? _reviewReverify.status_before) === 'fail'"
         + " && !(Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length > 0"

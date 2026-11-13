@@ -21,7 +21,9 @@ anchor tree is unreadable, revert mode returns ``error`` and writes nothing (fai
 keeps the snapshot baseline and adds ``"head_unreadable": true``.
 
 List mode (no ``failing``): ``{"edited", "created", "foreign", "tripwires", "snapshot", "error"}``,
-plus ``head_unreadable`` when applicable.
+plus ``head_unreadable`` when applicable. When review changed nothing (``edited`` and ``created`` both
+empty), they are derived from the run diff instead: manifest paths whose bytes differ from the ``base``
+commit's blob (``edited``) or that base lacks (``created``), with ``"derived_from": "run_diff"``.
 ``tripwires`` is the sorted tracked test modules (not already edited or created) whose source holds a string
 literal naming an edited or created path; empty for an empty edit set. When the tracked-file index cannot
 be read, ``tripwires`` is empty and ``error`` is ``"tripwire scan unavailable: <reason>"``; the other
@@ -380,6 +382,33 @@ def _edited(repo_root: Path, manifest: dict, view: _View) -> List[str]:
         if compute_content_hash(target) != digest:
             out.append(rel)
     return sorted(out)
+
+
+def _run_diff(repo_root: Path, manifest: dict) -> Tuple[List[str], List[str]]:
+    """(edited, created): manifest paths whose current bytes differ from the manifest ``base``
+    commit's blob, or that the base tree lacks. Spawn-free; an unreadable base answers empty."""
+    base = manifest.get("base")
+    if not _is_sha(base):
+        return [], []
+    info = git_state.read_commit(repo_root, base)
+    rels = sorted({_norm(p) for p in manifest["files"]})
+    leaves = _leaves(repo_root, info.tree, rels) if info is not None else None
+    if leaves is None:
+        return [], []
+    edited: List[str] = []
+    created: List[str] = []
+    for rel in rels:
+        target = repo_root / rel
+        if not target.is_file():
+            continue
+        entry = leaves.get(rel)
+        if entry is None:
+            created.append(rel)
+            continue
+        blob = _blob(repo_root, entry)
+        if blob is not None and compute_content_hash(target) != eol_folded_sha256(blob):
+            edited.append(rel)
+    return edited, created
 
 
 def _contained(repo_root: Path, rels: List[str]) -> bool:
@@ -837,6 +866,10 @@ def review_reverify(
     snapshot_rel = _rel(str(snapshot_dir / _MANIFEST), repo_root)
     if not revert and not probe:
         scan_error = None
+        derived = None
+        if not edited and not created:
+            edited, created = _run_diff(repo_root, manifest)
+            derived = "run_diff" if edited or created else None
         try:
             skip_paths = set(edited) | set(created)
             found = set(literal_namers(repo_root, edited + created, exclude=skip_paths))
@@ -854,6 +887,8 @@ def review_reverify(
             "snapshot": snapshot_rel,
             "error": scan_error,
         }
+        if derived:
+            out["derived_from"] = derived
         if unreadable:
             out["head_unreadable"] = True
         return out

@@ -37,6 +37,32 @@ def test_group_prompt_carries_the_indeterminate_instruction():
     assert "reverify_error" in block
 
 
+def _both() -> list[str]:
+    return [_phase(), _phase(group_prefixes=["g1", "g2"])]
+
+
+def test_empty_lists_never_say_pass_and_map_to_not_run():
+    for block in _both():
+        assert "status_before pass" not in block
+        assert "status_before \\\"not_run\\\"" in block or 'status_before "not_run"' in block
+        assert "to pass when none failed" not in block
+
+
+def test_pass_requires_a_test_that_ran():
+    for block in _both():
+        assert "tests ran and none failed" in block
+        assert "Never report pass when no test ran" in block
+        assert "pass requires at least one test that ran and passed" in block
+
+
+def test_node_test_files_are_selected_under_node_test_one_file_at_a_time():
+    for block in _both():
+        assert "*.test.js" in block
+        assert "tests/*.test.js" in block
+        assert "node --test <that file>" in block
+        assert "never a directory" in block
+
+
 def test_schema_declares_reverify_error_as_optional_string_or_null():
     prop = er._REVERIFY_SCHEMA["properties"]["reverify_error"]
     assert prop == {"type": ["string", "null"]}
