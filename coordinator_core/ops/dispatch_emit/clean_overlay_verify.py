@@ -42,8 +42,9 @@ _OUTPUT_TAIL = 2000
 
 @dataclass(frozen=True)
 class OverlayVerdict:
-    """`verdict` is "green" (tests ran and passed), "red" (a test failed) or "inconclusive" (no overlay or
-    no test ran: never a refusal). `detail` is the tail of the runner output or the reason."""
+    """`verdict` is "green" (tests ran and passed), "red" (a test failed), "pre_existing" (every failing test
+    also fails at the base sha: lands with an advisory) or "inconclusive" (no overlay or no test ran: never a
+    refusal). `detail` is the tail of the runner output or the reason."""
 
     verdict: str
     detail: str = ""
@@ -135,10 +136,42 @@ def teardown_only_error(returncode: int, output: str) -> bool:
     return any(marker in output for marker in _TEARDOWN_MARKERS)
 
 
-def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) -> OverlayVerdict:
+_FAILED_ID_RE = re.compile(r"^(?:FAILED|ERROR) (.+?)(?: - |$)", re.MULTILINE)
+
+
+def failing_ids(output: str) -> tuple:
+    """The node ids a pytest short summary reports as FAILED or ERROR, in order, without duplicates."""
+    return tuple(dict.fromkeys(m.strip() for m in _FAILED_ID_RE.findall(output)))
+
+
+def _base_failing(dest: Path, root: Path, run_id: str, base_sha: str, ids: Sequence[str]) -> frozenset:
+    """The subset of `ids` that also fail with `base_sha` checked out in the overlay clone `dest`. Any
+    setup problem or timeout yields the empty set: an unmeasured base never excuses a red."""
+    run_holder = None
+    try:
+        out = _run([_git_exe(), "checkout", "--detach", "-q", base_sha], dest, TEST_TIMEOUT_S)
+        if out.returncode:
+            return frozenset()
+        run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, f"{run_id}-base")
+        ran = _run(
+            [_gate_python(root), "-m", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", str(basetemp), *ids],
+            dest, TEST_TIMEOUT_S, env=scoped_pytest.tmp_env(os.environ, tmp),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+    finally:
+        if run_holder is not None:
+            shutil.rmtree(run_holder, ignore_errors=True)
+    return frozenset(failing_ids(ran.stdout + ran.stderr)) & frozenset(ids)
+
+
+def verify(
+    root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str], base_sha: Optional[str] = None,
+) -> OverlayVerdict:
     """Clone `root` shared into the run's overlay dir, check out `candidate_sha` detached, run pytest over
-    `seeds` there, and reap the overlay on every exit path. Never raises: a setup failure, a timeout or a
-    run that collected nothing is "inconclusive"."""
+    `seeds` there, and reap the overlay on every exit path. A red whose every failing node id also fails at
+    `base_sha` (re-run in the same clone, those ids only) is "pre_existing": the run did not cause it.
+    Never raises: a setup failure, a timeout or a run that collected nothing is "inconclusive"."""
     seeds = tuple(seeds)
     if not seeds:
         return OverlayVerdict("inconclusive", "the landing set has no test seeds", seeds)
@@ -164,19 +197,30 @@ def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) ->
             [_gate_python(root), "-m", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", str(basetemp), *seeds],
             dest, TEST_TIMEOUT_S, env=scoped_pytest.tmp_env(os.environ, tmp),
         )
+        full = ran.stdout + ran.stderr
+        tail = full.strip()[-_OUTPUT_TAIL:]
+        at_base: frozenset = frozenset()
+        ids = failing_ids(full)
+        if (
+            ran.returncode == _PYTEST_FAILED and ids and isinstance(base_sha, str) and base_sha
+            and base_sha != candidate_sha and not teardown_only_error(ran.returncode, full)
+        ):
+            at_base = _base_failing(dest, root, run_id, base_sha, ids)
     except (OSError, subprocess.SubprocessError) as exc:
         return OverlayVerdict("inconclusive", f"overlay verify did not complete: {type(exc).__name__}: {exc}", seeds)
     finally:
         shutil.rmtree(holder, ignore_errors=True)
         for run_dir in run_dirs:
             shutil.rmtree(run_dir, ignore_errors=True)
-    full = ran.stdout + ran.stderr
-    tail = full.strip()[-_OUTPUT_TAIL:]
     if ran.returncode == 0:
         return OverlayVerdict("green", tail, seeds)
     if teardown_only_error(ran.returncode, full):
         return OverlayVerdict("green", f"pytest teardown error after every test passed (exit {ran.returncode}): {tail}", seeds)
     if ran.returncode == _PYTEST_FAILED:
+        if ids and at_base == frozenset(ids):
+            return OverlayVerdict(
+                "pre_existing", f"every failing test also fails at base {str(base_sha)[:12]}: {', '.join(ids)}: {tail}", seeds,
+            )
         return OverlayVerdict("red", tail, seeds)
     return OverlayVerdict("inconclusive", f"pytest exit {ran.returncode}: {tail}", seeds)
 
@@ -244,7 +288,7 @@ def write_verdict(root: Path, run_id: str, measured: dict, outcome: OverlayVerdi
 
 def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
     """Read the run's overlay verdict for the `measured` record. One file read, no spawn: "green" or "red"
-    (or "inconclusive", which land_run lands with an advisory) when a verdict keyed to exactly this landing
+    (or "inconclusive" / "pre_existing", which land_run lands with an advisory) when a verdict keyed to exactly this landing
     set and base sha exists; otherwise "missing" (no file) or
     "mismatch" (keyed to a different landing set or base sha; `detail` says which side moved)."""
     try:
@@ -262,7 +306,7 @@ def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
     verdict = data.get("verdict")
     if verdict == "inconclusive":
         return OverlayVerdict("inconclusive", str(data.get("detail", "")), seeds)
-    if verdict not in ("green", "red"):
+    if verdict not in ("green", "red", "pre_existing"):
         return OverlayVerdict("missing", f"overlay verdict was {verdict!r}: {data.get('detail', '')}", seeds)
     return OverlayVerdict(verdict, str(data.get("detail", "")), seeds)
 
@@ -293,7 +337,7 @@ def reverify_on_mismatch(
         sleep(_REVERIFY_POLL_S)
         fresh = check_verdict(root, run_id, measured)
         if fresh.verdict not in ("mismatch", "missing"):
-            return fresh if fresh.verdict in ("green", "red") else stale
+            return fresh if fresh.verdict in ("green", "red", "pre_existing") else stale
         if clock() >= deadline:
             return stale
 
@@ -325,11 +369,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("measured-rev record carries no candidate sha", file=sys.stderr)
         return 2
     outcome = name_peer_owners(
-        verify(root, args.run_id, sha, seeds_for_landing(root, measured.get("paths") or [])), measured,
+        verify(
+            root, args.run_id, sha, seeds_for_landing(root, measured.get("paths") or []),
+            base_sha=measured.get("base_sha"),
+        ), measured,
     )
     write_verdict(root, args.run_id, measured, outcome)
     print(f"overlay verdict: {outcome.verdict}")
-    return {"green": 0, "red": 1}.get(outcome.verdict, 2)
+    return {"green": 0, "pre_existing": 0, "red": 1}.get(outcome.verdict, 2)
 
 
 if __name__ == "__main__":

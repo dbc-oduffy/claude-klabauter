@@ -313,6 +313,23 @@ def _run_produced(root: Path, run_id: str, path: str) -> bool:
         return False
 
 
+def _recorded_own_write(root: Path, run_id: str, path: str) -> bool:
+    """The run's own record (`run-outcome.json` review slice and test edits, `halted.json` withheld
+    keys) lists `path` as written by this run, so a hunk its `write_baseline` already carries is the
+    run's edit, not a peer's. Path-level evidence: it cannot split a peer hunk the baseline also holds.
+    Trap: run ask-20261113T043855-021188 re-staged (`stage-receipt.json` 04:47, `manifest.json`
+    rewritten after executor C1 wrote) so its `write_baseline` blob already held the run's
+    `except PermissionError` edit and the baseline-to-committed delta was empty; the manifest alone
+    cannot say whether a baseline hunk predates the run. False on any read failure."""
+    try:
+        from coordinator_core.ops.dispatch_emit import write_baseline
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+        return path in write_baseline.prior_pass_written(root, record_dir(root, run_id), include_predecessors=False)
+    except Exception:  # noqa: BLE001 -- unknown is not own
+        return False
+
+
 def _unproduced(root: Path, run_id: str, path: str) -> tuple:
     """`(ranges, own, head_bytes)`: committed-side line ranges ("3-4, 9") of hunks no row produced
     ("" when all are produced); the produced hunks as `(i1, i2, j1, j2)` opcodes; the HEAD blob bytes
@@ -370,12 +387,13 @@ def _unproduced(root: Path, run_id: str, path: str) -> tuple:
     if rhc.exceeds_match_bound(old, committed):
         raise ValueError("baseline delta is too coarse to attribute")
     delta = rhc._delta_spans(old, committed)
+    wrote_it = _recorded_own_write(root, run_id, path)
 
     ranges: list = []
     own: list = []
     for _tag, i1, i2, j1, j2 in hunks:
         lo, hi = (2 * j1 + 1, 2 * j1 + 1) if j2 == j1 else (2 * (j1 + 1), 2 * j2)
-        if any(a <= hi and lo <= b for a, b in delta):
+        if wrote_it or any(a <= hi and lo <= b for a, b in delta):
             own.append((i1, i2, j1, j2))
         else:
             ranges.append(f"{j1 + 1}-{j2}" if j2 > j1 + 1 else str(j1 + 1))

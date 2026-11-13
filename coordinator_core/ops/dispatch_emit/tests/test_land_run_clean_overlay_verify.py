@@ -247,6 +247,60 @@ def test_a_real_failed_test_is_still_red(tmp_path):
     assert cov.verify(root, "run1", head, [READER]).verdict == "red"
 
 
+_SECOND = "t/test_second.py"
+
+
+def _two_commits(tmp_path, base_data: str, head_data: str, second_data: str = "ok\n"):
+    """Base commit holds `base_data`; the candidate commit holds `head_data` and a second reader test."""
+    root, base = _repo(tmp_path, data=base_data)
+    _write(root, "t/data.txt", head_data)
+    _write(root, _SECOND, _READER_SRC.replace("test_reads_data", "test_reads_second").replace("data.txt", "second.txt"))
+    _write(root, "t/second.txt", second_data)
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "candidate")
+    return root, base, _git(root, "rev-parse", "HEAD").strip()
+
+
+def test_a_red_that_fails_identically_at_base_is_pre_existing_and_names_the_ids(tmp_path):
+    root, base, head = _two_commits(tmp_path, "broken\n", "broken\n")
+
+    out = cov.verify(root, "run1", head, [READER, _SECOND], base_sha=base)
+
+    assert out.verdict == "pre_existing", out
+    assert f"{READER}::test_reads_data" in out.detail
+    assert not cov.overlay_root(root, "run1").exists()
+
+
+def test_a_red_that_passes_at_base_stays_red(tmp_path):
+    root, base, head = _two_commits(tmp_path, "ok\n", "broken\n")
+
+    assert cov.verify(root, "run1", head, [READER, _SECOND], base_sha=base).verdict == "red"
+
+
+def test_a_mix_of_base_failing_and_newly_failing_ids_stays_red(tmp_path):
+    root, base, head = _two_commits(tmp_path, "broken\n", "broken\n", second_data="bad\n")
+
+    out = cov.verify(root, "run1", head, [READER, _SECOND], base_sha=base)
+
+    assert out.verdict == "red", out
+
+
+def test_a_red_with_no_base_sha_stays_red(tmp_path):
+    root, _base, head = _two_commits(tmp_path, "broken\n", "broken\n")
+
+    assert cov.verify(root, "run1", head, [READER]).verdict == "red"
+
+
+def test_pre_existing_is_a_readable_verdict_that_is_not_red(tmp_path):
+    root, head = _repo(tmp_path)
+    measured = {"blobs": {"a": "1"}, "base_sha": "b" * 40, "sha": head}
+    cov.write_verdict(root, "run1", measured, cov.OverlayVerdict("pre_existing", "ids", ("t/x.py",)))
+
+    out = cov.check_verdict(root, "run1", measured)
+
+    assert out.verdict == "pre_existing" and not out.red
+
+
 def test_a_timed_out_overlay_checkout_is_named_with_its_budget_never_silent(tmp_path, monkeypatch):
     root, head = _repo(tmp_path)
 
@@ -369,6 +423,27 @@ def test_land_run_lands_on_an_inconclusive_verdict_with_an_advisory(halted, monk
     assert "inconclusive" in result["clean_overlay_verify"]["advisory"]
     assert _git(halted, "log", "-1", "--format=%(trailers:key=Overlay,valueonly)").strip().startswith("inconclusive"), _git(halted, "log", "-1", "--format=%B")
     assert FIXTURE in result["reach_dirt_foreign"]
+
+
+def test_land_run_lands_a_pre_existing_verdict_with_an_advisory_trailer(halted, monkeypatch):  # noqa: F811
+    _no_spawn(monkeypatch)
+
+    _, result = _dirty_land(halted, "pre_existing")
+
+    assert result["committed"] is True, result
+    assert not result.get("refused")
+    assert result["clean_overlay_verify"]["verdict"] == "pre_existing"
+    assert "pre_existing" in result["clean_overlay_verify"]["advisory"]
+    assert _git(halted, "log", "-1", "--format=%(trailers:key=Overlay,valueonly)").strip().startswith("pre_existing"), _git(halted, "log", "-1", "--format=%B")
+
+
+def test_land_run_reverifies_a_mismatched_verdict_and_lands_when_pre_existing(halted, monkeypatch):  # noqa: F811
+    _reverify_spy(monkeypatch, "pre_existing")
+
+    _, result = _dirty_land(halted, "green", mutate={"blobs": {"x": "0" * 40}})
+
+    assert result["committed"] is True, result
+    assert result["clean_overlay_verify"]["verdict"] == "pre_existing"
 
 
 def test_land_run_lands_a_missing_verdict_with_an_advisory(halted, monkeypatch):  # noqa: F811

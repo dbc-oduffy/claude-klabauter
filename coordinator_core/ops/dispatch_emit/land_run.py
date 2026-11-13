@@ -4631,7 +4631,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             if overlay.verdict == "mismatch":
                 overlay = clean_overlay_verify.reverify_on_mismatch(root, measured_run, measured, overlay)
             reach_dirt_overlay = {"verdict": overlay.verdict, "seeds": list(overlay.seeds)}
-            if overlay.verdict in ("inconclusive", "missing"):
+            if overlay.verdict in ("inconclusive", "missing", "pre_existing"):
                 reach_dirt_overlay["advisory"] = f"clean-overlay verdict {overlay.verdict}: {overlay.detail}"
                 # The landing is recoverable so it proceeds, but unverified: the trailer is what a release
                 # gate reads to list the commits the full-tree regate alone covers.

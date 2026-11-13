@@ -1397,7 +1397,7 @@ def seed_host_status_line(config_path, host, *, uninstall=False):
     return "updated" if text is not None else "created"
 
 
-AGY_ALLOW_RULE = "command(coordinator-invoke *)"
+AGY_ALLOW_RULE = "command(coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json)"
 
 
 def seed_agy_allow_rule(config_path, *, uninstall=False):

@@ -285,3 +285,36 @@ def test_peer_split_unreadable_provenance_names_a_co_declaring_peer_only(world, 
     assert hp.peer_split(world.root, ME, [PATH]) == ({}, {})
     world.owner(PEER)
     assert hp.peer_split(world.root, ME, [PATH]) == ({}, {PATH: {"owner": PEER, "lines": hp.UNATTRIBUTABLE_LINES}})
+
+
+def _record_writes(world, *paths: str) -> None:
+    d = world.root / "state" / "warp" / ME
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "run-outcome.json").write_text(
+        json.dumps({"inline_review": {"prep": {"slice_files": list(paths)}}}), encoding="utf-8"
+    )
+
+
+def test_peer_split_attributes_a_baseline_held_hunk_to_the_run_that_recorded_writing_the_path(world, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import co_declared_settle
+
+    monkeypatch.setattr(co_declared_settle, "settled_blob", lambda *a, **k: "d" * 40)
+    world.head(_text({}))  # run base: lacks the edit
+    world.baseline(_text({2: "OWN"}))  # re-staged after the run's own edit
+    world.tree(_text({2: "OWN"}))
+    assert hp.peer_split(world.root, ME, [PATH]) == ({PATH: {"blob": "d" * 40, "owner": hp.UNKNOWN_OWNER, "lines": "2"}}, {})
+    _record_writes(world, PATH)
+    assert hp.peer_split(world.root, ME, [PATH]) == ({}, {})
+    assert hp.unproduced_hunks(world.root, ME, [PATH], own_plan="plan-a") == []
+
+
+def test_peer_split_still_names_a_baseline_hunk_when_the_record_lists_another_path(world, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import co_declared_settle
+
+    monkeypatch.setattr(co_declared_settle, "settled_blob", lambda *a, **k: "d" * 40)
+    world.head(_text({}))
+    world.baseline(_text({2: "PEER"}))
+    world.tree(_text({2: "PEER"}))
+    _record_writes(world, "src/other.py")
+    split, _ = hp.peer_split(world.root, ME, [PATH])
+    assert split == {PATH: {"blob": "d" * 40, "owner": hp.UNKNOWN_OWNER, "lines": "2"}}

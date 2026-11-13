@@ -2736,6 +2736,16 @@ def test_router_closure_digest_tracks_closure_bytes(tmp_path):
     assert ui.router_closure_digest(tmp_path) != first
 
 
+def test_default_install_grants_agy_only_the_exact_submit_command(monkeypatch, tmp_path):
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
+    agy.parent.mkdir(parents=True)
+    rc, _ = _tui_main(tmp_path, "--install")
+    assert rc == 0
+    allow = json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
+    assert allow == ["command(coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json)"]
+    assert not any("*" in rule for rule in allow)
+
+
 def test_agy_allow_rule_installs_once_keeps_operator_entries_and_uninstall_restores_bytes(monkeypatch, tmp_path):
     _, agy, _ = _tui_home(monkeypatch, tmp_path)
     agy.parent.mkdir(parents=True)
