@@ -36,9 +36,24 @@ from coordinator_core.ops.dispatch_emit.queue_emit import (
 from coordinator_core.ops.dispatch_emit.queue_select import select_rows
 
 from .conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit import grind_admission
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 _FIXTURE_PROFILE_DIR = Path(__file__).parent / "fixtures" / "queue-profiles"
+_STANDARD_CEILING = 40  # the fixture profile's standard appetite max_agent_calls
+
+
+def _admitted_at(n_rows: int, max_agent_calls: int) -> int:
+    """Rows grind_admission's live estimate admits for ``n_rows`` under ``max_agent_calls``."""
+    ids = [f"row{i}" for i in range(n_rows)]
+    return len(grind_admission.admit(ids, max_agent_calls=max_agent_calls, budget_tokens=None).admitted)
+
+
+def _covering_ceiling(n_rows: int) -> int:
+    """Smallest max_agent_calls whose live estimate admits every one of ``n_rows``."""
+    ceiling = grind_admission.RUN_FIXED_AGENT_CALLS + -(-n_rows * grind_admission.ROW_AGENT_CALLS_CENTI // 100)
+    assert _admitted_at(n_rows, ceiling) == n_rows
+    return ceiling
 
 
 def _write_row(path: Path, **fields) -> None:
@@ -192,15 +207,17 @@ def test_21_row_emit_at_standard_ceiling_admits_16_and_names_5(tmp_path):
     emission = _emit(tmp_path, n_rows=21)
     not_admitted = emission.receipt_extras["not_admitted"]
     run_order = sorted(f"row{i}" for i in range(21))
-    assert not_admitted["count"] == 5
-    assert not_admitted["row_ids"] == run_order[16:]
-    assert not_admitted["arithmetic"]["admitted_count"] == 16
-    assert emission.receipt_extras["admitted_count"] == 16
-    assert _batched_row_ids(emission.script) == run_order[:16]
+    admitted = _admitted_at(21, _STANDARD_CEILING)
+    assert 0 < admitted < 21
+    assert not_admitted["count"] == 21 - admitted
+    assert not_admitted["row_ids"] == run_order[admitted:]
+    assert not_admitted["arithmetic"]["admitted_count"] == admitted
+    assert emission.receipt_extras["admitted_count"] == admitted
+    assert _batched_row_ids(emission.script) == run_order[:admitted]
 
 
 def test_21_row_emit_under_a_ceiling_that_covers_all_admits_all(tmp_path):
-    profile_dir = _profile_dir_with_max_agent_calls(tmp_path / "profiles", 67)
+    profile_dir = _profile_dir_with_max_agent_calls(tmp_path / "profiles", _covering_ceiling(21))
     emission = _emit(tmp_path, n_rows=21, profile_dir=profile_dir)
     assert emission.receipt_extras["not_admitted"]["count"] == 0
     assert emission.receipt_extras["admitted_count"] == 21
@@ -368,12 +385,12 @@ def _run_900_row_perf(tmp_path, monkeypatch, profile_dir):
 
 def test_synthetic_900_row_queue_seeded_ledger_perf_zero_spawn(tmp_path, monkeypatch):
     emission = _run_900_row_perf(tmp_path, monkeypatch, _FIXTURE_PROFILE_DIR)
-    assert emission.receipt_extras["not_admitted"]["count"] == 884
+    assert emission.receipt_extras["not_admitted"]["count"] == 900 - _admitted_at(900, _STANDARD_CEILING)
 
 
 def test_synthetic_900_row_queue_fully_admitted_composes_all_rows_zero_spawn(tmp_path, monkeypatch):
     emission = _run_900_row_perf(
-        tmp_path, monkeypatch, _profile_dir_with_max_agent_calls(tmp_path / "profiles", 2835)
+        tmp_path, monkeypatch, _profile_dir_with_max_agent_calls(tmp_path / "profiles", _covering_ceiling(900))
     )
     assert emission.receipt_extras["not_admitted"]["count"] == 0
     assert len(_batches_const(emission.script)) >= 900 // 12

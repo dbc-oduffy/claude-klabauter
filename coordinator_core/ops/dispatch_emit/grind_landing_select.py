@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
-from coordinator_core.git import commit
+from coordinator_core.git import checkin_attrs, commit
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_objects import read_object, write_object
 from coordinator_core.git.own_delta_merge import apply_own_delta
@@ -65,6 +65,17 @@ def _load_images(root: Path, run_id: str, row_id: str):
     return out
 
 
+def _checkin(root: Path, path: str, raw: bytes) -> Optional[bytes]:
+    """Checkin form of ``raw``; None for CR bytes under a text/eol pin, whatever ``commit.checkin_form`` can reproduce.
+
+    Trap: a CR-bearing blob under a pin is not proven equal to what git would record, so landing treats it
+    as refused: an image drops, and a worktree copy is replaced by the supplied LF image.
+    """
+    if b"\r" in raw and checkin_attrs.checkin_disposition(root, path) == checkin_attrs.TEXT:
+        return None
+    return commit.checkin_form(root, path, raw)
+
+
 def _live_peer_held(root: Path, paths: List[str]) -> set:
     if not paths:
         return set()
@@ -107,7 +118,7 @@ def select(main_root, run_id: str, owners: Mapping[str, Sequence[str]]) -> Selec
         raw = blob(sha) if sha is not None else b""
         if raw is None or sha is None:
             return raw
-        return commit.checkin_form(root, path, raw)
+        return _checkin(root, path, raw)
 
     def record(row_id: str):
         if row_id not in records:
@@ -176,7 +187,7 @@ def select(main_root, run_id: str, owners: Mapping[str, Sequence[str]]) -> Selec
         elif landed_any:
             texts[path] = current
             wt = worktree(path)
-            wt_form = None if wt is None else (commit.checkin_form(root, path, wt) or wt)
+            wt_form = None if wt is None else (_checkin(root, path, wt) or wt)
             if wt_form != current:
                 supplied[path] = write_object(common, b"blob", current)
 

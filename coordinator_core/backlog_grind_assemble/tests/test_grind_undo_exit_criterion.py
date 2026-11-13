@@ -38,7 +38,7 @@ def _tree(repo):
     return {
         p.relative_to(repo).as_posix(): p.read_bytes()
         for p in sorted(repo.rglob("*"))
-        if p.is_file() and ".git" not in p.relative_to(repo).parts
+        if p.is_file() and not {".git", ".coordinator-local"} & set(p.relative_to(repo).parts)
     }
 
 

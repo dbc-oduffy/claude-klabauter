@@ -45,6 +45,9 @@ def repo(tmp_path, monkeypatch):
     _git(r, "add", ".")
     _git(r, "update-index", "--chmod=+x", "tool.sh")
     _git(r, "commit", "-q", "-m", "seed")
+    # The session hub and claim index live in .coordinator-local, gitignored in every real repo.
+    with (r / ".git" / "info" / "exclude").open("a", encoding="utf-8") as f:
+        f.write(".coordinator-local/\n")
     monkeypatch.setenv("COORDINATOR_SESSION_ID", SID)
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -66,7 +69,7 @@ def _undo(repo, paths):
 def _tree_bytes(repo):
     out = {}
     for p in sorted(repo.rglob("*")):
-        if ".git" in p.relative_to(repo).parts or not p.is_file():
+        if {".git", ".coordinator-local"} & set(p.relative_to(repo).parts) or not p.is_file():
             continue
         out[p.relative_to(repo).as_posix()] = (p.read_bytes(), p.stat().st_mode)
     return out
