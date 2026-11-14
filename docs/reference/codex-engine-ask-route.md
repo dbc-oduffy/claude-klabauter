@@ -1,4 +1,4 @@
-# Codex route to an engine-ask: submit, then fire
+# Codex route to an engine-ask: submit fires; fire:false opts out
 
 A Codex agent has no `Workflow` tool, so it reaches the engine-ask through two `coordinator-invoke`
 calls. The gates are the ones the Claude PreToolUse hook (`hooks.submit_engine_ask`) runs; both doors
@@ -58,9 +58,11 @@ coordinator-invoke workflow.fire '{"script_path": "<script_path>", "expected": "
 ```
 
 `expected` is the submit reply's `sha256`, passed through as-is; `workflow.fire` refuses the fire if
-the script bytes changed since submit. Passing `"fire": true` in step 1 does both calls: the reply then
-carries `fire` (the registry record), or `fire_error` with the run handle kept when the fire failed
-after a good submit. With `fire: true`, `notify_to` defaults to `caller`; an explicit peer name overrides it.
+the script bytes changed since submit. The PM's ask is itself the authorization, so submit fires by
+default and step 1 does both calls: the reply carries
+`fire` (the registry record), or `fire_error` with the run handle kept when the fire failed
+after a good submit. Pass `"fire": false` to mint without starting, then run this step by hand.
+When submit fires, `notify_to` defaults to `caller`; an explicit peer name overrides it.
 The warm engine observes driver exit and delivers the completion notice. The caller
 waits for that notice without polling or relaying the live run. After a terminal notice,
 `workflow.fire_status` can reconcile the recorded handle and outcome; driver exit and

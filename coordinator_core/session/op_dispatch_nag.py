@@ -120,6 +120,6 @@ def advisory_for_dispatch(repo_root, session_id: Optional[str], env: Mapping[str
             return None
         from coordinator_core import warp_fire
 
-        return warp_fire.nag_text(session_id, host=family)
+        return warp_fire.nag_text(session_id, host=family, edit_size=(files, lines))
     except Exception:
         return None

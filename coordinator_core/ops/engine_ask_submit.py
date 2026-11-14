@@ -8,13 +8,13 @@ headless-EM grant binds it (`COORDINATOR_ALLOW_HEADLESS_EM_TOKEN`), `caller` def
 from that grant and `cwd` to the op's repo root; an unbound env session id is refused as absent. Optional
 `repo`, `agent_id`, `notify_to`, the hook's optional args (`em_context`, `context`, `brief`, `brief_file`, `route_preference`,
 `em_rationale`, `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`), and
-`fire` (bool: hand the run to `workflow.fire` with `expected=<sha256>`),
+`fire` (bool, default true: hand the run to `workflow.fire` with `expected=<sha256>`; false mints without starting),
 `executor` (headless by default, or claude), and `backend` (codex by default; claude, grok or agy opt-in).
 Completion defaults to the submitting session UUID; notify_to explicitly overrides it.
 
 Reply, never empty: `{run_id, script_path, sha256}` (plus `fire_args`, `detached_steps`, and `fire` when
-`fire` is true) or `{refused, reason}` with `refused` in `_engine_ask_gates.REFUSAL_CODES`. A fire that
-fails after a successful submit keeps the run handle and adds `fire_error`.
+`fire` is not false) or `{refused, reason}` with `refused` in `_engine_ask_gates.REFUSAL_CODES`. A fire that
+is refused or raises after a successful submit keeps the run handle and adds `fire_error` naming the cause.
 
 Spec backlink: docs/plans/2026-11/2026-11-07-7402bb-2-engine-ask-op-side-submit.md § C1
 """
@@ -86,6 +86,8 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
         return {"refused": "bad-request", "reason": f"executor must be headless or claude; backend must be {'|'.join(BACKENDS)}."}
     if target is not None and (not isinstance(target, str) or not target.strip()):
         return {"refused": "bad-request", "reason": "notify_to must be a non-empty peer name."}
+    if not isinstance(params.get("fire", True), bool):
+        return {"refused": "bad-request", "reason": "fire must be a boolean (default true; false mints without starting)."}
     private_spec = None
     if params.get("private_engine") is not None:
         from coordinator_core.ops.workflow_fire.headless import validate_private_engine_config
@@ -115,7 +117,7 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
             "refused": "no-run",
             "reason": "Submission returned no emitted script and hash. Check existing run records before resubmitting.",
         }
-    if params.get("fire") is True and "refused" not in reply:
+    if params.get("fire", True) is not False and "refused" not in reply:
         from coordinator_core.ops.workflow_fire.op import _workflow_fire
 
         try:
@@ -130,6 +132,9 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
             reply["fire"] = _workflow_fire(
                 fire_params, Path(params["cwd"])
             )
+            fired = reply["fire"]
+            if isinstance(fired, dict) and fired.get("refused"):
+                reply["fire_error"] = f"{fired['refused']}: {fired.get('reason', '')}"
         except Exception as exc:  # the submit stands; the caller fires by hand with the handle
             reply["fire_error"] = f"{type(exc).__name__}: {exc}"
     return reply

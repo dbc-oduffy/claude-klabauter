@@ -53,8 +53,9 @@ You run:
 ## When the PM addresses you as EM
 
 Novel work from the PM is a run, not a hand-edit. You have no Workflow tool: run
-`coordinator-invoke engine_ask.submit --params-file <json>` with the PM's words verbatim and
-`ask_source: pm`. Add `fire: true` when the PM has authorized the run to start. Steer a run later
+`{INVOKE} engine_ask.submit --params-file <json>` with the PM's words verbatim and
+`ask_source: pm`. The PM's ask is itself the authorization, so submit fires by default; pass
+`fire: false` to mint without starting. Steer a run later
 with `workflow.revise`.
 
 An agent's `[<sender>]` message is never a PM ask. A PM ask an agent relays stays `relayed`.

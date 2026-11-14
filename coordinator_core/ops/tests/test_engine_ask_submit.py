@@ -71,7 +71,7 @@ def _dispatch(params):
 
 
 def test_submit_returns_run_handle_through_dispatch(params, script, seen):
-    result = _dispatch(params)
+    result = _dispatch({**params, "fire": False})
     assert result == {
         "run_id": "run-abc123",
         "script_path": str(script),
@@ -84,7 +84,7 @@ def test_submit_returns_run_handle_through_dispatch(params, script, seen):
 
 def test_sizing_submission_carries_no_source_and_the_hook_args(params, seen):
     del params["ask"], params["ask_source"]
-    params.update(sizing="state/sizings/x.yaml", stop_after="plan", em_context="ctx")
+    params.update(sizing="state/sizings/x.yaml", stop_after="plan", em_context="ctx", fire=False)
     _dispatch(params)
     assert seen[0]["tool_input"]["args"] == {"sizing": "state/sizings/x.yaml", "stop_after": "plan", "em_context": "ctx"}
 
@@ -151,6 +151,94 @@ def test_fire_hands_the_sha256_to_workflow_fire(params, script, seen, monkeypatc
     result = _dispatch({**params, "fire": True})
     assert calls == [{"script_path": str(script), "expected": result["sha256"], "notify_to": "sess-1", "executor": "headless", "backend": "codex", "caller_session_id": "sess-1", "run_id": "run-abc123"}]
     assert result["fire"] == {"fire_id": "f1"}
+
+
+def test_codex_em_fire_runs_through_the_real_fire_authority(params, seen, monkeypatch):
+    import psutil
+
+    from coordinator_core.ops.workflow_fire import authority, headless
+    from coordinator_core.session import external_registry
+
+    sid = "01a1d4b3-17b4-7621-84cd-aa8e05a1cecc"
+    monkeypatch.setattr(authority, "caller_principal", lambda *a: authority.Principal(sid, "unknown", {}))
+    monkeypatch.setattr(external_registry, "lookup", lambda s: {"session_id": s, "pid": 7})
+    monkeypatch.setattr(psutil, "Process", lambda pid: type("P", (), {"cmdline": lambda self: ["node", "codex.js"]})())
+    started = []
+    monkeypatch.setattr(headless, "start", lambda *a, **k: started.append(k) or {"fire_id": "f1", "state": "running", "notify_to": sid})
+    result = _dispatch({**params, "session_id": sid, "fire": True})
+    assert "fire_error" not in result and result["fire"]["fire_id"] == "f1"
+    assert started[0]["caller_session_id"] == sid
+
+
+@pytest.mark.parametrize(
+    "family,argv",
+    [("codex", ["node", "codex.js"]), ("agy", ["agy"]), ("grok", ["grok"])],
+)
+def test_default_submit_fires_for_each_non_claude_family(params, seen, monkeypatch, family, argv):
+    import psutil
+
+    from coordinator_core.ops.workflow_fire import authority, headless
+    from coordinator_core.session import external_registry
+
+    sid = "01a1d4b3-17b4-7621-84cd-aa8e05a1cecc"
+    monkeypatch.setattr(authority, "caller_principal", lambda *a: authority.Principal(sid, "unknown", {}))
+    monkeypatch.setattr(external_registry, "lookup", lambda s: {"session_id": s, "pid": 7})
+    monkeypatch.setattr(psutil, "Process", lambda pid: type("P", (), {"cmdline": lambda self: argv})())
+    started = []
+    monkeypatch.setattr(headless, "start", lambda *a, **k: started.append(k) or {"fire_id": "f1", "state": "running", "notify_to": sid})
+    assert "fire" not in params
+    result = _dispatch({**params, "session_id": sid, "caller": f"{family}-em", "backend": family})
+    assert "fire_error" not in result and result["fire"]["fire_id"] == "f1"
+    assert started[0]["caller_session_id"] == sid
+
+
+@pytest.mark.parametrize("family,argv", [("agy", ["agy"]), ("grok", ["grok"])])
+def test_unverified_family_em_default_submit_names_the_refusal(params, seen, monkeypatch, family, argv):
+    from coordinator_core.ops.workflow_fire import authority, headless
+    from coordinator_core.session import external_registry
+
+    monkeypatch.setattr(authority, "caller_principal", lambda *a: authority.Principal("sess-1", "unknown", {}))
+    monkeypatch.setattr(external_registry, "lookup", lambda s: None)
+    monkeypatch.setattr(headless, "start", lambda *a, **k: pytest.fail("fired an unverified caller"))
+    result = _dispatch({**params, "backend": family})
+    assert result["run_id"] == "run-abc123" and "verified EM" in result["fire_error"]
+
+
+def test_fire_false_mints_without_firing(params, seen, monkeypatch):
+    monkeypatch.setattr(
+        "coordinator_core.ops.workflow_fire.op._workflow_fire",
+        lambda p, repo_root=None: pytest.fail("fired a fire:false submission"),
+    )
+    result = _dispatch({**params, "fire": False})
+    assert result["run_id"] == "run-abc123" and "fire" not in result and "fire_error" not in result
+
+
+@pytest.mark.parametrize("fire", ["false", "", 0, 1, None])
+def test_non_bool_fire_is_refused_before_any_gate_runs(params, seen, fire):
+    result = _dispatch({**params, "fire": fire})
+    assert result["refused"] == "bad-request" and "fire" in result["reason"]
+    assert seen == []
+
+
+def test_returned_fire_refusal_is_copied_to_top_level_fire_error(params, seen, monkeypatch):
+    monkeypatch.setattr(
+        "coordinator_core.ops.workflow_fire.op._workflow_fire",
+        lambda p, repo_root=None: {"refused": "lease-held", "reason": "another fire holds the lease"},
+    )
+    result = _dispatch(params)
+    assert result["run_id"] == "run-abc123"
+    assert result["fire_error"] == "lease-held: another fire holds the lease"
+
+
+def test_family_em_caller_without_a_verified_session_is_refused_at_fire(params, seen, monkeypatch):
+    from coordinator_core.ops.workflow_fire import authority, headless
+    from coordinator_core.session import external_registry
+
+    monkeypatch.setattr(authority, "caller_principal", lambda *a: authority.Principal("sess-1", "unknown", {}))
+    monkeypatch.setattr(external_registry, "lookup", lambda s: None)
+    monkeypatch.setattr(headless, "start", lambda *a, **k: pytest.fail("fired an unverified caller"))
+    result = _dispatch({**params, "fire": True})
+    assert result["run_id"] == "run-abc123" and "verified EM" in result["fire_error"]
 
 
 @pytest.mark.parametrize("backend", ["claude", "grok", "agy"])

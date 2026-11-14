@@ -35,6 +35,7 @@ _REPO_ROOT = HERE.parents[1]
 
 REFUSED = 2
 SESSION_ENV = "COORDINATOR_SESSION_ID"
+PROVIDER_ENV = "COORDINATOR_AGENT_PROVIDER"
 FAMILIES = ("codex", "agy", "grok", "claude")
 BG_TIMEOUT_S = 60
 _BG_UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
@@ -147,7 +148,7 @@ def launch(family, extra, *, session_id=None, which=shutil.which, execv=os.execv
     cmd = [cli, *extra]
     if family == "claude":
         cmd = [cli, "--bg", *(["--resume", resume] if resume else ["-n", name] if name else []), *extra]
-    child = {SESSION_ENV: sid, HEADLESS_EM_TOKEN_ENV: token}
+    child = {SESSION_ENV: sid, HEADLESS_EM_TOKEN_ENV: token, PROVIDER_ENV: family}
     if family == "codex" and platform == "win32":
         from coordinator_core.codex_runner.codex_spawn_env import place_installed_pwsh
         path_key = next((k for k in environ if k.upper() == "PATH"), None)

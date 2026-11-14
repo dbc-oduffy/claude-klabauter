@@ -219,6 +219,16 @@ def test_windows_codex_prepare_with_already_shaped_path_emits_no_path(tmp_path, 
     assert "PATH" not in _prepare(env, capsys)
 
 
+@pytest.mark.parametrize("family", ["codex", "grok", "agy", "claude"])
+def test_prepare_environment_carries_the_family_as_agent_provider(family, capsys):
+    assert _prepare({"PATH": "x"}, capsys, family=family, platform="linux")["COORDINATOR_AGENT_PROVIDER"] == family
+
+
+def test_launch_child_env_carries_the_family_as_agent_provider():
+    rc, calls, env = _run("codex", env={"PATH": "x"})
+    assert rc == 0 and env["COORDINATOR_AGENT_PROVIDER"] == "codex"
+
+
 def test_windows_grok_never_gets_a_path(tmp_path, capsys):
     env, *_ = _pwsh_env(tmp_path)
     assert "PATH" not in _prepare(env, capsys, family="grok")

@@ -79,6 +79,12 @@ def test_over_bound_carries_advisory_and_leaves_result_alone(tmp_path, monkeypat
     assert reply["result"].keys() == reply2["result"].keys()
 
 
+def test_advisory_names_the_hand_edit_size(tmp_path, monkeypatch):
+    over = _repo(tmp_path, files=3, lines_each=13)
+    stdout, _, _ = _run(monkeypatch, over, _FAMILY_ENV["codex"], f"nag-size-{tmp_path.name}")
+    assert "3 files / 39 lines" in json.loads(stdout)["advisory"]
+
+
 def _repo_one_file(tmp_path: Path) -> Path:
     return _repo(tmp_path, files=1, lines_each=0)
 

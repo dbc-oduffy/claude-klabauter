@@ -27,7 +27,10 @@ def repo(tmp_path, monkeypatch):
     _git(root, "commit", "-q", "-m", "base")
     monkeypatch.setattr(nag.xs_lane_budget, "lane_path",
                         lambda repo_root, sid: tmp_path / "hub" / sid / "lane.json")
-    monkeypatch.setattr(warp_fire, "nag_text", lambda sid, sizing_rel=None, state_dir=None, host=None: f"NAG[{host}]")
+    monkeypatch.setattr(
+        warp_fire, "nag_text",
+        lambda sid, sizing_rel=None, state_dir=None, host=None, edit_size=None: f"NAG[{host}]",
+    )
     return root
 
 
@@ -44,6 +47,30 @@ def _env(family):
 def test_over_bound_returns_nag(repo, family):
     _edit(repo, 3, 7)
     assert nag.advisory_for_dispatch(repo, "sid1", _env(family)) == f"NAG[{family}]"
+
+
+def test_nag_receives_measured_size_without_extra_spawn(repo, monkeypatch):
+    seen = {}
+
+    def spy(sid, sizing_rel=None, state_dir=None, host=None, edit_size=None):
+        seen["size"] = edit_size
+        return "N"
+    monkeypatch.setattr(warp_fire, "nag_text", spy)
+    _edit(repo, 3, 7)
+    assert nag.advisory_for_dispatch(repo, "sid-size", _env("codex")) == "N"
+    assert seen["size"] == (3, 36)
+
+
+def test_real_nag_text_names_size_and_bound(tmp_path):
+    from coordinator_core.session import xs_lane_budget as b
+
+    first = warp_fire.nag_text("s-size", state_dir=tmp_path, host="codex", edit_size=(7, 321))
+    assert "7 files / 321 lines" in first
+    assert f"{b.BUDGET_FILES} files / {b.BUDGET_LINES} lines" in first
+    assert warp_fire.INVOKE_SUBMIT_COMMAND in first
+    again = warp_fire.nag_text("s-size", state_dir=tmp_path, host="codex", edit_size=(7, 321))
+    assert again.startswith(warp_fire.NAG_REPEAT_PREFIX) and "7 files / 321 lines" in again
+    assert "files /" not in warp_fire.nag_text("s-none", state_dir=tmp_path, host="codex")
 
 
 def test_zero_op_hand_edit_session_nagged_on_first_non_op_call(repo, tmp_path):

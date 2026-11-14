@@ -90,9 +90,23 @@ def nag_text(
     sizing_rel: Optional[str] = None,
     state_dir: Optional[Path] = None,
     host: Optional[str] = None,
+    edit_size: Optional[tuple[int, int]] = None,
 ) -> str:
-    """The session's nag: full `fire_step` first, then a one-line `[engine-ask nag #N]`. Never empty."""
+    """The session's nag: full `fire_step` first, then a one-line `[engine-ask nag #N]`. Never empty.
+
+    `edit_size` is the measured (files, lines) of the EM's uncommitted hand edit; when given, the
+    text leads with it against the XS bound.
+    """
     n = _bump(session_id or "", state_dir)
+    lead = ""
+    if edit_size is not None:
+        from coordinator_core.session import xs_lane_budget
+
+        files, lines = edit_size
+        lead = (
+            f"Your uncommitted hand edit is {files} files / {lines} lines, past the XS bound "
+            f"({xs_lane_budget.BUDGET_FILES} files / {xs_lane_budget.BUDGET_LINES} lines). "
+        )
     if n <= 1:
-        return fire_step(sizing_rel, host)
-    return f"{NAG_REPEAT_PREFIX} #{n}] call `{fire_command(sizing_rel, host)}`, once."
+        return lead + fire_step(sizing_rel, host)
+    return f"{NAG_REPEAT_PREFIX} #{n}] {lead}call `{fire_command(sizing_rel, host)}`, once."
