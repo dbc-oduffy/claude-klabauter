@@ -1464,13 +1464,24 @@ def _status_command_ours(value, host):
     return len(argv) == 5 and argv[1] == "-c" and argv[2] == _TUI_STATUS_BOOT and argv[4] == host
 
 
+def _agy_status_norm(value):
+    """agy's statusLine with the empty `type` key agy writes into it on its own settings rewrite dropped.
+
+    Trap: agy turns our `{"command": ...}` into `{"type": "", "command": ...}`; compared raw, our own
+    value never reads as present and the post-edit check refuses every re-install.
+    """
+    if isinstance(value, dict) and value.get("type") == "":
+        return {k: v for k, v in value.items() if k != "type"}
+    return value
+
+
 def _host_status_value(host, text, command):
     """(current status-line value or None, the value we install) for one host's config text."""
     if host == "agy":
         data = json.loads(text or "{}")
         if not isinstance(data, dict):
             raise ValueError("agy settings must be a JSON object")
-        return data.get("statusLine"), {"command": command}
+        return _agy_status_norm(data.get("statusLine")), {"command": command}
     ui_table = tomllib.loads(text or "").get("ui", {})
     if not isinstance(ui_table, dict):
         raise ValueError("ui must be a table")
@@ -1520,7 +1531,7 @@ def seed_host_status_line(config_path, host, *, uninstall=False, engine_root=Non
                 path.unlink()
         elif host == "agy":
             data = json.loads(text)
-            if not isinstance(data, dict) or data.get("statusLine") != state["managed"]:
+            if not isinstance(data, dict) or _agy_status_norm(data.get("statusLine")) != state["managed"]:
                 return "retained-customized"
             original = json.loads(state["before"] or "{}").get("statusLine")
             if original is None:

@@ -2834,6 +2834,23 @@ def test_tui_status_install_upgrades_our_bare_module_form(monkeypatch, tmp_path)
     assert "agy status line present" in out and "grok status line present" in out
 
 
+def test_tui_status_agy_empty_type_key_is_ours(tmp_path):
+    """agy rewrites its settings and adds `"type": ""` to our statusLine; that value is still ours."""
+    cfg = tmp_path / "settings.json"
+    cfg.write_text(json.dumps({"theme": "dark", "statusLine": {"type": "", "command": "/py/python3 -m coordinator_core.tui_status agy"}}))
+    assert ui.seed_host_status_line(cfg, "agy", engine_root="/eng") == "updated"
+    want = ui._tui_status_command("agy", "/eng")
+    assert json.loads(cfg.read_text())["statusLine"]["command"] == want
+    assert ui.seed_host_status_line(cfg, "agy", engine_root="/eng") == "present"
+    cfg.write_text(json.dumps({"theme": "dark", "statusLine": {"type": "", "command": want}}, indent=4))
+    assert ui.seed_host_status_line(cfg, "agy", engine_root="/eng") == "present"
+    fresh = tmp_path / "fresh" / "settings.json"
+    assert ui.seed_host_status_line(fresh, "agy", engine_root="/eng") == "created"
+    fresh.write_text(json.dumps({"statusLine": {"type": "", "command": want}, "added": 1}))
+    assert ui.seed_host_status_line(fresh, "agy", uninstall=True) == "restored"
+    assert json.loads(fresh.read_text()) == {"added": 1}
+
+
 def test_tui_status_invalid_config_is_never_overwritten(tmp_path):
     cfg = tmp_path / "settings.json"
     cfg.write_text("{not json")
