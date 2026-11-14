@@ -11,7 +11,6 @@ import json
 import os
 import re
 import shutil
-import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -45,6 +44,15 @@ def _default_pid_alive(pid):
     return roster.pid_alive(pid)
 
 
+def _contract():
+    """The peer contract module (box_id), loaded from the sibling script."""
+    spec = importlib.util.spec_from_file_location(
+        "unimatrix_peer_contract", Path(__file__).resolve().with_name("unimatrix-peer-contract.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _clean(value):
     return re.sub(r"[^A-Za-z0-9_-]+", "-", str(value)).strip("-")
 
@@ -60,7 +68,7 @@ def peer_name(session_id, cwd):
             root = None
         if root is not None and root.name:
             base = root.name
-    return f"grok-{_clean(base) or 'session'}-{session_id[:8]}-on-{_clean(socket.gethostname()).lower()}"
+    return f"grok-{_clean(base) or 'session'}-{session_id[:8]}-on-{_clean(_contract().local_box())}"
 
 
 def discover_peers(home=None, pid_alive=None, taken_names=(), taken_targets=()):

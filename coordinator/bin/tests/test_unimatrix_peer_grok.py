@@ -26,7 +26,13 @@ def registry(tmp_path, rows):
 
 
 def box():
-    return pg._clean(socket.gethostname()).lower()
+    return pg._clean(pg._contract().box_id(socket.gethostname()))
+
+
+@pytest.mark.parametrize("host", ["Machine-b.local", "machine-b", "Machine-b"])
+def test_peer_name_suffix_is_one_box_across_hostname_spellings(monkeypatch, host):
+    monkeypatch.setattr(socket, "gethostname", lambda: host)
+    assert pg.peer_name(SID, "/nowhere/myrepo") == "grok-myrepo-01a1c000-on-machine-b"
 
 
 def test_live_entry_yields_named_grok_peer(tmp_path):

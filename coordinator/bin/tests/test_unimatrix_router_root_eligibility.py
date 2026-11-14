@@ -89,7 +89,7 @@ def test_lock_discovery_applies_same_positive_root_classifier(tmp_path,monkeypat
  locks=tmp_path/'locks';locks.mkdir();metadata=rows(tmp_path)
  for sid in [ROOT,CHILD,UNKNOWN]:(locks/(sid+'.lock')).write_text('inert lock fixture')
  monkeypatch.setattr(R,'codex_thread_metadata',lambda home:metadata);monkeypatch.setattr(R,'lock_held',lambda path:True)
- monkeypatch.setattr(R,'_contract',lambda:SimpleNamespace(read_codex_address=lambda home,ident,box:{'address_version':1,'name':'repo-codex-box-1','box':box},safe_alias=lambda a:True))
+ monkeypatch.setattr(R,'_contract',lambda:SimpleNamespace(read_codex_address=lambda home,ident,box:{'address_version':1,'name':'repo-codex-box-1','box':box},safe_alias=lambda a:True,local_box=lambda:'fixture-box',box_id=lambda b:b))
  monkeypatch.setattr(R,'_roster',lambda:SimpleNamespace(settings_home=lambda:tmp_path))
  rollout=tmp_path/'sessions'/('rollout-2026-01-01T00-00-00-'+ROOT+'.jsonl');rollout.parent.mkdir()
  rollout.write_text(json.dumps({'type':'session_meta','payload':{'source':'vscode'}})+'\n')
@@ -113,7 +113,7 @@ def fallback_roster(router,tmp_path,monkeypatch):
  monkeypatch.setattr(R,'_contract',lambda:SimpleNamespace(
   projected_addresses=lambda e:e.get('aliases',[]),
   build_frame=lambda *a,**k:{'msg_id':'fixture-msg'},stamp=lambda f,*a,**k:f,
-  local_box=lambda:'fixture-box',agent_row=lambda e,box:{'name':e.get('name'),'box':box}))
+  local_box=lambda:'fixture-box',box_id=lambda b:'fixture-box' if b==R.socket.gethostname() else b,agent_row=lambda e,box:{'name':e.get('name'),'box':box}))
  def put(name,**extra):
   row={'name':name,'vendor':'codex','pid':700,'procStart':'birth-700','pidDomain':'test-domain','messagingSocketPath':'fixture-local-endpoint',**extra}
   (tmp_path/(str(len(list(tmp_path.glob('*.json'))))+'.json')).write_text(json.dumps(row))

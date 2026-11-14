@@ -230,3 +230,9 @@ def test_every_mirror_row_the_roster_writes_carries_host_box_and_a_labelled_name
     healed = json.loads(path.read_text())
     assert healed["unimatrixRemote"] == "me@machine-b" and healed["unimatrixBox"] == "machine-b"
     assert healed["name"] == roster.labelled(healed["name"], cfg.remote) == "group-em-c1.machine-b"
+
+
+def test_session_identity_origin_is_one_box_id_across_hostname_spellings(monkeypatch):
+    for host in ("Machine-b.local", "machine-b", "MACHINE-B.Local"):
+        monkeypatch.setattr(roster.socket, "gethostname", lambda host=host: host)
+        assert roster.session_identity({"name": "x"})["box"] == "machine-b"

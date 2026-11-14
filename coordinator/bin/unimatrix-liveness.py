@@ -180,6 +180,18 @@ def agy_face_unbacked(d, home=None):
     return not (isinstance(agy_pid, int) and not isinstance(agy_pid, bool) and pid_alive(agy_pid))
 
 
+def agy_peer_rows_orphaned(home=None):
+    """[(name, target)] for agy peers.json rows whose `agy-legs/<target>.json` record does not exist.
+
+    Targets that are not safe file names are skipped; an unreadable peers.json answers []."""
+    base = state_dir(home)
+    rows = _peer_rows(base / "peers.json")
+    return [(r.get("name"), r["target"]) for r in rows
+            if r.get("vendor") == "agy" and isinstance(r.get("target"), str) and r["target"]
+            and "/" not in r["target"] and "\\" not in r["target"]
+            and not (base / "agy-legs" / f"{r['target']}.json").exists()]
+
+
 def codex_holder_live(row):
     """Liveness of the Codex process a peer row recorded as `codexPid`/`codexProcStart`.
 

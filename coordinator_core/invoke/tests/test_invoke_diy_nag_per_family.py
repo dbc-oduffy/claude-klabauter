@@ -79,6 +79,36 @@ def test_over_bound_carries_advisory_and_leaves_result_alone(tmp_path, monkeypat
     assert reply["result"].keys() == reply2["result"].keys()
 
 
+def _repo_one_file(tmp_path: Path) -> Path:
+    return _repo(tmp_path, files=1, lines_each=0)
+
+
+def test_codex_large_tracked_hand_edit_gets_advisory(tmp_path, monkeypatch):
+    repo = _repo_one_file(tmp_path)
+    (repo / "f0.txt").write_text("base\n" + "x\n" * 525, encoding="utf-8")
+    stdout, _, _ = _run(monkeypatch, repo, _FAMILY_ENV["codex"], f"nag-big-{tmp_path.name}")
+    reply = json.loads(stdout)
+    assert reply.get("advisory"), stdout
+    assert "result" in reply
+
+
+def test_codex_untracked_new_files_only_gets_advisory(tmp_path, monkeypatch):
+    repo = _repo_one_file(tmp_path)
+    for i in range(3):
+        (repo / f"new{i}.py").write_text("x = 1\n" * 200, encoding="utf-8")
+    stdout, _, _ = _run(monkeypatch, repo, _FAMILY_ENV["codex"], f"nag-untracked-{tmp_path.name}")
+    reply = json.loads(stdout)
+    assert reply.get("advisory"), stdout
+    assert "result" in reply
+
+
+def test_codex_small_untracked_file_gets_no_advisory(tmp_path, monkeypatch):
+    repo = _repo_one_file(tmp_path)
+    (repo / "new.py").write_text("x = 1\n" * 3, encoding="utf-8")
+    stdout, _, _ = _run(monkeypatch, repo, _FAMILY_ENV["codex"], f"nag-small-{tmp_path.name}")
+    assert "advisory" not in json.loads(stdout)
+
+
 @pytest.mark.parametrize("family", ["codex", "grok", "agy"])
 def test_bare_mode_keeps_stdout_the_result_and_advises_on_stderr(tmp_path, monkeypatch, family):
     over = _repo(tmp_path, files=3, lines_each=13)

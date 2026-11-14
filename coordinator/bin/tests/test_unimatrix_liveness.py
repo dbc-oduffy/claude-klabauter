@@ -153,6 +153,41 @@ def test_agy_face_with_no_peers_row_is_unbacked_but_an_unreadable_peers_file_is_
     assert lv.agy_face_unbacked({"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}, home) is False
 
 
+def _peer_home(tmp_path, rows, legs=()):
+    base = tmp_path / "unimatrix"
+    (base / "agy-legs").mkdir(parents=True)
+    (base / "peers.json").write_text(json.dumps(rows))
+    for leg in legs:
+        (base / "agy-legs" / f"{leg}.json").write_text(json.dumps({"agy_pid": 1}))
+    return tmp_path
+
+
+def test_agy_peer_rows_orphaned_lists_only_agy_rows_without_a_leg_record(tmp_path):
+    home = _peer_home(tmp_path, [
+        {"name": "a-dead", "vendor": "agy", "target": "dead-1"},
+        {"name": "a-live", "vendor": "agy", "target": "live-1"},
+        {"name": "c-row", "vendor": "codex", "target": "codex-1"},
+        {"name": "a-unsafe", "vendor": "agy", "target": "../x"},
+        {"name": "a-unsafe2", "vendor": "agy", "target": "a\\b"},
+        {"name": "a-empty", "vendor": "agy", "target": ""},
+        {"name": "a-notarget", "vendor": "agy"},
+        "junk",
+    ], legs=["live-1"])
+    assert lv.agy_peer_rows_orphaned(home) == [("a-dead", "dead-1")]
+
+
+def test_agy_peer_rows_orphaned_reads_the_peers_container_shape(tmp_path):
+    home = _peer_home(tmp_path, {"peers": [{"name": "a-dead", "vendor": "agy", "target": "dead-1"}]})
+    assert lv.agy_peer_rows_orphaned(home) == [("a-dead", "dead-1")]
+
+
+def test_agy_peer_rows_orphaned_unreadable_or_missing_peers_file_is_empty(tmp_path):
+    home = _peer_home(tmp_path, [])
+    (tmp_path / "unimatrix" / "peers.json").write_text("{not json")
+    assert lv.agy_peer_rows_orphaned(home) == []
+    assert lv.agy_peer_rows_orphaned(tmp_path / "nowhere") == []
+
+
 def test_codex_holder_live_matching_start_is_live():
     me = _rec()
     assert lv.codex_holder_live({"codexPid": me["pid"], "codexProcStart": me["procStart"]}) is True

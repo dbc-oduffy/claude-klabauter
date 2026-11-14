@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -218,10 +219,57 @@ def test_windows_codex_prepare_with_already_shaped_path_emits_no_path(tmp_path, 
     assert "PATH" not in _prepare(env, capsys)
 
 
-@pytest.mark.parametrize("family", ["agy", "grok"])
-def test_windows_non_codex_families_never_get_a_path(family, tmp_path, capsys):
+def test_windows_grok_never_gets_a_path(tmp_path, capsys):
     env, *_ = _pwsh_env(tmp_path)
-    assert "PATH" not in _prepare(env, capsys, family=family)
+    assert "PATH" not in _prepare(env, capsys, family="grok")
+
+
+def _fake_invoke(home):
+    bin_dir = home / "bin"
+    bin_dir.mkdir(parents=True)
+    exe = bin_dir / ("coordinator-invoke.exe" if os.name == "nt" else "coordinator-invoke")
+    exe.write_text("")
+    exe.chmod(0o755)
+    return bin_dir, exe
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_agy_prepare_path_resolves_coordinator_invoke(platform, home, tmp_path, capsys):
+    bin_dir, exe = _fake_invoke(home)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    env = {"PATH": str(elsewhere), g.SETTINGS_HOME_KEY: str(home)}
+    child = _prepare(env, capsys, family="agy", platform=platform)
+    entries = child["PATH"].split(os.pathsep)
+    assert str(bin_dir) in entries and str(elsewhere) in entries
+    assert Path(shutil.which("coordinator-invoke", path=child["PATH"])) == exe
+
+
+def test_agy_prepare_without_caller_path_still_carries_the_bin_dir(home, capsys):
+    bin_dir, _ = _fake_invoke(home)
+    child = _prepare({g.SETTINGS_HOME_KEY: str(home)}, capsys, family="agy", platform="linux")
+    assert child["PATH"].split(os.pathsep) == [str(bin_dir)]
+
+
+def test_agy_prepare_does_not_duplicate_a_bin_dir_already_on_path(home, capsys):
+    bin_dir, _ = _fake_invoke(home)
+    env = {"PATH": os.pathsep.join(["x", str(bin_dir)]), g.SETTINGS_HOME_KEY: str(home)}
+    child = _prepare(env, capsys, family="agy", platform="linux")
+    assert child["PATH"].split(os.pathsep).count(str(bin_dir)) == 1
+
+
+def test_agy_bin_dir_falls_back_to_default_settings_home_under_home(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv(g.SETTINGS_HOME_KEY, raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    child = _prepare({"PATH": "x"}, capsys, family="agy", platform="linux")
+    assert str(tmp_path / ".coordinator-claude-settings" / "bin") in child["PATH"].split(os.pathsep)
+
+
+@pytest.mark.parametrize("family", ["codex", "grok", "claude"])
+def test_agy_path_shaping_never_touches_other_families(family, home, capsys):
+    _fake_invoke(home)
+    env = {"PATH": "x", g.SETTINGS_HOME_KEY: str(home)}
+    assert "PATH" not in _prepare(env, capsys, family=family, platform="linux")
 
 
 def test_non_windows_codex_launch_leaves_the_env_without_a_path_change(tmp_path):

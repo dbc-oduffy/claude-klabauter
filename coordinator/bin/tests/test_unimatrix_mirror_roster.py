@@ -630,6 +630,7 @@ def test_reap_unbacked_agy_faces_drops_a_dead_agent_face_but_spares_a_backed_or_
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(sessions.parent / "settings-home"))
     liveness = roster._liveness()
     monkeypatch.setattr(liveness, "agy_face_unbacked", lambda d: d.get("name") != "agy-backed")
     old = int(time.time() * 1000) - 10 * 60 * 1000
@@ -643,6 +644,43 @@ def test_reap_unbacked_agy_faces_drops_a_dead_agent_face_but_spares_a_backed_or_
     roster.reap_unbacked_agy_faces(lines.append)
     assert sorted(p.name for p in sessions.iterdir()) == ["999982.json", "999983.json"]
     assert len(lines) == 1 and "agy-dead" in lines[0]
+
+
+def _orphan_home(tmp_path, monkeypatch):
+    home = tmp_path / "settings-home"
+    (home / "unimatrix" / "agy-legs").mkdir(parents=True)
+    (home / "unimatrix" / "agy-legs" / "live.json").write_text("{}")
+    peers = home / "unimatrix" / "peers.json"
+    peers.write_text(json.dumps({"peers": [
+        {"name": "agy-orphan", "vendor": "agy", "target": "gone"},
+        {"name": "agy-live", "vendor": "agy", "target": "live"},
+        {"name": "codex-x", "vendor": "codex", "target": "gone"},
+    ]}))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    return peers
+
+
+def test_reap_unbacked_agy_faces_drops_an_orphaned_agy_peer_row_but_keeps_a_backed_or_non_agy_one(
+        sessions, tmp_path, monkeypatch):
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    peers = _orphan_home(tmp_path, monkeypatch)
+    lines = []
+    roster.reap_unbacked_agy_faces(lines.append)
+    kept = [r["name"] for r in json.loads(peers.read_text())["peers"]]
+    assert kept == ["agy-live", "codex-x"]
+    assert lines == ["reaped orphaned agy peer row agy-orphan (target gone)"]
+
+
+def test_reap_unbacked_agy_faces_survives_a_failing_peer_row_drop(sessions, tmp_path, monkeypatch):
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    _orphan_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(roster._codex_hook(), "drop_peer_rows",
+                        lambda *a: (_ for _ in ()).throw(OSError("locked")))
+    lines = []
+    roster.reap_unbacked_agy_faces(lines.append)
+    assert len(lines) == 1 and "locked" in lines[0]
 
 
 def _mirror_one(roster, sessions, monkeypatch, remote, entry_extra=None, pid=31339):

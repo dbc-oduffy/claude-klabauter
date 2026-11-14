@@ -50,15 +50,22 @@ class GrokAdapter:
         else:
             tool_name = name
             tool_input = dict(args)
+        session_id = str(payload.get("session_id") or "")
+        metadata = {key: payload[key] for key in ("agent_id", "transcript_path", "agent_type")
+                    if isinstance(payload.get(key), str) and payload[key]}
+        # A grok subagent's payload carries camelCase `subagentType` and no agent_id; its own session_id is the child id.
+        subagent_type = payload.get("subagentType")
+        if isinstance(subagent_type, str) and subagent_type and session_id:
+            metadata["agent_type"] = subagent_type
+            metadata["agent_id"] = session_id
         return HostEvent(
             host=HOST_GROK,
             event=str(event or payload.get("hook_event_name") or ""),
-            session_id=str(payload.get("session_id") or ""),
+            session_id=session_id,
             tool_name=tool_name,
             tool_input=tool_input,
             cwd=str(payload.get("cwd") or ""),
-            metadata={key: payload[key] for key in ("agent_id", "transcript_path", "agent_type")
-                      if isinstance(payload.get(key), str) and payload[key]},
+            metadata=metadata,
         )
 
     def engine_event(self, host_event: HostEvent) -> Optional[Dict[str, Any]]:

@@ -27,6 +27,10 @@ def roster(tmp_path, monkeypatch):
     sess = tmp_path / "sessions"
     sess.mkdir()
     monkeypatch.setattr(mod, "sessions_dir", lambda: str(sess))
+    # The real /tmp/cc-socks holds every live peer's socket: main() reaps there.
+    socks = tmp_path / "socks"
+    socks.mkdir()
+    monkeypatch.setattr(mod, "LOOPBACK_SOCKS", str(socks))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
     mod.killed = []
     monkeypatch.setattr(mod, "tree_kill_many", lambda pids: mod.killed.extend(pids))

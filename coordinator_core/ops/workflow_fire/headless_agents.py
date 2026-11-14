@@ -165,8 +165,7 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
         )
         posted = admission_post.post("START", sid, pids=[proc.pid], run=key,
                                      declared_peak_mb=actual_peak_mb)
-        if not posted.get("delivered"):
-            raise AgentFailed(f"Workflow START admission delivery failed: {posted.get('reason', 'unknown')}")
+        admission_post.record_undelivered(artifact_dir, {"phase": "START", **posted})
         if on_spawn:
             on_spawn(proc.pid)
         proc.communicate(prompt.encode("utf-8"), timeout=remaining())

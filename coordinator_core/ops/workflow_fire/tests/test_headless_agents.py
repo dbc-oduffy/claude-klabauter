@@ -259,16 +259,18 @@ def test_reservation_write_failure_is_fail_closed(tmp_path, monkeypatch, admissi
     assert not capture.exists()
 
 
-def test_start_delivery_failure_reaps_child_and_releases(tmp_path, monkeypatch, admission):
+def test_start_delivery_failure_fails_open_and_records(tmp_path, monkeypatch, admission, capsys):
     events, _ = admission
-    fake_cli(tmp_path, monkeypatch, delay=10)
+    fake_cli(tmp_path, monkeypatch)
     def post(phase, sid, **kwargs):
         events.append((phase, kwargs))
-        return {"delivered": phase != "START", "reason": "short_write"}
+        return {"delivered": phase != "START", "reason": "short_write", "path": "ledger"}
     monkeypatch.setattr(agents.admission_post, "post", post)
-    with pytest.raises(agents.AgentFailed, match="START admission delivery failed"):
-        agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
+    assert agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent") == '{"ok":true}'
     assert [name for name, _ in events] == ["reserve", "START", "END", "release"]
+    record = json.loads((tmp_path / "agent" / "admission-undelivered.json").read_text(encoding="utf-8"))
+    assert record == {"phase": "START", "reason": "short_write", "path": "ledger"}
+    assert "undelivered" in capsys.readouterr().err
 
 
 def test_parallel_agents_use_distinct_reservation_keys(tmp_path, monkeypatch, admission):

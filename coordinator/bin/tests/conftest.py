@@ -416,3 +416,31 @@ def make_plan():
 def run_spine_check():
     """Run plan-spine-check.py on a plan path with optional extra CLI args; returns CompletedProcess."""
     return _run
+
+
+_LIVE_SOCK_DIRS = ("/tmp/cc-socks", "/private/tmp/cc-socks")
+
+
+@pytest.fixture(autouse=True)
+def _never_unlink_live_peer_sockets(monkeypatch):
+    """A test never unlinks a real peer socket: one unredirected roster reap on a live box cut
+    every LAN peer (Machine-b 2026-11-14 16:18Z). Redirect LOOPBACK_SOCKS to tmp_path instead."""
+    real_unlink, real_remove = os.unlink, os.remove
+
+    def _refuse(path):
+        text = os.fspath(path)
+        if isinstance(text, bytes):
+            text = text.decode(errors="replace")
+        if any(text == d or text.startswith(d + "/") for d in _LIVE_SOCK_DIRS):
+            raise AssertionError(f"test tried to unlink a live peer socket: {text}")
+
+    def unlink(path, *a, **k):
+        _refuse(path)
+        return real_unlink(path, *a, **k)
+
+    def remove(path, *a, **k):
+        _refuse(path)
+        return real_remove(path, *a, **k)
+
+    monkeypatch.setattr(os, "unlink", unlink)
+    monkeypatch.setattr(os, "remove", remove)

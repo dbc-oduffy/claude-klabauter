@@ -69,7 +69,12 @@ def test_client_requests_only_the_explicitly_selected_mode(tmp_path, monkeypatch
     assert commands[0][-1] == ("reply-inbox temporary" if opt_in else "inbox temporary")
 
 
-def _exported(tmp_path, monkeypatch, capsys):
+def relay_box(host):
+    """The expected box id of a hostname spelling."""
+    return host.partition(".")[0].lower()
+
+
+def _exported(tmp_path, monkeypatch, capsys, host="Hosted-Box"):
     source = {"pid": 2, "name": "temporary", "unimatrixMirror": True, "unimatrixReplyInbox": True,
               "unimatrixRemoteSocket": "/client.sock", "unimatrixClient": "192.0.2.10",
               "messagingSocketPath": "/hosted.sock", "cwd": "/work/repo"}
@@ -81,13 +86,13 @@ def _exported(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(relay, "entries", lambda: iter([(2, source, key.name), (3, downstream, key.name), (4, ordinary, key.name)]))
     monkeypatch.setattr(relay, "engine_fields", lambda: {})
     monkeypatch.setattr(relay, "load_roster", lambda: roster)
-    monkeypatch.setattr(relay.socket, "gethostname", lambda: "Hosted-Box")
+    monkeypatch.setattr(relay.socket, "gethostname", lambda: host)
     relay.roster()
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert len(rows) == 1
     exported = rows[0]["entry"]
     assert exported["name"] == "temporary" and exported["vendor"] == "transport"
-    assert exported["box"] == "hosted-box" and exported["unimatrixReplyInbox"] is True
+    assert exported["box"] == relay_box(host) and exported["unimatrixReplyInbox"] is True
     assert not {"unimatrixMirror", "unimatrixRemoteSocket", "unimatrixClient"} & set(exported)
     assert source["unimatrixMirror"] is True  # publication changes a copy, never local ownership
     return rows[0]
@@ -95,6 +100,11 @@ def _exported(tmp_path, monkeypatch, capsys):
 
 def test_reply_endpoint_exports_once_without_mirror_markers(tmp_path, monkeypatch, capsys):
     _exported(tmp_path, monkeypatch, capsys)
+
+
+@pytest.mark.parametrize("host", ["Machine-b.local", "machine-b", "MACHINE-B.Local"])
+def test_reply_endpoint_box_is_one_id_across_hostname_spellings(tmp_path, monkeypatch, capsys, host):
+    assert _exported(tmp_path, monkeypatch, capsys, host)["entry"]["box"] == "machine-b"
 
 
 def test_downstream_reply_mirror_survives_repeated_sync_without_echo(tmp_path, monkeypatch, capsys):

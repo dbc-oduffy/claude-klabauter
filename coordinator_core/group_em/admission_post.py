@@ -69,6 +69,22 @@ def _append_verified(path: Path, data: bytes) -> Optional[str]:
     return None if data in span else "not_found_at_path"
 
 
+def record_undelivered(artifact_dir: Path, posted: dict) -> None:
+    """Record an undelivered admission post in ``artifact_dir``; never raises.
+
+    A no-op when ``posted`` was delivered. Writes ``admission-undelivered.json`` (phase,
+    reason, ledger path) so a run that proceeded without its bookkeeping line is traceable.
+    """
+    if posted.get("delivered"):
+        return
+    record = {k: posted.get(k) for k in ("phase", "reason", "path")}
+    print(f"admission_post: {record['phase']} undelivered, run proceeds: {record['reason']}", file=sys.stderr)
+    try:
+        (Path(artifact_dir) / "admission-undelivered.json").write_text(json.dumps(record), encoding="utf-8")
+    except OSError as exc:
+        print(f"admission_post: undelivered record not written to {artifact_dir}: {exc}", file=sys.stderr)
+
+
 def post(
     phase: str,
     session_id: str,
@@ -127,9 +143,13 @@ def post(
     if phase in ("START", "REQUEST") and peak is not None:
         line["declared_peak_mb"] = peak
     path = admission_path(directory)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = (json.dumps(line, separators=(",", ":")) + "\n").encode("utf-8")
-    reason = _append_verified(path, data)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        reason = f"write_failed:{type(exc).__name__}:{exc}"
+    else:
+        data = (json.dumps(line, separators=(",", ":")) + "\n").encode("utf-8")
+        reason = _append_verified(path, data)
     if reason:
         print(f"admission_post: {phase} NOT delivered to {path}: {reason}", file=sys.stderr)
     return {

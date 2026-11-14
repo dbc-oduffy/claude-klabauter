@@ -45,6 +45,7 @@ BOX_FIELD = "unimatrixBox"  # the peer contract's mirror-row box stamp
 
 log = None
 cfg = None
+bound_ino = None  # inode of the endpoint socket this bridge bound (unix only)
 
 
 def settings_home():
@@ -182,6 +183,8 @@ def accept_loop(endpoint):
         srv = socket.socket(socket.AF_UNIX)
         srv.bind(endpoint)
         os.chmod(endpoint, 0o600)
+        global bound_ino
+        bound_ino = os.stat(endpoint).st_ino
         srv.listen(8)
         while True:
             c, _ = srv.accept()
@@ -620,15 +623,15 @@ def supervisor_gone():
         {"pid": cfg.supervisor, "procStart": mine.get("unimatrixRosterProcStart")})
 
 
-def drop_own_files():
-    """Remove this bridge's registry entry, peer key and (unix) endpoint."""
+def drop_own_files(endpoint=True):
+    """Remove this bridge's registry entry, peer key and (unix) endpoint unless `endpoint` is False."""
     base = os.path.expanduser(SESSIONS)
     try:
         names = [f for f in os.listdir(base) if f.startswith(f"{os.getpid()}.")]
     except OSError:
         names = []
     paths = [os.path.join(base, f) for f in names]
-    if not IS_WIN:
+    if not IS_WIN and endpoint:
         paths.append(cfg.endpoint)
     for path in paths:
         try:
@@ -647,6 +650,26 @@ def watch_supervisor():
             os._exit(0)
 
 
+def socket_lost(endpoint, ino):
+    """True when `endpoint` no longer holds the socket inode this bridge bound; False before any bind."""
+    if ino is None:
+        return False
+    try:
+        return os.stat(endpoint).st_ino != ino
+    except OSError:
+        return True
+
+
+def watch_socket():
+    """Tick: exit when the bound socket path is gone or swapped, leaving the successor's file alone."""
+    while True:
+        time.sleep(SUPERVISOR_POLL_SECONDS)
+        if socket_lost(cfg.endpoint, bound_ino):
+            log.write(f"endpoint {cfg.endpoint} no longer the bound socket; exiting\n")
+            drop_own_files(endpoint=False)
+            os._exit(0)
+
+
 def main(argv=None):
     global cfg, log
     argv = sys.argv[1:] if argv is None else argv
@@ -659,6 +682,8 @@ def main(argv=None):
     _lock()  # create before serving threads exist: _lock()'s check-then-set is unguarded
     if cfg.return_port:
         threading.Thread(target=return_leg, daemon=True).start()
+    if not IS_WIN:
+        threading.Thread(target=watch_socket, daemon=True).start()
     if cfg.supervisor is not None:
         threading.Thread(target=watch_supervisor, daemon=True).start()
     for conn in accept_loop(cfg.endpoint):

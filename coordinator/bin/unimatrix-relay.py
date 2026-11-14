@@ -368,6 +368,16 @@ def _load_sibling(filename, modname):
     return mod
 
 
+_CONTRACT = []
+
+
+def local_box():
+    """This box's id via the peer contract's one normaliser, loaded once."""
+    if not _CONTRACT:
+        _CONTRACT.append(_load_sibling("unimatrix-peer-contract.py", "unimatrix_relay_peer_contract"))
+    return _CONTRACT[0].local_box()
+
+
 def _console_python():
     """A real console CPython for a child argv; OSError when none resolves."""
     found = _load_sibling("lib/python_interp.py", "unimatrix_relay_python_interp").resolve_console_python()
@@ -422,7 +432,7 @@ def roster():
             # mirror markers would suppress its downstream mirror on the next poll.
             for field in ("unimatrixMirror", "unimatrixRemoteSocket", "unimatrixClient"):
                 exported.pop(field, None)
-            exported.update(vendor="transport", box=socket.gethostname().lower())
+            exported.update(vendor="transport", box=local_box())
         rows.append((pid, exported, {"entry": exported, "key_name": key, "key": body, **fields}))
     holders = {}
     for pid, exported, _ in rows:
@@ -1691,7 +1701,7 @@ def probe_specs(platform=None):
     gpu = {"win32": _gpu_windows, "darwin": _gpu_darwin}.get(platform, _gpu_linux)
     total, available = _safe(ram) or (None, None)
     return {
-        "box": socket.gethostname(),
+        "box": local_box(),
         "ram_gb": round(total / GIB, 1) if total else None,
         "ram_available_gb": round(available / GIB, 1) if available else None,
         "cpu_cores": os.cpu_count(),

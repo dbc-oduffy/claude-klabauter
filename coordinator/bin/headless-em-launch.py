@@ -79,6 +79,21 @@ def _run_bg(argv, *, cwd, env, runner, name):
     return 0
 
 
+def _with_settings_bin(environ):
+    """The caller's PATH with `<settings home>/bin` appended once, so agy's sandbox resolves coordinator-invoke.
+
+    Reads the injected `environ`, not `os.environ`, so it mirrors `_settings_home.settings_home()`'s
+    COORDINATOR_SETTINGS_HOME / `~/.coordinator-claude-settings` precedence rather than calling it.
+    """
+    home = environ.get("COORDINATOR_SETTINGS_HOME") or str(Path.home() / ".coordinator-claude-settings")
+    bin_dir = str(Path(home) / "bin")
+    path_key = next((k for k in environ if k.upper() == "PATH"), None)
+    entries = [e for e in (environ[path_key].split(os.pathsep) if path_key else []) if e]
+    if bin_dir not in entries:
+        entries.append(bin_dir)
+    return os.pathsep.join(entries)
+
+
 def launch(family, extra, *, session_id=None, which=shutil.which, execv=os.execv, environ=None,
            prepare_only=False, platform=None, native_executable=None, mint=uuid.uuid4,
            name=None, resume=None, cwd=None, runner=subprocess.run):
@@ -141,6 +156,8 @@ def launch(family, extra, *, session_id=None, which=shutil.which, execv=os.execv
             shaped = place_installed_pwsh({"PATH": inherited}, environ, windows=True)["PATH"]
             if shaped != inherited:
                 child["PATH"] = shaped
+    if family == "agy":
+        child["PATH"] = _with_settings_bin(environ)
     if prepare_only:
         print(json.dumps({"argv": cmd, "session_id": sid, "environment": child}))
         return 0

@@ -136,3 +136,22 @@ def test_file_path_key_outranks_path_keys_and_session_id_is_optional():
 def test_non_edit_unknown_tool_is_not_mapped_to_an_edit_name():
     ev = GrokAdapter().adapt_event(_payload("web_search", {"query": "q"}))
     assert ev.tool_name == "web_search"
+
+
+def test_subagent_type_maps_to_agent_type_and_child_session_id_to_agent_id():
+    ev = GrokAdapter().adapt_event(_payload("read_file", {"path": "/x"}, session_id="child-1", subagentType="explore"))
+    assert ev.metadata["agent_type"] == "explore"
+    assert ev.metadata["agent_id"] == "child-1"
+    out = GrokAdapter().engine_event(ev)
+    assert out["agent_id"] == "child-1" and out["agent_type"] == "explore"
+
+
+def test_payload_without_subagent_type_stays_em_even_with_a_subagent_type_tool_arg():
+    ev = GrokAdapter().adapt_event(
+        _payload("spawn_subagent", {"subagent_type": "explore", "prompt": "p"}, session_id="em-1"))
+    assert "agent_id" not in ev.metadata and "agent_type" not in ev.metadata
+
+
+def test_subagent_type_without_session_id_does_not_invent_an_agent_id():
+    ev = GrokAdapter().adapt_event(_payload("read_file", {"path": "/x"}, subagentType="explore"))
+    assert "agent_id" not in ev.metadata

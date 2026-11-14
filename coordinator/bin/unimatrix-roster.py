@@ -205,6 +205,19 @@ def _liveness():
     return _LIVENESS[0]
 
 
+_CODEX_HOOK = []
+
+
+def _codex_hook():
+    if not _CODEX_HOOK:
+        spec = importlib.util.spec_from_file_location(
+            "unimatrix_codex_hook_sessionstart", HERE / "unimatrix-codex-hook-sessionstart.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _CODEX_HOOK.append(mod)
+    return _CODEX_HOOK[0]
+
+
 def entry_live(d):
     """The entry's pid is alive and, when it records a procStart, is still that process."""
     return _liveness().entry_live(d)
@@ -638,7 +651,14 @@ def mirror_name(name, remote, far_sock=None, scan=None):
         return name
     if LABEL_SEP in name and not name.endswith(LABEL_SEP + box_label(remote)):
         name = name.replace(LABEL_SEP, "-")
-    if bare_name(name) in live_bare_names(far_sock, scan):
+    bare = bare_name(name)
+    if scan is None:
+        scan = live_sessions()
+    want = box_key(remote)
+    # A same-named entry on this box is the face's own earlier entry (another alias, or a pre-restart socket).
+    rivals = [(n, s) for n, s in scan
+              if not (n == bare and isinstance(s, str) and "\0" in s and box_key(s.partition("\0")[0]) == want)]
+    if bare in live_bare_names(far_sock, rivals):
         return labelled(name, remote)
     return bare_name(name)
 
@@ -849,6 +869,12 @@ def liveness_unknown(d):
     return not isinstance(pid, int) or isinstance(pid, bool)
 
 
+def process_holds(d):
+    """True when the entry's own live process still holds its socket; the roster that owns that process
+    reaps it, so no other roster's sweep unlinks the socket out from under it."""
+    return not d.get(STALE_FIELD) and entry_live(d)
+
+
 def mark_stale(path, d, say):
     """Record `unimatrixStale` on the entry at `path` so `entry_listed` drops it; the entry is never deleted."""
     if d.get(STALE_FIELD):
@@ -877,7 +903,7 @@ def reap_stale_sockets(owners, keep, readable, say):
         socks = os.listdir(LOOPBACK_SOCKS)
     except OSError:
         return
-    held = {d.get("messagingSocketPath") for _, _, d in owners if liveness_unknown(d)}
+    held = {d.get("messagingSocketPath") for _, _, d in owners if liveness_unknown(d) or process_holds(d)}
     for f in socks:
         full = os.path.join(LOOPBACK_SOCKS, f)
         if not LOOPBACK_SOCK_RE.fullmatch(f) or full in listed or full in held:
@@ -923,6 +949,17 @@ def reap_unbacked_agy_faces(say):
     for pid, name in reaped:
         drop_session_files(pid)
         say(f"reaped unbacked agy face {name} pid {pid}")
+    try:
+        orphans = liveness.agy_peer_rows_orphaned()
+        if orphans:
+            hook = _codex_hook()
+            dropped = set(hook.drop_peer_rows(settings_home() / "unimatrix" / "peers.json",
+                                              {t for _, t in orphans}))
+            for name, target in orphans:
+                if name in dropped:
+                    say(f"reaped orphaned agy peer row {name} (target {target})")
+    except Exception as e:
+        say(f"orphaned agy peer row reap failed: {e}")
 
 
 def log_label(entry):
@@ -957,7 +994,7 @@ def session_identity(entry, box=None):
         else:
             vendor = "unknown"
     far = entry.get(FAR_SOCKET_FIELD) or entry.get("unimatrixMirror")
-    origin = entry.get("box") or box or ("unknown" if far else socket.gethostname().lower())
+    origin = entry.get("box") or box or ("unknown" if far else _contract().local_box())
     out = {"vendor": vendor, "box": str(origin), "cwd": entry.get("cwd") or ""}
     holder = _liveness().codex_face_holder(entry) if box is None and vendor == "codex" else None
     if holder:
@@ -1032,6 +1069,16 @@ def remote_ip(remote):
     return ip
 
 
+BOUND_SINCE = {}  # bridge pid -> spawn time; a bridge unknown here is never judged deaf
+
+
+def bridge_deaf(pid, endpoint):
+    """True when a bridge this process spawned outlived `SOCKET_GRACE_SECONDS` yet its socket file is gone."""
+    since = BOUND_SINCE.get(pid)
+    return (since is not None and not _is_win() and time.time() - since >= SOCKET_GRACE_SECONDS
+            and not os.path.exists(endpoint))
+
+
 def mirror(row, cfg, say, scan=None):
     e = row["entry"]
     far_sock = e["messagingSocketPath"]
@@ -1041,6 +1088,7 @@ def mirror(row, cfg, say, scan=None):
     b = spawn(bridge_cmd(endpoint, os.path.join(os.path.dirname(os.path.abspath(cfg.log)),
                                                 f"unimatrix-bridge-{log_label(e)}.log"),
                          cfg.remote, cfg.key, tunnel_remote=cfg.tunnel_remote, supervisor=os.getpid()))
+    BOUND_SINCE[b.pid] = time.time()
     time.sleep(1)
     d = {k: v for k, v in e.items() if k not in ("pid", "procStart", "pidDomain", "messagingSocketPath")}
     if "name" in d:
@@ -1062,6 +1110,9 @@ def mirror(row, cfg, say, scan=None):
                    local_peer_key(row["key"], d["procStart"], d["pidDomain"]))
     say(f"mirror {e.get('name')} {far_sock} -> bridge {b.pid} {endpoint}")
     return b
+
+
+FAR_LIVENESS_FIELDS = ("updatedAt", "statusUpdatedAt", "status")  # the far session's activity, never the face's
 
 
 def rename_live_mirror(pid, sock, row, cfg, say, scan=None):
@@ -1097,6 +1148,9 @@ def rename_live_mirror(pid, sock, row, cfg, say, scan=None):
     contract = _contract()
     if not d.get(contract.BOX_FIELD):
         updates[contract.BOX_FIELD] = contract.box_id(cfg.remote)
+    for field in FAR_LIVENESS_FIELDS:
+        if field in row["entry"] and d.get(field) != row["entry"][field]:
+            updates[field] = row["entry"][field]
     far_pid = row["entry"].get("pid")
     if isinstance(far_pid, int) and far_pid > 0 and d.get("farPid") != far_pid:
         updates["farPid"] = far_pid
@@ -1176,11 +1230,16 @@ def sync(bridges, rows, cfg, say):
                 unmirror(bridges.pop(sock).pid)
                 say(f"unmirror {sock}: another alias of this box mirrors it")
             continue
-        if b and b.poll() is None:
+        deaf = b and b.poll() is None and bridge_deaf(b.pid, local_endpoint(f"{cfg.remote}:{sock}"))
+        if b and b.poll() is None and not deaf:
             rename_live_mirror(b.pid, sock, row, cfg, say, scan)
             continue
-        if b:
+        if deaf:
+            say(f"bridge {b.pid} for {sock} lost its socket; re-mirror")
+        elif b:
             say(f"bridge {b.pid} for {sock} exited rc={b.poll()}; re-mirror")
+        if b:
+            BOUND_SINCE.pop(b.pid, None)
             unmirror(b.pid)
             scan = [(n, s) for n, s in scan if not same_scan_target(s, mirror_scan_key(cfg.remote, sock))]
         bridges[sock] = mirror(row, cfg, say, scan)

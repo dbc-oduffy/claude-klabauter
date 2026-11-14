@@ -46,6 +46,17 @@ def test_over_bound_returns_nag(repo, family):
     assert nag.advisory_for_dispatch(repo, "sid1", _env(family)) == f"NAG[{family}]"
 
 
+def test_zero_op_hand_edit_session_nagged_on_first_non_op_call(repo, tmp_path):
+    """Replay: codex hand-edits 3 tracked files and adds 2 new ones, never invoking an op; the
+    first call from any other surface (no stamp, no lane) still gets the advisory, once."""
+    _edit(repo, 3, 100)
+    for i in range(2):
+        (repo / f"new{i}.py").write_text("x\n" * 150)
+    assert not (tmp_path / "hub").exists()
+    assert nag.advisory_for_dispatch(repo, "never-invoked", _env("codex")) == "NAG[codex]"
+    assert nag.advisory_for_dispatch(repo, "never-invoked", _env("codex")) is None
+
+
 def test_under_bound_returns_none(repo):
     (repo / "f0.txt").write_text("a\na\nb\nb\nb\n")
     assert nag.advisory_for_dispatch(repo, "sid1", _env("codex")) is None
@@ -103,6 +114,58 @@ def test_binary_row_counts_as_file(repo, monkeypatch):
     monkeypatch.setattr(nag.subprocess, "run", lambda *a, **k: P)
     assert nag._measure(str(repo)) == (3, 0)
     assert nag.advisory_for_dispatch(repo, "sid1", _env("agy")) == "NAG[agy]"
+
+
+def test_untracked_new_files_count_toward_bound(repo):
+    for i in range(3):
+        (repo / f"new{i}.txt").write_text("n\n" * 12)
+    assert nag._measure(str(repo)) == (3, 36)
+    assert nag.advisory_for_dispatch(repo, "sid1", _env("codex")) == "NAG[codex]"
+
+
+def test_small_untracked_file_stays_under_bound(repo):
+    (repo / "new.txt").write_text("n\n" * 5)
+    assert nag._measure(str(repo)) == (1, 5)
+    assert nag.advisory_for_dispatch(repo, "sid1", _env("codex")) is None
+
+
+def test_ignored_untracked_files_not_counted(repo):
+    (repo / ".gitignore").write_text("*.log\n")
+    for i in range(5):
+        (repo / f"x{i}.log").write_text("n\n" * 50)
+    assert nag._measure(str(repo)) == (1, 1)
+
+
+def test_coordinator_local_engine_output_not_counted(repo):
+    (repo / ".coordinator-local").mkdir()
+    for i in range(5):
+        (repo / ".coordinator-local" / f"e{i}.txt").write_text("n\n" * 50)
+    assert nag._measure(str(repo)) == (0, 0)
+
+
+def test_state_records_not_counted(repo):
+    (repo / "state").mkdir()
+    for i in range(5):
+        (repo / "state" / f"r{i}.yaml").write_text("n\n" * 50)
+    assert nag._measure(str(repo)) == (0, 0)
+
+
+def test_binary_untracked_file_is_a_file_with_no_lines(repo):
+    (repo / "blob.bin").write_bytes(b"\0\1\2" * 100)
+    assert nag._measure(str(repo)) == (1, 0)
+
+
+def test_measure_uses_at_most_two_spawns(repo, monkeypatch):
+    (repo / "new.txt").write_text("n\n")
+    calls = []
+    real = subprocess.run
+
+    def counting(*a, **k):
+        calls.append(a)
+        return real(*a, **k)
+    monkeypatch.setattr(nag.subprocess, "run", counting)
+    nag._measure(str(repo))
+    assert len(calls) == 2
 
 
 def test_git_failure_fails_open(repo, monkeypatch):

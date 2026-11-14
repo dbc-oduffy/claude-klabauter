@@ -601,7 +601,7 @@ def test_router_with_no_peers_json_registers_locks_and_retires_them_when_release
 
 def _box_slug():
     """The `-on-<box>` suffix: the hostname with every non-[A-Za-z0-9_-] run collapsed to '-', lowercased."""
-    return re.sub(r"[^A-Za-z0-9_-]+", "-", socket.gethostname()).strip("-").lower()
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", pr._contract().box_id(socket.gethostname())).strip("-")
 
 
 def _dead_pid():
@@ -1066,6 +1066,43 @@ def test_face_entries_carry_their_peers_vendor(box):
     run(go())
 
 
+SPELLINGS = ["Machine-b.local", "machine-b", "Machine-b", "machine-b-lan.local"]
+
+
+@pytest.mark.parametrize("host", SPELLINGS)
+def test_box_identity_is_one_value_across_hostname_spellings(box, monkeypatch, host):
+    monkeypatch.setattr(socket, "gethostname", lambda: host)
+    assert pr.readable_peer_name("agy", "conv-1", "/x/repo").endswith("-on-machine-b")
+    peer = {"name": "x", "vendor": "codex", "target": THR_1}
+    reg = pr.Registration("x", str(box / "eps" / "x.sock"), str(box / "sessions"), vendor="codex", peer=peer)
+    assert reg.data["box"] == "machine-b"
+
+    async def go():
+        r = make_router(box, echo_adapters())
+        await r.start()
+        try:
+            resp = await r._dispatch({"op": "list"})
+            assert {d["box"] for n, d in resp["details"].items() if n in ("agy-a", "codex-a")} == {"machine-b"}
+        finally:
+            await r.stop()
+    run(go())
+
+
+@pytest.mark.parametrize("far_box,local,expected", [
+    ("Machine-b.local", "machine-b", False),
+    ("machine-b-lan", "Machine-b.local", False),
+    ("mac-mini.local", "Machine-b.local", True),
+])
+def test_far_row_check_compares_box_ids_not_raw_hostnames(box, monkeypatch, far_box, local, expected):
+    monkeypatch.setattr(socket, "gethostname", lambda: local)
+    roster = pr._roster()
+    entry = {"name": "far", "vendor": "codex", "unimatrixRemote": "me@far", "macSocketPath": "uds:/x.sock",
+             "box": far_box, "pid": os.getpid(), "farPid": 812, "procStart": roster.proc_start(os.getpid()),
+             "pidDomain": roster.pid_domain(), "messagingSocketPath": "ep"}
+    r = make_router(box, echo_adapters())
+    assert pr.Router.external_codex_sendable(r, entry) is expected
+
+
 def test_registration_without_a_vendor_writes_no_vendor_field(box):
     reg = pr.Registration("x", str(box / "eps" / "x.sock"), str(box / "sessions"))
     assert reg.data["vendor"] == "unknown"
@@ -1383,7 +1420,7 @@ def test_list_shows_per_peer_readiness_leg_present_or_not(box, capsys, monkeypat
     assert run(go()) == 0
     lines = capsys.readouterr().out.splitlines()
     assert not any(line.startswith("agy-a\t") for line in lines)  # no leg: not reachable, so not listed
-    assert any(line.split("\t")[0::2][:2] == ["codex-a", "codex"] and line.endswith("\tready") for line in lines)
+    assert any([line.split("\t")[0], line.split("\t")[3]] == ["codex-a", "codex"] and line.endswith("\tready") for line in lines)
 
 
 def test_scanner_repair_respawns_missing_face_and_restarts_exited_face_only(box):
@@ -1510,7 +1547,7 @@ def test_lock_only_codex_thread_is_listed_stale_and_refuses_sends_and_frames(box
             assert list(r.peers) == [name] and name in r.faces
             resp = await r._dispatch({"op": "list"})
             assert resp["agents"] == [{"name": name, "box": pr._contract().local_box(), "vendor": "codex",
-                                       "stale": True}]
+                                       "this_box": True, "stale": True}]
             bad = await r._dispatch({"op": "send", "to": name, "text": "hello there"})
             assert bad["ok"] is False and "stale" in bad["error"]
             raw = await asyncio.to_thread(face_reply, r.endpoint_of(name),
@@ -1765,3 +1802,82 @@ def test_resolve_op_answers_through_dispatch(tmp_path):
     r, _ = _relay_router(tmp_path, ("example-game-workbench-repo-66", "/s/h66.sock"))
     assert run(r._dispatch({"op": "resolve", "name": "example-game-workbench-repo-66"}))["endpoint"] == "/s/h66.sock"
     assert run(r._dispatch({"op": "resolve", "name": "nope"}))["ok"] is False
+
+
+def _inode_router(box):
+    return pr.Router([], sessions_dir=box / "sessions", state_dir=box / "state", endpoint_dir=box / "eps",
+                     adapters={})
+
+
+def _answers_on(path):
+    s = socket.socket(socket.AF_UNIX)
+    s.settimeout(2)
+    try:
+        s.connect(path)
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def test_router_rebinds_its_control_socket_after_the_path_is_deleted(box):
+    async def go():
+        r = _inode_router(box)
+        await r.start()
+        try:
+            os.unlink(r.ctl)
+            assert not os.path.exists(r.ctl)
+            await r.check_control_socket()
+            assert os.path.exists(r.ctl)
+            assert _answers_on(r.ctl)
+            assert not r.stop_requested.is_set()
+        finally:
+            await r.stop()
+    asyncio.run(go())
+
+
+def test_router_rebinds_when_the_path_holds_a_different_inode(box):
+    async def go():
+        r = _inode_router(box)
+        await r.start()
+        try:
+            os.unlink(r.ctl)
+            open(r.ctl, "w").close()  # a plain file now owns the path
+            await r.check_control_socket()
+            assert _answers_on(r.ctl)
+            assert os.stat(r.ctl).st_ino == r.ctl_ino
+        finally:
+            await r.stop()
+    asyncio.run(go())
+
+
+def test_router_leaves_an_unchanged_control_socket_alone(box):
+    async def go():
+        r = _inode_router(box)
+        await r.start()
+        try:
+            server, ino = r.server, r.ctl_ino
+            await r.check_control_socket()
+            assert r.server is server and r.ctl_ino == ino
+            assert _answers_on(r.ctl)
+        finally:
+            await r.stop()
+    asyncio.run(go())
+
+
+def test_router_exits_when_the_control_socket_cannot_be_rebound(box, monkeypatch):
+    async def go():
+        r = _inode_router(box)
+        await r.start()
+        try:
+            os.unlink(r.ctl)
+
+            async def refuse():
+                raise OSError("address in use")
+            monkeypatch.setattr(r, "_bind_control", refuse)
+            await r.check_control_socket()
+            assert r.stop_requested.is_set()
+        finally:
+            await r.stop()
+    asyncio.run(go())

@@ -834,12 +834,64 @@ def test_scannable_count_equals_compute_scope_scannable_at_pm_ruling(fixture_rep
     assert "docs/plans/2026-11-06-eph.md" not in {p for b in scope.manifest["batches"] for p in b}
 
 
-def test_scannable_count_fails_loud_on_a_missing_log(fixture_repo):
-    (fixture_repo / "state" / "distillation-log.md").unlink()
-    from coordinator_core.distill.harvest_debt import DistillationLogMissingError
+def _fresh_repo_with_log(fixture_repo: Path, log_text: str | None) -> None:
+    log = fixture_repo / "state" / "distillation-log.md"
+    if log_text is None:
+        log.unlink()
+    else:
+        log.write_text(log_text, encoding="utf-8")
 
-    with pytest.raises(DistillationLogMissingError):
+
+def test_an_absent_log_is_an_empty_baseline_not_a_refusal(fixture_repo):
+    _fresh_repo_with_log(fixture_repo, None)
+    scope = compute_scope(fixture_repo, run_id="r")
+    assert "archive/specs/2026-07-01-alpha.md" in scope.manifest["cohorts"]["harvest"]
+    # beta was credited only by the log that no longer exists: it is undebted again.
+    assert "archive/specs/2026-07-02-beta.md" in scope.manifest["cohorts"]["harvest"]
+    admitted = compute_scope(
+        fixture_repo, run_id="r2", cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS), admit=True
+    )
+    assert scannable_count(fixture_repo) == admitted.counts["scannable"] + admitted.counts["deferred"]
+    assert not (fixture_repo / "state" / "distillation-log.md").exists()
+
+
+def test_a_header_only_log_is_an_empty_baseline(fixture_repo):
+    _fresh_repo_with_log(fixture_repo, "# Distillation Log\n\n## Run 2026-07-05-00h00\n")
+    scope = compute_scope(fixture_repo, run_id="r")
+    assert "archive/specs/2026-07-02-beta.md" in scope.manifest["cohorts"]["harvest"]
+
+
+def test_a_log_with_content_and_no_parseable_row_still_refuses(fixture_repo):
+    from coordinator_core.distill.harvest_debt import DistillationLogUnparseableError
+
+    _fresh_repo_with_log(fixture_repo, "some prose that is no table and no row\n")
+    with pytest.raises(DistillationLogUnparseableError):
+        compute_scope(fixture_repo, run_id="r")
+    with pytest.raises(DistillationLogUnparseableError):
         scannable_count(fixture_repo)
+
+
+def test_the_handler_scopes_an_absent_log_repo(fixture_repo):
+    _fresh_repo_with_log(fixture_repo, None)
+    result = _handler({"run_id": "fresh"}, repo_root=fixture_repo / ".git")
+    assert (fixture_repo / result["input_json_path"]).is_file()
+    assert not (fixture_repo / "state" / "distillation-log.md").exists()
+
+
+def test_the_handler_scopes_params_repo_root_not_the_injected_repo(fixture_repo, tmp_path):
+    other = tmp_path / "other"
+    (other / "archive" / "specs").mkdir(parents=True)
+    result = _handler({"run_id": "r", "repo_root": str(fixture_repo / ".git")}, repo_root=other / ".git")
+    assert (fixture_repo / result["input_json_path"]).is_file()
+    assert not (other / "state").exists()
+
+
+def test_the_handler_without_params_repo_root_scopes_the_injected_repo(fixture_repo, tmp_path):
+    other = tmp_path / "other"
+    (other / "archive" / "specs").mkdir(parents=True)
+    result = _handler({"run_id": "r"}, repo_root=other / ".git")
+    assert (other / result["input_json_path"]).is_file()
+    assert not (fixture_repo / "state" / "scratch").exists()
 
 
 def test_scannable_count_cap_stops_at_cap_and_is_exact_below_it(fixture_repo):

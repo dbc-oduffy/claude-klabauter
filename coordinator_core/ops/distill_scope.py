@@ -684,14 +684,10 @@ class _ScopeCache:
 
     def log_facts(self, log_full_path: Path) -> dict[str, Any]:
         """What the harvest-debt computation needs from the distillation log, cached by the
-        log's (mtime_ns, size). Raises exactly what ``compute_harvest_debt`` raises for an
-        absent or unparseable log."""
+        log's (mtime_ns, size). An absent log is a fresh repo: zero harvested rows, nothing
+        written or cached. An unparseable log raises what ``compute_harvest_debt`` raises."""
         if not log_full_path.exists():
-            raise _harvest_debt.DistillationLogMissingError(
-                f"canonical distillation log not found at {log_full_path} — refusing to "
-                "compute harvest-debt against an absent log (an absent log is NOT "
-                "'nothing harvested yet'; it is an unknown state and must fail loud)"
-            )
+            return {"canonical": [], "legacy": [], "unparseable": False}
         key = _stat_key(log_full_path)
         cur = self.log
         if key is None or cur.get("key") != list(key) or not all(k in cur for k in ("canonical", "legacy", "unparseable")):
@@ -1273,7 +1269,7 @@ def scannable_count(
     before the batch budget. ``cohort_specs`` omitted means PM_RULING_2026_08_06_COHORT_SPECS; the
     logs cohort is always scanned first. Equals ``compute_scope(..., admit=True)`` ``counts["scannable"]
     + counts["deferred"]`` on the same tree. ``cap`` clamps the result.
-    Raises DistillationLogMissingError when ``log_path`` is absent, as compute_scope does."""
+    An absent ``log_path`` counts as an empty baseline, as compute_scope does."""
     cache = _ScopeCache(worktree_root)
     gathered = _gather_cohorts(
         worktree_root,
@@ -1428,9 +1424,8 @@ def compute_scope(
     written under the run directory first, batches are packed by digest bytes, and
     ``ScopeResult.digests`` maps each digested path to its worktree-relative digest path.
 
-    Fails loud (propagates DistillationLogMissingError) when log_path is absent,
-    per harvest_debt.compute_harvest_debt's own contract — an absent log is never
-    silently treated as "harvest everything."
+    An absent or header-only log_path is a fresh repo: zero harvested rows, empty baseline.
+    A log with content but no parseable row still raises DistillationLogUnparseableError.
     """
     cache = _ScopeCache(worktree_root)
     gathered = _gather_cohorts(
@@ -1920,9 +1915,13 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
     repo_root (injected by ipc.dispatch_message): git_common_dir of the originating
     worktree (_OP_KEY_SCOPE="common_dir"). Derives main_worktree_root(repo_root) — a
     linked worktree's .git is a file, so the raw common_dir must not be used directly.
-    Fails loud when repo_root is None (no silent meta-repo fallback, matching
-    artifact.emit's AC5 precedent).
+    ``params["repo_root"]`` (a repo's ``.git`` dir or worktree root), when given, scopes that
+    repo instead. Fails loud when neither is present (no silent meta-repo fallback,
+    matching artifact.emit's AC5 precedent).
     """
+    param_root = params.get("repo_root")
+    if param_root:
+        repo_root = Path(param_root)
     if repo_root is None:
         raise ValueError(
             "distill.scope requires a per-repo dispatch key (_origin_worktree); "

@@ -137,6 +137,23 @@ def _parse_iso(value: object) -> Optional[float]:
         return None
 
 
+def names_this_box(stamped: object, home: Optional[Path] = None) -> bool:
+    """True when ``stamped`` is this box's id, or the same id differing only in case or a ``.local`` suffix
+    (the same fold member_box applies). An unconfigured box (id "local") matches only itself; any other box id
+    never matches."""
+    local = box_registry.local_box_id(home)
+    if not isinstance(stamped, str):
+        return False
+    if stamped == local:
+        return True
+
+    def fold(name: str) -> str:
+        low = name.lower()
+        return low[: -len(".local")] if low.endswith(".local") else low
+
+    return local != box_registry.LOCAL_BOX_ID and fold(stamped) == fold(local)
+
+
 def _box_ok(record: dict) -> bool:
     """A record with no ``box_id``, or one stamped "local", is valid anywhere; any other
     ``box_id`` must equal this box's identity."""
@@ -395,7 +412,7 @@ def _receive_relayed_grant(
             or not _safe_sid(envelope.get("issuer_session_id"))
         ):
             return {"ok": False, "reason": "bad_record"}
-        if envelope.get("grantee_box_id") != box_registry.local_box_id(home):
+        if not names_this_box(envelope.get("grantee_box_id"), home):
             return {"ok": False, "reason": "wrong_grantee_box"}
         issued, expires = _parse_iso(envelope.get("issued_at")), _parse_iso(envelope.get("expires_at"))
         current = time.time() if now is None else now
@@ -666,7 +683,7 @@ def _check_relayed(sid, cwd, repo_root, directory, now) -> tuple[bool, Optional[
         envelope.get("schema_version") == SCHEMA_VERSION
         and envelope.get("kind") == KIND
         and envelope.get("grantee_session_id") == sid
-        and envelope.get("grantee_box_id") == box_registry.local_box_id(home)
+        and names_this_box(envelope.get("grantee_box_id"), home)
         and issued is not None
         and expires is not None
         and issued <= current + CLOCK_SKEW_S

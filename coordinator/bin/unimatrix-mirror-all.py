@@ -417,7 +417,7 @@ def publish_stale(clients, live, cfg, say, send=None):
             continue
         _PUBLISHED[name] = (v["state"], until)
         due.append(f"mirror-stale {name} {v['state']} {until} "
-                   f"{re.sub(r'[^a-z0-9-]', '-', socket.gethostname().lower()) or 'unknown'}")
+                   f"{re.sub(r'[^a-z0-9-]', '-', _box_mux_module().box_of(socket.gethostname())) or 'unknown'}")
     if due:
         (send or _start_publish)(cfg, due, say)
 

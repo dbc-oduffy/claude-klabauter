@@ -116,3 +116,12 @@ def test_win32_never_unlinks_a_socket_file(roster, monkeypatch):
     orphan = sock(roster, HEX_ORPHAN)
     roster.reap_orphaned_mirrors(REMOTE, lambda m: None)
     assert orphan.exists()
+
+
+def test_a_live_unbacked_mirror_of_another_roster_keeps_its_socket(roster):
+    held = sock(roster, HEX_UNKNOWN)
+    me = os.getpid()
+    entry(roster, me, "far-mirror", held, procStart=roster.proc_start(me), unimatrixRemote="other@box",
+          macSocketPath="/far.sock", unimatrixFarSeen=1)
+    roster.reap_orphaned_mirrors(REMOTE, lambda m: None)
+    assert held.exists()

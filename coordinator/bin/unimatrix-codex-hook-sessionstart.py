@@ -14,6 +14,7 @@ registration shows in the TUI. Never fails the session: every path exits 0.
 register_peer() is the shared registration helper: it takes the vendor and target, so another
 vendor's SessionStart hook differs only in payload field names and vendor.
 """
+import contextlib
 import importlib.util
 import json
 import os
@@ -72,16 +73,9 @@ def codex_holder(pid=None):
     return holder
 
 
-def register_peer(peers_file, name, vendor, target, address=None, holder=None):
-    """Upsert {name, vendor, target} into peers_file atomically; return "added", "rebound" or "present".
-
-    name may be a callable taking the current rows and returning the name, so it is chosen under the lock.
-    holder ({codexPid, codexProcStart}) is written onto the row and refreshes a prior one on rebind.
-
-    Other rows remain unchanged. A same-target legacy name becomes an alias when an engine
-    address is projected. Conflicts, unreadable JSON and non-list files raise ValueError without
-    writing the peers file.
-    """
+@contextlib.contextmanager
+def _peers_lock(peers_file):
+    """Hold the exclusive peers.json writer lock (flock; msvcrt byte zero with a 15s deadline on Windows)."""
     peers_file = Path(peers_file)
     peers_file.parent.mkdir(parents=True, exist_ok=True)
     lock = open(f"{peers_file}.lock", "a+b")
@@ -109,6 +103,23 @@ def register_peer(peers_file, name, vendor, target, address=None, holder=None):
                     if time.monotonic() >= deadline:
                         raise TimeoutError(f"peer registration lock timed out: {peers_file}") from exc
                     time.sleep(0.02)
+        yield
+    finally:
+        lock.close()
+
+
+def register_peer(peers_file, name, vendor, target, address=None, holder=None):
+    """Upsert {name, vendor, target} into peers_file atomically; return "added", "rebound" or "present".
+
+    name may be a callable taking the current rows and returning the name, so it is chosen under the lock.
+    holder ({codexPid, codexProcStart}) is written onto the row and refreshes a prior one on rebind.
+
+    Other rows remain unchanged. A same-target legacy name becomes an alias when an engine
+    address is projected. Conflicts, unreadable JSON and non-list files raise ValueError without
+    writing the peers file.
+    """
+    peers_file = Path(peers_file)
+    with _peers_lock(peers_file):
         data, rows = None, []
         if peers_file.exists():
             try:
@@ -174,8 +185,34 @@ def register_peer(peers_file, name, vendor, target, address=None, holder=None):
         tmp.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp, peers_file)
         return status
-    finally:
-        lock.close()
+
+
+def drop_peer_rows(peers_file, targets):
+    """Remove agy rows whose target is in targets under the peers lock; return the dropped names.
+
+    Container shape (list or {"peers": [...]}) and every other row are preserved. A missing,
+    unparseable or non-list file returns [] and is never written; nothing matching writes nothing.
+    """
+    peers_file = Path(peers_file)
+    targets = set(targets)
+    with _peers_lock(peers_file):
+        try:
+            data = json.loads(peers_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        rows = data.get("peers") if isinstance(data, dict) else data
+        if not isinstance(rows, list):
+            return []
+        dropped = [r for r in rows if isinstance(r, dict) and r.get("vendor") == "agy"
+                   and r.get("target") in targets]
+        if not dropped:
+            return []
+        kept = [r for r in rows if not any(r is d for d in dropped)]
+        out = {**data, "peers": kept} if isinstance(data, dict) else kept
+        tmp = Path(f"{peers_file}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, peers_file)
+        return [d.get("name") for d in dropped]
 
 
 WORKER_POINTER = (

@@ -1,7 +1,7 @@
 """Cheap DIY-nag detector for a non-Claude EM's coordinator-invoke op dispatch.
 
-One `git diff --numstat HEAD` per call, throttled per session. Advisory only: every failure
-returns None.
+At most two git spawns per call (tracked diff, untracked listing), throttled per session.
+Advisory only: every failure returns None.
 """
 
 from __future__ import annotations
@@ -35,15 +35,17 @@ def caller_family(env: Mapping[str, str]) -> Optional[str]:
 
 
 def _measure(repo_root: str) -> tuple[int, int]:
-    """(files, lines) of the tracked uncommitted diff against HEAD; a binary row is a file with 0 lines.
+    """(files, lines) of the uncommitted edit: the tracked diff against HEAD plus untracked, non-ignored files.
 
-    Untracked new files are not counted: `git diff` does not list them, so a hand edit made only of
-    new files stays under the bound.
+    A binary row is a file with 0 lines. At most two git spawns; the untracked listing runs only
+    while the tracked diff is still within the XS bound, and the count stops once the bound is passed.
+    `.coordinator-local` and `state/` are engine-written records (untracked until committed), never
+    a hand edit, so they are not counted.
     """
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     proc = subprocess.run(
         ["git", "-C", str(repo_root), "diff", "--numstat", "HEAD"],
-        capture_output=True, text=True, timeout=5, check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        capture_output=True, text=True, timeout=5, check=True, creationflags=flags,
     )
     files = lines = 0
     for row in proc.stdout.splitlines():
@@ -54,7 +56,35 @@ def _measure(repo_root: str) -> tuple[int, int]:
         for n in parts[:2]:
             if n.isdigit():
                 lines += int(n)
+    if files > xs_lane_budget.BUDGET_FILES or lines > xs_lane_budget.BUDGET_LINES:
+        return files, lines
+    listing = subprocess.run(
+        ["git", "-C", str(repo_root), "ls-files", "--others", "--exclude-standard", "-z",
+         "--", ".", ":(exclude).coordinator-local", ":(exclude)state"],
+        capture_output=True, timeout=5, check=True, creationflags=flags,
+    )
+    for raw in listing.stdout.split(b"\0"):
+        if not raw:
+            continue
+        files += 1
+        lines += _untracked_lines(Path(repo_root) / raw.decode("utf-8", "surrogateescape"))
+        if files > xs_lane_budget.BUDGET_FILES or lines > xs_lane_budget.BUDGET_LINES:
+            break
     return files, lines
+
+
+def _untracked_lines(path: Path) -> int:
+    """Line count of an untracked file, read up to 1 MiB; binary, unreadable or non-regular is 0."""
+    try:
+        if not path.is_file():
+            return 0
+        with open(path, "rb") as fh:
+            data = fh.read(1 << 20)
+    except OSError:
+        return 0
+    if b"\0" in data[:8192]:
+        return 0
+    return data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0)
 
 
 def _throttled(stamp: Path, now: float) -> bool:
@@ -70,7 +100,12 @@ def _throttled(stamp: Path, now: float) -> bool:
 
 
 def advisory_for_dispatch(repo_root, session_id: Optional[str], env: Mapping[str, str]) -> Optional[str]:
-    """The DIY nag text when a non-Claude EM's uncommitted edit exceeds the XS bound, else None."""
+    """The DIY nag text when a non-Claude EM's uncommitted edit exceeds the XS bound, else None.
+
+    Surface-agnostic: needs no prior op call, only repo root, session id and caller env. A hook on
+    a surface the EM always crosses (the only cover for an EM that edits and never invokes an op)
+    calls this directly; hook wiring is DoE-owned.
+    """
     try:
         if repo_root is None or not session_id:
             return None

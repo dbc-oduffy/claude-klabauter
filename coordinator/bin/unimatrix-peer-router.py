@@ -30,6 +30,7 @@ import re
 import secrets
 import shlex
 import socket
+import stat
 import sys
 import time
 from pathlib import Path
@@ -207,7 +208,7 @@ def readable_peer_name(vendor, target, cwd=None):
                 pass
     import hashlib
     short = hashlib.sha256(target.encode()).hexdigest()[:10]
-    return f"{vendor}-{clean(base) or 'session'}-{short}-on-{clean(socket.gethostname()).lower()}"
+    return f"{vendor}-{clean(base) or 'session'}-{short}-on-{clean(_contract().local_box())}"
 
 
 def codex_thread_metadata(home):
@@ -608,7 +609,7 @@ class Registration:
             "pidDomain": _roster().pid_domain(), "messagingSocketPath": endpoint, "name": name,
             "nameSource": "derived", "nameSince": now, "status": "idle", "updatedAt": now,
             "statusUpdatedAt": now,
-            "vendor": vendor or "unknown", "box": socket.gethostname().lower(),
+            "vendor": vendor or "unknown", "box": _contract().local_box(),
         }
         if native_target is not None:
             # Explicit router-owned binding, also for legacy display names.
@@ -794,6 +795,7 @@ class Router:
         self.lease = None  # open router.lock handle, locked for the router lifetime
         self.stop_requested = asyncio.Event()  # set by the shutdown op and by stop signals; serve waits on it
         self.pid_file = None  # router.pid.json path, set only while this router owns the lease
+        self.ctl_ino = None  # inode of the control socket this router bound; None on a pipe
         self.bound_faces = set()  # face endpoints whose child registration reached ready
         self.dead_holders = set()  # Codex peers whose recorded holder is gone: no face, not listed
 
@@ -868,6 +870,7 @@ class Router:
             _roster().write_json_atomic(self.pid_file, {"pid": os.getpid(),
                                                          "procStart": _roster().proc_start(os.getpid())})
             self.server = await self._bind_control()
+            self.ctl_ino = self._ctl_inode()
             await asyncio.to_thread(self._reconcile_orphan_faces)
             await self._drop_dead_holders()
             for name in list(self.peers):
@@ -952,6 +955,7 @@ class Router:
         while True:
             await asyncio.sleep(LEG_SCAN_SECONDS)
             try:
+                await self.check_control_socket()
                 await self.refresh_discovered()
                 await self._repair_faces()
             except Exception as e:
@@ -1046,6 +1050,30 @@ class Router:
     async def _bind_control(self):
         return await start_private_server(self._on_ctl, self.ctl)
 
+    def _ctl_inode(self):
+        if sys.platform == "win32":
+            return None
+        try:
+            return os.stat(self.ctl).st_ino
+        except OSError:
+            return None
+
+    async def check_control_socket(self):
+        """Tick check: the control path must still be the inode this router bound; else rebind, or ask to stop."""
+        if self.server is None or self.ctl_ino is None or self._ctl_inode() == self.ctl_ino:
+            return
+        self.log("CTL-SOCKET-LOST", self.ctl)
+        try:
+            self.server.close()
+            self.server = None
+            if os.path.exists(self.ctl) and not stat.S_ISSOCK(os.lstat(self.ctl).st_mode):
+                os.unlink(self.ctl)  # the lease owns this path; only a live socket is another owner's
+            self.server = await self._bind_control()
+            self.ctl_ino = self._ctl_inode()
+        except Exception as e:
+            self.log("CTL-REBIND-FAILED", type(e).__name__, e)
+            self.stop_requested.set()
+
     async def stop(self):
         """Remove every entry, key, endpoint, key file and child this router wrote.
 
@@ -1128,7 +1156,7 @@ class Router:
             details = await asyncio.to_thread(self.session_details)
             sessions = sorted(details)
             listed = {n: p for n, p in self.peers.items() if n not in self.dead_holders}
-            details.update({name: {"vendor": peer["vendor"], "box": socket.gethostname().lower(),
+            details.update({name: {"vendor": peer["vendor"], "box": _contract().local_box(),
                                    "cwd": peer.get("cwd") or ""}
                             for name, peer in listed.items()})
             ready = await asyncio.to_thread(self.peer_readiness)
@@ -1586,7 +1614,7 @@ class Router:
             remote, far_socket, box = (entry.get('unimatrixRemote'), entry.get('macSocketPath'), entry.get('box'))
             pid, far_pid = entry.get('pid'), entry.get('farPid')
             if not (isinstance(remote, str) and remote.strip() and isinstance(far_socket, str) and far_socket
-                    and isinstance(box, str) and box.strip() and box.casefold() != socket.gethostname().casefold()
+                    and isinstance(box, str) and box.strip() and _contract().box_id(box) != _contract().local_box()
                     and type(pid) is int and pid > 0 and type(far_pid) is int and far_pid > 0):
                 return False
             try:
