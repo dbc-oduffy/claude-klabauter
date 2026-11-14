@@ -634,6 +634,20 @@ def _iter_record_paths(root: Path, subdir: Sequence[str], recursive: bool) -> Li
         return []
 
 
+def _live_handoff_paths(worktree_root: Path) -> List[Path]:
+    """Live handoffs: `state/handoffs/*.md` plus one month-subdir level (`coordinator-doc-new` files
+    there); `state/handoffs/archive/` holds retired batons and stays out."""
+    top = worktree_root / "state" / "handoffs"
+    paths = _iter_record_paths(worktree_root, ("state", "handoffs"), recursive=False)
+    try:
+        subdirs = sorted(d for d in top.iterdir() if d.is_dir() and d.name != "archive")
+    except OSError:
+        subdirs = []
+    for sub in subdirs:
+        paths.extend(_iter_record_paths(sub, (), recursive=False))
+    return paths
+
+
 # ---------------------------------------------------------------------------
 # Plan index
 # ---------------------------------------------------------------------------
@@ -1029,7 +1043,7 @@ def scan_batons(
     by_id: Dict[str, Dict[str, Any]] = {}
     records: List[Dict[str, Any]] = []
 
-    for path in _iter_record_paths(worktree_root, ("state", "handoffs"), recursive=False):
+    for path in _live_handoff_paths(worktree_root):
         fm = _read_baton_fields(path)
         if not fm:
             continue

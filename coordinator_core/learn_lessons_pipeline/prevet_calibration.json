@@ -1,0 +1,22 @@
+{
+  "verdict": "prevet_not_viable",
+  "sample_size": 40,
+  "sample": "seeded random (seed 14) of the 291 rows mechanical_close leaves routed, standard appetite",
+  "model": "haiku",
+  "discard_candidates": 12,
+  "routed": 28,
+  "pass_to_router_rate": 0.7,
+  "tokens_total": 218357,
+  "tokens_per_row": 5459,
+  "batch_size": 40,
+  "measured_at_commit": "252765e92dd5e6fb3551629bda887f1a287b913e",
+  "feasibility": {
+    "R": 291, "P": 40, "T": 4, "S_projected": 204, "S_allowed_at_20_runs": 16,
+    "note": "runs = ceil(R/P) + 2*ceil(S/T): 8 + 102 = 110 at T=4. A prevet costs ~5.5k tokens per row to drop 30%; the triage spawn overhead it avoids is smaller."
+  },
+  "lever_found": {
+    "knob": "lessons.yaml appetite batch_size (default 4)",
+    "grind_cost_projection": {"4": {"spawns": 154, "max_batch_tokens": 7120}, "20": {"spawns": 32, "max_batch_tokens": 25769}, "40": {"spawns": 16, "max_batch_tokens": 47387}},
+    "caveat": "grind_cost prices every spawn at a flat 44,098 tokens, measured at batch 4; a 40-row spawn costs more, so the batch-40 token figure (705,568) is a floor until one batch-40 run is measured"
+  }
+}
