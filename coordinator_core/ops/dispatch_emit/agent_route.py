@@ -521,6 +521,33 @@ def resolve_agent_type(
     return RouteDecision(cls.agent_type, cls.triage_agent_type, cls, note)
 
 
+def run_only_fence(row: Any, repo_root: "str | os.PathLike[str] | None") -> Optional[WorkClass]:
+    """The `run_only` work class that fences `row`'s test runs away from its executor, else `None`.
+
+    Fenced means: the row dispatches as the executor, authors code (`_authors_code`), and its writes
+    match a `run_only` class of the repo's table (the example-game-repo-control table in a UE repo with none).
+    `resolve_agent_type` keeps such a row on the executor and returns `None`; this is the same
+    decision, kept visible so the emitter hands the row's test gate to a test-runner leg. An absent
+    repo, absent table or malformed table is unfenced; this never raises.
+    """
+    if not repo_root:
+        return None
+    from coordinator_core.ops.dispatch_emit import emit
+
+    try:
+        if emit._row_agent_type(row) != emit._EXECUTOR_AGENT_TYPE:
+            return None
+        table = load_route_table(repo_root)
+        if table is None:
+            table = _plugin_table(repo_root)[0]
+        if table is None:
+            return None
+        cls = match_work_class(table, writes=_row_writes(row), title=row.title or "", body=row.body or "")
+        return cls if cls is not None and cls.run_only and _authors_code(row) else None
+    except Exception:
+        return None
+
+
 def route_rows(
     rows: Sequence[Any], repo_root: "str | os.PathLike[str]"
 ) -> tuple[Sequence[Any], dict[str, Route], list[str]]:

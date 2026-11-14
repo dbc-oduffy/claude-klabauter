@@ -1237,6 +1237,14 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/lessons_filter.py",
         ("_lessons_reject_orphan_strip_entries",),
     ),
+    "learn_lessons_pipeline.mechanical_close": (
+        "coordinator_core/learn_lessons_pipeline/ops.py",
+        ("_learn_lessons_pipeline_mechanical_close",),
+    ),
+    "learn_lessons_pipeline.apply_mechanical": (
+        "coordinator_core/learn_lessons_pipeline/ops.py",
+        ("_learn_lessons_pipeline_mechanical_close",),
+    ),
     "mcp.resolve_server_cli_path": (
         "coordinator_core/ops/resolve_mcp_server_cli_path.py",
         ("_handler",),
@@ -7469,6 +7477,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # plan.mise_prep_probe: one reachable git site (HEAD sha read in `_head_sha`); the census
     # leg's per-entry shell spawns are the counted carve-out, bounded by `_census_deadline`.
     "plan.mise_prep_probe": 1,
+    # ceremony.hand_land: one reachable git site (run_git), the commit_paths landing; constant per call.
+    "ceremony.hand_land": 1,
     # ceremony.plan_wiki_map (56c85f, 2026-11-13): two git sites in weekly_doc_files, the batched
     # fallback taken only when no example-retrieval-repo doc_files view serves (`_git`, `_plan_texts`);
     # constant count per call, never per plan.
@@ -7610,10 +7620,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # Added 2026-09-03: one dynamic site, `invoke_coordinator_doc_new`. Pre-dates
     # this pass; it surfaced only because the file's other failures were cleared.
     "hooks.plan_persistence_check": 1,
-    # 1 -> 2 (f97a69 hand-land): the daily tier gained a second spawn site,
-    # `_pack_loose_batch` (rev-list enumeration + pack-objects, the loose leg
-    # that replaced `maintenance run --task=loose-objects`). Live reach, not slack;
-    # the whole op stays paused under PACK_DELETION_PAUSED.
+    # 1 -> 2: 69c55c18e9 put object_store_lock on the pack-writing maintenance paths; the static
+    # reach grew by one site (live count measured by this gate, site not individually attributed).
     "git.maintenance": 2,
     "housekeeping.cycle": 4,
     # 1 -> 2: 98f04d91ca added scope.release_committed_claims to _commit_group, reaching
@@ -7663,6 +7671,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # halt-resume spawn; its run_git site was already reachable. The tail replaces the hand commit
     # done after every distill shard, so the box runs fewer processes per run, not more.
     "distill.apply_disposal": 12,
+    # distill.bookkeeping: in-process composition of apply_disposal, archive_plans and
+    # scratch_hygiene, so the sites are theirs; measured 14 reachable static git sites.
+    "distill.bookkeeping": 14,
     "memo.transition": 4,
     "merge_assemble.apply": 1,
     # 8 -> 9 -> 8, 2026-10-22: sweep_scratch asks `_unborn_scratch_repo.scratch_clone_failures`
@@ -7752,6 +7763,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "cartography.tree": 1,
     "ceremony.chunk_commits": 1,
     "ceremony.update_docs_worklist": 1,
+    # ceremony.wiki_update_candidates: one reachable git site (run_git, shared by the log, cat-file
+    # and rev-parse calls); constant per call, never per plan.
+    "ceremony.wiki_update_candidates": 1,
     "changelog.compute_day_fields": 1,
     "ci.run_pip_audit": 1,
     "commit.exec_bit_change": 1,
@@ -7824,7 +7838,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # adopting a clone without verifying it points where the caller thinks.
     "install.clone_idempotent": 2,
     "install.detect_python3_appx_stub": 1,
-    "invoke.from_argv": 1,
+    # 1 -> 3: ff866638d3 (op-dispatch DIY-nag, a different run) added `op_dispatch_nag._measure`
+    # to the served path: two bounded local git reads (diff --numstat, ls-files --others), the
+    # second skipped once the diff passes the XS bound. The advisory needs the measurement.
+    "invoke.from_argv": 3,
     "memo.fate_backfill": 1,
     "merge.quiet_activity_gate": 1,
     "percolate.check_inverse_drift": 1,
@@ -7904,6 +7921,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "dispatch.reap_abandoned_runs": 2,
     "dispatch.commit_halted_rows": 1,
     "docindex.emit": 1,
+    # in-process composition of `update_docs_worklist` + `docindex.emit`; this gate measures 1 static
+    # reachable git site for the composite (each leg is itself pinned 1, so the count is not their sum).
+    "ceremony.update_docs_bookkeeping": 1,
     # doctor_kept_blobs and kept_blob_replay spawn only through git.run.run_git.
     "doctor.recover_kept_blobs": 1,
     "fleet.delete_superseded_decisions": 8,

@@ -646,6 +646,14 @@
         "value": 0.2
       },
       "_rationale": "Warm typical-round process time of dispatch_end_of_run_argv_parity_gate over the gate root, measured by coordinator_core/benchmarks/publish_end_of_run_gates_profile.py; the brightline bar, not a measurement."
+    },
+    "distill.bookkeeping": {
+      "target_ms": 500,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.0
+      },
+      "_rationale": "The brightline bar itself, no slack: the composite and each composed op (distill.apply_disposal, fleet.archive_completed_plans, fleet.scratch_hygiene) must each stay under 500ms process time (this process plus reaped children) at default arguments. Measured and gated by coordinator_core/benchmarks/distill_bookkeeping_bench.py, which also reports spawn counts per leg; the static spawn-site count is pinned in _STATIC_SPAWN_COUNT_PINS."
     }
   },
   "_catering_relay_baseline": {

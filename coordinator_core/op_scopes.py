@@ -453,11 +453,13 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "distill.stamp_disposal":                  "common_dir",
     "distill.write_curated_clusters":         "common_dir",
     "distill.apply_disposal":                  "common_dir",
+    "distill.bookkeeping":                     "common_dir",
     "crossrepo.closure_status":               "common_dir",
     # ceremony.update_docs_worklist — keyed on git_common_dir: the handler scans the
     # main worktree's docs/plans, memo archive and tasks, plus one scoped git diff.
     # Without this entry dispatch resolves repo_root=None and the handler raises.
     "ceremony.update_docs_worklist":           "common_dir",
+    "ceremony.update_docs_bookkeeping":        "common_dir",
     "ceremony.plan_wiki_map":                  "common_dir",
     "ceremony.wiki_update_candidates":         "common_dir",
     "deliverable.cascade_terminal":             "common_dir",
@@ -825,6 +827,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "bug_sweep.verify_fix_files_changed":       "show_top",
     "commit.exec_bit_change":                   "common_dir",
     "ceremony.commit_v2":                       "common_dir",
+    "ceremony.hand_land":                       "common_dir",
     # dispatch.terminal_commit — MUTATING: lands the run's terminal commit via
     # ONE in-process ceremony.commit_v2 call. Keyed identically to commit_v2
     # itself (D3) -- the caller's own worktree, never a params override.
@@ -1052,6 +1055,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "consolidate_assemble.brief":                "show_top",
     "learn_lessons_pipeline.brief":               "show_top",
     "learn_lessons_pipeline.apply":                "show_top",
+    "learn_lessons_pipeline.mechanical_close":     "show_top",
+    "learn_lessons_pipeline.apply_mechanical":     "show_top",
     "lessons.extract":                            "show_top",
     "lessons.verify_extraction":                  "show_top",
     "doctrine.surface_split_regenerate":          "show_top",

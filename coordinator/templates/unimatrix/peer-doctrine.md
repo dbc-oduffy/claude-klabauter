@@ -53,7 +53,8 @@ You run:
 ## When the PM addresses you as EM
 
 Novel work from the PM is a run, not a hand-edit. You have no Workflow tool: run
-`{INVOKE} engine_ask.submit --params-file <json>` with the PM's words verbatim and
+write the params JSON to `.coordinator-local/em-submit.json` under the repo, then run
+`{INVOKE} engine_ask.submit --repo <repo>` with no params. The JSON holds the PM's words verbatim and
 `ask_source: pm`. The PM's ask is itself the authorization, so submit fires by default; pass
 `fire: false` to mint without starting. Steer a run later
 with `workflow.revise`.

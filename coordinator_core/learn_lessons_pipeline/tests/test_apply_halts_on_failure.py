@@ -40,10 +40,16 @@ _DIRECTIVES: list[dict[str, Any]] = [
         "depends_on": ["d-drain-outbox"],
     },
     {
+        "id": "d-mechanical-close",
+        "op": "mechanical-close",
+        "args": [],
+        "depends_on": ["d-assert-outbox-empty"],
+    },
+    {
         "id": "d-age-sweep",
         "cli": "age-sweep-lessons",
         "args": ["sweep"],
-        "depends_on": ["d-assert-outbox-empty"],
+        "depends_on": ["d-mechanical-close"],
     },
     {
         "id": "d-stamp-run-complete",
@@ -65,7 +71,7 @@ def _admit_stamp_op(monkeypatch):
     monkeypatch.setattr(
         apply_base,
         "ASSEMBLER_DISPATCHABLE",
-        {"learn_lessons_pipeline": frozenset({"stamp-run-complete"})},
+        {"learn_lessons_pipeline": frozenset({"stamp-run-complete", "mechanical-close"})},
     )
 
 
@@ -94,6 +100,9 @@ class _FakeDispatch:
             ),
             "stamp-run-complete": lambda args, repo_root: self._handler(
                 "stamp-run-complete", args, repo_root
+            ),
+            "mechanical-close": lambda args, repo_root: self._handler(
+                "mechanical-close", args, repo_root
             ),
         }
 
@@ -125,7 +134,7 @@ def test_a_failing_verify_halts_before_drain_sweep_and_stamp(monkeypatch, tmp_pa
     assert "stamp-run-complete" not in dispatched_names
 
 
-def test_b_all_green_run_lands_all_six_ids_in_emitted_order(monkeypatch, tmp_path):
+def test_b_all_green_run_lands_all_seven_ids_in_emitted_order(monkeypatch, tmp_path):
     fake = _FakeDispatch(fail_on=frozenset())
     exit_code, report = _run(monkeypatch, tmp_path, fake)
 
@@ -144,6 +153,7 @@ def test_c_failing_age_sweep_leaves_the_run_unstamped(monkeypatch, tmp_path):
         "d-verify-extraction",
         "d-drain-outbox",
         "d-assert-outbox-empty",
+        "d-mechanical-close",
     ]
     dispatched_names = [name for name, _args in fake.calls]
     assert "stamp-run-complete" not in dispatched_names
@@ -155,6 +165,67 @@ def test_cli_dispatch_matches_consumes_manifest_and_run_stamp_is_in_neither():
     assert "run_stamp" not in llp_apply._OP_DISPATCH
     assert "stamp-run-complete" not in llp_apply._CLI_DISPATCH
     assert set(CONSUMES_MANIFEST).isdisjoint(llp_apply._OP_DISPATCH)
+    assert "mechanical-close" in llp_apply._OP_DISPATCH
+
+
+def test_a_failing_mechanical_close_halts_before_age_sweep_and_stamp(monkeypatch, tmp_path):
+    fake = _FakeDispatch(fail_on=frozenset({"mechanical-close"}))
+    fake_table = fake.table()
+    fake_table["mechanical-close"] = lambda args, repo_root: (_ for _ in ()).throw(RuntimeError("boom"))
+    monkeypatch.setattr(llp_apply, "_DISPATCH_TABLE", fake_table)
+    monkeypatch.setattr(
+        llp_apply, "brief", lambda repo_root, *, roots=None: {"directives": _DIRECTIVES, "judgment_points": []}
+    )
+    exit_code, report = llp_apply.apply(tmp_path)
+
+    assert exit_code == apply_base.APPLY_EXIT_PARTIAL_MUTATION
+    assert report["failed_directive"] == "d-mechanical-close"
+    assert "age-sweep-lessons" not in [n for n, _a in fake.calls]
+    assert "stamp-run-complete" not in [n for n, _a in fake.calls]
+
+
+def _lesson(root: Path, name: str, *, title: str, body: str, scope: str = "project", created: str = "2026-01-01") -> Path:
+    path = root / "state" / "lessons" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"created: {created}\nstatus: open\nscope: {scope}\ntitle: {title}\nbody: {body}\n", encoding="utf-8"
+    )
+    return path
+
+
+def test_default_apply_closes_mechanical_rows_ages_and_reports_tokens(monkeypatch, tmp_path):
+    keep = _lesson(tmp_path, "a-keep.yaml", title="Keep", body="A substantive lesson body about shared trees.")
+    dup = _lesson(tmp_path, "b-dup.yaml", title="Keep", body="A substantive lesson body about shared trees.",
+                  created="2026-02-01")
+    empty = _lesson(tmp_path, "c-empty.yaml", title="Empty", body="")
+    local = _lesson(tmp_path, "d-local.yaml", title="Local", body="A different substantive lesson for retag.",
+                    scope="local")
+    seen = _record_finish(monkeypatch, {"exit_code": 0})
+    fake = _FakeDispatch()
+    table = fake.table()
+    table["mechanical-close"] = llp_apply._OP_DISPATCH["mechanical-close"]
+    monkeypatch.setattr(llp_apply, "_DISPATCH_TABLE", table)
+    directives = [
+        {**d, "depends_on": None if d["id"] == "d-mechanical-close" else d["depends_on"]}
+        for d in _DIRECTIVES
+        if d["id"] in {"d-mechanical-close", "d-age-sweep", "d-stamp-run-complete"}
+    ]
+    monkeypatch.setattr(
+        llp_apply, "brief", lambda repo_root, *, roots=None: {"directives": directives, "judgment_points": []}
+    )
+
+    exit_code, report = llp_apply.apply(tmp_path)
+
+    assert exit_code == apply_base.APPLY_EXIT_OK
+    assert [n for n, _a in fake.calls] == ["age-sweep-lessons", "stamp-run-complete"]
+    assert keep.exists() and not dup.exists() and not empty.exists()
+    assert "scope: project" in local.read_text(encoding="utf-8")
+    mc = report["mechanical_close"]
+    assert mc["closed"] == {"dedupe": 1, "discard": 1, "wiki-append": 0, "retag": 1}
+    assert mc["tokens_after"] < mc["tokens_before"]
+    evidence = seen[0]["params"]["evidence"]
+    assert any(p.startswith("archive/lessons/") for p in evidence)
+    assert "state/lessons/b-dup.yaml" in evidence and "state/lessons/d-local.yaml" in evidence
 
 
 def test_unknown_op_raises_rather_than_dispatching(monkeypatch):

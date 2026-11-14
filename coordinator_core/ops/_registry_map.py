@@ -572,6 +572,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "distill.stamp_disposal":                 "coordinator_core.ops.distill_stamp_disposal",
     "distill.write_curated_clusters":         "coordinator_core.ops.distill_write_curated_clusters",
     "distill.apply_disposal":                 "coordinator_core.ops.distill_apply_disposal",
+    "distill.bookkeeping":                    "coordinator_core.ops.distill_bookkeeping",
     "crossrepo.closure_status":               "coordinator_core.ops.crossrepo_closure_status",
     "ceremony.update_docs_worklist":          "coordinator_core.ops.ceremony.update_docs_worklist",
     "ceremony.plan_wiki_map":                 "coordinator_core.ops.ceremony.plan_wiki_map",
@@ -616,6 +617,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "p4.session_state":                        "coordinator_core.p4.session_state",
     "learn_lessons_pipeline.brief":             "coordinator_core.learn_lessons_pipeline.ops",
     "learn_lessons_pipeline.apply":             "coordinator_core.learn_lessons_pipeline.ops",
+    "learn_lessons_pipeline.mechanical_close":  "coordinator_core.learn_lessons_pipeline.ops",
+    "learn_lessons_pipeline.apply_mechanical":  "coordinator_core.learn_lessons_pipeline.ops",
     # C9 (docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md): the closed
     # queue-grind op list the vocabulary's SOURCE_OPS/VERIFY_OPS/REGENERATE_OPS
     # (C1) resolve to — one shared owning module, same many-keys-one-value

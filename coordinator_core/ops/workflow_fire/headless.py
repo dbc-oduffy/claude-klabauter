@@ -83,6 +83,15 @@ def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = N
         from coordinator_core.ops.dispatch_emit.op import guard_against_fired_drift
 
         guard_against_fired_drift(script, expected)
+    from coordinator_core.warm import sandboxed_spawn
+
+    if sandboxed_spawn.caller_is_sandboxed():
+        forward = {'script_path': str(script), 'cwd': str(repo), 'backend': backend, 'executor': 'headless',
+                   'expected': expected, 'run_id': run_id, 'args': args, 'caller_session_id': caller_session_id,
+                   'notify_to': notify_to, 'concurrency_cap': concurrency_cap, 'timeout_s': timeout_s}
+        if private_engine is not None:
+            forward['private_engine'] = private_engine
+        return sandboxed_spawn.forward_spawn_to_warm('workflow.fire', {k: v for k, v in forward.items() if v is not None}, str(repo))
     registry, identifier, record_path, record = fire.reserve_fire(
         script, repo, digest, expected=expected, concurrency_cap=concurrency_cap, notify_to=notify_to,
     )

@@ -81,6 +81,81 @@ def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp
     assert out["ok"] is False and "twin_path is not a staged twin of this run" in out["error"] and len(calls) == 1
 
 
+def _verify(reply: dict, receipts: dict) -> dict:
+    """Run the deferred script's `_verifiedScriptPath` in node against a stub relay; `receipts` maps a script path to
+    its `[receipt_sha256, script_sha256]` (absent: no receipt). Returns [verdict, candidates the relay was asked about]."""
+    import shutil
+    import subprocess
+
+    import pytest
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    block = des._RECEIPT_PATH_JS.replace("__AUTHORITY__", json.dumps("AUTH"))
+    code = (
+        "const REPO_ROOT = '/r';\n"
+        f"const RECEIPTS = {json.dumps(receipts)};\n"
+        "const asked = [];\n"
+        "const agent = async (prompt) => {\n"
+        "  const cand = /sha256sum \"([^\"]+)\"/.exec(prompt)[1];\n"
+        "  asked.push(cand);\n"
+        "  const r = RECEIPTS[cand];\n"
+        "  return r ? { found: true, receipt_sha256: r[0], script_sha256: r[1] } : { found: false, error: 'No such file' };\n"
+        "};\n"
+        + block
+        + f"_verifiedScriptPath({json.dumps(reply)}).then((v) => console.log(JSON.stringify([v, asked])));\n"
+    )
+    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+_SHA = "ab" * 32
+_REAL = "/r/scratch/warp/ask-r1.workflow.mjs"
+
+
+def test_a_wrong_relay_path_still_starts_the_script_the_receipt_names():
+    verdict, asked = _verify({"path": "/other/tmp/none", "run_id": "ask-r1"}, {_REAL: [_SHA, _SHA]})
+    assert verdict == {"path": _REAL}
+    assert asked == [_REAL]
+
+
+def test_a_wrong_but_script_shaped_relay_path_is_skipped_when_it_has_no_receipt():
+    verdict, asked = _verify({"path": "/elsewhere/ask-r1.workflow.mjs", "run_id": "ask-r1"}, {_REAL: [_SHA, _SHA]})
+    assert verdict == {"path": _REAL}
+    assert asked == ["/elsewhere/ask-r1.workflow.mjs", _REAL]
+
+
+def test_a_windows_style_relay_path_with_doubled_backslashes_is_normalised_and_verified():
+    win = "E:/claude/scratch/warp/ask-r1.workflow.mjs"  # abs-path-ok: carve-out=test-input-data
+    verdict, asked = _verify({"path": win.replace("/", "\\\\"), "run_id": "ask-r1"}, {win: [_SHA, _SHA]})
+    assert verdict == {"path": win}
+    assert asked == [win]
+
+
+def test_a_receipt_whose_sha_disagrees_with_the_script_bytes_is_refused_by_name():
+    verdict, _ = _verify({"path": _REAL, "run_id": "ask-r1"}, {_REAL: [_SHA, "cd" * 32]})
+    assert "error" in verdict and "emit receipt sha mismatch" in verdict["error"] and "path" not in verdict
+
+
+def test_a_missing_receipt_is_refused_by_name():
+    verdict, _ = _verify({"path": _REAL, "run_id": "ask-r1"}, {})
+    assert "no emit receipt for " + _REAL in verdict["error"] and "path" not in verdict
+
+
+def test_a_reply_naming_neither_path_nor_run_id_is_refused():
+    verdict, asked = _verify({"path": "/other/none", "run_id": "bad id!"}, {_REAL: [_SHA, _SHA]})
+    assert "error" in verdict and asked == []
+
+
+def test_rendered_script_starts_only_the_verified_path(tmp_path):
+    script = des.write_deferred_script(tmp_path, {"ask_brief": "x"})
+    body = script.read_text(encoding="utf-8")
+    assert "_verifiedScriptPath(reply)" in body and "reply.path.replace" not in body
+
+
 def test_receipt_failure_never_fails_the_emit(tmp_path, monkeypatch):
     from coordinator_core.ops.dispatch_emit import emission_receipt
 

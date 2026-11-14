@@ -71,6 +71,14 @@ def _frontmatter(text: str) -> str:
     return text[3 : 3 + close.start()] if close else ""
 
 
+def _body(text: str) -> str:
+    """The plan past its frontmatter: a preview spent on YAML shows the reader no design."""
+    if not text.startswith("---"):
+        return text
+    close = re.search(r"^---[ \t]*$", text[3:], re.M)
+    return text[3 + close.end():].lstrip("\n") if close else text
+
+
 def _spine_writes(text: str) -> List[str]:
     """Repo-relative `writes:` paths of the `plan-tasks` fenced block, forward slashes, in order."""
     paths: List[str] = []
@@ -228,7 +236,7 @@ def wiki_update_candidates(root: Path, since: Optional[str] = None) -> Dict[str,
         if writes:
             plans.append({
                 "path": plan, "commit_sha": sha, "tshirt": _tshirt(root, fm),
-                "preview": text[:PREVIEW_CHARS], "writes": writes,
+                "preview": _body(text)[:PREVIEW_CHARS], "writes": writes,
             })
 
     cited = _citing_pages(root, sorted({p for pl in plans for p in pl["writes"]}))

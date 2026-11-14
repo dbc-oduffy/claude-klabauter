@@ -66,6 +66,37 @@ def test_measure_reports_the_routing_split(tmp_path, monkeypatch):
     assert result["mechanically_closed"] == 2
     assert result["llm_routed"] == 3
 
+    verdicts.append(mechanical_close.MechanicalVerdict("c", "retag", "", "scope", "", "project"))
+    result = grind_cost.measure(
+        repo_root, profile="fixture", queue=queue_dir, profile_dir=_FIXTURE_PROFILE_DIR
+    )
+    assert result["mechanically_closed"] == 2
+    assert result["llm_routed"] == 3
+
+
+def test_tokens_after_drops_closed_rows_but_keeps_retags(tmp_path, monkeypatch):
+    repo_root, queue_dir, _run_dir = _setup_repo(tmp_path, n_rows=4)
+    kw = dict(profile="fixture", queue=queue_dir, profile_dir=_FIXTURE_PROFILE_DIR)
+    base = grind_cost.measure(repo_root, **kw)
+    assert base["tokens_before"] == base["tokens_after"] > 0
+
+    rows = sorted(p.relative_to(repo_root).as_posix() for p in queue_dir.glob("*.yaml"))
+    V = mechanical_close.MechanicalVerdict
+    verdicts = [
+        V("a", "dedupe", "x.md", "dup", rows[0]),
+        V("b", "discard", "", "empty", rows[1]),
+        V("c", "retag", "", "scope", rows[2], "project"),
+    ]
+    monkeypatch.setattr(grind_cost, "close_candidates", lambda manifest, root: verdicts)
+    result = grind_cost.measure(repo_root, **kw)
+    sizes = {r: (repo_root / r).stat().st_size for r in rows}
+    from coordinator_core.distill.prompt_tier import estimate_tokens
+
+    closed = sum(estimate_tokens(sizes[r]) for r in rows[:2])
+    assert result["tokens_before"] == base["tokens_before"]
+    assert result["tokens_before"] - result["tokens_after"] == closed
+    assert result["tokens_after"] < result["tokens_before"]
+
 
 def test_routed_out_counts_only_schema_declines():
     assert grind_cost._is_routed_out("admission: row fails its schema and cannot be closed (x)")
@@ -92,6 +123,8 @@ def test_main_prints_json_with_the_four_keys(tmp_path, monkeypatch, capsys):
         "llm_routed",
         "mechanically_closed",
         "routed_out",
+        "tokens_before",
+        "tokens_after",
         "projected_spawns",
         "max_triage_batch_tokens",
     } <= payload.keys()

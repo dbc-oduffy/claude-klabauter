@@ -66,6 +66,20 @@ def test_rearmed_refusal_halt_with_marker_records_landed(repo):
     assert status == "landed"
 
 
+def test_refusal_kind_marker_on_lagging_running_status_records_landed_at_defaults(repo):
+    root, sha = repo
+    halted_run.write_halt_marker(
+        ask_contract.record_dir(root, RID), halted="refusal", sizing_rel=None,
+        reason="anchor premise AP1 CONTRADICTED",
+    )
+    prior = json.loads((root / c.status_rel(RID)).read_text(encoding="utf-8"))
+    assert prior["status"] == "running" and run_token.is_live(root, RID)
+    out = op._handler({"run_id": RID, "sha": sha}, root)
+    assert out["ok"], out
+    assert "not halted" not in json.dumps(out)
+    assert json.loads((root / c.status_rel(RID)).read_text(encoding="utf-8"))["status"] == "landed"
+
+
 def test_live_staged_run_with_resumed_marker_still_refuses(repo):
     root, sha = repo
     _marker(root)

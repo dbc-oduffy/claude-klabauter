@@ -25,6 +25,7 @@ Spec backlink: docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md
     d-verify-extraction   cli: extract-lessons      verify <extraction> <routing>
     d-drain-outbox        cli: lessons-outbox-drain read <root>...
     d-assert-outbox-empty cli: lessons-outbox-drain assert-empty <this_repo_root>
+    d-mechanical-close    op: mechanical-close
     d-age-sweep           cli: age-sweep-lessons     <lessons_path> --before <cutoff> --apply
     d-stamp-run-complete  op: stamp-run-complete     <runs_dir> <run_date>
 
@@ -42,7 +43,7 @@ in that case, with `--since` omitted rather than defaulted.
 (`state/lessons/records.yaml`, the naming convention
 `coordinator/bin/learn-lessons-age-sweep.py check-strip-orphans` already
 uses for the same artifact) that the ROUTING step — deliberately outside
-this pipeline's six directives, § Anti-scope "Do NOT mechanize Step 5
+this pipeline's seven directives, § Anti-scope "Do NOT mechanize Step 5
 routing" — writes before this ceremony's `apply()` dispatches verify. This
 module never creates, routes, or judges that file's contents; it only names
 the conventional path the verify CLI reads, exactly as it does today when an
@@ -66,7 +67,7 @@ Negative-spec:
       defaulted.
     - Do NOT mechanize the routing step (which wiki a drained/extracted
       entry belongs in) — that stays a judgment call made outside this
-      pipeline's six directives.
+      pipeline's seven directives.
     - Do NOT add `import subprocess`, a `subprocess.*` call, or a model/LLM
       client import anywhere in this package — the extract/verify legs are
       a deterministic parse (AC2), and adding a judgment point or a model
@@ -114,6 +115,9 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
 #: `CONSUMES_MANIFEST`'s docstring for why the run-stamp step is not a
 #: `CONSUMES_MANIFEST` member.
 STAMP_RUN_COMPLETE_OP = "stamp-run-complete"
+
+#: The model-free mechanical-close `op:` verb (dedupe, discard, retag over the open queue).
+MECHANICAL_CLOSE_OP = "mechanical-close"
 
 ROUTING_RECORDS_FILENAME = "records.yaml"
 
@@ -194,14 +198,22 @@ def build_directives(
         },
     ]
 
-    last_id = "d-assert-outbox-empty"
+    directives.append(
+        {
+            "id": "d-mechanical-close",
+            "op": MECHANICAL_CLOSE_OP,
+            "args": [],
+            "depends_on": ["d-assert-outbox-empty"],
+        }
+    )
+    last_id = "d-mechanical-close"
     if cutoff is not None:
         directives.append(
             {
                 "id": "d-age-sweep",
                 "cli": "age-sweep-lessons",
                 "args": [str(lessons_path), "--before", cutoff, "--apply"],
-                "depends_on": ["d-assert-outbox-empty"],
+                "depends_on": ["d-mechanical-close"],
             }
         )
         last_id = "d-age-sweep"
@@ -224,7 +236,7 @@ def brief(
 ) -> dict[str, Any]:
     """Computes and returns the learn-lessons pipeline decision object: the
     8-key envelope whose `directives[]` names extract -> verify ->
-    outbox-drain -> assert-outbox-empty -> age-sweep -> run-stamp, in that
+    outbox-drain -> assert-outbox-empty -> mechanical-close -> age-sweep -> run-stamp, in that
     order, each naming its predecessor in `depends_on`. `judgment_points[]`
     is always `[]` (AC2 — no model call on the extract/verify legs).
 

@@ -174,6 +174,7 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "extract-lessons",
         "lessons-outbox-drain",
         "age-sweep-lessons",
+        "mechanical-close",
         "stamp-run-complete",
     }),
     # Run-spec rows: script barewords a workflow run spec may dispatch; the

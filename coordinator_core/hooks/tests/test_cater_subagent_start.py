@@ -1840,3 +1840,73 @@ def test_other_agent_types_never_write_a_params_file(tmp_path: Path) -> None:
     payload["agent_type"] = "coordinator:executor"
     assert "params file not written" not in compose_catering(payload, cwd=str(tmp_path))
     assert not path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Run-stage phase leg
+# ---------------------------------------------------------------------------
+
+_PHASE_RUN = "ask-20261114T000000-abc123"
+
+
+def _phase_spawn(tmp_path: Path, monkeypatch, label: str, agent_type: str = "coordinator:executor"):
+    import json
+
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True, exist_ok=True)
+    ask_contract.write_run_stage(repo, _PHASE_RUN, "minted")
+    wf = tmp_path / "projects" / "slug" / "sess-p" / "subagents" / "workflows" / "wf_run1"
+    wf.mkdir(parents=True)
+    (wf / "journal.jsonl").write_text(
+        json.dumps({"type": "started", "key": "k", "agentId": "agp", "label": label}) + "\n",
+        encoding="utf-8",
+    )
+    prompt = f"Do the stage.\nWrite notes under .coordinator-local/workflow-sidecars/ask/{_PHASE_RUN}/{label}/ now."
+    transcript = wf / "agent-agp.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    payload = {
+        "agent_type": agent_type,
+        "agent_id": "agp",
+        "session_id": "sess-p",
+        "cwd": str(repo),
+        "transcript_path": str(transcript),
+    }
+    return repo, payload
+
+
+@pytest.mark.parametrize(
+    "label,phase", [("plan", "plan-author"), ("plan-review", "review"), ("plan-revise", "plan-author")]
+)
+def test_plan_and_review_child_starts_stamp_the_run_phase(tmp_path, monkeypatch, label, phase):
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    repo, payload = _phase_spawn(tmp_path, monkeypatch, label)
+    compose_catering(payload, cwd=str(repo))
+    rec = ask_contract.read_run_stage(repo, _PHASE_RUN)
+    assert rec["phase"] == phase and rec["stage"] == "minted"
+
+
+def test_a_non_plan_non_review_label_stamps_no_phase(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    for label in ("gate", "plan-docs-check", "work:C1"):
+        repo, payload = _phase_spawn(tmp_path / label.replace(":", "-"), monkeypatch, label)
+        compose_catering(payload, cwd=str(repo))
+        assert "phase" not in ask_contract.read_run_stage(repo, _PHASE_RUN)
+
+
+def test_a_terminal_run_is_never_rephased_and_the_hook_never_fails(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    repo, payload = _phase_spawn(tmp_path, monkeypatch, "plan")
+    ask_contract.write_run_stage(repo, _PHASE_RUN, "halted")
+    compose_catering(payload, cwd=str(repo))
+    assert "phase" not in ask_contract.read_run_stage(repo, _PHASE_RUN)
+    payload["transcript_path"] = str(tmp_path / "missing" / "subagents" / "workflows" / "w" / "agent-agp.jsonl")
+    assert isinstance(compose_catering(payload, cwd=str(repo)), str)

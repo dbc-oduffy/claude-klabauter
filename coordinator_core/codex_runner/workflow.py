@@ -976,6 +976,13 @@ def run_agent(
     (artifact_dir / "process.json").unlink(missing_ok=True)
     (artifact_dir / 'private-cli.json').unlink(missing_ok=True)
     if backend == "codex":
+        from coordinator_core.warm import sandboxed_spawn
+
+        if sandboxed_spawn.caller_is_sandboxed():
+            raise AgentFailed(
+                "codex child would spawn nested in the codex sandbox without network; "
+                "fire the run through the warm engine (engine_ask.submit)"
+            )
         preflight_auth(env=env, requested=False)
         try:
             try:

@@ -1167,6 +1167,46 @@ def _compose_docs_checker_rag_leg(
     return "\n\n" + DOCS_CHECKER_RAG_CLAUSE
 
 
+_RUN_ID_IN_PROMPT_RE = re.compile(
+    r"(?:workflow-sidecars/[A-Za-z0-9_-]+|(?:state|scratch)/warp)/([A-Za-z0-9][A-Za-z0-9._-]{0,200})/"
+)
+
+
+def _run_phase_for_stage(stage: str) -> str:
+    """The run-stage `phase` a Workflow stage label starts, or "" for a label that starts none."""
+    if "review" in stage:
+        return "review"
+    if stage in ("plan", "plan-revise", "plan-patch", "plan-prep-repair"):
+        return "plan-author"
+    return ""
+
+
+def _advance_run_phase(payload: Dict[str, Any], cwd: Optional[str]) -> None:
+    """Stamp the claude-klabauter run's run-stage `phase` when this child is its plan-author or review stage.
+
+    Any agent type: the Workflow child resolves through `run_stage_lookup`, its stage label picks
+    the phase, and the run id comes from the spawn prompt's sidecar or `warp/<run>` path. In-process
+    reads and at most one atomic write; a miss or error is silent.
+    """
+    try:
+        from coordinator_core.ops.dispatch_emit import run_stage_lookup
+        from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir, stamp_run_phase_at
+
+        found = run_stage_lookup.resolve(payload)
+        phase = _run_phase_for_stage(found[1]["stage"]) if found else ""
+        if not phase:
+            return
+        root = _show_toplevel_no_spawn(cwd or payload.get("cwd"))
+        prompt = chan.read_spawn_prompt(chan.spawn_transcript_path(payload))
+        match = _RUN_ID_IN_PROMPT_RE.search(prompt.replace("\\", "/")) if prompt else None
+        if not root or not match:
+            return
+        stamp_run_phase_at(record_dir(Path(root), match.group(1)), phase)
+    except Exception:
+        return
+
+
 COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 
 
@@ -1275,6 +1315,8 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
         params_text = _compose_params_prewrite_leg(payload, cwd, agent_type, subagent_type)
     except Exception:
         params_text = ""
+
+    _advance_run_phase(payload, cwd)
 
     parts: list[str] = []
     blocks_idx = -1

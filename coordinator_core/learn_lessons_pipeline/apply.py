@@ -27,8 +27,10 @@ Two closed dispatch tables, matching the two directive shapes C3's
     `resolve_cli_script_root`) and calls its `main(argv)` in-process —
     never spawned as a child process.
 
-    `_OP_DISPATCH = {"stamp-run-complete": _dispatch_stamp_run_complete}` —
-    the sixth directive's seam. `d-stamp-run-complete` carries `op:` rather
+    `_OP_DISPATCH` (`mechanical-close`, `stamp-run-complete`) — the in-package
+    directives' seam. `d-mechanical-close` (model-free dedupe/discard/retag over
+    the open queue, `mechanical_close.apply_verdicts`) and
+    `d-stamp-run-complete` carry `op:` rather
     than `cli:` because `run_stamp.py` is an in-package engine module, not a
     `coordinator/bin` script — admitting it into `_CLI_DISPATCH` would put a
     non-script into a manifest whose whole point is "every `cli` is a real,
@@ -64,7 +66,7 @@ Negative-spec:
       import_module` on a brief-derived string, or a subprocess spawn
       anywhere in this module — both dispatch tables are closed dict
       literals, and every load goes through `cli_dispatch.load_cli_module`.
-    - Do NOT mark any of the six directives `advisory` — advisory means a
+    - Do NOT mark any of the seven directives `advisory` — advisory means a
       failure does NOT halt the run, which is the one way to lose AC1
       silently while every test still passes.
     - Do NOT add `run_stamp` to `_CLI_DISPATCH`, and do NOT add any
@@ -75,6 +77,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
@@ -89,11 +92,17 @@ from coordinator_core.ceremony_common.cli_dispatch import (
 from coordinator_core.contract import apply_base
 from coordinator_core.contract.apply_base import assert_in_repo_root
 from coordinator_core import run_watermark
+from coordinator_core.distill.prompt_tier import estimate_tokens
 from coordinator_core.learn_lessons_pipeline import (
     CONSUMES_MANIFEST,
     LESSONS_WATERMARK_KIND,
     brief,
     lessons_run_dir,
+)
+from coordinator_core.learn_lessons_pipeline.mechanical_close import (
+    apply_verdicts,
+    classify_with_residue,
+    scan_queue,
 )
 from coordinator_core.learn_lessons_pipeline.run_stamp import stamp_run_complete
 from coordinator_core.run_watermark import Watermark
@@ -249,9 +258,43 @@ def _dispatch_stamp_run_complete(args: list[str], repo_root: Path) -> dict[str, 
     return {"sentinel": str(sentinel), "watermark": str(promoted) if promoted else None}
 
 
-#: The single `op:` verb this package's `directives[]` may name — kept
+def mechanical_close_dry_run(repo_root: Path) -> dict[str, Any]:
+    """Verdicts and token counts for the open queue, writing nothing. `tokens_after` is the
+    projection with every dedupe/discard row removed."""
+    verdicts, open_rows = classify_with_residue(repo_root)
+    sizes = {r["row_path"]: r["size_bytes"] for r in scan_queue(repo_root)}
+    closing = {v.row_path for v in verdicts if v.verdict != "retag"}
+    return {
+        "dry_run": True,
+        "verdicts": [asdict(v) for v in verdicts],
+        "closed": {k: sum(1 for v in verdicts if v.verdict == k) for k in ("dedupe", "discard", "wiki-append", "retag")},
+        "residue_ids": sorted(Path(p).stem for p in open_rows - {v.row_path for v in verdicts}),
+        "tokens_before": estimate_tokens(sum(sizes.values())),
+        "tokens_after": estimate_tokens(sum(s for p, s in sizes.items() if p not in closing)),
+    }
+
+
+def mechanical_close(repo_root: Path) -> dict[str, Any]:
+    """Applies every mechanical verdict over the open queue in process and declares each moved
+    or rewritten path so `post_run.finish` sees it. Returns `apply_verdicts`' report plus `residue_ids`, the open rows no verdict closed."""
+    verdicts, open_rows = classify_with_residue(repo_root)
+    result = apply_verdicts(verdicts, repo_root)
+    handled = {*result["archived_from"], *result["rewritten"]}
+    result["residue_ids"] = sorted(Path(p).stem for p in open_rows - handled)
+    for rel in (*result["archived_from"], *result["archived"], *result["rewritten"], *result["appended"]):
+        declare_write(repo_root / rel)
+    return result
+
+
+def _dispatch_mechanical_close(args: list[str], repo_root: Path) -> dict[str, Any]:
+    """Handles `d-mechanical-close`; the report is read back by `apply` into `report["mechanical_close"]`."""
+    return mechanical_close(repo_root)
+
+
+#: The `op:` verbs this package's `directives[]` may name — kept
 #: disjoint from `_CLI_DISPATCH` (§ module docstring negative-spec).
 _OP_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
+    "mechanical-close": _dispatch_mechanical_close,
     "stamp-run-complete": _dispatch_stamp_run_complete,
 }
 
@@ -286,6 +329,9 @@ def apply(
         )
     for path in declared:
         declare_write(path)
+    for entry in report.get("results") or []:
+        if entry.get("id") == "d-mechanical-close" and entry.get("detail") is not None:
+            report["mechanical_close"] = entry["detail"]
     if exit_code != apply_base.APPLY_EXIT_OK:
         return exit_code, report
     return _finish_run(repo_root, envelope["directives"], declared, report)

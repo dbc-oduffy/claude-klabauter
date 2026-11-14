@@ -478,6 +478,11 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/workweek_complete/release/merge.py': ('in-repo-non-state', 'transient pr-body-<sha>.md in the caller-supplied run_dir, handed to gh pr create --body-file: merge_pinned'),
     'coordinator_core/ops/review_mint/supersede.py': ('claims-explicitly', 'exclusive-create superseding record under state/superseding-reviews/, declared through declare_write: record_superseding_review'),
     'coordinator_core/percolate/_entrypoint_depth_probe/sitecustomize.py': ('outside-repo', 'per-pid depth record in the env-named dir the percolate gate makes with tempfile.TemporaryDirectory'),
+    'coordinator_core/codex_runner/codex_spawn_env.py': ('ignored-target', 'isolated codex child home (auth.json, config.toml re-keyed, hooks.json) via .part + os.replace under the gitignored <writable_root>/scratch/codex-home, plus the scratch/codex-tmp mkdir: _isolate_codex_home, _home_writable'),
+    'coordinator_core/git/worktree_sync.py': ('in-repo-non-state', 'post-landing 3-way sync of landed paths into the worktree via tmp + os.replace, re-read guarded: _sync_one'),
+    'coordinator_core/ops/fleet/_memo_push_pending.py': ('ignored-target', 'push-pending record json via tmp + os.replace under the gitignored .coordinator-local/memo-outbox/push-pending/: _write_atomic'),
+    'coordinator_core/session/op_dispatch_nag.py': ('git-internal', "the DIY-nag window and check stamps (op-dispatch-nag.stamp, op-dispatch-nag.checked) beside xs-lane.json under .coordinator-local/coordinator-sessions/<sid>/, never committed: _mark"),
+    'coordinator_core/gem_inbox_apply.py': ('to-fix', 'manifest-declared writes (batons under state/handoffs, memos, the commit ledger under .coordinator-local) via write_text and os.replace moves, with no claim declared: apply_manifest'),
     'coordinator_core/session/xs_lane_budget.py': ('git-internal', "the session's XS lane record under .coordinator-local/coordinator-sessions/<sid>/, never committed: _write writes a temp file then os.replaces it; _create_exclusive writes a temp file then os.links it"),
     'coordinator_core/session/em_turn_count.py': ('git-internal', "the session's em-turns.json beside xs-lane.json under .coordinator-local/coordinator-sessions/<sid>/, never committed: save_state writes a same-dir temp file then os.replaces it"),
     'coordinator_core/session/migrate_hub.py': ('ignored-target', 'one-shot merge-copy of the legacy .git/coordinator-sessions hub into the gitignored .coordinator-local/coordinator-sessions hub: migrate_common'),
@@ -846,6 +851,7 @@ _TO_FIX_CEILING: FrozenSet[str] = frozenset({
     'coordinator_core/bash_guards/_dialect.py',
     'coordinator_core/bash_guards/_write_bump_stand_down.py',
     'coordinator_core/bash_guards/chain_arrival_ledger.py',
+    'coordinator_core/gem_inbox_apply.py',
     'coordinator_core/hooks/context_pressure_precompact.py',
     'coordinator_core/hooks/nudge_unrouted_sizing.py',
     'coordinator_core/ops/archive_auto_memory_rows.py',
@@ -1139,10 +1145,10 @@ def test_at_close_out_the_ceiling_is_empty():
     write to the category their real write target names (53 to 35 -- see
     the register's C7 comment block for the full per-module breakdown); retiring the
     backlog-history shard deleted one to-fix module outright (35 to 34); deleting generator_scan_cache.py took it 34 to 33; the bug-sweep atomic-write pass left
-    runtime_tripwire_em_check.py with no raw token (33 to 32)), so
+    runtime_tripwire_em_check.py with no raw token (33 to 32); gem_inbox_apply landed undispositioned, 31 to 32), so
     a reader of this file at this commit does not mistake a non-empty
     ceiling for a defect."""
-    assert len(_TO_FIX_CEILING) == 31
+    assert len(_TO_FIX_CEILING) == 32
 
 
 @pytest.mark.parametrize(

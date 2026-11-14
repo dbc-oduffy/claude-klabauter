@@ -88,7 +88,7 @@ def test_default_window_selects_completed_plan_and_citing_page(repo):
     assert [pg["page"] for pg in out["pages"]] == ["docs/wiki/alpha.md"]
     entry = out["pages"][0]["plans"][0]
     assert entry["path"] == plan and entry["commit_sha"] == sha and entry["tshirt"] == "L"
-    assert entry["preview"].startswith("---\ntitle: p1")
+    assert entry["preview"].startswith("# p1") and "status:" not in entry["preview"]
     assert out["preview_chars_total"] == len(entry["preview"])
     assert out["truncated"] == {"pages": 0, "plans": 0}
 

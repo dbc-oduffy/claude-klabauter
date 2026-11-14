@@ -11,6 +11,8 @@ from that grant and `cwd` to the op's repo root; an unbound env session id is re
 `fire` (bool, default true: hand the run to `workflow.fire` with `expected=<sha256>`; false mints without starting),
 `executor` (headless by default, or claude), and `backend` (codex by default; claude, grok or agy opt-in).
 Completion defaults to the submitting session UUID; notify_to explicitly overrides it.
+An empty params object reads the object in `.coordinator-local/em-submit.json` under the repo; a missing or
+non-object file is a `bad-request` refusal naming that path. Non-empty params are used as given.
 
 Reply, never empty: `{run_id, script_path, sha256}` (plus `fire_args`, `detached_steps`, and `fire` when
 `fire` is not false) or `{refused, reason}` with `refused` in `_engine_ask_gates.REFUSAL_CODES`. A fire that
@@ -21,11 +23,14 @@ Spec backlink: docs/plans/2026-11/2026-11-07-7402bb-2-engine-ask-op-side-submit.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.workflow_fire.backends import BACKENDS
+
+CANONICAL_PARAMS_PATH = ".coordinator-local/em-submit.json"
 
 _EXTRA_KEYS = (
     "em_context", "context", "brief", "brief_file", "route_preference", "em_rationale", "em_size",
@@ -63,6 +68,19 @@ def _with_grant_bound_identity(params: dict, repo_root: Optional[Path]) -> dict:
     return filled
 
 
+def _canonical_params(repo_root: Path) -> dict:
+    """Load `.coordinator-local/em-submit.json` under the repo; a refusal dict names the path."""
+    path = repo_root / CANONICAL_PARAMS_PATH
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {"refused": "bad-request",
+                "reason": f"No params given and {CANONICAL_PARAMS_PATH} is unreadable ({type(exc).__name__}); write the params object there."}
+    if not isinstance(loaded, dict):
+        return {"refused": "bad-request", "reason": f"{CANONICAL_PARAMS_PATH} must hold a JSON object of params."}
+    return {"params": loaded}
+
+
 @register_op("engine_ask.submit")
 def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Submit one ask or sizing through the shared gates; see the module docstring for the wire contract."""
@@ -70,6 +88,11 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     if not isinstance(params, dict):
         return {"refused": "bad-request", "reason": "engine_ask.submit takes an object of params."}
+    if not params and repo_root is not None:
+        canonical = _canonical_params(Path(repo_root))
+        if "refused" in canonical:
+            return canonical
+        params = canonical["params"]
     unknown = sorted(set(params) - _KNOWN_KEYS)
     if unknown:
         return {

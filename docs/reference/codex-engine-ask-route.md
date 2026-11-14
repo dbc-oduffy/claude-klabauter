@@ -22,15 +22,21 @@ Do not repeat a mutation after a timeout without reconciling whether it already 
 
 ## 1. Submit
 
+Write the params as a UTF-8 JSON object to `.coordinator-local/em-submit.json` under the repo:
+
 ```
-coordinator-invoke engine_ask.submit --params-file - --repo <repo> <<'EOF'
 {"ask": "<the PM's words verbatim, or the relayed ask>",
  "ask_source": "pm",
  "session_id": "<your Codex thread id>",
  "caller": "<your peer name, e.g. the name peers.json binds>",
  "cwd": "<absolute path of your checkout>",
  "em_context": "<optional EM framing, kept separate from the ask>"}
-EOF
+```
+
+Then submit with no params; the op reads that file:
+
+```
+coordinator-invoke engine_ask.submit --repo <repo>
 ```
 
 - `ask` xor `sizing`; `ask_source` (`pm` | `relayed`) is required with `ask`.
@@ -67,9 +73,6 @@ The warm engine observes driver exit and delivers the completion notice. The cal
 waits for that notice without polling or relaying the live run. After a terminal notice,
 `workflow.fire_status` can reconcile the recorded handle and outcome; driver exit and
 `outcome: clean` do not establish phase success.
-
-For Windows or arbitrary free text, write a UTF-8 JSON file with Python and supply
-`--params-file <absolute JSON path>`; the heredoc example is for POSIX shells.
 
 A matching verified script already reserved or executed returns its existing fire handle and
 `already_fired`; it does not start another driver. A pending reservation whose owner disappeared

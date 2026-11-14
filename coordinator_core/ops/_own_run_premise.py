@@ -8,6 +8,7 @@ Stdlib plus the halt index; no subprocess, no git.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path, PurePosixPath
@@ -54,9 +55,22 @@ def _newest_run_for(root: Path, sizing_rel: str) -> Optional[tuple]:
         if not safe_id(name):
             continue
         marker = _read(warp / name)
-        if marker and marker.get("status") in _RUN_STATUSES and marker.get("sizing_rel") == norm:
+        if not marker or marker.get("status") not in _RUN_STATUSES:
+            continue
+        named = marker.get("sizing_rel") or _run_json_sizing(warp / name)
+        if named == norm:
             return name, marker["status"]
     return None
+
+
+def _run_json_sizing(run_dir: Path) -> Optional[str]:
+    """The normalised sizing ``run.json`` names; a refusal halt marker carries no ``sizing_rel``."""
+    try:
+        data = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    rel = data.get("sizing_rel") if isinstance(data, dict) else None
+    return PurePosixPath(rel.replace("\\", "/")).as_posix() if isinstance(rel, str) and rel else None
 
 
 def own_run_paths(repo_root: Path, sizing_rel: str) -> dict:

@@ -90,3 +90,20 @@ def test_spawned_temp_and_tmp_are_the_writable_scratch_dir(rig, tmp_path, monkey
     expected = rig["repo"] / "scratch" / "codex-tmp"
     assert expected.is_dir()
     assert env["TEMP"] == env["TMP"] == str(expected)
+
+
+def test_codex_under_restricted_token_refuses_nested_spawn_before_any_spawn(rig, tmp_path, monkeypatch):
+    from coordinator_core.warm import sandboxed_spawn
+
+    monkeypatch.setattr(sandboxed_spawn, "caller_is_sandboxed", lambda: True)
+    with pytest.raises(agents.AgentFailed, match="nested in the codex sandbox"):
+        agents.run_agent("x", {}, repo_root=rig["repo"], artifact_dir=tmp_path / "agent")
+    assert "env" not in rig["seen"]
+
+
+def test_codex_unrestricted_still_reaches_the_spawn(rig, tmp_path, monkeypatch):
+    from coordinator_core.warm import sandboxed_spawn
+
+    monkeypatch.setattr(sandboxed_spawn, "caller_is_sandboxed", lambda: False)
+    with pytest.raises(_Spawned):
+        agents.run_agent("x", {}, repo_root=rig["repo"], artifact_dir=tmp_path / "agent")

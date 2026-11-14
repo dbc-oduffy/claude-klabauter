@@ -42,6 +42,39 @@ def test_path_the_run_did_not_write_still_pulls(tmp_path):
     assert reply["verdict"] == "judgment" and reply["blocking_findings"] == 1
 
 
+def _rearmed_refusal_run(root: Path, run: str = RUN, sizing: str = SIZING) -> None:
+    """A refusal halt re-armed in place: halted marker with no `sizing_rel`, the sizing only in run.json."""
+    record = root / "state" / "warp" / run
+    record.mkdir(parents=True, exist_ok=True)
+    (record / "halted.json").write_text(
+        json.dumps({"status": "halted", "halted": "staging-refusal", "sizing_rel": None}), encoding="utf-8"
+    )
+    (record / "run.json").write_text(json.dumps({"sizing_rel": sizing}), encoding="utf-8")
+    (record / "kept.json").write_text(
+        json.dumps({"chunks": {"C1": {"paths": {"src/x.py": "a" * 40}}}}), encoding="utf-8"
+    )
+
+
+def test_rearmed_refusal_run_landed_path_row_is_not_a_pull(tmp_path):
+    common = _repo(tmp_path)
+    _rearmed_refusal_run(tmp_path)
+    reply = _reply(common, [_row("src/x.py")])
+    assert reply["verdict"] == "ready" and reply["blocking_findings"] == 0
+    assert _own_run_premise.own_run_paths(tmp_path, SIZING) == {"src/x.py": RUN}
+
+
+def test_rearmed_refusal_run_other_path_still_pulls(tmp_path):
+    common = _repo(tmp_path)
+    _rearmed_refusal_run(tmp_path)
+    reply = _reply(common, [_row("src/y.py")])
+    assert reply["verdict"] == "judgment" and reply["blocking_findings"] == 1
+
+
+def test_rearmed_refusal_run_of_another_sizing_does_not_own_the_path(tmp_path):
+    _rearmed_refusal_run(tmp_path, sizing="state/sizings/2026-10-28-other-bbbbbb.yaml")
+    assert _own_run_premise.own_run_paths(tmp_path, SIZING) == {}
+
+
 def test_own_run_paths_stamps_run_id_and_ignores_other_sizing(tmp_path):
     _run(tmp_path, "landed", {"chunks": {"C1": {"paths": {"./src/x.py": "a" * 40}}}})
     assert _own_run_premise.own_run_paths(tmp_path, SIZING) == {"src/x.py": RUN}

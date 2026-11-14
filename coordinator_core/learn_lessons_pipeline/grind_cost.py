@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.distill.prompt_tier import estimate_tokens
-from coordinator_core.learn_lessons_pipeline.mechanical_close import close_candidates
+from coordinator_core.learn_lessons_pipeline.mechanical_close import close_candidates, repo_relative
 from coordinator_core.session import record_homes
 from coordinator_core.temp_layout import managed_temp_dir
 
@@ -56,6 +56,8 @@ def measure(
 
     `spawns_per_lesson` is triage_batches / admitted (0.0 when nothing is admitted).
     `max_triage_batch_tokens` is the largest triage batch's summed row-file tokens (bytes/4).
+    `tokens_before` sums row-file tokens over admitted rows; `tokens_after` excludes rows a
+    dedupe/discard verdict closes (a retag keeps its row).
     `llm_routed` is admitted minus `mechanically_closed` (close_candidates);
     `routed_out` counts schema-failing declines; `projected_spawns` is triage
     batches plus pre-vet batches (profile `prevet.batch_size`, when declared)
@@ -98,7 +100,15 @@ def measure(
             default=0,
         )
 
-        mechanically_closed = len(close_candidates(manifest, repo_root))
+        verdicts = close_candidates(manifest, repo_root)
+        archived = {repo_relative(v.row_path, repo_root) for v in verdicts if v.verdict != "retag"}
+        mechanically_closed = sum(1 for v in verdicts if v.verdict != "retag")
+        tokens_before = tokens_after = 0
+        for e in manifest.entries:
+            t = estimate_tokens(_entry_bytes(e, repo_root))
+            tokens_before += t
+            if repo_relative(str(e.path), repo_root) not in archived:
+                tokens_after += t
 
     admitted = len(manifest.entries)
     triage_batches = len(batches)
@@ -119,6 +129,8 @@ def measure(
         "llm_routed": llm_routed,
         "mechanically_closed": mechanically_closed,
         "routed_out": routed_out,
+        "tokens_before": tokens_before,
+        "tokens_after": tokens_after,
         "projected_spawns": triage_batches + prevet_batches + (triage_batches if has_verify else 0),
     }
 

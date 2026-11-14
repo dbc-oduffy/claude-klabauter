@@ -726,6 +726,122 @@ def _reserved_run(root: Path, reserved: object, sizing_doc: Optional[dict], sizi
     return run_id, marker[0]
 
 
+_UNFIRED_RESEND_WINDOW_SECS = 120.0
+
+
+def _resend_holder(
+    root: Path, sizing_rel: Optional[str], ask: object, exclude: Optional[str] = None
+) -> Optional[str]:
+    """Run id already minted for this emit's key (the sizing, else the normalized ask hash): a minted
+    run nothing has fired yet inside `_UNFIRED_RESEND_WINDOW_SECS` (the lost-reply case: the caller
+    never learned the id, so never fired it), else a live one. None when no held token carries the
+    key. The live lookup runs only when a token carries the key, so a first emit lists nothing extra.
+    `exclude` is the emit's `chain_parent`: a successor is never a resend of the run it chains from."""
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    if sizing_rel:
+        key = lambda r: isinstance(r.get("sizing_rel"), str) and run_token.normalize_sizing_rel(root, r["sizing_rel"]) == sizing_rel  # noqa: E731
+    elif isinstance(ask, str) and ask.strip():
+        digest = normalized_ask_hash(ask)
+        key = lambda r: r.get("ask_sha256") == digest  # noqa: E731
+    else:
+        return None
+    held = [
+        r for r in run_token.held_records(root)
+        if isinstance(r.get("run_id"), str) and r["run_id"] != exclude and key(r)
+    ]
+    if not held:
+        return None
+    dirs = warp_live._launch_dirs(None)
+    now = time.time()
+    for record in sorted(held, key=lambda r: float(r.get("minted_at") or 0), reverse=True):
+        minted = record.get("minted_at")
+        if (
+            isinstance(minted, (int, float)) and now - minted <= _UNFIRED_RESEND_WINDOW_SECS
+            and warp_live._unfired(root, record, dirs)
+        ):
+            return record["run_id"]
+    if sizing_rel:
+        live = warp_live.live_run_for_sizing(root, sizing_rel)
+    else:
+        found = warp_live.run_for_ask(root, normalized_ask_hash(ask))
+        live = found[1] if found is not None and found[0] == "live" else None
+    return None if live == exclude else live
+
+
+def _resent_live_emit(
+    params: dict, root: Path, sizing_rel: Optional[str], ask: object, gated: Optional[dict] = None
+) -> Optional[dict]:
+    """The reply for an emit whose key is already minted into a run (`_resend_holder`): that run's
+    id, no new run. A re-send after a lost reply (-32004) lands here and yields exactly one run.
+    `gated` is the sizing gate's verdict for the re-send (`batons`, `uncommitted`), so the reply
+    keeps the accepted receipt's keys. A still-unfired run is re-tokened under `carry_prior` and
+    `fire_args` carries the new `runToken`; a fired run's token is never touched (a re-mint drops
+    its claim). A halted run still rebinds and a landed one still refuses or residues; a
+    `reserved_run_id` emit keeps its own live-run refusal. None when no run holds the key."""
+    if params.get("reserved_run_id") is not None:
+        return None
+    chain_parent = params.get("chain_parent")
+    holder = _resend_holder(root, sizing_rel, ask, chain_parent if isinstance(chain_parent, str) else None)
+    if holder is None:
+        return None
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    from coordinator_core.ops.dispatch_emit.fanout_cost import read_fanout
+
+    record = run_token._read_rec(root, holder) or {}
+    script = record.get("script_path")
+    path = None
+    digest = None
+    receipt = None
+    fanout = None
+    if isinstance(script, str) and script:
+        path = Path(script)
+        if not path.is_absolute():
+            path = root / path
+        try:
+            data = path.read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            fanout = read_fanout(data.decode("utf-8", errors="replace"))
+        except OSError:
+            pass
+        candidate = emission_receipt_path(path)
+        receipt = str(candidate) if candidate.is_file() else None
+    ask_source = params.get("ask_source") or (ASK_SOURCE_PM if sizing_rel else ASK_SOURCE_RELAYED)
+    fire_args = {"repoRoot": Path(root).as_posix()}
+    if isinstance(script, str) and script and record.get("run_id") == holder:
+        from coordinator_core import warp_live
+
+        if warp_live._unfired(root, record, warp_live._launch_dirs(None)):
+            try:
+                fire_args["runToken"] = run_token.mint(
+                    root, holder, script, session_id=record.get("session_id"),
+                    sizing_rel=record.get("sizing_rel"), carry_prior=True,
+                    ask_sha256=record.get("ask_sha256"),
+                )
+            except (OSError, ValueError):
+                pass
+    reply = {
+        "run_id": holder,
+        "path": str(path) if path is not None else None,
+        "receipt": receipt,
+        "sha256": digest,
+        "ok": True,
+        "deduped": True,
+        "findings": [],
+        "error_count": 0,
+        "warn_count": 0,
+        "fanout": fanout,
+        "ask_source": ask_source,
+        "fire_args": fire_args,
+    }
+    if gated is not None and "batons" in gated:
+        reply["batons"] = gated["batons"]
+        reply["uncommitted"] = gated.get("uncommitted", [])
+    return reply
+
+
 def _halted(status: Path) -> bool:
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 
@@ -986,7 +1102,8 @@ def _unstamped_stem(sizing_rel: str) -> str:
     """Sizing stem with any run id already carried stripped, so a mint appends exactly one stamp."""
     stem = Path(sizing_rel).stem
     if _RUN_STAMP_TAIL.search(stem):
-        stem = _RUN_STAMP_TAIL.sub("", stem)
+        while _RUN_STAMP_TAIL.search(stem):
+            stem = _RUN_STAMP_TAIL.sub("", stem)
         stem = stem.removeprefix("warp-")
     return stem
 
@@ -2657,12 +2774,20 @@ def _dispatch_emit_body(
                     ask_root, sizing_rel, list(params.get("writes") or []), baton=ask_baton,
                     cross_repo_approved=bool(params.get("cross_repo_approved")),
                 )
+            resent = _resent_live_emit(
+                params, ask_root, sizing_rel, None, ask_sizing if intake_doc is None else None
+            )
+            if resent is not None:
+                return resent
         else:
             intake_doc = sizing_doc = None
             given_root = repo_root or params.get("target_root")
             if not given_root:
                 raise ValueError("dispatch.emit ask requires repo_root or target_root")
             ask_root = Path(given_root)
+            resent = _resent_live_emit(params, ask_root, None, ask)
+            if resent is not None:
+                return resent
             ask_baton = _read_baton_ids(
                 ask_root, params.get("baton"), params.get("deliverable_id")
             )
@@ -3278,7 +3403,7 @@ def _dispatch_emit_body(
             for staged_name, staged_text in staged_prompts.items():
                 staged_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / PROMPTS_DIR / f"{staged_name}.md"
                 staged_file.parent.mkdir(parents=True, exist_ok=True)
-                staged_file.write_text(staged_text, encoding="utf-8", newline="\n")
+                atomic_write_bytes(staged_file, staged_text.encode("utf-8"))
             if not ask_ctx["route_preference"].is_empty():
                 pref_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / _route_pref.ROUTE_PREFERENCE_FILE
                 pref_file.parent.mkdir(parents=True, exist_ok=True)

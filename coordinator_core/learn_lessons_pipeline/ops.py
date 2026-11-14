@@ -1,6 +1,7 @@
 """coordinator_core.learn_lessons_pipeline.ops — registers
-`learn_lessons_pipeline.brief` (read-only) and `learn_lessons_pipeline.apply`
-(MUTATING) as warm-servable ops.
+`learn_lessons_pipeline.brief` (read-only), `learn_lessons_pipeline.apply`, and
+`learn_lessons_pipeline.mechanical_close` plus its alias
+`learn_lessons_pipeline.apply_mechanical` (all MUTATING) as warm-servable ops.
 
 Purpose: this module's own import is the registration side-effect,
 mirroring `coordinator_core.baton_assemble.ops` and
@@ -36,9 +37,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.ipc import register_op
+from coordinator_core.group_em.repo_root_arg import RepoRootArgError, resolve_repo_root_arg
+from coordinator_core.ipc import CallerFacingValidationError, register_op
 from coordinator_core.learn_lessons_pipeline import brief as _brief
 from coordinator_core.learn_lessons_pipeline.apply import apply as _apply
+from coordinator_core.learn_lessons_pipeline.apply import mechanical_close, mechanical_close_dry_run
 
 
 @register_op("learn_lessons_pipeline.brief")
@@ -63,3 +66,35 @@ async def _learn_lessons_pipeline_apply(
     """
     exit_code, report = _apply(repo_root, roots=params.get("roots"))
     return {"exit_code": exit_code, "report": report}
+
+
+_MECHANICAL_CLOSE_PARAMS = {
+    "type": "object",
+    "properties": {"repo": {"type": "string"}, "dry_run": {"type": "boolean"}},
+}
+
+
+@register_op("learn_lessons_pipeline.mechanical_close", params_schema=_MECHANICAL_CLOSE_PARAMS)
+@register_op("learn_lessons_pipeline.apply_mechanical", params_schema=_MECHANICAL_CLOSE_PARAMS)
+async def _learn_lessons_pipeline_mechanical_close(
+    params: dict[str, Any], repo_root: Optional[Path]
+) -> dict[str, Any]:
+    """MUTATING adapter over `mechanical_close` -- closes duplicate, content-free, wiki-append
+    and out-of-enum-scope lesson rows in process, no model call; the report's `residue_ids`
+    are the rows left for the agent.
+
+    params:
+        repo: optional absolute path of the queue's repo root; defaults to the op's repo_root.
+            A path that is not an existing directory is refused naming `repo`.
+        dry_run: optional bool (default false); true returns verdicts and token counts
+            without writing.
+    """
+    root = repo_root
+    if params.get("repo") is not None:
+        try:
+            root = Path(resolve_repo_root_arg(params["repo"]))
+        except RepoRootArgError as exc:
+            raise CallerFacingValidationError(f"param `repo`: {exc}") from exc
+    if params.get("dry_run"):
+        return {"exit_code": 0, "report": mechanical_close_dry_run(root)}
+    return {"exit_code": 0, "report": mechanical_close(root)}

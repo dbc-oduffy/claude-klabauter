@@ -45,10 +45,51 @@ function _blankPath(p) {
 """
 
 
+# Trap: a workflow script has no filesystem, so the receipt is read through a read-only relay; the started path is one
+# whose `<script>.emitted.json` sha equals the script's own bytes, never the relay's word for where the script is.
+# Self-contained: the block is run alone under node by its test.
+_RECEIPT_PATH_JS = r"""const RECEIPT_SCHEMA = {
+  type: 'object',
+  required: ['found'],
+  properties: { found: { type: 'boolean' }, receipt_sha256: { type: 'string' }, script_sha256: { type: 'string' }, error: { type: 'string' } },
+};
+function _receiptCandidates(reply) {
+  const out = [];
+  const add = (p) => { if (out.indexOf(p) === -1) out.push(p); };
+  const p = reply && typeof reply.path === 'string' ? reply.path.trim().replace(/^["']+|["']+$/g, '') : '';
+  const norm = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  if (norm.endsWith('.mjs')) add((norm[0] === '/' || /^[A-Za-z]:\//.test(norm)) ? norm : REPO_ROOT + '/' + norm.replace(/^\.\//, ''));
+  const id = reply && typeof reply.run_id === 'string' ? reply.run_id.trim() : '';
+  if (/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) add(REPO_ROOT + '/scratch/warp/' + id + '.workflow.mjs');
+  return out;
+}
+async function _verifiedScriptPath(reply) {
+  const cands = _receiptCandidates(reply);
+  if (cands.length === 0) return { error: 'the deferred emit named neither a script path nor a run id to verify against an emit receipt' };
+  // A headless runner calls the op in-process: the reply is not transcribed, so there is nothing to verify.
+  if (typeof engineOp === 'function') return { path: cands[0] };
+  const errors = [];
+  for (const cand of cands) {
+    const r = await agent(
+      __AUTHORITY__
+      + ' Run `sha256sum "' + cand + '"` (`shasum -a 256` where sha256sum is absent) and read the file `' + cand + '.emitted.json`. Do not delete or modify any file. Then '
+      + 'return found true with receipt_sha256 (the "sha256" field of that JSON) and script_sha256 (the digest the command printed), both verbatim. '
+      + 'When either file is missing or unreadable, return found false and the error text verbatim in the error field.',
+      { label: 'receipt-check', phase: 'emit', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: RECEIPT_SCHEMA },
+    );
+    if (!r || r.found !== true) { errors.push('no emit receipt for ' + cand + (r && r.error ? ' (' + r.error + ')' : '')); continue; }
+    const rs = String(r.receipt_sha256 || '').trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(rs) || rs !== String(r.script_sha256 || '').trim().toLowerCase()) { errors.push('emit receipt sha mismatch for ' + cand); continue; }
+    return { path: cand };
+  }
+  return { error: errors.join('; ') };
+}
+"""
+
 _DEFERRED_JS = r"""export const meta = { name: 'engine-ask-deferred-emit', description: __DESCRIPTION__ }
 const REPO_ROOT = __REPO_ROOT__;
 const PARAMS_FILE = __PARAMS_FILE__;
-""" + _EMIT_RELAY_JS + r"""// Trap: ask text carries quotes and `$(`; the command names a params file and never inlines the payload. Trap: a subagent relay is denied recursive or forced removal, so the prompt carries no removal and the file is left in scratch/warp.
+""" + _EMIT_RELAY_JS + _RECEIPT_PATH_JS + r"""// Trap: ask text carries quotes and `$(`; the command names a params file and never inlines the payload. Trap: a subagent relay is denied recursive or forced removal, so the prompt carries no removal and the file is left in scratch/warp.
 const EMIT_PROMPT = __AUTHORITY__
   + ' Run `' + INVOKE + ' ' + EMIT_OP + ' --params-file "' + PARAMS_FILE + '"` once, with the command word exactly as written. '
   + 'Do not delete or modify any file. Then '
@@ -78,9 +119,14 @@ for (let attempt = 1; attempt <= HANDOVER_MAX_ATTEMPTS; attempt++) {
 if (!reply || _blankPath(reply.path)) {
   return { status: 'emit_refused', error: (reply && reply.error) || (_isHandover(reply) ? 'handover_pending persisted across ' + HANDOVER_MAX_ATTEMPTS + ' emit attempts' : 'the deferred emit returned no script path') };
 }
-// Trap: the relay re-serializes the reply path, so a Windows path can arrive with doubled backslashes or repo-relative.
-const norm = reply.path.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
-const scriptPath = (norm[0] === '/' || /^[A-Za-z]:\//.test(norm)) ? norm : REPO_ROOT + '/' + norm.replace(/^\.\//, '');
+const _verified = await _verifiedScriptPath(reply);
+if (_verified.error) {
+  const _rid = (typeof reply.run_id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(reply.run_id.trim())) ? reply.run_id.trim() : '';
+  return _rid
+    ? { status: 'minted_not_started', run_id: _rid, error: 'minted, not started: dispatch.minted_run start ' + _rid + ' (' + _verified.error + ')' }
+    : { status: 'emit_refused', error: _verified.error };
+}
+const scriptPath = _verified.path;
 __START__
 """
 

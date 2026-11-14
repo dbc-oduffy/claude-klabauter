@@ -133,6 +133,62 @@ def test_agy_delta_whitespace_survives_json_stream():
     assert reviewer_run._verdict_from(reply)["findings"][0]["finding"] == "one two"
 
 
+def test_run_reviewer_agy_route_returns_parsed_verdict_and_findings(monkeypatch, tmp_path, home):
+    script = tmp_path / "fake_agy.py"
+    script.write_text(
+        "import json, sys\n"
+        "argv = sys.argv[1:]\n"
+        "reply = '```json\\n' + json.dumps({'verdict': 'READY', 'findings': [\n"
+        "    {'finding': 'argv=' + ' '.join(argv[-6:])}]}) + '\\n```'\n"
+        "for i in range(0, len(reply), 7):\n"
+        "    print(json.dumps({'event': 'step_update', 'step_update': {\n"
+        "        'step_type': 'agent_response', 'text_delta': reply[i:i + 7]}}))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reviewer_run.AgyAdapter, "spawn_argv",
+        lambda self, prompt: [sys.executable, str(script), prompt],
+    )
+    out = run_reviewer("coord:rev", "BRIEF", ProviderChoice("agy", "gem-x"), home=home, verdicts=["READY"])
+    assert out["verdict"] == "READY" and out["provider"] == "agy" and out["model"] == "gem-x"
+    assert "--mode plan --sandbox --model gem-x" in out["findings"][0]["finding"]
+
+
+def test_provider_env_naming_plan_reviewer_agy_drives_run_reviewer(monkeypatch, tmp_path, home):
+    from coordinator_core.agent_pipe.reviewer_provider import PROVIDER_ENV, resolve_reviewer_provider
+
+    monkeypatch.setenv(PROVIDER_ENV, "coordinator:staff-eng=agy")
+    choice = resolve_reviewer_provider("coordinator:staff-eng")
+    assert choice is not None and choice.provider == "agy"
+    assert resolve_reviewer_provider("coordinator:executor") is None
+    script = tmp_path / "fake_agy_env.py"
+    script.write_text(
+        "import json\nreply = json.dumps({'verdict': 'READY', 'findings': []})\n"
+        "print(json.dumps({'event': 'step_update', 'step_update': "
+        "{'step_type': 'agent_response', 'text_delta': reply}}))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reviewer_run.AgyAdapter, "spawn_argv", lambda self, prompt: [sys.executable, str(script), prompt]
+    )
+    out = run_reviewer("coord:rev", "BRIEF", choice, home=home, verdicts=["READY"])
+    assert out["verdict"] == "READY" and out["provider"] == "agy" and out["findings"] == []
+
+
+def test_run_reviewer_agy_unparseable_reply_is_failed(monkeypatch, tmp_path, home):
+    script = tmp_path / "fake_agy_prose.py"
+    script.write_text(
+        "import json\nprint(json.dumps({'event': 'step_update', 'step_update': "
+        "{'step_type': 'agent_response', 'text_delta': 'no verdict here'}}))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reviewer_run.AgyAdapter, "spawn_argv", lambda self, prompt: [sys.executable, str(script), prompt]
+    )
+    out = run_reviewer("coord:rev", "BRIEF", ProviderChoice("agy", "gem-x"), home=home)
+    assert out["verdict"] == FAILED and "unparseable" in out["error"]
+
+
 def test_nested_verdict_does_not_replace_outer_reply():
     reply = {"verdict":"FAIL", "findings":[{"verdict":"OK", "finding":"nested evidence"}]}
     assert reviewer_run._verdict_from(json.dumps(reply)) == reply
@@ -183,7 +239,7 @@ def test_codex_windowsapps_only_path_refused_before_popen(tmp_path, monkeypatch)
 
 
 @pytest.mark.skipif(__import__("os").name != "nt", reason="PATH shaping is Windows-only")
-def test_codex_ps7_placed_ahead_of_windowsapps_at_popen(tmp_path, monkeypatch):
+def test_codex_ps7_replaces_windowsapps_pwsh_alias_at_popen(tmp_path, monkeypatch):
     apps, ps7, os = _codex_windowsapps(tmp_path, monkeypatch, ps7=True)
     seen = {}
 
@@ -194,7 +250,8 @@ def test_codex_ps7_placed_ahead_of_windowsapps_at_popen(tmp_path, monkeypatch):
     monkeypatch.setattr(reviewer_run.subprocess, "Popen", spy)
     run_reviewer("agent", "brief", ProviderChoice("codex", "m"))
     entries = seen["PATH"].split(os.pathsep)
-    assert entries.index(ps7) < entries.index(apps)
+    assert ps7 in entries
+    assert apps not in entries
 
 
 @pytest.mark.parametrize("provider,secret", [("codex","OPENAI_API_KEY"), ("agy","GEMINI_API_KEY"), ("grok","XAI_API_KEY")])

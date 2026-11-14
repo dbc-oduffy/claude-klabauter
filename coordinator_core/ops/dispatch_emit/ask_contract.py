@@ -1328,13 +1328,45 @@ def write_run_stage_at(
 HEARTBEAT_MIN_S = 60.0
 _HEARTBEAT_TERMINAL = frozenset({"halted", "complete", "landed"})
 
+#: Additive progress label on the run-stage record; `stage` stays the frozen `RUN_STAGES` enum.
+PHASE_FIELD = "phase"
+RUN_PHASES = ("executing", "plan-author", "review")
+
+
+def stamp_run_phase_at(record_path: Path, phase: str, *, now: str | None = None) -> bool:
+    """Set `phase` (one of `RUN_PHASES`) on `<record_path>/run-stage.json` and advance `last_activity_at`.
+    True when it wrote. False for an unknown phase, an absent, malformed, stage-less or terminal
+    (halted/landed) record, or a record already at `phase`. `stage` is untouched. One read, at most one
+    atomic write; never raises."""
+    from datetime import datetime, timezone
+
+    if phase not in RUN_PHASES:
+        return False
+    path = Path(record_path) / RUN_STAGE_FILE
+    try:
+        data = _read_json_object(path)
+        if not data:
+            return False
+        stage = data.get("stage")
+        if not isinstance(stage, str) or not stage or stage in _HEARTBEAT_TERMINAL:
+            return False
+        if data.get(PHASE_FIELD) == phase:
+            return False
+        data[PHASE_FIELD] = phase
+        data["last_activity_at"] = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        atomic_write_bytes(path, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    except (ValueError, OSError):
+        return False
+    return True
+
 
 def touch_run_activity(record_path: Path, *, now: "datetime | None" = None) -> bool:
     """Advance `<record_path>/run-stage.json`'s `last_activity_at` only, at most once per `HEARTBEAT_MIN_S`.
 
     True when it wrote. False for an absent, malformed, stage-less or terminal file, or a stamp younger
-    than the throttle (nothing written). `stage` and every other key are untouched. One read, at most
-    one atomic write; never raises on an unwritable file."""
+    than the throttle (nothing written). `stage` and every other key are untouched, except that a
+    record with no `phase` gets `phase` `executing` in the same write, which the throttle never defers.
+    One read, at most one atomic write; never raises on an unwritable file."""
     from datetime import datetime, timezone
 
     path = Path(record_path) / RUN_STAGE_FILE
@@ -1345,14 +1377,18 @@ def touch_run_activity(record_path: Path, *, now: "datetime | None" = None) -> b
     if not isinstance(stage, str) or not stage or stage in _HEARTBEAT_TERMINAL:
         return False
     moment = now or datetime.now(timezone.utc)
-    try:
-        last = datetime.fromisoformat(str(data.get("last_activity_at")).strip().replace("Z", "+00:00"))
-        if last.tzinfo is None:
-            last = last.replace(tzinfo=timezone.utc)
-        if (moment - last).total_seconds() < HEARTBEAT_MIN_S:
-            return False
-    except ValueError:
-        pass
+    first_phase = PHASE_FIELD not in data
+    if not first_phase:
+        try:
+            last = datetime.fromisoformat(str(data.get("last_activity_at")).strip().replace("Z", "+00:00"))
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            if (moment - last).total_seconds() < HEARTBEAT_MIN_S:
+                return False
+        except ValueError:
+            pass
+    else:
+        data[PHASE_FIELD] = "executing"
     data["last_activity_at"] = moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         atomic_write_bytes(path, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))

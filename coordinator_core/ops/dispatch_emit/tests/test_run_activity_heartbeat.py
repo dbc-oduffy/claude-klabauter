@@ -19,7 +19,7 @@ T0 = datetime(2026, 11, 5, 12, 0, 0, tzinfo=timezone.utc)
 def _stage(d, stage="staged", at=T0):
     d.mkdir(parents=True, exist_ok=True)
     (d / RUN_STAGE_FILE).write_text(
-        json.dumps({"stage": stage, "last_activity_at": at.strftime("%Y-%m-%dT%H:%M:%SZ"), "session_id": "s"}),
+        json.dumps({"stage": stage, "phase": "executing", "last_activity_at": at.strftime("%Y-%m-%dT%H:%M:%SZ"), "session_id": "s"}),
         encoding="utf-8",
     )
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -315,6 +316,32 @@ def launcher_env(tmp_path, monkeypatch):
 
 def _no_args(tmp_path):
     return {"ask": "build the thing", "ask_source": "pm"}
+
+
+def test_empty_params_load_the_canonical_file_under_the_repo(params, tmp_path, seen):
+    canonical = tmp_path / ".coordinator-local" / "em-submit.json"
+    canonical.parent.mkdir()
+    canonical.write_text(json.dumps({**params, "fire": False}), encoding="utf-8")
+    result = op._engine_ask_submit({}, repo_root=tmp_path)
+    assert result["run_id"] == "run-abc123"
+    assert seen[0]["tool_input"]["args"] == {"ask": "build the thing", "source": "pm"}
+
+
+@pytest.mark.parametrize("body", [None, "[1]", "not json"])
+def test_empty_params_with_a_missing_or_non_object_file_name_the_path(tmp_path, seen, body):
+    if body is not None:
+        (tmp_path / ".coordinator-local").mkdir()
+        (tmp_path / ".coordinator-local" / "em-submit.json").write_text(body, encoding="utf-8")
+    result = op._engine_ask_submit({}, repo_root=tmp_path)
+    assert result["refused"] == "bad-request" and ".coordinator-local/em-submit.json" in result["reason"]
+    assert seen == []
+
+
+def test_explicit_params_ignore_the_canonical_file(params, tmp_path, seen):
+    (tmp_path / ".coordinator-local").mkdir()
+    (tmp_path / ".coordinator-local" / "em-submit.json").write_text('{"ask": "other"}', encoding="utf-8")
+    op._engine_ask_submit({**params, "fire": False}, repo_root=tmp_path)
+    assert seen[0]["tool_input"]["args"]["ask"] == "build the thing"
 
 
 def test_grant_bound_env_supplies_identity_when_params_omit_it(tmp_path, launcher_env, seen):

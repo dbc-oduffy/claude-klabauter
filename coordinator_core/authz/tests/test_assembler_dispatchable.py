@@ -283,11 +283,12 @@ class TestAC7RegistryAndClassificationBacking:
     def test_learn_lessons_pipeline_entry_equals_its_declared_verbs(self) -> None:
         from coordinator_core.learn_lessons_pipeline import (
             CONSUMES_MANIFEST,
+            MECHANICAL_CLOSE_OP,
             STAMP_RUN_COMPLETE_OP,
         )
 
         assert ASSEMBLER_DISPATCHABLE["learn_lessons_pipeline"] == (
-            frozenset(CONSUMES_MANIFEST) | {STAMP_RUN_COMPLETE_OP}
+            frozenset(CONSUMES_MANIFEST) | {MECHANICAL_CLOSE_OP, STAMP_RUN_COMPLETE_OP}
         )
 
 

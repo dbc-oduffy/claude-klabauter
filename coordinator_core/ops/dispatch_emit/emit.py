@@ -2358,6 +2358,16 @@ def _footprint_miss_clause(leg_writes: Sequence[str] = ()) -> str:
     )
 
 
+def _fenced_test_clause(work_class_id: str) -> str:
+    """Replaces the self-run test demand for a row whose writes sit under a run-only work class."""
+    return (
+        f"Test gate (run-only fence, work class {work_class_id}): the repo fences test runs for "
+        "your write set away from you. Run no test and no test command. A coordinator:test-runner "
+        "leg runs this row's scoped tests after you; tests not run here are never a gate-blocker. "
+        "Return DONE once your edits are complete."
+    )
+
+
 def _slot_row_clause(commands: list) -> str:
     """A `needs_slot` row's process (build, compiler, editor) is scheduled by
     the Group EM against box load and never launched by the executor unless the
@@ -3281,10 +3291,14 @@ def _row_prompt(
     if plan_context is not None:
         if is_slot_row:
             body += f"\n\n{_slot_row_clause(gate_commands)}"
-        elif gate_commands:
-            body += f"\n\n{_build_gate_clause(gate_commands)}"
         else:
-            body += f"\n\n{_footprint_miss_clause(plan_context.leg_writes)}"
+            fence = _agent_route.run_only_fence(row, plan_context.repo_root)
+            if gate_commands:
+                body += f"\n\n{_build_gate_clause(gate_commands)}"
+            if fence is not None:
+                body += f"\n\n{_fenced_test_clause(fence.id)}"
+            elif not gate_commands:
+                body += f"\n\n{_footprint_miss_clause(plan_context.leg_writes)}"
         if criterion_routed:
             body += f"\n\n{CRITERION_TYPECHECK_CLAUSE}"
     body += sidecar
@@ -7104,6 +7118,16 @@ def compose_script(
         )
         for note in route_notes if routes else ():
             body_blocks.append(f"  log({_js_string_literal('route: ' + note)});")
+        fenced_ids = [r.id for r in flat_rows if _agent_route.run_only_fence(r, repo_anchor) is not None]
+        if fenced_ids:
+            body_blocks.append(
+                "  log("
+                + _js_string_literal(
+                    f"fence: {', '.join(fenced_ids)} run no tests themselves (run-only work class); "
+                    "a coordinator:test-runner leg runs their scoped tests"
+                )
+                + ");"
+            )
         if split_note:
             body_blocks.append(f"  log({_js_string_literal(_sibling_split.width_narration(split_note))});")
 

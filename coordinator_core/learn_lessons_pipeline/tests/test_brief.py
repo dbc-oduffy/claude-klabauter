@@ -3,8 +3,8 @@
 Spec backlink: docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md § C3
 
 Falsifier (plan frontmatter): run A over a fixture tree carrying a COMPLETE
-sentinel must emit six directive ids in pipeline order with a computed
-`--before` cutoff on `d-age-sweep`; run B over an empty tree must emit five
+sentinel must emit seven directive ids in pipeline order with a computed
+`--before` cutoff on `d-age-sweep`; run B over an empty tree must emit six
 ids (no `d-age-sweep`) plus a `gates["age_sweep"]` reason. Both cases are
 exercised below.
 """
@@ -26,6 +26,7 @@ _EXPECTED_ORDER = (
     "d-verify-extraction",
     "d-drain-outbox",
     "d-assert-outbox-empty",
+    "d-mechanical-close",
     "d-age-sweep",
     "d-stamp-run-complete",
 )
@@ -37,7 +38,7 @@ def _stamp(runs_dir: Path, run_date: str) -> None:
     (run_dir / "COMPLETE").touch()
 
 
-def test_stamped_tree_emits_six_directives_in_order(tmp_path, monkeypatch):
+def test_stamped_tree_emits_seven_directives_in_order(tmp_path, monkeypatch):
     repo_root = tmp_path / "repo"
     (repo_root / "state" / "lessons").mkdir(parents=True)
     claude_home = tmp_path / "fx"
@@ -81,7 +82,8 @@ def test_empty_tree_withholds_age_sweep_and_records_gate_reason(tmp_path, monkey
     by_id = {d["id"]: d for d in envelope["directives"]}
     assert by_id["d-extract-lessons"]["depends_on"] is None
     assert "--since" not in by_id["d-extract-lessons"]["args"]
-    assert "d-assert-outbox-empty" in by_id["d-stamp-run-complete"]["depends_on"]
+    assert "d-mechanical-close" in by_id["d-stamp-run-complete"]["depends_on"]
+    assert "d-assert-outbox-empty" in by_id["d-mechanical-close"]["depends_on"]
 
 
 def test_no_argv_token_is_em_supplied(tmp_path, monkeypatch):
@@ -107,8 +109,10 @@ def test_cli_directives_are_consumes_manifest_members(tmp_path, monkeypatch):
         if "cli" in directive:
             assert directive["cli"] in CONSUMES_MANIFEST, directive
         else:
-            assert directive["op"] == "stamp-run-complete"
-            assert directive["id"] == "d-stamp-run-complete"
+            assert (directive["id"], directive["op"]) in {
+                ("d-mechanical-close", "mechanical-close"),
+                ("d-stamp-run-complete", "stamp-run-complete"),
+            }
 
 
 def test_no_judgment_point_names_extract_or_verify_directives(tmp_path, monkeypatch):

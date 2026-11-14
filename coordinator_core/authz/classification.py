@@ -2389,6 +2389,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md § C3
     "ceremony.commit_v2": OpClass.MUTATING,
+    # ceremony.hand_land — MUTATING: lands named paths on HEAD through git.commit.commit_paths (CAS ref move
+    # plus the post-landing worktree sync); the caller's own worktree.
+    "ceremony.hand_land": OpClass.MUTATING,
     # dispatch.terminal_commit — MUTATING: lands the run's terminal commit via
     # ONE in-process `ceremony.commit_v2` call (ops/dispatch_emit/terminal_commit.py).
     # DR-208 five-question affirmation (citing dispatch.terminal_commit handler):
@@ -3979,6 +3982,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Governing DR: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D2a, D2b, D3, D4
     # ---------------------------------------------------------------------------
     "distill.apply_disposal": OpClass.MUTATING,
+    # distill.bookkeeping — MUTATING: composes distill.apply_disposal, fleet.archive_completed_plans and
+    # fleet.scratch_hygiene in process (ops/distill_bookkeeping.py); each composed op keeps its own bounds,
+    # and the disposal step still requires the PM stamp on the run's manifest.
+    "distill.bookkeeping": OpClass.MUTATING,
     # crossrepo.closure_status — COMPUTE_ONLY: joins the memo corpus
     # (cross-repo/inbox|archive) against the commitment ledger
     # (state/cross-repo-commitments/*.yaml) and returns a computed per-memo closure
@@ -4013,6 +4020,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      changes no op's result, only how much it re-reads.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "ceremony.update_docs_worklist": OpClass.COMPUTE_ONLY,
+    # ceremony.update_docs_bookkeeping — MUTATING: composes the worklist with docindex.emit, whose
+    # `write`/`rebaseline` params rewrite index regions on disk (report-only by default).
+    "ceremony.update_docs_bookkeeping": OpClass.MUTATING,
     # ceremony.wiki_update_candidates — COMPUTE_ONLY: read-only git log/cat-file/grep join
     # (ops/ceremony/wiki_update_candidates.py); writes no file, no queue, no cache.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
@@ -5247,6 +5257,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # computation over disk reads only).
     # Spec: docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md § C5
     "learn_lessons_pipeline.apply": OpClass.MUTATING,
+    # learn_lessons_pipeline.mechanical_close — MUTATING: dedupe/discard/wiki-append/retag of open lesson
+    # rows in process (archive moves, scope-line rewrite, body appended to an indexed wiki .md);
+    # dry_run writes nothing.
+    "learn_lessons_pipeline.mechanical_close": OpClass.MUTATING,
+    # learn_lessons_pipeline.apply_mechanical — MUTATING: same handler as mechanical_close
+    "learn_lessons_pipeline.apply_mechanical": OpClass.MUTATING,
     "learn_lessons_pipeline.brief": OpClass.COMPUTE_ONLY,
 
     # lessons.extract — COMPUTE_ONLY: `coordinator_core.ops.grind_ops::
