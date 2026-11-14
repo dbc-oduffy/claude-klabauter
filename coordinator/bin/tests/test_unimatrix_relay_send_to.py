@@ -33,6 +33,23 @@ class _Stdin:
         self.buffer = io.BytesIO(data)
 
 
+@pytest.fixture(autouse=True)
+def no_live_router(monkeypatch, tmp_path):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.setattr(R, "_router_resolve", lambda name: None)
+
+
+def test_router_without_the_resolve_op_leaves_local_checks_standing(monkeypatch):
+    import types
+    router = types.SimpleNamespace(ROUTER_ENDPOINT_SEED="s", endpoint_path=lambda seed: "ctl",
+                                   request_line=lambda ctl, req, t: {"ok": False, "error": "unknown op"})
+    monkeypatch.undo()
+    monkeypatch.setattr(R, "_load_sibling", lambda *a: router)
+    assert R._router_resolve("g") is None
+    router.request_line = lambda ctl, req, t: {"ok": False, "error": "no unique live session"}
+    assert R._router_resolve("g") == {"ok": False, "error": "no unique live session"}
+
+
 @pytest.fixture
 def written(monkeypatch):
     sent = []
@@ -225,7 +242,8 @@ def test_send_session_matching_session_delivers(monkeypatch, tmp_path, capsys, w
     serve_many(monkeypatch, kind, [(7, {"messagingSocketPath": a, "name": "g", "sessionId": "sid-g"})], tmp_path)
     monkeypatch.setattr(R.sys, "stdin", _Stdin(b'{"a":1}\n'))
     R.send_batch(7, digest(a), ndigest("g"), "sid-g")
-    assert json.loads(capsys.readouterr().out) == {"ok": True}
+    reply = json.loads(capsys.readouterr().out)
+    assert reply["ok"] is True and (reply["reached"], reply["reached_session"], reply["reached_pid"]) == ("g", "sid-g", 7)
     assert [p for p, _ in written] == [a]
 
 

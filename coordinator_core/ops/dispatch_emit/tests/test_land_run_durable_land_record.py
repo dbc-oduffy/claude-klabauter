@@ -150,7 +150,7 @@ def path(request):
 def _phases(monkeypatch) -> list:
     seen: list = []
     real = land_intent.mark
-    monkeypatch.setattr(land_intent, "mark", lambda phase, sha=None: (seen.append(phase), real(phase, sha))[1])
+    monkeypatch.setattr(land_intent, "mark", lambda phase, sha=None, **fields: (seen.append(phase), real(phase, sha, **fields))[1])
     return seen
 
 
@@ -181,10 +181,10 @@ def test_a_death_before_the_commit_spawn_resolves_never_ran(path, keyed, monkeyp
     _claim, journal = keyed
     real = land_intent.mark
 
-    def _die_at_committing(phase, sha=None):
+    def _die_at_committing(phase, sha=None, **fields):
         if phase == land_intent.PHASE_COMMITTING:
             raise _Death()
-        real(phase, sha)
+        real(phase, sha, **fields)
 
     monkeypatch.setattr(land_intent, "mark", _die_at_committing)
     head = _git(root, "rev-parse", "HEAD")
@@ -225,8 +225,8 @@ def test_a_death_inside_the_commit_is_unresolved_never_never_ran(path, keyed, mo
     _claim, journal = keyed
     real = land_intent.mark
 
-    def _die_after_committing(phase, sha=None):
-        real(phase, sha)
+    def _die_after_committing(phase, sha=None, **fields):
+        real(phase, sha, **fields)
         if phase == land_intent.PHASE_COMMITTING:
             raise _Death()
 

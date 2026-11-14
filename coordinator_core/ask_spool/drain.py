@@ -116,13 +116,22 @@ def _live_token_run(root: Path, key: Optional[str], taken: set) -> Optional[str]
     return None
 
 
-def _raw_ask_text(payload: dict) -> Optional[str]:
-    """The free-text ask a bare entry carries: a string `args`, or a dict `args["ask"]`."""
-    tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
-    args = tool_input.get("args") if isinstance(tool_input, dict) else None
-    if isinstance(args, dict):
-        args = args.get("ask")
-    return args if isinstance(args, str) and args.strip() else None
+_raw_ask_text = record.raw_ask_text
+
+
+def _any_ask_run(root: Path, ask: str) -> Optional[str]:
+    """A live token run recording the same normalized ask hash, whatever its session or age."""
+    from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
+    from coordinator_core.ops.dispatch_emit.run_token import live_records
+
+    want = normalized_ask_hash(ask)
+    try:
+        for rec in live_records(root):
+            if rec.get("ask_sha256") == want and rec.get("run_id"):
+                return rec["run_id"]
+    except (OSError, ValueError, TypeError):
+        return None
+    return None
 
 
 def _same_ask_run(root: Path, session: str, ask: Optional[str], spooled_at: float, taken: set) -> Optional[str]:
@@ -464,7 +473,8 @@ def run(
 
     `minted` made a new run, `skipped` found its run already minted, `failed` stays pending,
     `coalesced` joined the run another entry of the same sizing or run key holds, `withdrawn`
-    was retired as stale (its sizing, plan or run is gone, or the plan's rows all closed).
+    was retired as stale (its sizing, plan or run is gone, or the plan's rows all closed) or as
+    superseded (a bare ask whose normalized text a live run token already records, any session or age).
     A drainer killed mid-entry leaves a claim that `stale_after_s` later returns to pending."""
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 
@@ -484,6 +494,7 @@ def run(
         payload = b""
         loaded = False
         why: Optional[str] = None
+        superseded: Optional[str] = None
         try:
             header, payload = record.read_entry(path)
             loaded = True
@@ -502,17 +513,28 @@ def run(
                     run_id, coalesced = _find_run(
                         root, header, parsed.get("tool_use_id"), taken, key, None if key else _raw_ask_text(parsed)
                     )
+                if run_id is None and not key and _raw_ask_text(parsed):
+                    dup = _any_ask_run(root, _raw_ask_text(parsed))
+                    if dup:
+                        superseded = dup
+                        if not record.withdraw(
+                            repo_root, sid, f"superseded by {dup}", by="drain", superseded_by=dup
+                        )["withdrawn"]:
+                            raise RuntimeError("the superseded entry could not be withdrawn")
                 minted_now = run_id is None
-                if run_id is None:
+                if run_id is None and superseded is None:
                     run_id = _mint(root, header, parsed, evaluate, taken)
-                if not os.path.isdir(root / RUN_DIR_ROOT / run_id):
+                if superseded is None and not os.path.isdir(root / RUN_DIR_ROOT / run_id):
                     raise RuntimeError(f"run {run_id} has no run dir")
         except Exception as exc:  # BaseException (a kill) leaves the claim for the stale reclaim
             _fail(repo_root, sid, path, header, payload, f"{type(exc).__name__}: {exc}", counts, loaded)
             continue
-        if why:
+        if why or superseded:
             counts["withdrawn"] += 1
-            if _notify(repo_root, header, {"status": "withdrawn", "reason": "stale: " + why}):
+            fields = {"status": "withdrawn", "reason": "stale: " + why} if why else {
+                "status": "withdrawn", "reason": "superseded", "run_id": superseded,
+            }
+            if _notify(repo_root, header, fields):
                 counts["notified"] += 1
             continue
         if key and key not in by_key:

@@ -150,8 +150,17 @@ def test_blocking_rows_without_met_by_refuse_and_leave_the_marker_halted(halted)
     root, marker, _, _, _, after2 = halted
     out = _call(root, sha=after2)
     assert not out["ok"]
-    assert out["error"] == "halt reason stands: blocking rows R1, R2 carry no met_by credit"
+    assert out["error"].startswith("halt reason stands: blocking rows R1, R2 carry no met_by credit")
     assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "halted"
+
+
+def test_refusal_names_the_met_by_param_and_its_row_to_sha_shape(halted):
+    root, _, _, _, after1, after2 = halted
+    refused = _call(root, sha=after2, met_by={"R1": after1})
+    assert not refused["ok"] and 'met_by={"R2": "<sha>"}' in refused["error"]
+    # The named shape is accepted: crediting the remaining row lands the run.
+    out = _call(root, sha=after2, met_by={"R1": after1, "R2": after2})
+    assert out["ok"], out
 
 
 def test_one_credited_row_still_refuses_the_other(halted):

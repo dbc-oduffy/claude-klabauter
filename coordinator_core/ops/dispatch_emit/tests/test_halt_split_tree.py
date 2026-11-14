@@ -80,6 +80,39 @@ def test_200_siblings_under_50ms_process_time(tmp_path):
     assert time.process_time() - start < 0.05
 
 
+def test_visits_are_bounded_whatever_the_tree_holds(tmp_path, monkeypatch):
+    for i in range(40):
+        for j in range(40):
+            (tmp_path / f"d{i:03d}" / f"s{j:03d}").mkdir(parents=True)
+    for corpus in ("archive", "docs", ".coordinator-local"):
+        (tmp_path / corpus / "x" / "y").mkdir(parents=True)
+    visited = []
+    real = hst._check_package
+    monkeypatch.setattr(hst, "_check_package", lambda p: (visited.append(p), real(p))[1])
+    assert hst.find_split_trees(tmp_path) == []
+    assert len(visited) <= 1 + 32 + 32 * 32
+    assert not any(p.parts[len(tmp_path.parts)] in ("archive", "docs", ".coordinator-local") for p in visited if p != tmp_path)
+
+
+def test_real_package_still_detected_beside_corpora(tmp_path):
+    for corpus in ("archive", "docs", "state"):
+        (tmp_path / corpus / "x").mkdir(parents=True)
+    _pkg(tmp_path, "control/server")
+    _pkg(tmp_path, "top")
+    assert sorted(h["package_dir"] for h in hst.find_split_trees(tmp_path)) == ["control/server", "top"]
+
+
+def test_a_dot_directory_is_skipped_and_its_sibling_package_is_detected(tmp_path):
+    _pkg(tmp_path, ".tools/pkg")
+    _pkg(tmp_path, "tools/pkg")
+    assert [h["package_dir"] for h in hst.find_split_trees(tmp_path)] == ["tools/pkg"]
+
+
+def test_a_package_inside_a_skipped_corpus_is_not_visited(tmp_path):
+    _pkg(tmp_path, "archive/pkg")
+    assert hst.find_split_trees(tmp_path) == []
+
+
 def _stub_identify(monkeypatch, verdict):
     from coordinator_core.group_em import nomination
 

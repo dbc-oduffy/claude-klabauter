@@ -97,6 +97,53 @@ def test_em_context_paths_value_joins_stripped_nonblank_lines():
     assert c.em_context_paths_value(["  ", ""]) is None
 
 
+@pytest.fixture
+def roots(tmp_path, monkeypatch):
+    from coordinator_core import _fleet_names
+
+    repo, home, sib = tmp_path / "me", tmp_path / "home", tmp_path / "sib" / "other"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    monkeypatch.setattr(_fleet_names, "_registry_paths", lambda: [str(sib)])
+    return repo, home, sib
+
+
+def test_context_paths_normalize_to_portable_tokens(roots):
+    repo, home, sib = roots
+    value = c.em_context_paths_value(
+        [str(repo / "docs" / "a.md"), str(home / "bin" / "x.py"), str(sib / "n" / "b.md")], repo_root=repo
+    )
+    assert value == "docs/a.md\n~/.coordinator-claude-settings/bin/x.py\n<repo:other>/n/b.md"
+
+
+def test_session_scratchpad_path_is_written_as_the_scratchpad_token(roots, tmp_path):
+    repo, _, _ = roots
+    pad = tmp_path / "tmp" / "claude" / "E--proj" / "1234-uuid" / "scratchpad" / "sub" / "cap.md"
+    assert c.em_context_paths_value([str(pad)], repo_root=repo) == "<scratchpad>/sub/cap.md"
+
+
+def test_context_path_under_no_root_is_kept_as_is(roots, tmp_path):
+    repo, _, _ = roots
+    stray = str(tmp_path / "elsewhere" / "z.md")
+    assert c.em_context_paths_value([stray], repo_root=repo) == stray
+
+
+def test_context_path_normalization_needs_a_root_boundary(roots, tmp_path):
+    repo, _, _ = roots
+    lookalike = str(tmp_path / "me-not" / "a.md")
+    assert c.em_context_paths_value([lookalike], repo_root=repo) == lookalike
+
+
+def test_context_path_without_repo_root_still_tokenizes_settings_home(roots):
+    _, home, _ = roots
+    assert c.em_context_paths_value([str(home / "k.md")]) == "~/.coordinator-claude-settings/k.md"
+
+
+def test_context_paths_round_trip_survives_normalization(roots):
+    repo, _, _ = roots
+    value = c.em_context_paths_value([str(repo / "docs" / "a.md")], repo_root=repo)
+    assert c.read_em_context_paths({"em_analysis": {c.EM_CONTEXT_PATHS_KEY: value}}) == ("docs/a.md",)
+
+
 def test_em_context_paths_round_trip():
     value = c.em_context_paths_value([" a.md ", "b/c.md"])
     assert c.read_em_context_paths({"em_analysis": {c.EM_CONTEXT_PATHS_KEY: value}}) == ("a.md", "b/c.md")

@@ -2,7 +2,8 @@
 
 `unproduced_hunks` compares the to-be-committed blob (worktree in checkin form) with HEAD and
 keeps a hunk only when this run produced it: the blob equals a `kept.json` fingerprint, or the
-hunk lies inside the run's `write_baseline`-to-committed delta. A hunk already in the baseline
+hunk lies inside the run's `write_baseline`-to-committed delta, or a `kept.json` blob of the run
+carries the hunk and no other holding run's blob does. A hunk already in the baseline otherwise
 has no producing row. Zero spawn; unknown (unreadable baseline, coarse delta) holds.
 """
 
@@ -62,7 +63,7 @@ def unproduced_hunks(
         if not path:
             continue
         try:
-            bad, own, head_bytes = _unproduced(Path(root), run_id, path)
+            bad, own, head_bytes = _provenance(Path(root), run_id, path, own_plan)
         except Exception as exc:  # noqa: BLE001 -- unknown holds
             if (
                 isinstance(exc, NoWriteBaseline) and settled is not None and exc.head_sha
@@ -130,7 +131,6 @@ def peer_hunks_present(root: Path, holder: str, path: str) -> bool:
         from coordinator_core.git import git_objects
         from coordinator_core.git.git_dir import resolve_git_common_dir
         from coordinator_core.ops.dispatch_emit import kept_work
-        from coordinator_core.ops.dispatch_emit import run_hunk_claims as rhc
         from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
         blobs = kept_work.kept_fingerprints(record_dir(root, holder)).get(path)
@@ -144,21 +144,61 @@ def peer_hunks_present(root: Path, holder: str, path: str) -> bool:
             return True
         work = form.splitlines(keepends=True)
         head = head_obj[1].splitlines(keepends=True) if head_obj else []
-        for blob in blobs:
-            obj = git_objects.read_object(common, blob)
-            lifted = kept_work.checkin_form(root, path, obj[1]) if obj is not None else None
-            if lifted is None:
-                continue
-            kept = lifted.splitlines(keepends=True)
-            for _tag, i1, i2, j1, j2 in rhc.changed_opcodes(head, kept):
-                added = kept[j1:j2]
-                if added and _occurrences(work, added) > _occurrences(head, added):
-                    return True
-                if not added and head[i1:i2] and _occurrences(work, head[i1:i2]) < _occurrences(head, head[i1:i2]):
-                    return True
+        for removed, added in _kept_blocks(root, common, path, head, blobs):
+            if added and _occurrences(work, list(added)) > _occurrences(head, list(added)):
+                return True
+            if not added and removed and _occurrences(work, list(removed)) < _occurrences(head, list(removed)):
+                return True
         return False
     except Exception:  # noqa: BLE001 -- unreadable evidence holds
         return True
+
+
+def _kept_blocks(root: Path, common: Path, path: str, head: list, blobs: Sequence[str]) -> set:
+    """`{(removed, added)}` line-tuple blocks of each kept blob in `blobs` against `head`, in checkin
+    form. A blob that cannot be read or lifted contributes nothing."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.ops.dispatch_emit import kept_work
+    from coordinator_core.ops.dispatch_emit import run_hunk_claims as rhc
+
+    out: set = set()
+    for blob in blobs:
+        obj = git_objects.read_object(common, blob)
+        lifted = kept_work.checkin_form(root, path, obj[1]) if obj is not None else None
+        if lifted is None:
+            continue
+        kept = lifted.splitlines(keepends=True)
+        for _tag, i1, i2, j1, j2 in rhc.changed_opcodes(head, kept):
+            out.add((tuple(head[i1:i2]), tuple(kept[j1:j2])))
+    return out
+
+
+def _own_hunk_evidence(
+    root: Path, common: Path, run_id: str, path: str, head: list, own_plan: Optional[str],
+) -> tuple:
+    """`(mine, peers)`: kept-blob blocks of `run_id` for `path`, and of every other run holding it
+    (co-declaring owners, the halted holder). Never raises: unreadable evidence is empty."""
+    from coordinator_core.ops.dispatch_emit import kept_work
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    def blocks(run: str) -> set:
+        try:
+            blobs = kept_work.kept_fingerprints(record_dir(root, run)).get(path)
+            return _kept_blocks(root, common, path, head, sorted(blobs)) if blobs else set()
+        except Exception:  # noqa: BLE001 -- unreadable evidence is none
+            return set()
+
+    mine = blocks(run_id)
+    if not mine:
+        return mine, set()
+    others = [o for o in _owners(root, run_id, path, own_plan) if o != run_id]
+    holder = _halted_holder(root, run_id, own_plan, path)
+    if holder is not None and holder != run_id:
+        others.append(holder)
+    peers: set = set()
+    for other in others:
+        peers |= blocks(other)
+    return mine, peers
 
 
 def _occurrences(lines: list, block: list) -> int:
@@ -205,7 +245,7 @@ def peer_split(
         if not path:
             continue
         try:
-            bad, own, head_bytes = _unproduced(root, run_id, path)
+            bad, own, head_bytes = _provenance(root, run_id, path, own_plan)
         except Exception:  # noqa: BLE001 -- unreadable provenance names a peer only when one co-declares the path
             owner = _peer_owner(root, run_id, own_plan, path)
             if owner is not None and not _own_chain(root, run_id, owner):
@@ -328,27 +368,20 @@ def _run_produced(root: Path, run_id: str, path: str) -> bool:
         return False
 
 
-def _recorded_own_write(root: Path, run_id: str, path: str) -> bool:
-    """The run's own record (`run-outcome.json` review slice and test edits, `halted.json` withheld
-    keys) lists `path` as written by this run, so a hunk its `write_baseline` already carries is the
-    run's edit, not a peer's. Path-level evidence: it cannot split a peer hunk the baseline also holds.
-    Trap: run ask-20261113T043855-021188 re-staged (`stage-receipt.json` 04:47, `manifest.json`
-    rewritten after executor C1 wrote) so its `write_baseline` blob already held the run's
-    `except PermissionError` edit and the baseline-to-committed delta was empty; the manifest alone
-    cannot say whether a baseline hunk predates the run. False on any read failure."""
-    try:
-        from coordinator_core.ops.dispatch_emit import write_baseline
-        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
-
-        return path in write_baseline.prior_pass_written(root, record_dir(root, run_id), include_predecessors=False)
-    except Exception:  # noqa: BLE001 -- unknown is not own
-        return False
+def _provenance(root: Path, run_id: str, path: str, own_plan: Optional[str]) -> tuple:
+    """`_unproduced`, handing `own_plan` over only when set so the plan-less call keeps its 3-arg shape."""
+    if own_plan is None:
+        return _unproduced(root, run_id, path)
+    return _unproduced(root, run_id, path, own_plan)
 
 
-def _unproduced(root: Path, run_id: str, path: str) -> tuple:
+def _unproduced(root: Path, run_id: str, path: str, own_plan: Optional[str] = None) -> tuple:
     """`(ranges, own, head_bytes)`: committed-side line ranges ("3-4, 9") of hunks no row produced
     ("" when all are produced); the produced hunks as `(i1, i2, j1, j2)` opcodes; the HEAD blob bytes
-    (None when the path is absent from HEAD)."""
+    (None when the path is absent from HEAD). A hunk outside the baseline-to-committed delta is produced
+    only when a kept blob of `run_id` carries its exact block against HEAD and no kept blob of another
+    run holding the path does; whole-file kept blobs carry peer hunks too, so any other hunk stays
+    unattributed."""
     from coordinator_core.git import git_objects
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.git.git_state import head_blobs
@@ -402,14 +435,28 @@ def _unproduced(root: Path, run_id: str, path: str) -> tuple:
     if rhc.exceeds_match_bound(old, committed):
         raise ValueError("baseline delta is too coarse to attribute")
     delta = rhc._delta_spans(old, committed)
-    wrote_it = _recorded_own_write(root, run_id, path)
+    outside = [
+        h for h in hunks
+        if not any(a <= _span(h)[1] and _span(h)[0] <= b for a, b in delta)
+    ]
+    mine: set = set()
+    peers: set = set()
+    if outside:
+        mine, peers = _own_hunk_evidence(root, common, run_id, path, head, own_plan)
 
     ranges: list = []
     own: list = []
-    for _tag, i1, i2, j1, j2 in hunks:
-        lo, hi = (2 * j1 + 1, 2 * j1 + 1) if j2 == j1 else (2 * (j1 + 1), 2 * j2)
-        if wrote_it or any(a <= hi and lo <= b for a, b in delta):
+    for hunk in hunks:
+        _tag, i1, i2, j1, j2 = hunk
+        block = (tuple(head[i1:i2]), tuple(committed[j1:j2]))
+        if hunk not in outside or (block in mine and block not in peers):
             own.append((i1, i2, j1, j2))
         else:
             ranges.append(f"{j1 + 1}-{j2}" if j2 > j1 + 1 else str(j1 + 1))
     return ", ".join(ranges), own, head_bytes
+
+
+def _span(hunk: tuple) -> tuple:
+    """The doubled-index interval of a committed-side hunk, comparable with `rhc._delta_spans`."""
+    _tag, _i1, _i2, j1, j2 = hunk
+    return (2 * j1 + 1, 2 * j1 + 1) if j2 == j1 else (2 * (j1 + 1), 2 * j2)

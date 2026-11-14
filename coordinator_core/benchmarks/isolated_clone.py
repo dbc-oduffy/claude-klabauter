@@ -67,7 +67,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
@@ -176,7 +175,8 @@ def mkdtemp_for_clone(source_root: Path, *, prefix: str) -> Path:
     _assert_under_git_root(scratch)
     scratch.mkdir(parents=True, exist_ok=True)
     _reap_stale_clones(scratch)
-    return Path(tempfile.mkdtemp(prefix=prefix, dir=str(scratch)))
+    from coordinator_core.temp_layout import mkdtemp_in
+    return mkdtemp_in(prefix, scratch)
 
 
 _SHORT_PREFIX_MAX = 6
@@ -231,7 +231,10 @@ def record_fixture_repo(source_root: Path, paths, *, prefix: str, label: str) ->
     """
     from coordinator_core.git.run import run_git
 
-    tmp = Path(tempfile.mkdtemp(prefix=_short_clone_prefix(prefix)))
+    from coordinator_core.temp_layout import make_managed_temp_dir
+
+    # Trap: the managed path is ~45 chars deeper than a bare Temp child, eating the MAX_PATH headroom the short prefix buys.
+    tmp = make_managed_temp_dir(prefix=_short_clone_prefix(prefix))
     try:
         dest = tmp / "c"
         dest.mkdir()

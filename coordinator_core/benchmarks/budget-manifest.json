@@ -42,6 +42,11 @@
     }
   },
   "overrides": {
+    "landing.guard_selection": {
+      "target_ms": 70,
+      "tolerance": {"kind": "relative", "value": 0.2},
+      "_rationale": "COMPUTE_ONLY default target. Reads coordinator.local.md and the invariant table, spawns nothing, never runs pytest."
+    },
     "plan.prep_gate": {
       "target_ms": 200,
       "tolerance": {

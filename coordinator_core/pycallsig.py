@@ -77,15 +77,22 @@ class FileImportMap:
         self._current_is_package = current_is_package
         self._module_scope = _ImportScope(parent=None)
         self._call_scope: "dict[int, _ImportScope]" = {}
-        self._calls: "list[tuple[int, int, ast.Call]]" = []
+        self._calls_by_depth: "dict[int, list[ast.Call]]" = {}
+        self._ordered_calls: "Optional[list[ast.Call]]" = None
         self.withs: "list[ast.AST]" = []
         self._walk(tree, self._module_scope, 0)
 
     @property
     def calls(self) -> "list[ast.Call]":
         """Every ``ast.Call`` in ``ast.walk`` (breadth-first) order: depth
-        first, then pre-order position, which is the order a level is visited."""
-        return [call for _depth, _seq, call in sorted(self._calls, key=lambda t: (t[0], t[1]))]
+        first, then pre-order position, which is the order a level is visited.
+        Built once; each depth bucket is already in pre-order, so no sort."""
+        ordered = self._ordered_calls
+        if ordered is None:
+            by_depth = self._calls_by_depth
+            ordered = [call for depth in sorted(by_depth) for call in by_depth[depth]]
+            self._ordered_calls = ordered
+        return ordered
 
     def _bind_import_node(self, node: "ast.stmt", scope: "_ImportScope") -> None:
         if isinstance(node, ast.Import):
@@ -128,7 +135,7 @@ class FileImportMap:
                     self._bind_import_node(child, scope)
                 elif isinstance(child, ast.Call):
                     self._call_scope[id(child)] = scope
-                    self._calls.append((depth + 1, len(self._calls), child))
+                    self._calls_by_depth.setdefault(depth + 1, []).append(child)
                     self._walk(child, scope, depth + 1)
                 elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     # A new function body is its OWN scope, chained to the

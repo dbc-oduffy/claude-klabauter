@@ -993,6 +993,15 @@ A declared pin that does not resolve on the host is an `interpreter-resolution-d
 failure: the agent runs nothing and reports `status: error`, `tests_run: 0`. A verdict with
 `tests_run: 0` is recorded as `not-run` and withholds no file as `targeted-tests-failed`.
 
+## Always-run guards — `always_run_guards`
+
+`always_run_guards:` in `coordinator.local.md` frontmatter is an inline list of pytest node ids
+(`always_run_guards: ["tests/test_guard.py::test_no_literal", "tests/test_other.py"]`). Every
+landing selects each declared guard, whatever files it touches. A guard already red at HEAD is
+judged by new hits in the touched files (tree count above the HEAD-export count), not by its
+verdict: a new hit is refused, a baseline-only red passes. A hand-land calls
+`landing.guard_selection` (`{repo_root, paths}`) and runs the returned `retest_command`.
+
 ## Perf ratchets measure process time, not wall clock
 
 An upper-bound assertion on an elapsed-time value is process time by default; wall clock is a

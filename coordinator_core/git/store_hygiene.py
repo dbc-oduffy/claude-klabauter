@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
 from typing import NamedTuple, Optional
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.object_store_lock import ObjectStoreBusy, hold
 
 #: Uncovered packs (pack_count - midx_pack_count) past which the daily tier owes a MIDX write.
 STALE_PACK_SLACK = 32
@@ -52,6 +54,12 @@ DEFER_RETRY_S = 3.0
 #: interval; the claim stays, so a busy box spawns no further child until it ages out.
 BUSY_CPU_LOAD = 0.85
 
+#: Temp pack files older than this are a dead writer's leavings.
+STALE_TMP_PACK_AGE_S = 24 * 3600
+
+_TMP_PACK_RE = re.compile(
+    r"^(?:\.tmp-\d+-pack-.+\.(?:pack|idx|rev)|pack-.+\.(?:pack|idx|rev)\.tmp\d+)$"
+)
 _SAMPLE_FANOUT = "00"
 _LOOSE_NAME_LEN = 38
 _MIDX_MAGIC = b"MIDX"
@@ -220,10 +228,21 @@ def consolidate_small_packs(common_dir) -> int:
     repack). A no-op at or under CONSOLIDATE_MAX_PACKS small packs. Per group the merged
     pack is written pack-first/idx-last, then each old idx is unlinked before its pack;
     a pack that cannot be unlinked (Windows lock) stays for a later pass. Any unreadable
-    object abandons the group with nothing removed."""
+    object abandons the group with nothing removed.
+
+    Holds the object-store lock (try once) for the whole merge; a holder elsewhere
+    means nothing is touched and 0 is returned. Callable outside `_run_daily`."""
+    common_dir = Path(common_dir)
+    try:
+        with hold(common_dir, wait_s=0, holder_label="store-hygiene:consolidate"):
+            return _consolidate_locked(common_dir)
+    except ObjectStoreBusy:
+        return 0
+
+
+def _consolidate_locked(common_dir: Path) -> int:
     from coordinator_core.git import git_objects as go
 
-    common_dir = Path(common_dir)
     pack_dir = common_dir / "objects" / "pack"
     small = _small_packs(pack_dir)
     if len(small) <= CONSOLIDATE_MAX_PACKS:
@@ -276,28 +295,95 @@ def consolidate_small_packs(common_dir) -> int:
     return removed
 
 
-def _run_daily(repo: Path) -> int:
+def _is_tmp_pack_name(name: str) -> bool:
+    return _TMP_PACK_RE.match(name) is not None
+
+
+def sweep_stale_tmp_packs(common_dir, now: Optional[float] = None) -> int:
+    """Unlink temp pack files older than STALE_TMP_PACK_AGE_S; returns files removed.
+
+    Reaps git's `.tmp-<pid>-pack-*` triplets (.pack/.idx/.rev) and the engine's
+    `pack-*.pack.tmp<pid>` / `.idx.tmp<pid>` whether or not a sibling exists: a file
+    that old belongs to a dead writer. Callers hold the object-store lock; a live
+    writer's file is younger than the cutoff."""
+    pack_dir = Path(common_dir) / "objects" / "pack"
+    cutoff = (time.time() if now is None else now) - STALE_TMP_PACK_AGE_S
+    removed = 0
+    try:
+        with os.scandir(pack_dir) as it:
+            entries = [e for e in it if _is_tmp_pack_name(e.name)]
+    except OSError:
+        return 0
+    for e in entries:
+        try:
+            if e.is_file(follow_symlinks=False) and e.stat().st_mtime < cutoff:
+                removed += _unlink_quiet(Path(e.path))
+        except OSError:
+            continue
+    return removed
+
+
+def _has_stale_tmp_pack(common_dir: Path, now: Optional[float] = None) -> bool:
+    """True when a temp pack file older than STALE_TMP_PACK_AGE_S exists; a scandir, no lock."""
+    cutoff = (time.time() if now is None else now) - STALE_TMP_PACK_AGE_S
+    try:
+        with os.scandir(Path(common_dir) / "objects" / "pack") as it:
+            for e in it:
+                if _is_tmp_pack_name(e.name) and e.stat().st_mtime < cutoff:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def _run_daily_outcome(repo: Path) -> tuple[int, bool]:
+    """Run the daily tier; returns `(rc, deferred)`. `deferred` is True when the tier did not
+    run for want of the box (busy, object-store lock held, index.lock held past the retries),
+    so the caller retries soon; not-owed is not a deferral. The stale tmp-pack reap runs
+    whenever one exists, whether or not the store owes maintenance."""
     try:
         from coordinator_core.ops.git_maintenance import run_tier
 
         common_dir = resolve_git_common_dir(str(repo))
-        if not _owes_maintenance(repo, common_dir) or _box_busy():
-            return 0
+        owed = _owes_maintenance(repo, common_dir)
+        reap = _has_stale_tmp_pack(common_dir)
+        if not (owed or reap):
+            return 0, False
+        if _box_busy():
+            return 0, True
         try:
-            consolidate_small_packs(common_dir)
-        except Exception as exc:  # noqa: BLE001 -- consolidation must not block the MIDX refresh
-            _record_failure(repo, exc)
+            with hold(common_dir, wait_s=0, holder_label="store-hygiene:daily"):
+                try:
+                    sweep_stale_tmp_packs(common_dir)
+                except Exception as exc:  # noqa: BLE001 -- the sweep must not block consolidation
+                    _record_failure(repo, exc)
+                if owed:
+                    try:
+                        consolidate_small_packs(common_dir)
+                    except Exception as exc:  # noqa: BLE001 -- consolidation must not block the MIDX refresh
+                        _record_failure(repo, exc)
+        except ObjectStoreBusy:
+            _release_claim(common_dir)
+            return 0, True
+        if not owed:
+            return 0, False
+        # The lock is dropped before the retry loop: run_tier takes it per attempt, so a
+        # landing during the DEFER_RETRY_S sleep still packs.
         for attempt in range(DEFER_RETRIES + 1):
             result = run_tier(repo, "daily")
             if not result.deferred:
-                return result.rc
+                return result.rc, False
             if attempt < DEFER_RETRIES:
                 time.sleep(DEFER_RETRY_S)
         _release_claim(resolve_git_common_dir(str(repo)))
-        return result.rc
+        return result.rc, True
     except Exception as exc:  # noqa: BLE001
         _record_failure(repo, exc)
-        return 1
+        return 1, False
+
+
+def _run_daily(repo: Path) -> int:
+    return _run_daily_outcome(repo)[0]
 
 
 def main(argv: list[str]) -> int:

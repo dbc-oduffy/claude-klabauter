@@ -279,7 +279,11 @@ def verified_host(host, box, key, *, connect=None, read_key=None, verify=None, n
     for ADDRESS_TTL_SECONDS so repeated dials neither re-probe nor re-read the list. The caller keeps `box` as the channel's box id (HostKeyAlias)."""
     far = _far_addresses()
     user, _, name = host.rpartition("@")
-    connect = connect or far.tcp_connect
+    connect = connect or getattr(far, "tcp_connect", None)
+    if connect is None:
+        print("unimatrix: installed unimatrix_far_addresses lacks tcp_connect; upgrade it (version skew); "
+              f"dialling {host} unverified", file=sys.stderr)
+        return host
     if is_ip_literal(name):
         return host
     hit = _VERIFIED.get((box, user))

@@ -42,7 +42,7 @@ def _gates(monkeypatch, tmp_path, shadow: Path):
     monkeypatch.setattr(publish, "check_version_consistency", lambda *a, **k: True)
     monkeypatch.setattr(publish, "warn_machine_slug_net", lambda *a, **k: None)
     monkeypatch.setattr(publish, "_round_pin_source_sha", lambda root, pinned, *, out=None, late=False: "SHA")
-    monkeypatch.setattr(publish, "_git_materialize_ref", lambda root, ref="HEAD": shadow)
+    monkeypatch.setattr(publish, "_git_materialize_ref", lambda root, ref="HEAD", withheld=None: shadow)
     err = io.StringIO()
     result = publish.run_pre_sync_gates(
         target,

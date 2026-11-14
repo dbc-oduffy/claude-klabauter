@@ -2,9 +2,9 @@
 
 Reads one hook payload on stdin, adapts it, asks the warm engine under a hard budget, and prints
 the host-shaped answer. No engine verdict (down, slow, error) falls to the engine-free backstop,
-then (shell commands only) the in-process Claude Bash guard chain; a deny from either is the answer,
-otherwise the host's neutral fallback plus one degrade row. Any
-exception prints the neutral fallback and exits 0. Cold-start imports: stdlib and host_hooks only;
+then the in-process Claude guard chain for shell commands (deny only) and mapped file writes (deny or
+advisory); a verdict from either is the answer, otherwise the host's neutral fallback plus one degrade
+row. Any exception prints the neutral fallback and exits 0. Cold-start imports: stdlib and host_hooks only;
 warm.client and warm.telemetry load lazily.
 """
 from __future__ import annotations
@@ -99,14 +99,19 @@ def _degrade(kind_name: str, cause: str) -> None:
         return
 
 
-def _cold_shell_verdict(event: HostEvent, engine_event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
-    """The in-process Claude Bash guard chain's deny for a shell command, or None.
+_WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"})
 
-    Runs only when the engine gave no verdict, so a cold engine denies a codex or agy shell command the way
-    the Claude path does (EM powers; a payload carrying `agent_id` gets the subagent limits). Advisories are
-    not forwarded. Non-shell tools and any failure return None.
+
+def _cold_verdict(event: HostEvent, engine_event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The in-process Claude guard chain's answer for a shell command or a mapped file write, or None.
+
+    Runs only when the engine gave no verdict. A shell command forwards a deny only; a mapped write also
+    forwards the advisory (`additionalContext`, the DIY nag), so a cold engine treats a codex or agy EM
+    like the Claude path. A payload carrying `agent_id` gets the subagent limits: the guards advise it
+    nothing. Other tools and any failure return None.
     """
-    if event.tool_name != "Bash":
+    shell = event.tool_name == "Bash"
+    if not shell and event.tool_name not in _WRITE_TOOLS:
         return None
     try:
         from coordinator_core.host_hooks.tool_policy import evaluate
@@ -114,7 +119,11 @@ def _cold_shell_verdict(event: HostEvent, engine_event: Mapping[str, Any]) -> Op
         verdict = evaluate(dict(engine_event))
     except Exception:  # noqa: BLE001 -- a raising chain is a miss, never a hook failure
         return None
-    return verdict if isinstance(verdict, dict) and verdict.get("permissionDecision") == "deny" else None
+    if not isinstance(verdict, dict):
+        return None
+    if verdict.get("permissionDecision") == "deny":
+        return verdict
+    return None if shell or not verdict.get("additionalContext") else verdict
 
 
 def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
@@ -144,7 +153,7 @@ def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
     denied = backstop.match(event)
     if denied is not None:
         return adapter.render(event, denied)
-    cold = _cold_shell_verdict(event, engine_event)
+    cold = _cold_verdict(event, engine_event)
     if cold:
         return adapter.render(event, cold)
     if timed_out:

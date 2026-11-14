@@ -25,7 +25,6 @@ import socket
 import statistics
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -244,14 +243,15 @@ def measure(runs: int = DEFAULT_RUNS) -> dict:
     """Run every case and its two drains; `{case: report}` with a `drain` sub-report each."""
     if os.name == "nt":
         raise RuntimeError("ask_spool_write_budget drives the POSIX door; it does not run on Windows")
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
-    scratch = Path(tempfile.mkdtemp(prefix="ask-spool-bench-", dir=str(managed_tempdir())))
+    scratch = make_managed_temp_dir(prefix="ask-spool-bench-")
     # The drains mint run tokens under the settings home; script mode has no pytest quarantine.
     home_scope = contextlib.ExitStack()
     home_scope.enter_context(fixture_settings_home(scratch))
     # AF_UNIX paths cap near 104 bytes on macOS: the socket base must be short, so /tmp not the managed tempdir.
-    short = Path(os.path.realpath(tempfile.mkdtemp(prefix="asb-", dir="/tmp")))
+    from coordinator_core.temp_layout import mkdtemp_in
+    short = Path(os.path.realpath(mkdtemp_in("asb-", "/tmp")))
     server: Optional[_ReplyingServer] = None
     old_session = os.environ.get("COORDINATOR_SESSION_ID")
     try:

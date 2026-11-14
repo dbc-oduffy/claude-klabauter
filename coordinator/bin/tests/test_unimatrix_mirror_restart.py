@@ -67,6 +67,7 @@ def _mirror_all_rig(tmp_path, monkeypatch):
         procs.append(p)
         return p
 
+    monkeypatch.setattr(mod.socket, "gethostname", lambda: "aaa-near")  # lower than "farbox": this side owns the mirror
     monkeypatch.setattr(mod.R, "spawn", fake_spawn)
     monkeypatch.setattr(mod.R, "tree_kill", lambda pid: None)
     monkeypatch.setattr(mod, "_now", lambda: clock[0])

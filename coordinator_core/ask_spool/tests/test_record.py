@@ -423,6 +423,47 @@ def test_withdraw_absent_and_reason_validation(tmp_path):
     assert len(header["withdraw_reason"]) == record.WITHDRAW_REASON_MAX
 
 
+def test_withdraw_by_hook_names_the_superseding_run_in_the_header(tmp_path):
+    root = str(tmp_path)
+    sid, _ = _spool(tmp_path)
+    assert record.withdraw(root, sid, "superseded by ask-x", by="hook", superseded_by="ask-x")["withdrawn"] is True
+    header, _ = record.read_entry(record.entry_path(root, sid, record.WITHDRAWN_SUFFIX))
+    assert header["superseded_by"] == "ask-x" and header["withdrawn_by"] == "hook"
+
+
+def test_same_ask_matches_on_key_or_normalized_text_and_never_across_them():
+    def sizing(rel):
+        return {"tool_input": {"args": {"sizing": rel}}}
+
+    def text(t):
+        return {"tool_input": {"args": {"ask": t}}}
+
+    assert record.same_ask(sizing("./a/b.yaml"), sizing("a/b.yaml"))
+    assert not record.same_ask(sizing("a.yaml"), sizing("b.yaml"))
+    assert record.same_ask(text("Fix  the BUG"), {"tool_input": {"args": "fix the bug"}})
+    assert not record.same_ask(text("fix the bug"), text("fix the bug now"))
+    assert not record.same_ask(sizing("a.yaml"), text("fix the bug"))
+    assert not record.same_ask({}, {})
+
+
+def test_supersede_pending_retires_only_the_matching_pending_entries(tmp_path):
+    import json
+
+    root = str(tmp_path)
+
+    def entry(tuid, text):
+        body = json.dumps({"tool_input": {"args": {"ask": text}}}).encode()
+        return record.spool_ask(root, body, session_id="s", tool_use_id=tuid, reason="r")[0]
+
+    same, other, claimed = entry("1", "do it"), entry("2", "do something else"), entry("3", "do it")
+    record.claim(root, claimed)
+    retired = record.supersede_pending(root, {"tool_input": {"args": {"ask": "Do it"}}}, "ask-9")
+    assert retired == [same]
+    assert record.list_pending(root) == [other]
+    assert os.path.exists(record.entry_path(root, claimed, record.CLAIMED_SUFFIX))
+    assert record.supersede_pending(root, {"tool_input": {"args": {}}}, "ask-9") == []
+
+
 def test_withdraw_rejects_unknown_by(tmp_path):
     sid, _ = _spool(tmp_path)
     with pytest.raises(ValueError):

@@ -17,7 +17,6 @@ import json
 import os
 import re
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -27,6 +26,7 @@ if __package__ in (None, ""):
 
 from coordinator_core.git.run import run_git
 from coordinator_core.telemetry import spawn_counter
+from coordinator_core.temp_layout import managed_temp_dir
 
 OP = "post_run.finish"
 BASE_SHA = "c90cf75a0b"
@@ -279,7 +279,7 @@ def run_bench(pages: int = DEFAULT_PAGES) -> dict:
         return report
     budget = spawn_budget()
     rows, failed = [], []
-    with tempfile.TemporaryDirectory(prefix="post-run-finish-bench-") as tmp:
+    with managed_temp_dir(prefix="post-run-finish-bench-") as tmp:
         base = Path(tmp)
         run_pipeline(handler, "lessons", base / "warmup", pages)
         for pipeline in PIPELINES:

@@ -1252,17 +1252,26 @@ def _handle(params: dict, repo_root: Optional[Path]) -> dict:
     if params.get("live_runs") and live_runs is None:
         return _fail("review.prep params.live_runs must map run ids to objects")
     run_id = str(params.get("run_id") or "")
+    halted_foreign: List[str] = []
     if live_runs is None and run_id:
         from coordinator_core.git.call_io_scope import call_io_scope
         from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld
 
         with review_prep_legs.leg("handler.halted_withheld"), call_io_scope():
             held = foreign_halted_withheld(repo_root, run_id, str(params.get("plan_path") or "") or None, [str(p) for p in paths])
+        if not head:
+            halted_foreign = [str(p) for p in paths if str(p) in held]
+            if halted_foreign:
+                gone = set(halted_foreign)
+                paths = [p for p in paths if str(p) not in gone]
+                held_by_peer = {p: v for p, v in held_by_peer.items() if p not in gone}
+                undeclared = [p for p in undeclared if p not in gone]
+                held = {p: r for p, r in held.items() if p not in gone}
         live_runs = holders_from_held(held) or None
     from coordinator_core.ops.review_freeze_diff import diff_targets_batch
 
     with diff_targets_batch(repo_root):
-        return review_prep(
+        reply = review_prep(
             repo_root,
             base=base,
             paths=[str(p) for p in paths],
@@ -1277,3 +1286,6 @@ def _handle(params: dict, repo_root: Optional[Path]) -> dict:
             undeclared_edits=undeclared,
             peer_held=list(held_by_peer),
         )
+    if halted_foreign and not reply.get("error"):
+        reply = {**reply, "foreign_claims": sorted({*(reply.get("foreign_claims") or []), *halted_foreign})}
+    return reply

@@ -42,7 +42,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -408,8 +407,11 @@ def verify_reproducible(
     prebuilt = prebuilt if prebuilt is not None else (_SOURCE.parent / "door.exe")
     if not prebuilt.exists():
         raise SystemExit(f"door build: no committed binary at {prebuilt} to verify against")
-    with tempfile.TemporaryDirectory() as tmp:
-        rebuilt = Path(tmp) / "door-rebuilt.exe"
+    # Lazy: the mirror's build.py is file-loaded by door_install, so no top-level engine import.
+    from coordinator_core.temp_layout import managed_temp_dir
+
+    with managed_temp_dir("door-verify-") as tmp:
+        rebuilt = tmp / "door-rebuilt.exe"
         build(engine_root, python_bin=python_bin, compiler=compiler, output=rebuilt)
         return _sha256_file(prebuilt) == _sha256_file(rebuilt)
 
@@ -536,8 +538,11 @@ def build(
     if require_warm:
         rendered = "#define DOOR_PRIVATE_REQUIRED 1\n" + rendered
 
-    with tempfile.TemporaryDirectory() as tmp:
-        generated = Path(tmp) / "door_generated.c"
+    # Lazy: the mirror's build.py is file-loaded by door_install, so no top-level engine import.
+    from coordinator_core.temp_layout import managed_temp_dir
+
+    with managed_temp_dir("door-generated-") as tmp:
+        generated = tmp / "door_generated.c"
         generated.write_text(rendered, encoding="utf-8", newline="\n")
         _compile(kind, compiler_path, generated, output)
 

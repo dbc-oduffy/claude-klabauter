@@ -679,6 +679,32 @@ def test_a_newer_lockfile_without_a_build_script_is_not_a_split(tmp_path):
     assert "live_breakage" not in json.loads(hr.write_halt_marker(d, halted="x", sizing_rel=SIZING).read_text())
 
 
+def test_write_halt_marker_with_500_halted_runs_under_the_500ms_bar(tmp_path, monkeypatch):
+    import time
+
+    from coordinator_core.ops.dispatch_emit import halt_split_tree as hst
+
+    for i in range(500):
+        d = _dir(tmp_path, f"20261016T{i:06d}-aaaaaa")
+        d.mkdir(parents=True)
+        (d / hr.HALTED_FILE).write_text(json.dumps({"status": "halted", "halted": "x", "sizing_rel": SIZING}))
+    # Wide non-skipped fan-out: unbounded, the repo-tree walk visits 1 + 80 + 80*80 package dirs.
+    for i in range(80):
+        for j in range(80):
+            (tmp_path / f"pkg{i:03d}" / f"s{j:03d}").mkdir(parents=True)
+    for corpus in ("archive", "docs", ".coordinator-local"):
+        for i in range(60):
+            (tmp_path / corpus / f"c{i}" / "n").mkdir(parents=True)
+    visited = []
+    real = hst._check_package
+    monkeypatch.setattr(hst, "_check_package", lambda p: (visited.append(p), real(p))[1])
+    target = _dir(tmp_path, "20261017T010000-bbbbbb")
+    start = time.process_time()
+    hr.write_halt_marker(target, halted="x", sizing_rel=SIZING)
+    assert time.process_time() - start < 0.5
+    assert len(visited) <= 1 + 32 + 32 * 32
+
+
 def test_a_split_alerts_the_live_gem_once_and_no_holder_means_no_alert(tmp_path, monkeypatch):
     from coordinator_core.group_em import nomination
     from coordinator_core.ops.dispatch_emit import halt_split_tree as hst

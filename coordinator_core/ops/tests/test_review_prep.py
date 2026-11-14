@@ -29,6 +29,7 @@ def repo(tmp_path):
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@example.com")
     _git(tmp_path, "config", "user.name", "T")
+    _git(tmp_path, "config", "core.longpaths", "true")
     (tmp_path / "seed.py").write_text("x = 1\n", encoding="utf-8")
     plan = tmp_path / "docs" / "plans" / "p.md"
     plan.parent.mkdir(parents=True)

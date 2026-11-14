@@ -14,8 +14,9 @@ worktree; a marker-less run writes nothing and replies the not-applicable close)
 ``landed_under`` (string, optional run id: admits a run with no sibling status or halt record whose
 work landed under that other run; the named run's marker must read ``landed`` at a sha matching
 ``sha``/``shas``, else the "never ran" refusal stands; writes nothing and replies the not-applicable close),
-``foreign`` (list of path strings, optional: owed withheld paths holding only a concurrent run's hunks; voided
-unless the run's own ``kept.json`` fingerprints the path, which refuses).
+``foreign`` (list of path strings, optional: owed withheld paths holding only a concurrent run's hunks; voided,
+kept-fingerprinted or not, and echoed as ``foreign``), ``dropped`` (list of path strings, optional: owed withheld
+paths the landing deliberately left out; voided the same way, echoed as ``dropped``).
 Each sha is a lowercase hex commit sha, full or abbreviated to at least 4
 characters; an abbreviation must name exactly one commit and the reply and
 recorded marker carry the full 40-hex sha. The run's sibling status must read
@@ -587,25 +588,28 @@ def _unauthored_paths(root: Path, run_id: str, record_dir: Path, paths: list) ->
         return set()
 
 
-def _foreign_problem(root: Path, record_dir: Path, owed: list, foreign: frozenset) -> tuple[Optional[str], list]:
-    """``(refusal, claimed)``: the *owed* paths the caller declared *foreign*, or the refusal for one the run's own ``kept.json`` fingerprints.
+def _named_paths(owed: list, named: frozenset) -> list:
+    """The *owed* paths the caller named in *named* (``foreign`` or ``dropped``).
 
-    A foreign path holds only a concurrent run's hunks. The match is casefolded on the tree path (a
-    ``<repo>:`` qualifier stripped); a *foreign* name that is not owed is ignored.
+    The match is casefolded on the tree path (a ``<repo>:`` qualifier stripped); a name that is not
+    owed is ignored. A path the run's ``kept.json`` fingerprints may be named: the caller's word
+    voids it, and ``_verify`` echoes it back, so the record shows which kept paths the landing left out.
     """
-    from coordinator_core.ops.dispatch_emit import kept_work
+    return [p for p in owed if _tree_path(p).replace("\\", "/").casefold() in named]
 
-    claimed = [p for p in owed if _tree_path(p).replace("\\", "/").casefold() in foreign]
-    if not claimed:
-        return None, []
-    try:
-        kept = {k.casefold() for k in kept_work.kept_fingerprints(record_dir)}
-    except Exception:  # noqa: BLE001 -- an unreadable kept record cannot clear a path as foreign
-        return f"kept record unreadable; cannot clear {claimed[0]} as foreign", []
-    for p in claimed:
-        if _tree_path(p).replace("\\", "/").casefold() in kept:
-            return f"{p} is fingerprinted in the run's own kept record; it is not foreign", []
-    return None, claimed
+
+def _predecessor_record(path: str, run_id: str) -> bool:
+    """True for a file directly in a run record dir (``state/warp/<id>/<file>``) of a run other than *run_id*.
+
+    Pure string test, casefolded, ``<repo>:`` qualifier stripped; the run's own record dir and every
+    product path are False.
+    """
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    parts = _tree_path(path).replace("\\", "/").casefold().split("/")
+    root_parts = RECORD_DIR_ROOT.casefold().split("/")
+    n = len(root_parts)
+    return len(parts) == n + 2 and parts[:n] == root_parts and parts[n] != run_id.casefold()
 
 
 def _carries_withheld(
@@ -617,8 +621,8 @@ def _carries_withheld(
     withheld list less the paths a revision voided (``voided``, ``_voided_paths``), and every sha must
     change at least one owed path. ``covers`` maps each sha to the owed paths it changed (empty for a
     run withholding nothing or with no marker, which passes). An unreadable commit or tree refuses.
-    *foreign* (casefolded tree paths the caller declares hold only a peer's hunks) voids those owed
-    paths last, and refuses when the run's own ``kept.json`` fingerprints one.
+    *foreign* (casefolded tree paths the caller declares hold only a peer's hunks, or ``dropped`` ones
+    merged in by ``_verify``) voids those owed paths last, kept-fingerprinted or not.
     """
     from coordinator_core.git.commit_walk import commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -690,10 +694,14 @@ def _carries_withheld(
         em_held = run_withhold.read([record_dir])
         voided_list += [p for p in unchanged if p in em_held]
         unchanged = [p for p in unchanged if p not in em_held]
+    if unchanged:
+        # A superseded attempt's halt record is carried by the halted run's own halt commit, never by
+        # the product landing; owing it makes every correct hand-landing after a refire unrecordable.
+        prior = [p for p in unchanged if _predecessor_record(p, run_id)]
+        voided_list += prior
+        unchanged = [p for p in unchanged if p not in prior]
     if unchanged and foreign:
-        problem, claimed = _foreign_problem(root, record_dir, unchanged, foreign)
-        if problem:
-            return problem, {}, []
+        claimed = _named_paths(unchanged, foreign)
         voided_list += claimed
         unchanged = [p for p in unchanged if p not in claimed]
     if unchanged:
@@ -880,7 +888,11 @@ def _standing_halt_problem(root: Path, run_id: str, credited: dict) -> Optional[
     have = set(credited) | (set(stamped) if isinstance(stamped, dict) else set())
     uncredited = [b for b in _withheld(marker) if b not in have]
     if uncredited:
-        return f"halt reason stands: blocking rows {', '.join(uncredited)} carry no met_by credit"
+        shape = "{" + ", ".join(f'"{b}": "<sha>"' for b in uncredited) + "}"
+        return (
+            f"halt reason stands: blocking rows {', '.join(uncredited)} carry no met_by credit; "
+            f"pass met_by={shape} (row id to the commit that met it, an ancestor of HEAD at or after the halt commit)"
+        )
     if any(
         isinstance(marker.get(k), str) and marker[k].lstrip().startswith(_COMPLETION_GATE_PREFIX)
         for k in (halted_run.HALT_REASON_FIELD, "halted")
@@ -895,12 +907,14 @@ def _standing_halt_problem(root: Path, run_id: str, credited: dict) -> Optional[
 
 def _verify(
     root: Path, run_id: str, shas: list, met_by: Optional[dict] = None, foreign: frozenset = frozenset(),
+    dropped: frozenset = frozenset(),
 ) -> tuple[Optional[str], Optional[str], dict]:
     """``(newest_full_sha, None, echo)`` when *shas* resolve, are reachable and cover the withheld paths, else ``(None, refusal, {})``.
 
     ``echo`` is ``{"shas": every verified full sha, "covers": {sha: withheld paths it changed}}``,
-    plus ``"met_by": {row: full sha}`` when *met_by* is given. *met_by* shas join the same
-    prefix-resolve and HEAD-ancestry reads as *shas*.
+    plus ``"met_by": {row: full sha}`` when *met_by* is given, and ``"foreign"`` / ``"dropped"``
+    (the voided paths the caller named). *met_by* shas join the same prefix-resolve and
+    HEAD-ancestry reads as *shas*.
     """
     from coordinator_core import git_ancestry
     from coordinator_core.git.commit_walk import commit_meta
@@ -931,14 +945,18 @@ def _verify(
         problem = _met_by_problem(root, run_id, full_met, reached)
         if problem:
             return None, problem, {}
-    problem, covers, voided = _carries_withheld(root, run_id, full, foreign)
+    problem, covers, voided = _carries_withheld(root, run_id, full, foreign | dropped)
     if problem:
         return None, problem, {}
     problem = _withheld_import_problem(root, run_id, full, covers)
     if problem:
         return None, problem, {}
+    named_foreign = _named_paths(voided, foreign)
+    named_dropped = [p for p in _named_paths(voided, dropped) if p not in named_foreign]
     echo = {
         "shas": full, "covers": covers, **({"voided": voided} if voided else {}),
+        **({"foreign": named_foreign} if named_foreign else {}),
+        **({"dropped": named_dropped} if named_dropped else {}),
         **({MET_BY_FIELD: full_met} if full_met else {}),
     }
     if len(full) == 1:
@@ -1010,13 +1028,13 @@ def _met_by_param(params: dict) -> tuple[dict, Optional[str]]:
     return dict(raw), None
 
 
-def _foreign_param(params: dict) -> tuple[frozenset, Optional[str]]:
-    """``(casefolded forward-slash paths, None)`` from the optional ``foreign`` list param, else ``(frozenset(), refusal)``."""
-    raw = params.get("foreign")
+def _foreign_param(params: dict, key: str = "foreign") -> tuple[frozenset, Optional[str]]:
+    """``(casefolded forward-slash paths, None)`` from the optional ``foreign`` (or *key*, e.g. ``dropped``) list param, else ``(frozenset(), refusal)``."""
+    raw = params.get(key)
     if raw is None:
         return frozenset(), None
     if not isinstance(raw, list) or any(not isinstance(p, str) or not p for p in raw):
-        return frozenset(), f"{OP_NAME} requires foreign to be a list of non-empty path strings"
+        return frozenset(), f"{OP_NAME} requires {key} to be a list of non-empty path strings"
     return frozenset(_tree_path(p).replace("\\", "/").casefold() for p in raw), None
 
 
@@ -1163,6 +1181,7 @@ def _landed_sha(root: Path, other: str, shas: list) -> Optional[str]:
 def _record_solo(
     root: Path, run_id: str, shas: list, session_id: Optional[str] = None, in_run: bool = False,
     met_by: Optional[dict] = None, landed_under: Optional[str] = None, foreign: frozenset = frozenset(),
+    dropped: frozenset = frozenset(),
 ) -> dict:
     """Solo run (no sibling status): record landed on its halt marker; the caller commits ``recorded``.
 
@@ -1181,7 +1200,7 @@ def _record_solo(
     except halted_run.UnreadableHaltRecord as exc:
         return _refuse(f"{exc.reason}: halt marker unreadable; {run_id} is not recorded landed")
     if marker is None and in_run:
-        sha, problem, echo = _verify(root, run_id, shas, met_by, foreign)
+        sha, problem, echo = _verify(root, run_id, shas, met_by, foreign, dropped)
         problem = problem or _in_run_unclean(root, run_id)
         if problem:
             return _refuse(problem)
@@ -1210,7 +1229,7 @@ def _record_solo(
             return _refuse(f"{run_id} is resumed and its successor {successor} is still live; wait for it or stop it")
     elif status != halted_run.STATUS_HALTED:
         return _refuse(f"{run_id} is {status}; only a halted or resumed run is recorded landed")
-    sha, problem, echo = _verify(root, run_id, shas, met_by, foreign)
+    sha, problem, echo = _verify(root, run_id, shas, met_by, foreign, dropped)
     problem = problem or _standing_halt_problem(root, run_id, echo.get(MET_BY_FIELD, {}))
     if problem:
         return _refuse(problem)
@@ -1251,6 +1270,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     foreign, problem = _foreign_param(params)
     if problem:
         return _refuse(problem)
+    dropped, problem = _foreign_param(params, "dropped")
+    if problem:
+        return _refuse(problem)
     in_run = params.get("in_run")
     if in_run is not None and not isinstance(in_run, bool):
         return _refuse(f"{OP_NAME} requires in_run to be a boolean")
@@ -1271,7 +1293,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     try:
         prior = json.loads((root / contract.status_rel(run_id)).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return _record_solo(root, run_id, shas, session_id, bool(in_run), met_by, landed_under, foreign)
+        return _record_solo(root, run_id, shas, session_id, bool(in_run), met_by, landed_under, foreign, dropped)
     except (OSError, ValueError):
         return _refuse(f"{run_id} sibling status is unreadable")
     status = prior.get("status") if isinstance(prior, dict) else None
@@ -1289,7 +1311,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not admitted:
         return _refuse(f"{run_id} is {status}, not halted; only a halted run is recorded landed")
 
-    sha, problem, echo = _verify(root, run_id, shas, met_by, foreign)
+    sha, problem, echo = _verify(root, run_id, shas, met_by, foreign, dropped)
     problem = problem or _standing_halt_problem(root, run_id, echo.get(MET_BY_FIELD, {}))
     if problem:
         return _refuse(problem)

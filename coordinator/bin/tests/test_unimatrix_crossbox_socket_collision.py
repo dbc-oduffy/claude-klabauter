@@ -54,6 +54,7 @@ def test_bridge_uses_own_registry_pid_even_with_same_endpoint_decoy(tmp_path, mo
     sent = []
     monkeypatch.setattr(bridge, "pick_remote", lambda remote, tunnel: remote)
     monkeypatch.setattr(bridge, "record_delivery", lambda row: None)
+    monkeypatch.setattr(bridge._box_mux(), "IS_WIN", False)
     monkeypatch.setattr(bridge.subprocess, "run", lambda argv, **kw: sent.append(argv) or subprocess.CompletedProcess(argv, 0, b"", b""))
     connection = SimpleNamespace(read=iter([b'{"type":"user"}\n', b""]).__next__, close=lambda: None)
     bridge.relay_send(connection)

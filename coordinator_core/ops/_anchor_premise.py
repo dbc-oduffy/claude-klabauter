@@ -303,11 +303,10 @@ def _checked_paths(anchor: dict) -> Optional[list[str]]:
 def _evaluate_at_ref(anchor: dict, ref: str, paths: list[str], repo_root: Path):
     """``anchor_lane.evaluate`` over the checked ``paths`` as they stand at ``ref`` (one git show
     per file, into a tempdir); None when a path cannot be read at the ref."""
-    import tempfile
-
     from coordinator_core.git.run import run_git
+    from coordinator_core.temp_layout import managed_temp_dir
 
-    with tempfile.TemporaryDirectory(prefix="anchor-baseline-") as tmp:
+    with managed_temp_dir("anchor-baseline-", repo_root) as tmp:
         for rel in paths:
             done = run_git(["-C", str(repo_root), "show", f"{ref}:{rel}"], binary=True)
             if done.returncode != 0:
@@ -315,7 +314,7 @@ def _evaluate_at_ref(anchor: dict, ref: str, paths: list[str], repo_root: Path):
             target = Path(tmp) / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(done.stdout_bytes)
-        return anchor_lane.evaluate(anchor, Path(tmp))
+        return anchor_lane.evaluate(anchor, tmp)
 
 
 def _reanchor(anchor: dict, plan_text: str, repo_root: Path) -> Optional[str]:
@@ -467,7 +466,8 @@ def anchor_verdicts(
     MISMATCH -> CONTRADICTED) > none. A row or carry verdict other than RESOLVES yields to a
     met engine check (the declared check holds, so the premise is confirmed). NOT_EVALUABLE leaves source "none". A MISMATCH on a file the
     plan's own run wrote that held at the plan's baseline_ref is RESOLVES with ``observed``
-    opening ``REANCHORED`` (source stays "engine-check": the reply schema enumerates sources)."""
+    opening ``REANCHORED`` (source stays "engine-check": the reply schema enumerates sources). A row or
+    carry CONTRADICTED on such a file takes the same regrade and keeps its source."""
     live = frozenset(line_hashes(plan_text))
     known = frozenset(a["id"] for a in anchors)
     fm = _plan_fm(plan_text) if repo_root is not None else {}
@@ -486,6 +486,10 @@ def anchor_verdicts(
             result = evaluate(anchor)
             if result.outcome == "held":
                 verdict, source, observed = "RESOLVES", "engine-check", result.observed or ""
+            elif verdict == "CONTRADICTED" and not (base_ref and not claimed_ref(anchor.get("claim"), fm)):  # same gate as the engine branch below
+                moved = _reanchor(anchor, plan_text, repo_root)
+                if moved is not None:
+                    verdict, observed = "RESOLVES", moved
         if verdict is None and repo_root is not None:
             result = evaluate(anchor)
             observed = result.observed or ""

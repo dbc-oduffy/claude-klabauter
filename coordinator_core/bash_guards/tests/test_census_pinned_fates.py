@@ -24,6 +24,7 @@ from coordinator_core.bash_guards import (
 from coordinator_core.bash_guards import bump_foreign_repo_write as bump
 from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
     _posix,
+    _repo_template,  # noqa: F401 -- module-scoped autouse fixture `repos` copies from
     _reset_git_root_cache,  # noqa: F401 -- autouse fixture reused
     _set_anchor,
     repos,  # noqa: F401 -- reused fixture
@@ -32,10 +33,17 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
     _clean_bump_env,  # noqa: F401 -- reused fixture
 )
 from coordinator_core.guard_messages.testing import envelope_of
+from coordinator_core.testing.home_sandbox import sandbox_home
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 SUB_ID = "a1b2c3d4e5f6a7b8"
+
+
+@pytest.fixture(autouse=True)
+def _resolvable_home(_clean_bump_env, monkeypatch, tmp_path):
+    """`_clean_bump_env` deletes HOME and USERPROFILE; the dispatched guards resolve the plugin root from the home dir and crash without one."""
+    sandbox_home(monkeypatch, tmp_path / "sandbox-home")
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -189,15 +197,16 @@ def test_clone_remedy_route_is_not_refused_by_its_own_guard(repo, tmp_path, monk
     nowhere = tmp_path / "norepo"
     nowhere.mkdir()
 
-    refused = _reason(_sub_check(f"git clone {repo} {tmp_path / 'elsewhere' / 'c'}", nowhere))
-    assert "session scratchpad" in refused
+    refused = _reason(_sub_check(f"git clone {repo} {repo}", nowhere))
+    assert "empty or absent" in refused
 
     named_route = f"git clone {repo} {scratchpad / 'head-clone-73'}"
     assert _sub_check(named_route, nowhere) is None
 
 
-def test_clone_into_an_arbitrary_dir_still_denies(repo, tmp_path):
-    assert "scratch" in _reason(_sub_check(f"git clone {repo} {tmp_path / 'elsewhere' / 'c'}", repo))
+def test_clone_into_an_absent_dir_passes_and_into_a_populated_dir_denies(repo, tmp_path):
+    assert _sub_check(f"git clone {repo} {tmp_path / 'elsewhere' / 'c'}", repo) is None
+    assert "empty or absent" in _reason(_sub_check(f"git clone {repo} {repo}", repo))
 
 
 # --- bump_foreign_repo_write: a ff-only mirror catch-up passes, a non-ff write still routes -------

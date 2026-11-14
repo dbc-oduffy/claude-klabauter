@@ -5124,6 +5124,26 @@ class _ServerContext:
                 import logging
 
                 logging.getLogger(__name__).warning("land-resume tick failed", exc_info=True)
+        try:
+            import importlib
+
+            staged_stall = importlib.import_module("coordinator_core.ops.dispatch_emit.staged_stall")
+            if staged_stall.on_idle_tick(self.served_repos()):
+                idle.mark_invocation()
+        except Exception:  # noqa: BLE001 -- no staged-stall failure may escape the tick
+            import logging
+
+            logging.getLogger(__name__).warning("staged-stall tick failed", exc_info=True)
+        try:
+            import importlib
+
+            maintenance_tick = importlib.import_module("coordinator_core.git.maintenance_tick")
+            if maintenance_tick.on_idle_tick(self.served_repos()):
+                idle.mark_invocation()
+        except Exception:  # noqa: BLE001 -- no git-maintenance failure may escape the tick
+            import logging
+
+            logging.getLogger(__name__).warning("git-maintenance tick failed", exc_info=True)
         from coordinator_core.session_ceremonies import retry_pending_notifications
 
         if retry_pending_notifications():

@@ -27,7 +27,6 @@ import json
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -245,7 +244,9 @@ def measure_forced_slow(spec: Dict[str, Any], cwd: str) -> Dict[str, Any]:
 
 
 def run(n: int = 5) -> Dict[str, Any]:
-    with tempfile.TemporaryDirectory(prefix="preuse-phase-cost-") as td:
+    from coordinator_core.temp_layout import managed_temp_dir
+
+    with managed_temp_dir(prefix="preuse-phase-cost-") as td:
         root = Path(td).resolve() / "repo"
         root.mkdir()
         fx = _build_fixture(root)

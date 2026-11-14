@@ -50,6 +50,31 @@ def test_kwargs_callee_accepts_any_keyword():
     assert _bind("def f(a, **kw): pass", "f(1, anything=2)") == []
 
 
+def test_calls_cover_every_call_nest_outer_first_and_are_computed_once():
+    src = (
+        "import os\n"
+        "a(b(c()), d())\n"
+        "def f():\n"
+        "    g(h())\n"
+        "    class K:\n"
+        "        x = i(j(k()))\n"
+        "async def af():\n"
+        "    l(m())\n"
+        "n(o(p(q())))\n"
+    )
+    tree = ast.parse(src)
+    fim = pycallsig.FileImportMap(tree, "m", False)
+    expected = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
+    assert sorted(map(id, fim.calls)) == sorted(map(id, expected))
+    assert fim.calls is fim.calls
+    assert len(fim.calls) == len(expected)
+    position = {id(c): i for i, c in enumerate(fim.calls)}
+    # Within one nesting chain the outer call precedes the inner call.
+    outer = next(c for c in fim.calls if getattr(c.func, "id", None) == "n")
+    inner = outer.args[0]
+    assert position[id(outer)] < position[id(inner)]
+
+
 def test_payload_parity_reuses_the_shared_binder():
     assert pp._bind_check is pycallsig.bind_check
     assert pp._FileImportMap is pycallsig.FileImportMap

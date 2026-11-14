@@ -453,7 +453,8 @@ def rebuild_door_for_mirror(
     the builder records `engine_root`'s own stamp file."""
     import importlib.util
     import inspect
-    import tempfile
+
+    from coordinator_core.temp_layout import managed_temp_dir
 
     door_dir = Path(mirror_root) / "coordinator_core" / "warm" / "door"
     build_py = door_dir / "build.py"
@@ -476,8 +477,8 @@ def rebuild_door_for_mirror(
             )
         build_kwargs["engine_stamp"] = engine_stamp
 
-    with tempfile.TemporaryDirectory() as scratch:
-        built = Path(scratch) / "door.exe"
+    with managed_temp_dir("door-rebuild-") as scratch:
+        built = scratch / "door.exe"
         try:
             mirror_build.build(
                 engine_root, python_bin=python_bin, compiler=compiler, output=built, **build_kwargs
@@ -998,10 +999,10 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
                 print(f"[door-install] copied prebuilt {_PREBUILT_DOOR_EXE} -> {dest_exe}")
                 shutil.copy2(_PREBUILT_PROVENANCE, dest_provenance)
             else:
-                import tempfile
+                from coordinator_core.temp_layout import managed_temp_dir
 
-                with tempfile.TemporaryDirectory() as tmp:
-                    fresh = Path(tmp) / "door.exe"
+                with managed_temp_dir("door-build-") as tmp:
+                    fresh = tmp / "door.exe"
                     door_build.build(engine_root, output=fresh)
                     _replace_possibly_running_image(fresh, dest_exe)
                     shutil.copy2(fresh.parent / (fresh.name + ".provenance.json"), dest_provenance)

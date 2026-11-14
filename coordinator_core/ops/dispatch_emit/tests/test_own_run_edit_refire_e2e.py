@@ -88,6 +88,45 @@ def test_refire_regrades_the_run_own_edit_row_and_resumes_at_the_fix_leg(repo): 
     assert phases["rerun"][phases["rerun"].index("execute"):] == ["execute", "review", "test", "criterion", "commit"]
 
 
+WARP_STEM = "warp-2026-10-01-gate-"
+WARP_RUN = WARP_STEM + "20261001T000000-aaaaaa"
+FRESH_RUN = WARP_STEM + "20261002T000000-bbbbbb"
+RETURNED_ONLY = "src/returned_only.py"
+
+
+def _df88cd_shape(repo):
+    """Predecessor marker `resumed`; kept.json holds C2 only; C1 and C2 returned; the refire's own
+    run dir has no marker. Gap (a): C1's path is neither kept nor withheld, so `own_run_paths` omitted it."""
+    from coordinator_core.ops.dispatch_emit import row_returns
+
+    (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    _readiness_plan(repo)
+    (repo / ".git").mkdir(exist_ok=True)
+    record = repo / RECORD_DIR_ROOT / WARP_RUN
+    record.mkdir(parents=True)
+    (record / "halted.json").write_text(
+        json.dumps({"status": "resumed", "halted": "commit", "sizing_rel": REL}), encoding="utf-8"
+    )
+    (record / "manifest.json").write_text(
+        json.dumps({"rows": [{"id": "C1", "writes": [RETURNED_ONLY]}, {"id": "C2", "writes": [EDITED]}]}),
+        encoding="utf-8",
+    )
+    row_returns.write(record, {"C1": "DONE: C1", "C2": "DONE: C2"})
+    (record / "kept.json").write_text(
+        json.dumps({"chunks": {"C2": {"paths": {EDITED: "x"}}}, "plan_gate": None, "post_checkpoint": {}}),
+        encoding="utf-8",
+    )
+    (repo / RECORD_DIR_ROOT / FRESH_RUN).mkdir()
+    (repo / RECORD_DIR_ROOT / FRESH_RUN / "run-stage.json").write_text('{"stage": "composed"}', encoding="utf-8")
+
+
+def test_premise_row_on_a_returned_row_path_of_the_resumed_predecessor_is_the_runs_own_work(repo):  # noqa: F811
+    _df88cd_shape(repo)
+    assert _readiness(repo, RETURNED_ONLY)["verdict"] == "ready"
+    assert _readiness(repo, EDITED)["verdict"] == "ready"
+    assert _readiness(repo, "src/untouched.py")["verdict"] == "judgment"
+
+
 def test_a_row_citing_a_path_the_run_did_not_withhold_still_pulls(repo):  # noqa: F811
     _halt_criterion_not_met(repo)
     verdict = _readiness(repo, "src/untouched.py")

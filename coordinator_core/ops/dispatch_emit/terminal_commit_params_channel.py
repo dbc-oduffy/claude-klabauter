@@ -437,6 +437,38 @@ def materialize_from_prompt(repo_root: object, prompt: object) -> tuple[Optional
     return canonical, None
 
 
+def prewrite_for_spawn(repo_root: object, prompt: object) -> tuple[Optional[Path], Optional[str]]:
+    """Pre-spawn write of the run's params file from the spawn `prompt`: (path, None) or (canonical_or_None, leg).
+
+    `materialize_from_prompt` plus removal of a stale refusal note on success, so a retried spawn
+    does not leave a note contradicting the file now on disk. Same refusal legs and trap as
+    `materialize_from_prompt`. Never raises.
+    """
+    path, leg = materialize_from_prompt(repo_root, prompt)
+    if path is not None and leg is None:
+        clear_refusal(str(path))
+    return path, leg
+
+
+# The SubagentStart leg that calls `prewrite_for_spawn` before a commit agent's first tool call.
+PRE_SPAWN_WRITER_FILE = Path(__file__).resolve().parents[2] / "hooks" / "cater_subagent_start.py"
+PRE_SPAWN_WRITER_CALL = "chan.prewrite_for_spawn("
+
+
+def params_writer_bound(repo_root: object, run_id: object) -> bool:
+    """True when `run_id` is a valid run id and the pre-spawn writer seam calls `prewrite_for_spawn`.
+
+    A composer refuses a commit brief naming a params path for which this is False: nothing
+    would write that file before the agent runs. File read only, no import of the hook module.
+    """
+    if params_path(repo_root, run_id) is None:
+        return False
+    try:
+        return PRE_SPAWN_WRITER_CALL in PRE_SPAWN_WRITER_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
 def recorded_land_params(repo_root: object, run_id: object) -> Optional[dict]:
     """The product params recorded for `run_id`, or None. Never raises.
 

@@ -488,6 +488,7 @@ rationale.
 | `COORDINATOR_OVERRIDE_PROSE_QUEUE_CREATION` | `nudge-prose-queue-creation` | `write_guards/nudge_prose_queue_creation.py` |
 | `COORDINATOR_OVERRIDE_OWN_INBOX` | `validate-frontmatter-schema` (`_own_inbox_deny_message`) | `write_guards/validate_frontmatter_schema_deny.py` |
 | `COORDINATOR_OVERRIDE_ROADMAP_GRAPH_FIELDS` | roadmap-baton required-graph-fields (`_cf_spinoff_roadmap_requires_graph`) | `frontmatter/schema_validate.py` |
+| `COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR` | `block-drive-root-new-dir-write`, `block-drive-root-new-dir-bash-write` (box-degrading deny, PM R2). Sessions whose cwd is under the general-work root or the Group EM root, new repos (checkouts/links) and moves out of a repo are never blocked. An EM in autonomous mode, or on G-EM say-so, may set it to `1` for a deliberate new drive-root or home folder; it needs no PM verbatim. Prefer `<repo>/scratch/`, and question whether the content is worth keeping before copying it anywhere | `write_guards/_drive_root.py`, `write_guards/block_drive_root_new_dir_write.py`, `bash_guards/block_drive_root_new_dir_bash_write.py` |
 | `COORDINATOR_OVERRIDE_AGENT_MODEL_PIN` | `enforce-agent-model-pin` (`check`, composed into `PreToolUse(Agent)` via `block_unenumerated_agent_type.check()`) | `hooks/enforce_agent_model_pin.py` |
 
 ## Override keys outside the bash-guard/write-guard suite

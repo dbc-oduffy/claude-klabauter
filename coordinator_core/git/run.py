@@ -317,6 +317,12 @@ def _is_leaf_argv(args: Sequence[str]) -> bool:
     return True
 
 
+#: Spliced after the git binary in every spawned argv so auto-gc cannot start inside an engine
+#: landing, whatever the repo config says. Argv, not GIT_CONFIG_COUNT env:
+#: `scoped_worktree_status` gates on that env var being set. Leaf classification reads the
+#: caller's `args`, never this prefix (a global `-c` would make every argv non-leaf).
+_GC_AUTO_OFF = ("-c", "gc.auto=0")
+
 _GIT_EXE: Optional[str] = None
 
 
@@ -651,7 +657,7 @@ def run_git(
                 else:
                     io_kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, **mode_kwargs}
                 proc = subprocess.Popen(
-                    [_git_exe(), *args], cwd=cwd,
+                    [_git_exe(), *_GC_AUTO_OFF, *args], cwd=cwd,
                     env=_remote_env(env) if remote else (dict(env) if env is not None else None),
                     **io_kwargs,
                     **spawn_flags,
@@ -743,7 +749,7 @@ def run_git_stream(
     timer = None
     try:
         with subprocess.Popen(
-            [_git_exe(), *args],
+            [_git_exe(), *_GC_AUTO_OFF, *args],
             cwd=cwd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,

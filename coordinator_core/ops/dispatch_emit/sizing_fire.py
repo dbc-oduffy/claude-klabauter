@@ -658,8 +658,47 @@ def _unclaimed_rows_halt(
     )
 
 
+def own_records_run(root: Path, sizing_rel: str) -> str | None:
+    """The newest `warp-<stem>-*` run of `sizing_rel` that holds a `halted` or `resumed` marker and whose
+    own records (`own_records_resume.landing_resume_from_own_records`) show every row done and reviewed, else None.
+
+    Marker-less newer dirs (a fresh run an earlier refire minted) and minted-only shells are passed over; a
+    newer run with any other marker status ended the sizing's work, so the answer is None. One scandir plus
+    the verdict's file reads; no git."""
+    import os
+
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.own_records_resume import landing_resume_from_own_records
+
+    norm = halted_run._norm(sizing_rel)
+    prefix = f"warp-{PurePosixPath(norm).stem}-"
+    base = Path(root) / RECORD_DIR_ROOT
+    try:
+        with os.scandir(base) as it:
+            names = sorted(
+                (e.name for e in it if e.name.startswith(prefix) and halted_run._STAMP.fullmatch(e.name[len(prefix):]) and e.is_dir()),
+                reverse=True,
+            )
+    except OSError:
+        return None
+    for name in names:
+        if halted_run._is_shell(base / name):
+            continue
+        marker = halted_run._read(base / name)
+        if marker is None:
+            continue
+        bound = marker.get("sizing_rel")
+        if marker.get("status") not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
+            return None
+        if not isinstance(bound, str) or halted_run._norm(bound) != norm:
+            return None
+        return name if landing_resume_from_own_records(Path(root), name) is not None else None
+    return None
+
+
 def _kept_rows(root: Path, sizing_rel: str, open_ids: Sequence[str]) -> tuple[tuple[str, ...], str | None]:
-    """The still-open ids the newest halted ask run of this sizing kept, and that run's id.
+    """The still-open ids the newest halted ask run of this sizing kept, and that run's id; with no halted
+    ask run, the run whose own records show every row done and reviewed (`own_records_run`).
 
     A row is kept while `kept_work.still_kept` holds against the run's live notes. Reads the run
     record dir only; no git spawn.
@@ -668,7 +707,7 @@ def _kept_rows(root: Path, sizing_rel: str, open_ids: Sequence[str]) -> tuple[tu
     from coordinator_core.ops.dispatch_emit.halted_run import halted_ask_run_for
     from coordinator_core.ops.dispatch_emit.requirements_ledger import NOTES_FILE, LedgerRefused, run_dir
 
-    run_id = halted_ask_run_for(root, sizing_rel)
+    run_id = halted_ask_run_for(root, sizing_rel) or own_records_run(root, sizing_rel)
     if run_id is None:
         return (), None
     try:

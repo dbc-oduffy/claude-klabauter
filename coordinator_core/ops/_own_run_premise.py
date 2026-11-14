@@ -1,4 +1,4 @@
-"""Regrade premise rows that cite a path the refired run itself withheld, kept or landed.
+"""Regrade premise rows that cite a path the refired run itself withheld, kept, returned or landed.
 
 A run's own edits (unlanded, kept or landed) sit in the working tree, so a premise-checker reads them as
 drift against the plan's base-sha citations. The run's own work is provenance, never evidence
@@ -14,10 +14,9 @@ from pathlib import Path, PurePosixPath
 from typing import List, Optional
 
 from coordinator_core.ops._path_guard import safe_id
-from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit import halted_withheld_index as _index
-from coordinator_core.ops.dispatch_emit import kept_work
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.own_records_resume import own_written_paths
 
 _LEADING_PATH = re.compile(r"[`'\"(\s]*([^\s:`'\")]+)")
 
@@ -60,22 +59,11 @@ def _newest_run_for(root: Path, sizing_rel: str) -> Optional[tuple]:
     return None
 
 
-def _kept_paths(record: Path) -> list:
-    """Paths the run's ``kept.json`` records: every kept chunk's paths plus its post-checkpoint hunks."""
-    kept = kept_work.read(record)
-    out = list(kept[kept_work.POST_CHECKPOINT_KEY])
-    for entry in kept["chunks"].values():
-        paths = entry.get("paths") if isinstance(entry, dict) else None
-        if isinstance(paths, dict):
-            out += [p for p in paths if isinstance(p, str)]
-    return [_index._norm(p) for p in out if p]
-
-
 def own_run_paths(repo_root: Path, sizing_rel: str) -> dict:
     """``{path: run_id}`` for the paths the newest halted, resumed or landed ask or warp-lane run of
-    ``sizing_rel`` wrote: its withheld set plus every path its ``kept.json`` records. ``{}`` when no
-    such run exists. Reads that run's own records, so a path another run also holds still belongs
-    to this run."""
+    ``sizing_rel`` wrote: its withheld set, every path its ``kept.json`` records and the declared
+    writes of its returned rows (``own_records_resume.own_written_paths``). ``{}`` when no such run
+    exists. Reads that run's own records, so a path another run also holds still belongs to this run."""
     if not isinstance(sizing_rel, str) or not sizing_rel.strip():
         return {}
     root = Path(repo_root)
@@ -91,10 +79,8 @@ def own_run_paths(repo_root: Path, sizing_rel: str) -> dict:
         if os.path.isfile(file):
             entry = _index._parse(file)
             paths.update(entry.paths if entry else ())
-    elif status == "resumed":
-        # mark_resumed drops the index entry; the marker still names what the halt withheld.
-        paths.update(_index._norm(p) for p in halted_run.halted_withheld(root / RECORD_DIR_ROOT / run_id) if p)
-    paths.update(_kept_paths(root / RECORD_DIR_ROOT / run_id))
+    # Kept, withheld (a `resumed` marker's too: mark_resumed drops the index entry) and returned-row paths.
+    paths.update(_index._norm(p) for p in own_written_paths(root, run_id))
     return {path: run_id for path in paths}
 
 

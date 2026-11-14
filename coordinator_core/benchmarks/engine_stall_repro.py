@@ -24,7 +24,6 @@ import argparse
 import json
 import os
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -39,7 +38,7 @@ from coordinator_core import atomic_append  # noqa: E402
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise  # noqa: E402
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed  # noqa: E402
 from coordinator_core.telemetry import log_rotation  # noqa: E402
-from coordinator_core.temp_layout import managed_tempdir  # noqa: E402
+from coordinator_core.temp_layout import make_managed_temp_dir  # noqa: E402
 
 #: The per-scenario caller-hold bar (plan acceptance 1).
 BAR_MS = 300.0
@@ -313,7 +312,7 @@ def _scenario_guard_under_load(tmp: Path, guard_secs: float) -> dict:
     finally:
         release.set()
         if ctx is not None and getattr(ctx, "_dispatch_pool", None) is not None:
-            ctx._dispatch_pool.shutdown(wait=False, cancel_futures=True)
+            ctx._dispatch_pool.shutdown(wait=True, cancel_futures=True)
         mp.undo()
         spawn_mp.undo()
 
@@ -330,7 +329,7 @@ def measure(guard_secs: float = GUARD_SECS, scenarios: "tuple[str, ...]" = SCENA
     """Run each scenario in its own tmp dir; one record per scenario, in order. Never raises on a hold."""
     out: list[dict] = []
     for name in scenarios:
-        tmp = Path(tempfile.mkdtemp(prefix="engine-stall-repro-", dir=str(managed_tempdir())))
+        tmp = make_managed_temp_dir(prefix="engine-stall-repro-")
         try:
             out.append(_RUNNERS[name](tmp, guard_secs))
         finally:

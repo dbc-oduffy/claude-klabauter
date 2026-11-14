@@ -87,6 +87,7 @@ from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.authoring_leaks import leak_gate
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.commit_gates import (
+    abs_path_citation_gate,
     attribution_gate,
     carry_gate,
     residue_gate,
@@ -97,6 +98,7 @@ from coordinator_core.ops.ceremony.commit_gates import (
     machine_path_leak_gate,
     op_scope_coverage_gate,
     registration_quad_gate,
+    reparse_advisory_gate,
 )
 from coordinator_core.ops.ceremony.commit_admission import (
     publish_allowlist_drift_refusal,
@@ -441,15 +443,16 @@ def _pre_commit_gates(
     read_source: Callable[[str], Optional[bytes]],
     prefer_staged: Sequence[str] = (),
     deliberate_stage: bool = False,
+    advisories: Optional[list] = None,
 ) -> Optional[str]:
     """Run the gates `run_commit_pipeline` ran before landing, returning a
     refusal string or None. TWO of its four, and the omissions are the point.
 
     Runs now, in order: `declared_deletion_gate`, `carry_gate`, `residue_gate`,
     `op_scope_coverage_gate`, `leak_gate`, `registration_quad_gate`,
-    `claude_md_budget_gate`, `machine_path_leak_gate`, `import_closure_gate`, `attribution_gate`.
+    `claude_md_budget_gate`, `machine_path_leak_gate`, `abs_path_citation_gate`, `import_closure_gate`, `attribution_gate`.
     `read_source` is the post-commit reader (`commit_source.post_commit_reader`): the last
-    four and `op_scope_coverage_gate` judge the tree this commit lands, never the
+    five and `op_scope_coverage_gate` judge the tree this commit lands, never the
     worktree or the index.
 
     `run_commit_pipeline` ran four; C3 repointed every caller onto this op,
@@ -559,6 +562,8 @@ def _pre_commit_gates(
         ("registration_quad_gate", partial(registration_quad_gate, read_source=read_source)),
         ("claude_md_budget_gate", partial(claude_md_budget_gate, read_source=read_source)),
         ("machine_path_leak_gate", partial(machine_path_leak_gate, read_source=read_source)),
+        ("abs_path_citation_gate", partial(abs_path_citation_gate, read_source=read_source)),
+        ("reparse_advisory_gate", reparse_advisory_gate),
         ("import_closure_gate", partial(import_closure_gate, read_source=read_source)),
         ("attribution_gate", partial(
             attribution_gate, vacated=deleted_paths,
@@ -566,6 +571,8 @@ def _pre_commit_gates(
         )),
     ):
         outcome = gate(worktree_root, gate_paths)
+        if name == "reparse_advisory_gate" and advisories is not None:
+            advisories.extend(outcome.diagnostics)
         if not outcome.passed:
             shown = (
                 outcome.diagnostics if name == "attribution_gate"
@@ -1043,6 +1050,17 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             )
 
 
+def _record_reparse_advisories(lines: list, repo_root: Optional[Path]) -> None:
+    """Persist the `reparse<TAB><path> -> <target>` advisory lines as an op-latency sink row; never raises."""
+    with contextlib.suppress(Exception):
+        from coordinator_core.telemetry import op_latency
+
+        op_latency._write_entry(
+            {"kind": "reparse_advisory", "op": "ceremony.commit_v2", "t_start": time.time(), "lines": list(lines)},
+            repo_root,
+        )
+
+
 class _Parsed(NamedTuple):
     """Validated, normalised params of one call."""
 
@@ -1446,6 +1464,7 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             abandoned_holds=abandoned_holds,
         )
 
+    reparse_advisories: list = []
     # Gates run BEFORE the commit lands -- they are refusals, and a refusal after the fact is not one.
     with ledger.phase("pre_commit_gates"):
         read_source = post_commit_reader(
@@ -1460,9 +1479,12 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             worktree_root, raw_paths, raw_removed, read_source,
             prefer_staged=raw_prefer_staged,
             deliberate_stage=raw_prefer_deliberate_stage,
+            advisories=reparse_advisories,
         )
     if gate_refusal is not None:
         return _error(gate_refusal)
+    if reparse_advisories:
+        _record_reparse_advisories(reparse_advisories, repo_root)
 
     # EOL repair (`docs/reference/eol-drift-detection.md`) runs BEFORE the commit and never refuses; a
     # repair-side exception is worse than the drift. `prefer_staged` paths are excluded.
@@ -1732,6 +1754,7 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             f"dropped {len(dropped_ignored)} gitignored-untracked path(s) from `paths`: {shown}."
         )
     warnings.extend(peer_claim_warnings)
+    warnings.extend(reparse_advisories)
     if skill_weight_note is not None:
         warnings.append(skill_weight_note)
     staged_preferred = [p for o in outcomes for p in o.staged_preferred]

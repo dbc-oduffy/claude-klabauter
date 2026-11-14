@@ -412,7 +412,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/bug_blitz/mint.py': ('claims-explicitly', 'in-place tag rewrite of a state/bug-backlog row via tmp + os.replace, declared through declare_write: _write_reuse'),
     'coordinator_core/ops/dispatch_emit/kept_work.py': ('claims-explicitly', 'kept.json under the run record dir, declared through declare_write: write'),
     'coordinator_core/ops/dispatch_emit/row_returns.py': ('claims-explicitly', 'returns.json under the run record dir, declared through declare_write: write'),
-    'coordinator_core/git/commit.py': ('in-repo-non-state', 'published-tree classification file rewritten in place with the refused inclusions and added to the commit path list: write_text'),
+    'coordinator_core/git/commit.py': ('in-repo-non-state', 'published-tree classification file rewritten in place with the refused inclusions and added to the commit path list: write_text; post-landing convergence os.replace of the committed blob over a supplied path whose worktree still equals the pre-commit HEAD blob: _converge_supplied_worktree'),
     'coordinator_core/idle_compact/watcher.py': ('outside-repo', 'injections.jsonl append and armed.json tmp + os.replace under <settings>/state/idle-compact: append_log, save_armed'),
     'coordinator_core/ops/dispatch_emit/ask_fanout.py': ('claims-explicitly', 'ask records staged exclusive-create under .coordinator-local/fanout-staging, published by os.replace with ledger.claim and declare_write: _stage_text, the publish loop'),
     'coordinator_core/ops/dispatch_emit/tranche_chain.py': ('in-repo-non-state', 'zero-byte O_EXCL tranche-chain.claim marker in the run record dir (ask_contract.record_dir) so a re-fired terminal commit spawns the next part once: _claim_chain'),

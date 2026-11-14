@@ -177,6 +177,21 @@ def test_an_unreachable_name_dials_the_first_verified_listed_address_with_the_bo
     assert "HostKeyAlias=farbox" in seen[0] and seen[0][-2:] == ["me@192.0.2.2", "send hello"]
 
 
+def test_an_older_far_addresses_without_tcp_connect_names_the_skew_and_degrades_to_the_host(mux, monkeypatch, capsys):
+    mux._VERIFIED.clear()
+    monkeypatch.setattr(mux, "_far_addresses", lambda: types.SimpleNamespace())
+    assert mux.verified_host("me@farbox.local", "farbox", "k") == "me@farbox.local"
+    err = capsys.readouterr().err
+    assert "lacks tcp_connect" in err and "version skew" in err
+
+
+def test_a_caller_supplied_connect_still_works_when_far_addresses_lacks_tcp_connect(mux, monkeypatch, capsys):
+    mux._VERIFIED.clear()
+    monkeypatch.setattr(mux, "_far_addresses", lambda: types.SimpleNamespace())
+    assert mux.verified_host("me@farbox.local", "farbox", "k", connect=lambda h: True) == "me@farbox.local"
+    assert capsys.readouterr().err == ""
+
+
 def test_an_address_held_by_a_different_machine_is_never_the_box(mux):
     ch, probed, _ = _fallback(mux, answering={"192.0.2.1", "192.0.2.3"},
                               statuses={"192.0.2.1": ("not-this-box", "key mismatch")})

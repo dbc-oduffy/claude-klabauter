@@ -126,7 +126,7 @@ def test_stage_paths_in_process_preserves_exec_mode_via_fallback_leg(tmp_path):
 def _attrs_repo(tmp_path):
     repo = _repo(tmp_path)
     (repo / ".gitattributes").write_text(
-        "*.cmd text eol=crlf\n*.sh text eol=lf\n_goldens/** -text\n",
+        "*.cmd -text eol=crlf\n*.sh text eol=lf\n_goldens/** -text\n",
         encoding="utf-8", newline="\n",
     )
     _git(repo, "add", "-A")

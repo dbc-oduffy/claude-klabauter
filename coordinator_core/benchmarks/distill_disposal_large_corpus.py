@@ -14,7 +14,6 @@ import argparse
 import json
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -121,7 +120,8 @@ def run(files: int = DEFAULT_FILES, candidates: int = DEFAULT_CANDIDATES,
     """Runs assemble then stamp (unmeasured) then apply; returns the two measured rows."""
     scratch = base_dir or (Path(__file__).resolve().parents[2] / "scratch")
     scratch.mkdir(parents=True, exist_ok=True)
-    top = Path(tempfile.mkdtemp(prefix="distill-bench-", dir=scratch))
+    from coordinator_core.temp_layout import mkdtemp_in
+    top = mkdtemp_in("distill-bench-", scratch)
     try:
         corpus = top / "corpus"
         work = top / "work"

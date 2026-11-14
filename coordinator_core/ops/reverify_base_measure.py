@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -28,25 +29,31 @@ _DROPPED = "reverify-base-measure-dropped:\t"
 _RETRY_RUNNER = (
     "import contextlib, io, re, sys\n"
     "import pytest\n"
-    "ids, dropped = sys.argv[1:], []\n"
-    "nf = re.compile(r'not found:\\s+(\\S+)')\n"
+    "ids, dropped, broken = sys.argv[1:], [], []\n"
+    "nf = re.compile(r'(not found|found no collectors for):?\\s+(\\S+)')\n"
     "while True:\n"
     "    out, err = io.StringIO(), io.StringIO()\n"
     "    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):\n"
-    "        rc = pytest.main(['-rfE', *ids])\n"
-    "    named = [m.group(1) for m in map(nf.search, (err.getvalue() + out.getvalue()).splitlines()) if m]\n"
-    "    gone = [i for i in ids if any(n == i or n.endswith('/' + i) for n in named)]\n"
-    "    if rc != 4 or not gone:\n"
+    "        rc = pytest.main(['-rfE', '--continue-on-collection-errors', *ids])\n"
+    "    hits = [m.groups() for m in map(nf.search, (err.getvalue() + out.getvalue()).splitlines()) if m]\n"
+    "    def named(kind):\n"
+    "        paths = [n.replace('\\\\', '/') for k, n in hits if k.startswith(kind)]\n"
+    "        return [i for i in ids if any(n == i or n.endswith('/' + i) for n in paths)]\n"
+    "    gone, bad = named('not found'), named('found no')\n"
+    "    if rc != 4 or not (gone or bad):\n"
     "        break\n"
-    "    ids = [i for i in ids if i not in gone]\n"
+    "    ids = [i for i in ids if i not in gone and i not in bad]\n"
     "    dropped += gone\n"
+    "    broken += bad\n"
     "    if not ids:\n"
     "        break\n"
     "sys.stdout.write(out.getvalue())\n"
     "sys.stderr.write(err.getvalue())\n"
+    "sys.stdout.write(''.join('ERROR ' + b + '\\n' for b in broken))\n"
     f"sys.stdout.write(''.join('{_DROPPED}' + d + '\\n' for d in dropped))\n"
-    "sys.exit(rc)\n"
+    "sys.exit(1 if broken and (rc == 0 or (rc == 4 and not ids)) else rc)\n"
 )
+_HEX = re.compile(r"[0-9a-fA-F]{4,40}")
 _ENGINE_ROOT = Path(__file__).resolve().parents[2]
 #: Runs baseline_export with the live engine importable by sys.path only: a PYTHONPATH entry would
 #: leak into the runner and shadow the exported tree's own packages.
@@ -70,8 +77,20 @@ def _parse(argv: list[str]) -> Optional[tuple[str, Optional[str], str, list[str]
     return flags["--sha"], flags.get("--head-sha"), flags["--out"], ids
 
 
+def _resolve(sha: str, cwd: str) -> str:
+    """`sha` as the 40-hex commit id baseline_export requires: a symbolic ref (`HEAD`) is resolved at
+    `cwd`; a hex id, or one git cannot resolve, is returned unchanged (baseline_export then reports it)."""
+    if _HEX.fullmatch(sha):
+        return sha
+    proc = subprocess.run(["git", "-C", cwd, "rev-parse", "--verify", "--end-of-options", f"{sha}^{{commit}}"],
+                          capture_output=True, text=True, errors="replace", **no_console_creationflags())
+    out = proc.stdout.strip()
+    return out if proc.returncode == 0 and _HEX.fullmatch(out) else sha
+
+
 def _run(sha: str, ids: list[str], cwd: str) -> tuple[str, Optional[int], list[str], list[str]]:
     """One baseline_export run: (export state, runner exit, stdout lines, stderr lines)."""
+    sha = _resolve(sha, cwd)
     argv = [sys.executable, "-c", _LAUNCH, str(_ENGINE_ROOT), "--sha", sha, "--",
             sys.executable, "-c", _RETRY_RUNNER, *ids]
     proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, errors="replace",
@@ -106,8 +125,12 @@ def measure(sha: str, head_sha: Optional[str], ids: list[str], cwd: str) -> dict
     if export == "ok" and runner_exit in (0, 1) and remaining:
         red = _red(lines)
         passed = [i for i in remaining if not _is_red(i, red)]
-    if head_sha and export == "ok" and runner_exit in (0, 1) and passed:
-        h_export, h_exit, h_lines, _h_err = _run(head_sha, passed, cwd)
+    base_ok = export == "ok" and (runner_exit in (0, 1) or (runner_exit == 4 and not remaining))
+    if export == "ok" and runner_exit == 4 and remaining:
+        export = "failed"  # a usage error with ids left measured nothing; "ok" would read as an empty red set
+    head_ids = [i for i in ids if not _is_red(i, red)]
+    if head_sha and base_ok and head_ids:
+        h_export, h_exit, h_lines, _h_err = _run(head_sha, head_ids, cwd)
         if h_export != "ok" or h_exit not in (0, 1):
             export = h_export if h_export != "ok" else "failed"
         else:

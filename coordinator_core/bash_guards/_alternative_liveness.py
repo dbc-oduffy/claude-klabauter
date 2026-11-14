@@ -136,7 +136,7 @@ from coordinator_core.bash_guards import (
     _dc_rewrites,
     _dc_rm,
 )
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import managed_temp_dir
 from coordinator_core.bash_guards import block_approval_sentinel_creation
 from coordinator_core.bash_guards import block_illegal_filename
 from coordinator_core.bash_guards import block_noncanonical_branch_creation
@@ -365,23 +365,19 @@ def _trigger_host_subagent_policy_guard(
     box (measured 2026-08-30). A `mkdtemp` plus one small write is the whole
     cost, cleaned up before returning.
     """
-    scratch = tempfile.mkdtemp(prefix="altlive-policy-", dir=_probe_temp_root())
-    try:
-        config = Path(scratch) / "coordinator.local.md"
+    with managed_temp_dir("altlive-policy-", _probe_repo_root()) as scratch_path:
+        scratch = str(scratch_path)
+        config = scratch_path / "coordinator.local.md"
         config.write_text(
             "---\n%s: deny\n---\n\nAltlive probe fixture.\n" % policy_key,
             encoding="utf-8",newline="\n"
         )
         return module.check(_payload(cmd, agent_id="deadbeef0123", cwd=scratch))
-    finally:
-        from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
-
-        rmtree_or_raise(Path(scratch), label="altlive-policy")
 
 
-def _probe_temp_root() -> str:
-    """Parent for every probe scratch dir: this checkout's managed Temp root."""
-    return str(managed_tempdir(Path(__file__).resolve().parents[2]))
+def _probe_repo_root() -> Path:
+    """The checkout whose managed Temp root parents every probe scratch dir."""
+    return Path(__file__).resolve().parents[2]
 
 
 def _run(argv: List[str], cwd: str, timeout: int = _PROBE_TIMEOUT_SEC) -> None:
@@ -410,9 +406,9 @@ _SCRATCH_REPOS_MADE: set = set()
 def _scratch_git_repo():
     """A throwaway git repo (one committed file) in a tempdir -- cleaned up
     on every exit path. Never the real working tree."""
-    tmp = tempfile.mkdtemp(prefix="altlive-repo-", dir=_probe_temp_root())
-    _SCRATCH_REPOS_MADE.add(tmp)
-    try:
+    with managed_temp_dir("altlive-repo-", _probe_repo_root(), strict=True) as tmp_path:
+        tmp = str(tmp_path)
+        _SCRATCH_REPOS_MADE.add(tmp)
         _run(["git", "init", "-q"], cwd=tmp)
         _run(["git", "config", "user.email", "altlive-probe@example.com"], cwd=tmp)
         _run(["git", "config", "user.name", "altlive-probe"], cwd=tmp)
@@ -421,12 +417,6 @@ def _scratch_git_repo():
         _run(["git", "add", "."], cwd=tmp)
         _run(["git", "commit", "-q", "-m", "init"], cwd=tmp)
         yield tmp
-    finally:
-        # `ignore_errors` strips a Windows scratch repo's writable files but leaves its read-only
-        # git objects, so the directory survives and the vanished-repo rebase never applies.
-        from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
-
-        rmtree_or_raise(Path(tmp), label="altlive-scratch-repo")
 
 
 def _make_backpointer(git_root: str, agent_id: str, subagent_type: str, em_sid: str = "altliveemsess") -> None:
@@ -1175,23 +1165,20 @@ def _isolated_session_scope():
     check -- cleanup after the fact cannot win that race."""
     prior = os.environ.get(_SESSION_SCOPED_ENV_VAR)
     fresh_sid = "altlive-probe-" + uuid.uuid4().hex
-    latch_root = Path(tempfile.mkdtemp(prefix="altlive-latch-", dir=_probe_temp_root()))
     real_latch_path = guard_inprocess_search._latch_path
-    os.environ[_SESSION_SCOPED_ENV_VAR] = fresh_sid
-    guard_inprocess_search._latch_path = (
-        lambda _cwd, sid: latch_root / sid / guard_inprocess_search._LATCH_MARKER_NAME
-    )
-    try:
-        yield
-    finally:
-        guard_inprocess_search._latch_path = real_latch_path
-        if prior is None:
-            os.environ.pop(_SESSION_SCOPED_ENV_VAR, None)
-        else:
-            os.environ[_SESSION_SCOPED_ENV_VAR] = prior
-        from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
-
-        rmtree_or_raise(Path(latch_root), label="alternative-liveness latch root")
+    with managed_temp_dir("altlive-latch-", _probe_repo_root()) as latch_root:
+        os.environ[_SESSION_SCOPED_ENV_VAR] = fresh_sid
+        guard_inprocess_search._latch_path = (
+            lambda _cwd, sid: latch_root / sid / guard_inprocess_search._LATCH_MARKER_NAME
+        )
+        try:
+            yield
+        finally:
+            guard_inprocess_search._latch_path = real_latch_path
+            if prior is None:
+                os.environ.pop(_SESSION_SCOPED_ENV_VAR, None)
+            else:
+                os.environ[_SESSION_SCOPED_ENV_VAR] = prior
 
 
 @contextlib.contextmanager
@@ -1807,8 +1794,9 @@ def probe_command(alt: Alternative) -> Verdict:
         )
 
     safe_argv = [resolved] + [_dummy_substitute(t) for t in argv[1:]]
-    tmp = tempfile.mkdtemp(prefix="altlive-cmd-", dir=_probe_temp_root())
-    try:
+    # Teardown OSError is swallowed by managed_temp_dir (non-strict), so it cannot replace the Verdict.
+    with managed_temp_dir("altlive-cmd-", _probe_repo_root()) as tmp_path:
+        tmp = str(tmp_path)
         # A trigger's `_scratch_git_repo()` is already deleted by the time its
         # offers are probed, so a command naming that repo (`git -C <repo> ...`)
         # would grade DEAD on "cannot change to". Rebase exactly the repos this
@@ -1832,11 +1820,6 @@ def probe_command(alt: Alternative) -> Verdict:
             proc = subprocess.run(safe_argv, cwd=tmp, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=_PROBE_TIMEOUT_SEC, **_NO_WINDOW)
         except (OSError, subprocess.TimeoutExpired) as exc:
             return Verdict(VerdictStatus.DEAD, "invocation failed: %s" % exc)
-    finally:
-        from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
-
-        # Trap: a CloneTeardownLeak raised here replaces the Verdict this probe returns.
-        rmtree_or_raise(Path(tmp), label="altlive-cmd-probe")
 
     stderr_lower = proc.stderr.lower()
     dead_markers = ("command not found", "no such file or directory", "unrecognized option",

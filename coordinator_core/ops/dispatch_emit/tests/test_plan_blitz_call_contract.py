@@ -91,6 +91,17 @@ def test_planblitz_baton_carries_title_and_sizing_exit_criterion(repo, capsys, r
     assert "undefined" not in call
 
 
+@pytest.mark.parametrize("route", ["sizing", "ask-sizing"])
+def test_planblitz_baton_falls_back_to_sizing_tshirt_and_route(repo, capsys, resolvable, route):  # noqa: F811
+    """A chained or staged-resume gate seeds route null; the baton still carries the sizing's tshirt and route."""
+    _arrange(repo, route)
+    assert cli.main(_ROUTES[route](repo)) == 0
+    call = _blitz_call(capsys)
+    assert "sized: true, sizingObject: _sizingRel" in call
+    assert 'tshirt: _gate.tshirt ?? "M"' in call
+    assert 'route: _gate.baton?.route ?? _gate.route ?? "plan"' in call
+
+
 def test_default_resolve_carries_parallel_review_chatty_does_not(monkeypatch, tmp_path):
     roster = {"plan_review": {
         "tiers": {"XXL": {"reviewers": [{"agentType": "a:x", "model": "m"}]}},

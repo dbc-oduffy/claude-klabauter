@@ -2,7 +2,8 @@
 
 Builds a tmp git repo with N run dirs under `state/warp` (a mix of `ask-<stamp>` and
 `warp-<stem>-<stamp>` dirs, some with `run.json`, some with `parent.json`) and two run-bound
-sizings, one non-`-build` stem (the incident shape: `_credit_split_predecessors` returns before its
+sizings plus a third, `plan_resume`, whose sizing names a plan with open rows (the gate then spends one
+`git log --grep` over a history that matches nothing); one non-`-build` stem (the incident shape: `_credit_split_predecessors` returns before its
 `parent.json` glob) and one `-build` stem. It calls `ask_gate._handler({"sizing_path", "run_id"}, root)`
 in-process and reports process ms (`time.process_time`, never wall clock), spawn count and a per-leg
 split: `_credit_split_predecessors`, `_newest_run_binding`, `_bounded_orphan_lookup`, `_bind_run` and
@@ -23,7 +24,6 @@ import argparse
 import json
 import statistics
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -45,16 +45,23 @@ INCIDENT_STEM = "2026-11-10-codex-tier-name-probe-97c2c1"
 SHAPES = {
     "non_build": (INCIDENT_STEM, "ask-20261110T132102-97c2c1"),
     "build": ("2026-11-10-codex-tier-name-probe-97c2c1-build", "ask-20261110T132103-97c2c2"),
+    "plan_resume": ("2026-11-10-codex-tier-name-probe-97c2c1-plan", "ask-20261110T132104-97c2c3"),
 }
+#: The shape whose sizing carries a `plan:` edge to a plan with open rows: the gate then reads the
+#: plan and spends its `git log` over the history on the checkpoint-landed rows.
+PLAN_SHAPE = "plan_resume"
+DEFAULT_COMMITS = 3000
 #: leg name -> (module, attribute) wrapped where the caller looks it up.
 LEGS = {
     "credit_split_predecessors": ("coordinator_core.ops.dispatch_emit.ask_gate", "_credit_split_predecessors"),
     "newest_run_binding": ("coordinator_core.ops.dispatch_emit.ask_gate", "_newest_run_binding"),
     "bounded_orphan_lookup": ("coordinator_core.ops.dispatch_emit.ask_gate", "_bounded_orphan_lookup"),
     "bind_run": ("coordinator_core.ops.dispatch_emit.ask_gate", "_bind_run"),
+    "resumable_plan": ("coordinator_core.ops.dispatch_emit.sizing_fire", "resumable_plan"),
+    "resume_landed_state": ("coordinator_core.ops.dispatch_emit.emit", "resume_landed_state"),
     "pack_read": ("coordinator_core.git.git_objects", "read_object"),
 }
-_TOP_LEVEL = ("credit_split_predecessors", "bounded_orphan_lookup", "bind_run")
+_TOP_LEVEL = ("credit_split_predecessors", "bounded_orphan_lookup", "bind_run", "resumable_plan")
 _LIFTED_WALL_S = 600.0
 _FLOOR_DAY = "20261110"
 
@@ -82,7 +89,24 @@ def _stamp(i: int) -> str:
     return f"{day}T{(i * 7) % 24:02d}{(i * 13) % 60:02d}{(i * 17) % 60:02d}-{i:06x}"
 
 
-def build_fixture(root: Path, dirs: int) -> dict:
+def _seed_history(root: Path, commits: int) -> None:
+    """`commits` plain commits on `main` in one `git fast-import`, so the gate's `git log --grep`
+    walks a history that matches nothing, the worst case for a `-n`-limited log."""
+    lines = []
+    for i in range(commits):
+        msg = f"filler commit {i}"
+        lines += ["commit refs/heads/main", f"committer t <t@t.example> {1_700_000_000 + i} +0000", f"data {len(msg)}", msg]
+        if i == 0:
+            lines.append("from refs/heads/main^0")
+        lines.append("")
+    stream = "\n".join(lines) + "\n"
+    res = run_git(["-C", str(root), "fast-import", "--quiet", "--force"], input=stream.encode())
+    if not res.ok:
+        raise RuntimeError(f"git fast-import failed (rc={res.returncode}): {res.stderr.strip()}")
+
+
+
+def build_fixture(root: Path, dirs: int, commits: int = DEFAULT_COMMITS) -> dict:
     """Populate `root` (an empty dir): a git repo, the two sizings and `dirs` warp run dirs.
     Returns `{shape: sizing_rel}`."""
     _git(root, "init", "-q", "-b", "main")
@@ -93,7 +117,20 @@ def build_fixture(root: Path, dirs: int) -> dict:
         sizings[shape] = rel
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(yaml.safe_dump(_sizing_doc(stem), sort_keys=False), encoding="utf-8", newline="\n")
+        doc = _sizing_doc(stem)
+        if shape == PLAN_SHAPE:
+            plan_rel = f"docs/plans/{stem}.md"
+            doc["plan"] = plan_rel
+            plan = root / plan_rel
+            plan.parent.mkdir(parents=True, exist_ok=True)
+            rows = "".join(
+                f"- id: A{n}\n  title: T{n}\n  disposition: open\n  writes:\n    - some/a{n}.py\n" for n in range(1, 4)
+            )
+            plan.write_text(
+                f"---\nrun_id: fixture\n---\n\n## Tasks\n\n```yaml plan-tasks\n{rows}```\n",
+                encoding="utf-8", newline="\n",
+            )
+        path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8", newline="\n")
         run = root / "state" / "warp" / run_id
         run.mkdir(parents=True)
         (run / "run.json").write_text(json.dumps({}) + "\n", encoding="utf-8", newline="\n")
@@ -113,6 +150,10 @@ def build_fixture(root: Path, dirs: int) -> dict:
             (d / "parent.json").write_text("{}\n", encoding="utf-8", newline="\n")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "seed (ask gate bench)")
+    if commits:
+        _seed_history(root, commits)
+    if commits:
+        _seed_history(root, commits)
     return sizings
 
 
@@ -184,15 +225,16 @@ def measure_shape(root: Path, shape: str, sizing_rel: str, runs: int = DEFAULT_R
         "largest_leg": max(cold["legs"], key=cold["legs"].get) if cold["legs"] else None,
         "halt": (reply.get("halt") or {}).get("kind"),
         "arm": reply.get("arm"),
+        "resume_plan": reply.get("resume_plan"),
         "bound_sizing_path": reply.get("sizing_path"),
     }
 
 
 def measure(dirs: int = DEFAULT_DIRS, runs: int = DEFAULT_RUNS) -> dict:
     """Build the fixture and measure both shapes; returns `{"dirs": N, "shapes": {shape: report}}`."""
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
-    scratch = Path(tempfile.mkdtemp(prefix="ask-gate-bench-", dir=str(managed_tempdir())))
+    scratch = make_managed_temp_dir(prefix="ask-gate-bench-")
     try:
         root = scratch / "repo"
         root.mkdir()

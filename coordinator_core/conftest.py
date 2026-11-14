@@ -684,7 +684,11 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     if os.name == "nt":
         _warm_base = quarantine / "warm-runtime-base"
     else:
-        _warm_base = Path(tempfile.mkdtemp(prefix="cwrb-", dir="/tmp"))
+        from coordinator_core import temp_layout as _temp_layout
+
+        # Short on purpose (sun_path caps near 104 bytes): a child of the real /tmp, not the
+        # managed layout and not the suite's deep Temp redirect.
+        _warm_base = _temp_layout.mkdtemp_in("cwrb", "/tmp")
 
         def _drop_warm_base() -> None:
             try:
@@ -1990,11 +1994,79 @@ def diff_engine_records(before: dict[str, frozenset], after: dict[str, frozenset
     return added_dirs, fixture, other
 
 
+_SESSION_TEMP_ATTR = "_managed_temp_session"
+
+
+def default_basetemp_to_temp_layout(config) -> None:
+    """Without --basetemp pytest uses <Temp>/pytest-of-<user>/pytest-current, a shared symlink
+    that goes stale and locks; default it to a per-run temp_layout dir. A caller's value is kept.
+    """
+    if config.option.basetemp:
+        return
+    from coordinator_core import temp_layout
+
+    root = temp_layout.pytest_basetemp_root(config.rootpath)
+    root.mkdir(parents=True, exist_ok=True)
+    chosen = str(root / ("%d-%s" % (os.getpid(), os.urandom(3).hex())))
+    config.option.basetemp = chosen
+    # tmpdir's pytest_configure may already have built its factory from the empty option.
+    factory = getattr(config, "_tmp_path_factory", None)
+    if factory is not None and getattr(factory, "_given_basetemp", None) is None:
+        factory._given_basetemp = Path(chosen)
+
+
+def managed_temp_session_start(session: pytest.Session) -> None:
+    """Point ``tempfile.tempdir`` at a managed per-process session dir (workers get their own)."""
+    from coordinator_core import temp_layout
+
+    if getattr(session.config, _SESSION_TEMP_ATTR, None) is not None:
+        return
+    default_basetemp_to_temp_layout(session.config)
+    path = temp_layout.make_managed_temp_dir("pytest-session")
+    setattr(session.config, _SESSION_TEMP_ATTR, (path, tempfile.tempdir))
+    tempfile.tempdir = str(path)
+
+
+def managed_temp_session_finish(session: pytest.Session, exitstatus) -> None:
+    """Restore ``tempfile.tempdir``; any entry left in the session dir fails a passing session.
+
+    Empty dirs under ``coordinator/`` are the helper's own skeleton (a managed dir created while
+    the session dir was the Temp root), pruned before the listing.
+    """
+    state = getattr(session.config, _SESSION_TEMP_ATTR, None)
+    if state is None:
+        return
+    setattr(session.config, _SESSION_TEMP_ATTR, None)
+    path, saved = state
+    tempfile.tempdir = saved
+    for dirpath, _dirs, _files in os.walk(path / "coordinator", topdown=False):
+        try:
+            os.rmdir(dirpath)
+        except OSError:
+            pass
+    try:
+        left = sorted(p.name for p in path.iterdir())
+    except OSError:
+        left = []
+    for name in left[:20]:
+        print(f"managed-temp: left in session Temp: {name}", file=sys.stderr)
+    if left and int(exitstatus) == 0:
+        from coordinator_core.testing.fs_containment import force_exit_status
+
+        force_exit_status(
+            session,
+            pytest.ExitCode.TESTS_FAILED,
+            f"{len(left)} entr{'y' if len(left) == 1 else 'ies'} left in session Temp {path}: {', '.join(left[:3])}",
+        )
+    shutil.rmtree(path, ignore_errors=True)
+
+
 _ENGINE_RECORDS_BEFORE: dict | None = None
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     global _ENGINE_RECORDS_BEFORE
+    managed_temp_session_start(session)
     _ENGINE_RECORDS_BEFORE = None
     if hasattr(session.config, "workerinput") or not _REAL_SETTINGS_HOME:
         return
@@ -2003,7 +2075,9 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     _ENGINE_RECORDS_BEFORE = snapshot_engine_records(_REAL_SETTINGS_HOME)
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_sessionfinish(session: pytest.Session, exitstatus) -> None:
+    managed_temp_session_finish(session, exitstatus)
     if _ENGINE_RECORDS_BEFORE is None:
         return
     added_dirs, fixture, other = diff_engine_records(

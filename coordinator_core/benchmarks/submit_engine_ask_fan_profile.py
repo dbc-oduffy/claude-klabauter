@@ -16,9 +16,7 @@ import argparse
 import os
 import subprocess
 import sys
-import tempfile
 import time
-from pathlib import Path
 
 import pytest
 
@@ -88,9 +86,9 @@ def profile(asks: int = 14, mode: str = "base") -> dict:
     from coordinator_core.hooks import submit_engine_ask as mod
     from coordinator_core.ops import baton_pm_turns as PT
     from coordinator_core.session_baton import store
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
-    scratch = Path(tempfile.mkdtemp(prefix="fan-profile-", dir=managed_tempdir()))
+    scratch = make_managed_temp_dir(prefix="fan-profile-")
     mp = pytest.MonkeyPatch()
     try:
         managed = scratch / "managed"
@@ -157,9 +155,9 @@ def main() -> None:
     ap.add_argument("--mode", choices=("base", "deferred"), default="base")
     ap.add_argument("--cold-import", action="store_true")
     args = ap.parse_args()
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import managed_temp_dir
 
-    with tempfile.TemporaryDirectory(prefix="fan-profile-home-", dir=managed_tempdir()) as home, fixture_settings_home(home):
+    with managed_temp_dir(prefix="fan-profile-home-") as home, fixture_settings_home(home):
         result = profile(args.asks, args.mode)
     legs = result.pop("legs")
     for key, value in result.items():

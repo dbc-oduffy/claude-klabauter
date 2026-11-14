@@ -554,11 +554,11 @@ def test_python_inline_c_reset_hard_payload_still_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_python_inline_c_stash_pop_payload_still_denies():
-    # AC6: `git stash pop` free-text pattern still fires inside a -c
+def test_python_inline_c_stash_apply_payload_still_denies():
+    # AC6: `git stash apply` free-text pattern still fires inside a -c
     # payload.
     payload = _payload(
-        "python3 -c \"import os; os.system('git stash pop')\"",
+        "python3 -c \"import os; os.system('git stash apply')\"",
         agent_type="coordinator:executor",
     )
     result = _enveloped(guard.check)(payload)
@@ -2753,20 +2753,16 @@ def test_git_stash_pathspec_with_input_redirect_still_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_stash_pop_still_denies_as_pop_apply():
+def test_git_stash_pop_is_allowed_for_subagent():
     payload = _payload("git stash pop", agent_type="coordinator:executor")
-    result = _enveloped(guard.check)(payload)
-    assert result is not None
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "git stash pop/apply" in reason
-    assert "git stash (unscoped)" not in reason
+    assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_stash_apply_still_denies_as_pop_apply():
+def test_git_stash_apply_still_denies():
     payload = _payload("git stash apply stash@{0}", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
-    assert "git stash pop/apply" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "git stash apply" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_git_stash_drop_still_denies_as_drop_clear():
@@ -2785,23 +2781,12 @@ def test_git_stash_clear_still_denies_as_drop_clear():
     assert "git stash drop/clear" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_pop_deny_message_names_no_stash_recipe():
-    # 2026-07-29: pop/apply used to fall through to the generic catch-all
-    # deny reason with no forward path at all. It now names the no-stash
-    # pre-existing-failure recipe explicitly (design-as-offers).
-    payload = _payload("git stash pop", agent_type="coordinator:executor")
-    result = _enveloped(guard.check)(payload)
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "git show <ref>:<path>" in reason
-    assert "your-wip.bak" in reason
-    assert "STACK-POSITION" in reason
-
-
 def test_git_stash_apply_deny_message_names_no_stash_recipe():
     payload = _payload("git stash apply stash@{0}", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "git show <ref>:<path>" in reason
+    assert "STACK-POSITION" in reason
 
 
 def test_git_stash_drop_deny_message_does_not_redirect_to_the_em():

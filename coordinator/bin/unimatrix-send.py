@@ -9,8 +9,8 @@ the sender, never with plain text to the human at the keyboard.
 
 The sender is identified from the shell this runs in: CODEX_THREAD_ID (Codex) or
 ANTIGRAVITY_CONVERSATION_ID (agy) names the session, or a Grok session whose registry pid is an
-ancestor of this shell; the router maps it to that peer's name. --as overrides it. Reads no token
-and puts no credential in argv.
+ancestor of this shell; the router maps it to that peer's roster name and stamps the frame with
+that name and its box, so nothing is signed by hand. Reads no token and puts no credential in argv.
 """
 import argparse
 import importlib.util
@@ -103,10 +103,33 @@ def relay_outcome(name, since, wait=RELAY_SETTLE_SECONDS, sleep=time.sleep, now=
         sleep(0.25)
 
 
+def _route_note(outcome):
+    """` [box <box>, transport <leg>]` from the bridge's recorded row; `[box unknown]` when an older bridge's row lacks them."""
+    box = outcome.get("box")
+    transport = outcome.get("transport")
+    if not isinstance(box, str) or not box or not isinstance(transport, str) or not transport:
+        return " [box unknown]"
+    return f" [box {box}, transport {transport}]"
+
+
+def _reached_note(resp):
+    """` (reached <session> on <box>)` when the router named the session it delivered to, else ''."""
+    reached = resp.get("reached")
+    if not isinstance(reached, str) or not reached:
+        return ""
+    box = resp.get("reached_box")
+    return f" (reached {reached} on {box})" if isinstance(box, str) and box else f" (reached {reached})"
+
+
 def _print_rows(rows):
-    print("NAME\tBOX\tVENDOR\tSTATE")
-    for name, box, vendor, state in rows:
-        print(f"{name}\t{box}\t{vendor}\t{state}")
+    print("NAME\tBOX\tTHIS-BOX\tVENDOR\tSTATE")
+    for name, box, this_box, vendor, state in rows:
+        print(f"{name}\t{box}\t{this_box}\t{vendor}\t{state}")
+
+
+def _yes_no(flag):
+    """`yes`/`no` for a bool this-box flag; `-` when the row carries none."""
+    return "-" if not isinstance(flag, bool) else "yes" if flag else "no"
 
 
 def _member_ip_hosts():
@@ -139,7 +162,7 @@ def _list_from_sessions():
         for r in rows:
             if c.is_ip_literal(r["box"]):
                 r["box"] = c.box_id(r["box"], ip_hosts)
-    _print_rows([(r["name"], r["box"], r["vendor"], "via SendMessage") for r in rows])
+    _print_rows([(r["name"], r["box"], _yes_no(r["box"] == box), r["vendor"], "via SendMessage") for r in rows])
     print("Message any of these with SendMessage; ListAgents lists them too.")
 
 
@@ -162,7 +185,6 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="unimatrix-send.py", description=__doc__.split("\n\n")[0])
     p.add_argument("--to", help="name of the agent to message (see --list)")
     p.add_argument("--list", action="store_true", help="list the agents you can message")
-    p.add_argument("--as", dest="as_name", default=os.environ.get("UNIMATRIX_PEER_NAME", ""))
     p.add_argument("--endpoint-dir", default=None)
     p.add_argument("text", nargs="*")
     a = p.parse_args(argv)
@@ -173,10 +195,9 @@ def main(argv=None):
     # records its FAILED row, so a lookup after the router's reply finds no mirror and reads success.
     to_mirror, to_mirror_name = (_is_mirror(a.to), _mirror_name(a.to)) if a.to and not a.list else (False, "")
     if a.list:
-        req = {"op": "list", "as_target": own_target(), "as": a.as_name or "cli"}
+        req = {"op": "list", "as_target": own_target(), "as": "cli"}
     elif a.to and a.text:
-        req = {"op": "send", "to": a.to, "text": " ".join(a.text),
-               "as_target": "" if a.as_name else own_target(), "as": a.as_name or "cli"}
+        req = {"op": "send", "to": a.to, "text": " ".join(a.text), "as_target": own_target(), "as": "cli"}
     else:
         p.error("give --to NAME and the message text, or --list")
     try:
@@ -202,7 +223,8 @@ def main(argv=None):
             return 1
         agents = {row.get("name"): row for row in resp.get("agents", []) if isinstance(row, dict)}
         peers = set(resp.get("peers", []))
-        _print_rows([(name, agents.get(name, {}).get("box", "-"), agents.get(name, {}).get("vendor", "-"),
+        _print_rows([(name, agents.get(name, {}).get("box", "-"), _yes_no(agents.get(name, {}).get("this_box")),
+                      agents.get(name, {}).get("vendor", "-"),
                       "stale" if agents.get(name, {}).get("stale") is True
                       else "ready" if name in peers else "session") for name in reachable])
         print("Message any of these with SendMessage; ListAgents lists them too.")
@@ -211,18 +233,18 @@ def main(argv=None):
     elif resp.get("written") is True or resp.get("msg_id"):
         outcome = relay_outcome(to_mirror_name or a.to, started) if to_mirror else {"ok": True}
         if outcome is None:
-            print(f"unconfirmed: the relay recorded no outcome for {a.to} within {RELAY_SETTLE_SECONDS}s; "
-                  "check before resending", file=sys.stderr)
+            print(f"undelivered: {a.to}: no far ingest ack within {RELAY_SETTLE_SECONDS}s; the outcome is "
+                  "unknown (a cold leg can outlast this wait), check the far inbox before resending", file=sys.stderr)
             return 1
         elif not outcome.get("ok"):
-            print(f"undelivered: {a.to}: {outcome.get('error', 'far relay refused')}", file=sys.stderr)
+            print(f"undelivered: {a.to}: {outcome.get('error', 'far relay refused')}"
+                  + (_route_note(outcome) if to_mirror else ""), file=sys.stderr)
             return 1
         else:
-            print(f"sent to {a.to}")
+            print(f"sent to {a.to}" + _reached_note(resp) + (_route_note(outcome) if to_mirror else ""))
     else:
         print(f"unconfirmed: router gave no delivery receipt for {a.to}; the message may have been delivered, "
               "check before resending", file=sys.stderr)
-        return 1
     return 0
 
 

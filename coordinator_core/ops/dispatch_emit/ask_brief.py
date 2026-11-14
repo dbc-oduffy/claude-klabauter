@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from coordinator_core.ops.sizing_intake_contract import SCRATCHPAD_TOKEN
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 EM_BRIEF_VAR = "_EM_BRIEF"
@@ -64,6 +65,13 @@ def _in_session_scratchpad(resolved: Path, session_id: str | None) -> bool:
 
 def _context_path(repo_root: Path, raw: str, session_id: str | None = "") -> tuple[Path, str]:
     """Repo-relative form for an in-repo file; absolute posix form for one in the session's scratchpad."""
+    if raw.startswith(SCRATCHPAD_TOKEN + "/") and session_id:
+        rest = raw[len(SCRATCHPAD_TOKEN) + 1:]
+        base = Path(tempfile.gettempdir()).resolve() / "claude"
+        for pad in sorted(base.glob(f"*/{session_id}/scratchpad")):
+            resolved = (pad / rest).resolve()
+            if _in_session_scratchpad(resolved, session_id) and resolved.exists():
+                return resolved, resolved.as_posix()
     try:
         return _rel(repo_root, raw, "--context")
     except EmBriefRefused:

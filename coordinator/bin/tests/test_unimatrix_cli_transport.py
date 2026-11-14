@@ -111,7 +111,7 @@ def test_ambiguous_names_are_refused_and_old_far_aliases_resolve_only_when_uniqu
 
 
 
-def test_cli_explicit_as_overrides_inherited_codex_target(monkeypatch):
+def test_cli_sender_is_the_inherited_codex_target_never_a_hand_signed_name(monkeypatch):
     from types import SimpleNamespace
     spec = importlib.util.spec_from_file_location(
         "cli_send_override", Path(__file__).resolve().parents[1] / "unimatrix-send.py")
@@ -124,7 +124,6 @@ def test_cli_explicit_as_overrides_inherited_codex_target(monkeypatch):
     monkeypatch.setattr(send, "_router", lambda: fake)
     monkeypatch.setenv("CODEX_THREAD_ID", "inherited-thread")
     monkeypatch.delenv("UNIMATRIX_PEER_NAME", raising=False)
-    assert send.main(["--as", "group-em-09", "--to", "mac-peer", "message"]) == 0
-    assert requests[-1]["as"] == "group-em-09" and requests[-1]["as_target"] == ""
+    monkeypatch.setenv("UNIMATRIX_PEER_NAME", "group-em-09")
     assert send.main(["--to", "mac-peer", "message"]) == 0
-    assert requests[-1]["as_target"] == "inherited-thread"
+    assert requests[-1]["as_target"] == "inherited-thread" and requests[-1]["as"] == "cli"

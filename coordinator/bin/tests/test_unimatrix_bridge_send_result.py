@@ -118,9 +118,9 @@ def test_far_relay_lacking_send_session_is_a_failed_outcome_the_sender_can_read(
     bridge.serve_one(Conn([], deliveries))
     rows = [json.loads(l) for l in deliveries.read_text().splitlines()]
     assert [r["ok"] for r in rows] == [False]
-    assert rows[0]["error"] == "far relay lacks send-session; upgrade it"
+    assert rows[0]["error"] == "far relay lacks send-session; upgrade it (version skew)"
     assert rows[0]["target"].startswith("far (pid ") and isinstance(rows[0]["at"], float)
-    assert bridge.notices == ["far relay lacks send-session; upgrade it"]
+    assert bridge.notices == ["far relay lacks send-session; upgrade it (version skew)"]
 
 
 @pytest.mark.parametrize("stdout", [

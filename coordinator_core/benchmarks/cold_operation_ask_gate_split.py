@@ -29,7 +29,6 @@ import os
 import statistics
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 #: The brightline process-time bar (CLAUDE.md § The brightline).
@@ -147,9 +146,9 @@ def measure(dirs: int = DEFAULT_DIRS, runs: int = DEFAULT_RUNS) -> dict:
     from coordinator_core.benchmarks import fixture_settings_home
     from coordinator_core.benchmarks.ask_gate_cold_route_second_call import RUN_ID, build_fixture
     from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
-    scratch = Path(tempfile.mkdtemp(prefix="cold-ask-gate-split-", dir=str(managed_tempdir())))
+    scratch = make_managed_temp_dir(prefix="cold-ask-gate-split-")
     try:
         root = scratch / "repo"
         root.mkdir()

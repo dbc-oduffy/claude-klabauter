@@ -41,7 +41,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -258,7 +257,14 @@ def run_swap(
     `pair_stop.stop_warm_pair`.
     """
     stopper = stop_pair if stop_pair is not None else pair_stop.stop_warm_pair
-    with tempfile.TemporaryDirectory(prefix="land-swap-hook-window-", dir=work_dir) as tmp:
+    from coordinator_core.temp_layout import managed_temp_dir, temp_dir_in
+
+    tmp_scope = (
+        managed_temp_dir(prefix="land-swap-hook-window-")
+        if work_dir is None
+        else temp_dir_in("land-swap-hook-window-", work_dir)
+    )
+    with tmp_scope as tmp:
         root = Path(tmp) / "engine"
         root.mkdir()
         saved = os.environ.get(_RUNTIME_BASE_ENV)
@@ -440,7 +446,8 @@ def run_production_swap(
     source = source_root if source_root is not None else Path(__file__).resolve().parents[2]
     base = work_dir if work_dir is not None else source / "scratch"
     base.mkdir(parents=True, exist_ok=True)
-    tmp = Path(tempfile.mkdtemp(prefix="land-swap-production-", dir=base))
+    from coordinator_core.temp_layout import mkdtemp_in
+    tmp = mkdtemp_in("land-swap-production-", base)
     pair: Optional[RealPair] = None
     try:
         root = boot.build_engine_root(tmp / "engine", source)
@@ -529,7 +536,8 @@ def run_old_pair_spike(
     base.mkdir(parents=True, exist_ok=True)
     import psutil
 
-    tmp = Path(tempfile.mkdtemp(prefix="land-swap-spike-", dir=base))
+    from coordinator_core.temp_layout import mkdtemp_in
+    tmp = mkdtemp_in("land-swap-spike-", base)
     pair: Optional[RealPair] = None
     try:
         root = boot.build_engine_root(tmp / "engine", source)
@@ -968,10 +976,10 @@ def swap_window_method_defined(source: Path) -> Optional[bool]:
     return "def is_token_skewed(" in (warm / "skew.py").read_text(encoding="utf-8")
 
 
-def _short_runtime_parent() -> Path:
+def _short_runtime_parent() -> Optional[Path]:
     """Parent of the runtime base. TRAP: the pair's unix socket lives under the runtime base and
     `sun_path` caps at 100 bytes, which a repo scratch dir or macOS's per-user temp dir overruns."""
-    return Path(tempfile.gettempdir()) if sys.platform == "win32" else Path("/tmp")
+    return None if sys.platform == "win32" else Path("/tmp")
 
 
 def run_publish_round(
@@ -992,10 +1000,11 @@ def run_publish_round(
     source = source_root if source_root is not None else _SOURCE_ROOT
     base = work_dir if work_dir is not None else source / "scratch"
     base.mkdir(parents=True, exist_ok=True)
-    tmp = Path(tempfile.mkdtemp(prefix="land-swap-round-", dir=base))
+    from coordinator_core.temp_layout import mkdtemp_in
+    tmp = mkdtemp_in("land-swap-round-", base)
     runtime_saved = os.environ.get(_RUNTIME_BASE_ENV)
     autostart_saved = os.environ.pop(boot._LISTENER_AUTOSTART_ENV, None)
-    runtime = Path(tempfile.mkdtemp(prefix="lsr-", dir=_short_runtime_parent()))
+    runtime = mkdtemp_in("lsr-", _short_runtime_parent())
     os.environ[_RUNTIME_BASE_ENV] = str(runtime)
     roots: dict[str, Path] = {}
     try:

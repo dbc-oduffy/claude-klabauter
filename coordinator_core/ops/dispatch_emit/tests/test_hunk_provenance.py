@@ -66,8 +66,12 @@ def world(tmp_path, monkeypatch):
             state["owner"] = list(ids)
 
         @staticmethod
-        def kept(raw_sha: str):
-            d = tmp_path / "state" / "warp" / ME
+        def store(data: bytes) -> str:
+            return put(data)
+
+        @staticmethod
+        def kept(raw_sha: str, run: str = ME):
+            d = tmp_path / "state" / "warp" / run
             d.mkdir(parents=True, exist_ok=True)
             (d / "kept.json").write_text(json.dumps({"post_checkpoint": {PATH: raw_sha}}), encoding="utf-8")
 
@@ -315,7 +319,7 @@ def _record_writes(world, *paths: str) -> None:
     )
 
 
-def test_peer_split_attributes_a_baseline_held_hunk_to_the_run_that_recorded_writing_the_path(world, monkeypatch):
+def test_peer_split_attributes_a_baseline_held_hunk_to_the_run_whose_kept_blob_carries_it(world, monkeypatch):
     from coordinator_core.ops.dispatch_emit import co_declared_settle
 
     monkeypatch.setattr(co_declared_settle, "settled_blob", lambda *a, **k: "d" * 40)
@@ -323,9 +327,66 @@ def test_peer_split_attributes_a_baseline_held_hunk_to_the_run_that_recorded_wri
     world.baseline(_text({2: "OWN"}))  # re-staged after the run's own edit
     world.tree(_text({2: "OWN"}))
     assert hp.peer_split(world.root, ME, [PATH]) == ({PATH: {"blob": "d" * 40, "owner": hp.UNKNOWN_OWNER, "lines": "2"}}, {})
-    _record_writes(world, PATH)
+    world.kept(world.store(_text({2: "OWN", 5: "KEPT"})))
     assert hp.peer_split(world.root, ME, [PATH]) == ({}, {})
     assert hp.unproduced_hunks(world.root, ME, [PATH], own_plan="plan-a") == []
+
+
+def test_baseline_held_peer_hunk_in_a_declared_path_is_not_credited_by_the_path_record(world):
+    world.head(_text({}))
+    world.baseline(_text({2: "PEER"}))
+    world.tree(_text({2: "PEER"}))
+    _record_writes(world, PATH)  # path-level record: lists the path, carries no hunk
+    found = _run(world)
+    assert [f.reason for f in found] == [hp.FOREIGN_HUNK_UNPRODUCED]
+    assert found[0].detail.startswith("committed lines 2 ")
+
+
+def test_restaged_own_edit_is_credited_from_the_kept_blob(world):
+    world.head(_text({}))
+    world.baseline(_text({2: "OWN"}))
+    world.tree(_text({2: "OWN"}))
+    world.kept(world.store(_text({2: "OWN", 5: "KEPT"})))
+    assert _run(world) == []
+    assert hp.peer_split(world.root, ME, [PATH]) == ({}, {})
+
+
+def test_hunk_carried_by_my_and_a_co_declaring_runs_kept_blob_stays_unattributed(world):
+    world.head(_text({}))
+    world.baseline(_text({2: "SHARED"}))
+    world.tree(_text({2: "SHARED"}))
+    world.owner(PEER)
+    world.kept(world.store(_text({2: "SHARED", 5: "KEPT"})))
+    world.kept(world.store(_text({2: "SHARED", 6: "THEIRS"})), run=PEER)
+    found = _run(world)
+    assert [f.reason for f in found] == [hp.FOREIGN_HUNK_UNPRODUCED]
+    assert PEER in found[0].detail
+
+
+def test_kept_blob_of_a_run_that_does_not_hold_the_path_does_not_exclude_my_hunk(world):
+    world.head(_text({}))
+    world.baseline(_text({2: "OWN"}))
+    world.tree(_text({2: "OWN"}))
+    world.owner()
+    world.kept(world.store(_text({2: "OWN", 5: "KEPT"})))
+    world.kept(world.store(_text({2: "OWN"})), run=PEER)
+    assert _run(world) == []
+
+
+def test_run_without_kept_json_credits_no_baseline_held_hunk(world):
+    world.head(_text({}))
+    world.baseline(_text({2: "OWN"}))
+    world.tree(_text({2: "OWN"}))
+    assert [f.reason for f in _run(world)] == [hp.FOREIGN_HUNK_UNPRODUCED]
+
+
+def test_a_hunk_inside_the_baseline_delta_stays_own_beside_an_unattributed_baseline_hunk(world):
+    world.head(_text({}))
+    world.baseline(_text({2: "PEER"}))
+    world.tree(_text({2: "PEER", 8: "OWN"}))
+    found = _run(world)
+    assert [f.reason for f in found] == [hp.FOREIGN_HUNK_UNPRODUCED]
+    assert found[0].detail.startswith("committed lines 2 ")
 
 
 def test_peer_split_still_names_a_baseline_hunk_when_the_record_lists_another_path(world, monkeypatch):

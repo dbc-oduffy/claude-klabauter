@@ -4,6 +4,11 @@ creation outside a managed root.
 Findings (tracked, non-test `.py` under coordinator_core/, coordinator/,
 scripts/, setup/, plus repo-root `*.py`):
 
+  - `unmanaged-temp-create`: any `mkdtemp` / `TemporaryDirectory` call under
+    coordinator_core/ outside coordinator_core/temp_layout.py, with or without
+    `dir=` and inside or outside a `with`; use `temp_layout.managed_temp_dir`.
+    Other trees keep `bare-temp-create` below.
+
   - `bare-temp-create`: a `mkdtemp` / `mkstemp` / `NamedTemporaryFile` /
     `TemporaryDirectory` call with no `dir=` (or `dir=None`) and no
     positional `dir` argument, unless it is the context expression of a
@@ -90,6 +95,11 @@ READ_ONLY_GETTEMPDIR = frozenset(
         ("coordinator_core/guard_routes/assemble.py", "_collect"),
         # Names the harness `claude` dir under Temp to scan; creates nothing.
         ("coordinator_core/ops/claude_home_census.py", "claude_temp_root"),
+        # Reads: free-space probe, throwaway-path classifier, scratchpad glob, scratch-target classifier.
+        ("coordinator_core/group_em/watch.py", "_low_disk_tick"),
+        ("coordinator_core/ops/check_registry_codename_leak.py", "_is_throwaway_path"),
+        ("coordinator_core/ops/dispatch_emit/ask_brief.py", "_context_path"),
+        ("coordinator_core/ops/new_project_scaffold.py", "_is_scratch_target"),
     }
 )
 
@@ -115,6 +125,16 @@ class Finding(NamedTuple):
     line: int
     kind: str
     function: str
+
+
+_DIR_CREATORS = frozenset({"mkdtemp", "TemporaryDirectory"})
+_TEMP_LAYOUT_PATH = "coordinator_core/temp_layout.py"
+UNMANAGED_KIND = "unmanaged-temp-create"
+
+
+def _engine_scope(relpath: str) -> bool:
+    """True for engine files where a directory creator must go through temp_layout."""
+    return relpath.startswith("coordinator_core/") and relpath != _TEMP_LAYOUT_PATH
 
 
 def _call_name(node: ast.Call) -> Optional[str]:
@@ -178,6 +198,10 @@ class _Visitor(ast.NodeVisitor):
                 self.findings.append(
                     Finding(self.relpath, node.lineno, "gettempdir", self._fn())
                 )
+        elif name in _DIR_CREATORS and _engine_scope(self.relpath):
+            self.findings.append(
+                Finding(self.relpath, node.lineno, UNMANAGED_KIND, self._fn())
+            )
         elif name in _CREATOR_DIR_POS and not _has_dir(node, name):
             managed_with = (
                 id(node) in self._with_ctx
@@ -242,7 +266,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     findings = scan(args or None)
     for f in findings:
-        print(f"{f.path}:{f.line}: {f.kind} in {f.function}")
+        hint = (
+            "  -> use temp_layout.managed_temp_dir / make_managed_temp_dir"
+            if f.kind == UNMANAGED_KIND
+            else ""
+        )
+        print(f"{f.path}:{f.line}: {f.kind} in {f.function}{hint}")
     return 1 if findings else 0
 
 

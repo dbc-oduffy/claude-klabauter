@@ -57,6 +57,8 @@ class GrokAdapter:
             tool_name=tool_name,
             tool_input=tool_input,
             cwd=str(payload.get("cwd") or ""),
+            metadata={key: payload[key] for key in ("agent_id", "transcript_path", "agent_type")
+                      if isinstance(payload.get(key), str) and payload[key]},
         )
 
     def engine_event(self, host_event: HostEvent) -> Optional[Dict[str, Any]]:
@@ -64,6 +66,7 @@ class GrokAdapter:
         if host_event.event not in SERVED_EVENTS:
             return None
         return {
+            **dict(host_event.metadata),
             "host": HOST_GROK,
             "hook_event_name": host_event.event,
             "session_id": host_event.session_id or None,
@@ -82,7 +85,8 @@ class GrokAdapter:
             return _decision(host_event, "deny", reason or "denied by coordinator guard")
         if decision in ("ask", "force_ask"):
             return _decision(host_event, "ask", reason or "coordinator: confirm", context)
-        if decision == "allow" and context:
+        # An advisory with no decision (the DIY nag, warm or cold) is an allow that carries the advisory.
+        if decision in ("", "allow") and context:
             return _decision(host_event, "allow", reason, context)
         return neutral_fallback(HOST_GROK)
 

@@ -31,7 +31,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import ExitStack
 from pathlib import Path
@@ -46,6 +45,7 @@ from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
 from coordinator_core.benchmarks.commit_leg_profile import _ChildMeter  # noqa: E402
 from coordinator_core.git.run import run_git  # noqa: E402
 from coordinator_core.owner_safe_rmtree import make_removable  # noqa: E402
+from coordinator_core.temp_layout import make_managed_temp_dir  # noqa: E402
 
 BAR_MS = 500.0
 MOVABLE = 701
@@ -240,9 +240,7 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     declare_benchmark_origin()
-    scratch = _REPO / "scratch"
-    scratch.mkdir(exist_ok=True)
-    root = Path(tempfile.mkdtemp(prefix="terminal-sizing-drain-", dir=scratch))
+    root = make_managed_temp_dir(prefix="terminal-sizing-drain-")
     try:
         rows = run_budget(root, baseline=args.baseline)
     finally:

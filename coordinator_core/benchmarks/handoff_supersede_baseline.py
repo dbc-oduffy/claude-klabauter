@@ -53,13 +53,12 @@ import os
 import shutil
 import statistics
 import sys
-import tempfile
 from pathlib import Path
 
 from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.git.run import run_git
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import make_managed_temp_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -152,7 +151,7 @@ def build_fixture(root: Path) -> None:
 
 
 def sample(mode: str, out_dir: Path, idx: int) -> dict:
-    tmp = Path(tempfile.mkdtemp(prefix=f"handoff-baseline-{mode}-", dir=str(managed_tempdir(REPO_ROOT))))
+    tmp = make_managed_temp_dir(prefix=f"handoff-baseline-{mode}-", repo_root=REPO_ROOT)
     root = tmp / "repo"
     root.mkdir()
     try:
@@ -216,7 +215,7 @@ def check(report: dict) -> list:
 def main(argv: list[str]) -> int:
     declare_benchmark_origin()
     n = int(argv[1]) if len(argv) > 1 else 15
-    out_dir = Path(tempfile.mkdtemp(prefix="handoff-baseline-out-", dir=str(managed_tempdir(REPO_ROOT))))
+    out_dir = make_managed_temp_dir(prefix="handoff-baseline-out-", repo_root=REPO_ROOT)
     report = measure(n, out_dir)
     problems = check(report)
     if problems:

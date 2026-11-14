@@ -562,18 +562,15 @@ def _baseline_failing(baseline: Mapping) -> list[str]:
 
 
 UNDECLARED_DIRT = "undeclared-dirt"
-PEER_HELD_PATH = "peer-held-path"
-_UNCAUSED_REASONS = frozenset({UNDECLARED_DIRT, PEER_HELD_PATH})
 
 
 def _dirt_ids(baseline: Mapping) -> set[str]:
-    """``foreign`` ids the retest child recorded as not the run's: red only on the live tree (``foreign_reason``
-    ``undeclared-dirt``), or red on a path outside the run's writes that a live peer run holds (``peer-held-path``)."""
+    """``foreign`` ids the retest child recorded red only on the live tree (``foreign_reason`` ``undeclared-dirt``)."""
     reasons = baseline.get("foreign_reason")
     if not isinstance(reasons, Mapping):
         return set()
     foreign = {str(i.get("id") if isinstance(i, Mapping) else i) for i in (baseline.get("foreign") or [])}
-    return {str(n) for n, why in reasons.items() if why in _UNCAUSED_REASONS and str(n) in foreign}
+    return {str(n) for n, why in reasons.items() if why == UNDECLARED_DIRT and str(n) in foreign}
 
 
 def unevidenced_ids(baseline: Mapping, cleared: Collection[str] = (), measured: bool = True) -> list[str]:
@@ -595,6 +592,8 @@ def unevidenced_ids(baseline: Mapping, cleared: Collection[str] = (), measured: 
 HEAD_RED_KEY = "head_red"
 OWED_CLEARED_KEY = "owed_cleared"
 HEAD_SHA_KEY = "head_sha"
+#: Re-verify failing ids measured red at HEAD plus the run's landing paths (``owed_cleared`` holds only greens).
+REVERIFY_EXPORT_RED_KEY = "reverify_export_red"
 
 
 def _measured_ids(fresh: Optional[Mapping], key: str) -> Optional[set[str]]:
@@ -634,6 +633,51 @@ def base_check_red(fresh: Optional[Mapping], ids: Sequence[str]) -> tuple[set[st
     )
 
 
+def norm_node_id(n: object) -> str:
+    """A test node id with posix separators and no leading ``./``."""
+    s = str(n).replace("\\", "/")
+    while s.startswith("./"):
+        s = s[2:]
+    return s
+
+
+def reverify_live_failing(record: Optional[Mapping]) -> list[str]:
+    """The record's ``failing`` node ids, posix-normalised and deduplicated, minus the ids it names red
+    at the run base (``BASE_RED_KEYS``). Empty for no record. Pure read; the one derivation of the live
+    failing set."""
+    if not isinstance(record, Mapping):
+        return []
+    base_red = {norm_node_id(n) for n in _record_base_red(record)}
+    failing = (norm_node_id(n) for n in (record.get("failing") or []) if n)
+    return [n for n in dict.fromkeys(failing) if n not in base_red]
+
+
+def reverify_export_split(fresh: Optional[Mapping], ids: Sequence[str]) -> tuple[set[str], set[str], set[str]]:
+    """Split re-verify failing ``ids`` into ``(owned, foreign, unmeasured)`` from the fresh isolated-export
+    retest record. Foreign: in ``baseline.head_red`` (red at HEAD) or ``baseline.owed_cleared`` (green at
+    HEAD plus the run's blobs, so live-tree only). Owned: in ``baseline.reverify_export_red`` and not
+    ``head_red``. Anything else, including every id of a record with no ``reverify_export_red`` key, is
+    unmeasured. Ids compare posix-normalised; each result holds the caller's ``ids`` spelling. Pure read."""
+    norm = norm_node_id
+
+    def keyed(key: str) -> set[str]:
+        return {norm(n) for n in (_measured_ids(fresh, key) or ())}
+
+    head_red, cleared, export_red = keyed(HEAD_RED_KEY), keyed(OWED_CLEARED_KEY), keyed(REVERIFY_EXPORT_RED_KEY)
+    owned: set[str] = set()
+    foreign: set[str] = set()
+    unmeasured: set[str] = set()
+    for raw in dict.fromkeys(str(n) for n in ids if n):
+        nid = norm(raw)
+        if nid in head_red or nid in cleared:
+            foreign.add(raw)
+        elif nid in export_red:
+            owned.add(raw)
+        else:
+            unmeasured.add(raw)
+    return owned, foreign, unmeasured
+
+
 def reverify_verdict(record: Mapping) -> object:
     """``status_after``, else ``status_before`` when after is null."""
     after = record.get("status_after")
@@ -667,18 +711,13 @@ def reverify_unverified_reds(params: Mapping) -> list[str]:
     if record is None or reverify_verdict(record) != "fail":
         return []
 
-    def norm(n: object) -> str:
-        s = str(n).replace("\\", "/")
-        while s.startswith("./"):
-            s = s[2:]
-        return s
-
+    norm = norm_node_id
     proven = {norm(n) for n in (record.get("pre_existing") or []) if n}
     return sorted({norm(n) for n in (record.get("foreign_unverified") or []) if n} - proven)
 
 
 def reverify_red_findings(
-    worktree_root: Path, params: Mapping, landing_paths: Sequence[str]
+    worktree_root: Path, params: Mapping, landing_paths: Sequence[str], *, fresh: Optional[Mapping] = None
 ) -> list[Finding]:
     """One Finding(REVIEW_REVERIFY_INDETERMINATE) when the re-verify record reads ``indeterminate`` or
     carries a non-empty ``reverify_error``: it never ran, an engine defect rather than a test result.
@@ -689,7 +728,9 @@ def reverify_red_findings(
     failure implicating no landed path yields []. ``failing`` ids also listed in ``pre_existing`` (red at the
     run base) or under the record's ``foreign`` key (reds the run does not own) are dropped; ``reverted[].tests``
     are kept. A fail whose every ``failing`` id is pre_existing or foreign and
-    that has no reverted tests yields []; a fail naming no test at all still refuses. In-process; one read per implicated test file."""
+    that has no reverted tests yields []; a fail naming no test at all still refuses. With ``fresh`` (the
+    isolated-export retest record) ``failing`` ids ``reverify_export_split`` names foreign are dropped too.
+    In-process; one read per implicated test file."""
     record = reverify_record(params)
     if record is None:
         return []
@@ -700,8 +741,9 @@ def reverify_red_findings(
         return []
     landed = {str(p).replace("\\", "/") for p in landing_paths}
     failing = [str(n) for n in (record.get("failing") or []) if n]
-    pre = _record_base_red(record)
-    nodes: list[str] = [n for n in failing if n not in pre]
+    live = reverify_live_failing(record)
+    export_foreign = reverify_export_split(fresh, live)[1] if fresh is not None else set()
+    nodes: list[str] = [n for n in live if n not in export_foreign]
     for entry in record.get("reverted") or []:
         if isinstance(entry, Mapping):
             nodes += [str(n) for n in (entry.get("tests") or []) if n]

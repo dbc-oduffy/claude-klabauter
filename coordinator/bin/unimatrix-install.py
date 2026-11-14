@@ -306,7 +306,7 @@ def _copy_if_changed(src, dst):
 
 VENDORED_LIB = ("python_interp.py", "unimatrix_box_mux.py", "unimatrix_relay_sessions.py", "session_detach.py",
                 "unimatrix_pair_contract.py", "cc_invoke.py", "engine_bootstrap.py",
-                "machine_local_impl_resolve.py", "unimatrix_far_addresses.py", "__init__.py")  # sibling lib/ modules the installed scripts load by path or import; __init__ makes `import lib` put lib/ on sys.path
+                "machine_local_impl_resolve.py", "unimatrix_far_addresses.py", "unimatrix_capabilities.py", "__init__.py")  # sibling lib/ modules the installed scripts load by path or import; __init__ makes `import lib` put lib/ on sys.path
 UNSHIPPED_LIB = ("unimatrix_test_home.py",)  # loaded by path only under UNIMATRIX_TEST_HOME; absent from installs by design
 
 

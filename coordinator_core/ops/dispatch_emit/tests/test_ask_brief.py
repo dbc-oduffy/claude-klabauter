@@ -110,6 +110,17 @@ def test_scratchpad_context_admitted_absolute(tmp_path, monkeypatch):
     check_em_brief_paths(root, brief_file=None, context=[str(f)])
 
 
+def test_scratchpad_token_resolves_in_its_own_session_only(tmp_path, monkeypatch):
+    _, pad, root = _fake_tmp(tmp_path, monkeypatch)
+    f = pad / "cap.md"
+    f.write_text("c")
+    b = load_em_brief(root, brief="x", brief_file=None, context=["<scratchpad>/cap.md"], session_id="1234-uuid")
+    assert b.context == (f.resolve().as_posix(),)
+    for sid in ("9999-other", ""):
+        with pytest.raises(EmBriefRefused):
+            load_em_brief(root, brief="x", brief_file=None, context=["<scratchpad>/cap.md"], session_id=sid)
+
+
 @pytest.mark.parametrize("sid", ["9999-other", ""])
 def test_other_or_empty_session_scratchpad_refused(tmp_path, monkeypatch, sid):
     _, pad, root = _fake_tmp(tmp_path, monkeypatch)

@@ -29,7 +29,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 #: The brightline process-time bar (CLAUDE.md § The brightline).
@@ -110,9 +109,9 @@ def measure(timeout: float = DEFAULT_TIMEOUT_SECS) -> dict:
     from coordinator_core.benchmarks.ask_gate_cold_route_second_call import RUN_ID, build_fixture
     from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
     from coordinator_core.benchmarks.process_time import single_invocation_tree_process_time
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
-    scratch = Path(tempfile.mkdtemp(prefix="headless-ask-gate-", dir=str(managed_tempdir())))
+    scratch = make_managed_temp_dir(prefix="headless-ask-gate-")
     try:
         root = scratch / "repo"
         root.mkdir()

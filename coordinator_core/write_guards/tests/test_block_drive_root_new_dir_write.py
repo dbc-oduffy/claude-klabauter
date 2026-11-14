@@ -28,13 +28,13 @@ def _payload(path, tool="Write", key="file_path", **extra):
 
 
 def _reason(out):
-    """The guard is advisory-by-ruling (recoverable clutter): allow plus one advisory line."""
+    """The guard is a box-degrading deny (PM R2): a refusal carrying the reason."""
     body = out["hookSpecificOutput"]
-    assert body["permissionDecision"] == "allow"
-    return body["additionalContext"]
+    assert body["permissionDecision"] == "deny"
+    return body["permissionDecisionReason"]
 
 
-def test_write_to_new_top_level_is_advised_naming_scratch(world):
+def test_write_to_new_top_level_is_denied_naming_scratch(world):
     root, _ = world
     reason = _reason(guard.check(_payload(root / "fresh" / "f.txt")))
     assert "<repo>/scratch/" in reason
@@ -64,6 +64,18 @@ def test_payload_env_override_allows(world):
     root, _ = world
     payload = _payload(root / "fresh" / "f.txt", env={"COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR": "1"})
     assert guard.check(payload) is None
+
+
+def test_group_em_cwd_is_exempt_other_cwd_still_denied(world, monkeypatch):
+    from coordinator_core.group_em import gem_home
+
+    root, _ = world
+    gem = root / "gem-home"
+    gem.mkdir()
+    monkeypatch.setattr(gem_home, "gem_root", lambda: str(gem))
+    target = root / "fresh" / "f.txt"
+    assert guard.check(_payload(target, cwd=str(gem))) is None
+    assert _reason(guard.check(_payload(target, cwd=str(root / "existing"))))
 
 
 def test_home_new_first_component_denied_but_depth_one_left_to_home_pair(world):

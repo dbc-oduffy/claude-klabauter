@@ -21,9 +21,10 @@ import pstats
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 from typing import Any, Dict, List
+
+from coordinator_core.temp_layout import managed_temp_dir
 
 _REPO_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -109,7 +110,7 @@ def measure_warm_evaluate(
     """Median process-time ms of warm ``evaluate`` on an Edit, plus a profile."""
     from coordinator_core.write_guards.engine import evaluate
 
-    with tempfile.TemporaryDirectory(prefix="hook-op-resolve-cost-") as tmp:
+    with managed_temp_dir(prefix="hook-op-resolve-cost-") as tmp:
         payload = _edit_payload(tmp)
         for _ in range(warmup):
             evaluate(dict(payload), cwd=tmp)

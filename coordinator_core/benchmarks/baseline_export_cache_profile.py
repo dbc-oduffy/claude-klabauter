@@ -14,7 +14,6 @@ import json
 import os
 import sys
 import tarfile
-import tempfile
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -133,9 +132,9 @@ def main(argv: list[str] | None = None) -> int:
             repo = Path(args.repo).resolve()
             sha = _git(repo, "rev-parse", args.sha)
         else:
-            from coordinator_core.temp_layout import managed_tempdir
+            from coordinator_core.temp_layout import make_managed_temp_dir
 
-            tmp = Path(tempfile.mkdtemp(prefix="bec-profile-", dir=str(managed_tempdir())))
+            tmp = make_managed_temp_dir(prefix="bec-profile-")
             repo = tmp / "repo"
             sha = build_fixture(repo)
         rows, summary = profile(repo, sha, args.calls)

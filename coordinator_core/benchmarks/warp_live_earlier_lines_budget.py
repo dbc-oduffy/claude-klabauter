@@ -23,7 +23,6 @@ import json
 import os
 import shutil
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Iterator, Optional
@@ -101,10 +100,10 @@ def _timed(root: Path) -> tuple:
 
 def run_benchmark(base: Optional[Path] = None, size: int = TRANSCRIPT_BYTES) -> dict:
     """`{cold, repeat, append}` rows of `(process_ms, live run id)` under `base` (a temp dir when None)."""
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
     owned = base is None
-    base = Path(tempfile.mkdtemp(prefix="warp-live-earlier-", dir=str(managed_tempdir()))) if owned else Path(base)
+    base = make_managed_temp_dir(prefix="warp-live-earlier-") if owned else Path(base)
     try:
         with live_environment(base):
             warm_root, _ = build_fixture(base / "warm", size=2 * 1024 * 1024)

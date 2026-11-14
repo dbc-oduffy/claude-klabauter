@@ -197,6 +197,97 @@ def test_grok_engine_down_is_neutral_and_irreversible_command_denied(monkeypatch
     assert shim.run("grok", json.dumps(GROK_PUSH))["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+NAG = "[em-code-dispatch nudge] DIY-NAG-SENTINEL"
+CODEX_EDIT = {**CODEX_LS, "tool_name": "Edit",
+              "tool_input": {"file_path": "/nonexistent-shim-cwd/a.py", "old_string": "x", "new_string": "y"}}
+CODEX_WRITE = {**CODEX_EDIT, "tool_name": "Write", "tool_input": {"file_path": "/nonexistent-shim-cwd/a.py", "content": "x"}}
+
+
+def _agy_write(tmp_path, tool):
+    return {"conversationId": "agy-1", "workspacePaths": [str(tmp_path)],
+            "toolCall": {"name": tool, "args": {"path": str(tmp_path / "a.py")}}}
+
+
+@pytest.fixture
+def nag_guard(monkeypatch):
+    """The DIY nag guard body answers the nag for an EM payload and nothing for a subagent payload."""
+    from coordinator_core.write_guards import nudge_em_code_dispatch as guard
+
+    def op(payload):
+        if "agent_id" in payload:
+            return None
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                       "additionalContext": NAG}}
+
+    monkeypatch.setattr(guard, "_op", op)
+
+
+def _nag_in(host, out):
+    return NAG in json.dumps(out)
+
+
+@pytest.mark.parametrize("payload", [CODEX_EDIT, CODEX_WRITE])
+def test_warm_codex_write_tools_render_nag(monkeypatch, payload):
+    _engine(monkeypatch, {"result": {"additionalContext": NAG}})
+    assert _nag_in("codex", shim.decide("codex", payload))
+
+
+@pytest.mark.parametrize("tool", ["edit_file", "write_file"])
+def test_warm_agy_write_tools_render_nag(monkeypatch, tmp_path, tool):
+    _engine(monkeypatch, {"result": {"additionalContext": NAG}})
+    out = shim.decide("agy", _agy_write(tmp_path, tool))
+    assert _nag_in("agy", out) and out["decision"] == "ask"
+
+
+@pytest.mark.parametrize("payload", [CODEX_EDIT, CODEX_WRITE])
+def test_cold_codex_write_tools_render_nag(monkeypatch, nag_guard, payload):
+    _engine(monkeypatch, None)
+    assert _nag_in("codex", shim.decide("codex", payload))
+
+
+@pytest.mark.parametrize("tool", ["edit_file", "write_file"])
+def test_cold_agy_write_tools_render_nag(monkeypatch, nag_guard, tmp_path, tool):
+    _engine(monkeypatch, None)
+    assert _nag_in("agy", shim.decide("agy", _agy_write(tmp_path, tool)))
+
+
+def _grok_write(tool):
+    return {**GROK_EDIT, "tool_name": tool, "tool_input": {"path": "/nonexistent-shim-cwd/a.py", "content": "x"}}
+
+
+@pytest.mark.parametrize("tool", ["edit_file", "write_file"])
+def test_warm_grok_write_tools_render_nag(monkeypatch, tool):
+    _engine(monkeypatch, {"result": {"additionalContext": NAG}})
+    assert _nag_in("grok", shim.decide("grok", _grok_write(tool)))
+
+
+@pytest.mark.parametrize("tool", ["edit_file", "write_file"])
+def test_cold_grok_write_tools_render_nag(monkeypatch, nag_guard, tool):
+    _engine(monkeypatch, None)
+    assert _nag_in("grok", shim.decide("grok", _grok_write(tool)))
+
+
+@pytest.mark.parametrize("tool", ["edit_file", "write_file"])
+def test_cold_grok_subagent_write_gets_no_nag(monkeypatch, nag_guard, tool):
+    _engine(monkeypatch, None)
+    assert not _nag_in("grok", shim.decide("grok", {**_grok_write(tool), "agent_id": "sub-1"}))
+
+
+@pytest.mark.parametrize("tool", ["Edit", "Write"])
+def test_cold_subagent_write_gets_no_nag(monkeypatch, nag_guard, tool):
+    _engine(monkeypatch, None)
+    payload = {**(CODEX_EDIT if tool == "Edit" else CODEX_WRITE), "agent_id": "sub-1"}
+    assert not _nag_in("codex", shim.decide("codex", payload))
+
+
+def test_cold_shell_advisory_still_not_forwarded(monkeypatch):
+    import coordinator_core.host_hooks.tool_policy as tool_policy
+
+    _engine(monkeypatch, None)
+    monkeypatch.setattr(tool_policy, "evaluate", lambda payload: {"additionalContext": NAG})
+    assert shim.decide("codex", CODEX_LS) == {}
+
+
 def test_main_without_host_exits_zero_with_empty_answer(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
     assert shim.main([]) == 0

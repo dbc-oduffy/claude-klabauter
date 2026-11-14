@@ -624,6 +624,24 @@ def _claim_provenance(findings: list) -> tuple[list, list]:
     return landing_integrity.split_claim_provenance(findings)
 
 
+def _reverify_export_foreign(params: dict, fresh: Optional[dict]) -> tuple:
+    """``(foreign, all_foreign)`` for the review re-verify's failing ids read against the fresh
+    isolated-export retest record: ``foreign`` the posix-normalised ids it names foreign (red at HEAD, or
+    green at HEAD plus the run's blobs); ``all_foreign`` true when it names some and every failing id not
+    already red at the run base is among them. No record or no measurement: ``(set(), False)``. Pure read."""
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+
+    if fresh is None:
+        return set(), False
+    record = ltt.reverify_record(params)
+    if record is None or ltt.reverify_verdict(record) != "fail":
+        return set(), False
+
+    live = ltt.reverify_live_failing(record)
+    foreign = set(ltt.reverify_export_split(fresh, live)[1])
+    return foreign, bool(foreign) and all(n in foreign for n in live)
+
+
 def _landing_integrity_gate(
     worktree_root: Path, all_paths: list, deleted_paths: list, record_abs: Optional[Path],
     params: dict, run_id: Optional[str], plan: Optional[str] = None,
@@ -752,22 +770,28 @@ def _landing_integrity_gate(
         extra["targeted_tests_foreign"] = tested.foreign_evidence
     if tested.deleted_note:
         extra["targeted_tests_note"] = tested.deleted_note
-    fresh_record = None
-    if tcheck == "pass-on-retest":
-        fresh_record = landing_retest.fresh_targeted_verdict(worktree_root, run_id) if run_id else None
-        if fresh_record is not None:
-            extra["retested_tests"] = fresh_record.get("tests")
-    red = landing_targeted_tests.reverify_red_findings(worktree_root, params, paths)
+    fresh_any = landing_retest.fresh_targeted_verdict(worktree_root, run_id) if run_id else None
+    fresh_record = fresh_any if tcheck == "pass-on-retest" else None
+    if fresh_record is not None:
+        extra["retested_tests"] = fresh_record.get("tests")
+    red = landing_targeted_tests.reverify_red_findings(worktree_root, params, paths, fresh=fresh_any)
     record = landing_targeted_tests.reverify_record(params)
     unverified = landing_targeted_tests.reverify_unverified_reds(params)
+    export_foreign, all_foreign = _reverify_export_foreign(params, fresh_any)
+    unverified = [n for n in unverified if landing_targeted_tests.norm_node_id(n) not in export_foreign]
     if unverified:
         extra["reverify_unverified"] = unverified
     if record is None:
         extra["reverify_check"] = "absent"
     elif landing_targeted_tests.reverify_verdict(record) != "fail":
         extra["reverify_check"] = "pass"
+    elif red:
+        extra["reverify_check"] = "fail"
+    elif all_foreign:
+        extra["reverify_check"] = "fail-foreign-only"
+        extra["reverify_foreign"] = sorted(export_foreign)
     else:
-        extra["reverify_check"] = "fail" if red else "fail-off-landing"
+        extra["reverify_check"] = "fail-off-landing"
     if tcheck == "pass-on-retest" and _retest_covers_targeted_set(li, params, fresh_record):
         # A fresh passing retest of the whole targeted set supersedes a re-verify that never ran.
         red = [f for f in red if f.reason != landing_targeted_tests.REVIEW_REVERIFY_INDETERMINATE]

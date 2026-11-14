@@ -14,13 +14,13 @@ CLI: `python -m coordinator_core.learn_lessons_pipeline.grind_cost` prints JSON.
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.distill.prompt_tier import estimate_tokens
 from coordinator_core.learn_lessons_pipeline.mechanical_close import close_candidates
 from coordinator_core.session import record_homes
+from coordinator_core.temp_layout import managed_temp_dir
 
 DEFAULT_PROFILE = "lessons"
 DEFAULT_APPETITE = "standard"
@@ -75,7 +75,7 @@ def measure(
     validate_graph(loaded)
     knobs = resolve_appetite(loaded, appetite, None)
 
-    with tempfile.TemporaryDirectory(prefix="grind-cost-") as tmp:
+    with managed_temp_dir("grind-cost-", repo_root) as tmp:
         manifest = select_rows(
             [queue_dir],
             where=knobs.get("where"),

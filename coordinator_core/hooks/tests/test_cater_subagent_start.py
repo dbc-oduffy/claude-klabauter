@@ -1765,3 +1765,78 @@ def test_docs_checker_clause_absent_without_rag_or_without_uproject_or_other_age
     ):
         payload = {"agent_type": agent, "cwd": str(repo), "session_id": "s"}
         assert _RAG_ABORT_LINE not in compose_catering(payload, cwd=str(repo))
+
+
+# ---------------------------------------------------------------------------
+# Commit-agent params prewrite leg
+# ---------------------------------------------------------------------------
+
+_COMMIT_AGENT = "coordinator:git-commit-agent"
+_COMMIT_SCRIPT = "scratch/warp/a.workflow.mjs"
+_NASTY_NOTE = "it's \"quoted\"\nsecond line \\ back"
+
+
+def _commit_spawn(repo: Path, *, token_ok: bool = True, blocks: int = 1, note: str = _NASTY_NOTE):
+    import json
+
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    (repo / ".git").mkdir(exist_ok=True)
+    token = run_token.mint(repo, "ask-1", _COMMIT_SCRIPT) if token_ok else "f" * 32
+    params = {"run_id": "ask-1", "run_token": token, "script_path": _COMMIT_SCRIPT, "note": note}
+    block = chan.render_params_block(params)
+    prompt = "Commit.\n" + "\n".join([block] * blocks) if blocks else "Commit."
+    transcript = repo / "t" / "subagents" / "workflows" / "wf_x" / "agent-a1.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n",
+        encoding="utf-8",
+    )
+    payload = {
+        "agent_type": _COMMIT_AGENT,
+        "agent_id": "a1",
+        "session_id": "s",
+        "cwd": str(repo),
+        "transcript_path": str(transcript),
+    }
+    return payload, params, chan.params_path(repo, "ask-1")
+
+
+def test_commit_agent_spawn_gets_its_params_file_written_with_awkward_text(tmp_path: Path) -> None:
+    import json
+
+    payload, params, path = _commit_spawn(tmp_path)
+    out = compose_catering(payload, cwd=str(tmp_path))
+    assert "params file not written" not in out
+    assert json.loads(path.read_text(encoding="utf-8")) == params
+
+
+def test_commit_agent_spawn_with_unminted_token_writes_nothing_and_names_the_leg(tmp_path: Path) -> None:
+    payload, _params, path = _commit_spawn(tmp_path, token_ok=False)
+    out = compose_catering(payload, cwd=str(tmp_path))
+    assert "params file not written (params-token); return error naming it and run nothing." in out
+    assert not path.exists()
+
+
+def test_commit_agent_spawn_with_two_blocks_or_none_stays_silent_and_writes_nothing(tmp_path: Path) -> None:
+    for i, blocks in enumerate((0, 2)):
+        repo = tmp_path / f"r{i}"
+        repo.mkdir()
+        payload, _params, path = _commit_spawn(repo, blocks=blocks)
+        assert "params file not written" not in compose_catering(payload, cwd=str(repo))
+        assert not path.exists()
+
+
+def test_commit_agent_spawn_with_unreadable_transcript_stays_silent(tmp_path: Path) -> None:
+    payload, _params, path = _commit_spawn(tmp_path)
+    payload["transcript_path"] = str(tmp_path / "t" / "subagents" / "workflows" / "wf_x" / "missing.jsonl")
+    assert "params file not written" not in compose_catering(payload, cwd=str(tmp_path))
+    assert not path.exists()
+
+
+def test_other_agent_types_never_write_a_params_file(tmp_path: Path) -> None:
+    payload, _params, path = _commit_spawn(tmp_path)
+    payload["agent_type"] = "coordinator:executor"
+    assert "params file not written" not in compose_catering(payload, cwd=str(tmp_path))
+    assert not path.exists()

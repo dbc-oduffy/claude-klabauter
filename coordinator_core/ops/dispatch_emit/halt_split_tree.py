@@ -6,12 +6,21 @@ no npm, no tsc, no git. Heuristic: a later no-op `npm install` that touches the 
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 from pathlib import Path
 
-_SKIP_DIRS = frozenset({"node_modules", ".git", "state", "scratch"})
+#: Run/record/doc corpora grow without bound and never hold a buildable package.
+_SKIP_DIRS = frozenset(
+    {"node_modules", "state", "scratch", "archive", "docs", "tmp", "dist", "coordinator-sessions", "tasks", "__pycache__"}
+)
 _MAX_DEPTH = 2
+#: Per-directory caps: total visits stay <= 1 + 32 + 32*32 whatever the tree holds. Trade-off: a directory
+#: with more than `_MAX_ENTRIES_SCANNED` entries is judged on its first entries in scandir order, and every
+#: dot-directory is skipped, so a package under `.tools/` is never detected.
+_MAX_ENTRIES_SCANNED = 256
+_MAX_DIRS_PER_LEVEL = 32
 _DEFAULT_ENTRY = "dist/index.js"
 _LOCK_REL = Path("node_modules") / ".package-lock.json"
 
@@ -57,7 +66,11 @@ def _walk(directory: Path, depth: int, out: list[dict]) -> None:
         return
     try:
         with os.scandir(directory) as it:
-            subdirs = sorted(e.path for e in it if e.name not in _SKIP_DIRS and e.is_dir(follow_symlinks=False))
+            subdirs = sorted(
+                e.path
+                for e in itertools.islice(it, _MAX_ENTRIES_SCANNED)
+                if e.name not in _SKIP_DIRS and not e.name.startswith(".") and e.is_dir(follow_symlinks=False)
+            )[:_MAX_DIRS_PER_LEVEL]
     except OSError:
         return
     for sub in subdirs:
@@ -109,6 +122,6 @@ def alert_live_gem(root: Path, run_id: str, splits: list[dict]) -> None:
 
         engine_root = Path(__file__).resolve().parents[3]
         script = engine_root / "coordinator" / "bin" / "unimatrix-send.py"
-        spawn_detached(str(engine_root), str(script), ["--as", "halted-run", "--to", name, text])
+        spawn_detached(str(engine_root), str(script), ["--to", name, text])
     except Exception:  # noqa: BLE001 -- alerting is best-effort; the marker is the truth
         pass

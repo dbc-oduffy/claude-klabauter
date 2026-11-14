@@ -134,6 +134,37 @@ def test_unset_or_unreadable_pin_exempts_nothing(world, monkeypatch):
     assert dr.new_top_level_entry(str(root / "_general-work" / "f"), None) == "_general-work"
 
 
+def test_general_work_and_gem_cwd_are_exempt_other_cwd_is_not(world, monkeypatch):
+    from coordinator_core.group_em import gem_home
+    from coordinator_core.session import general_work_scope as gws
+
+    root, home = world
+    gw, gem = root / "gw-home", root / "gem-home"
+    gw.mkdir()
+    gem.mkdir()
+    monkeypatch.setattr(gws, "general_work_root", lambda: str(gw))
+    monkeypatch.setattr(gem_home, "gem_root", lambda: str(gem))
+    target = str(root / "fresh" / "f.txt")
+    assert dr.new_top_level_entry(target, str(gw)) is None
+    assert dr.new_top_level_entry(target, str(gem / "sub")) is None
+    assert dr.new_top_level_entry(target, str(root / "existing")) == "fresh"
+    assert dr.new_top_level_entry(target, None) == "fresh"
+
+
+def test_unreadable_exemption_sources_exempt_nothing(world, monkeypatch):
+    from coordinator_core.group_em import gem_home
+    from coordinator_core.session import general_work_scope as gws
+
+    root, _ = world
+
+    def boom():
+        raise RuntimeError("registry down")
+
+    monkeypatch.setattr(gws, "general_work_root", lambda: None)
+    monkeypatch.setattr(gem_home, "gem_root", boom)
+    assert dr.new_top_level_entry(str(root / "fresh" / "f"), str(root / "existing")) == "fresh"
+
+
 def test_scope_equals_enforcement(world):
     root, home = world
     in_scope = [

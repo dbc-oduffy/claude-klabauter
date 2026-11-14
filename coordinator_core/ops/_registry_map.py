@@ -251,6 +251,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     # of plan.stamp_prepped; the DoE-side runnable half is
     # coordinator/bin/mise-prep-gate.py and the two must agree.
     "plan.prep_gate":                         "coordinator_core.ops.plan_prep_gate",
+    "landing.guard_selection":                "coordinator_core.ops.landing_guard_selection",
     "plan.readiness_verdict":                 "coordinator_core.ops.plan_readiness_verdict",
     "plan.set_code_done":                     "coordinator_core.ops.plan_set_code_done",
     "repo.setup":                             "coordinator_core.ops.repo_setup",

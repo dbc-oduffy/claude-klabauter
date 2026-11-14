@@ -87,6 +87,8 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     # commit_stage_halt.halt_run_on_unrecorded_end: the run ended with no halt record; a refire resumes the kept work.
     "run-ended-unrecorded": (MECHANICAL, "refire-resumes-kept-work"),
     "citation_unbacked": (DECISION, None),
+    # staged_stall.halt_stalled: a staged run silent past the stall bound; a refire resumes the kept work.
+    "staged_stall": (MECHANICAL, "refire-resumes-kept-work"),
 }
 
 #: Class label of a kind whose continuing would do irreversible harm or commit an unasked direction.

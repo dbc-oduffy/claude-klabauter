@@ -420,6 +420,44 @@ def test_materialize_from_prompt_reports_a_failed_write(tmp_path, monkeypatch):
     assert canonical == ch.params_path(tmp_path, "ask-1")
 
 
+def test_prewrite_for_spawn_round_trips_apostrophes_quotes_and_newlines(tmp_path):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    (tmp_path / ".git").mkdir()
+    token = run_token.mint(tmp_path, "ask-1", _SCRIPT)
+    params = {"run_id": "ask-1", "run_token": token, "script_path": _SCRIPT, "note": "it's", "q": 'say "hi"', "nl": "a\nb"}
+    written, leg = ch.prewrite_for_spawn(tmp_path, "Commit.\n" + ch.render_params_block(params))
+    assert leg is None
+    assert json.loads(written.read_text(encoding="utf-8")) == params
+
+
+def test_prewrite_for_spawn_clears_a_stale_refusal_only_on_success(tmp_path):
+    target = ch.params_path(tmp_path, "ask-1")
+    target.parent.mkdir(parents=True)
+    ch.note_refusal(str(target), "stale")
+    refusal = target.with_name(ch.REFUSAL_FILE_NAME)
+    bad = ch.render_params_block({"run_id": "ask-1", "run_token": "f" * 32, "script_path": _SCRIPT})
+    assert ch.prewrite_for_spawn(tmp_path, bad)[1] == "params-token"
+    assert refusal.exists()
+    assert ch.prewrite_for_spawn(tmp_path, _minted_prompt(tmp_path)) == (target, None)
+    assert not refusal.exists()
+
+
+@pytest.mark.parametrize("bad", ["", "../x", "a/b", None, 5, "-x"])
+def test_params_writer_bound_refuses_a_bad_run_id(tmp_path, bad):
+    assert ch.params_writer_bound(tmp_path, bad) is False
+
+
+def test_params_writer_bound_needs_the_writer_seam_to_call_prewrite(tmp_path, monkeypatch):
+    assert ch.params_writer_bound(tmp_path, "ask-1") is True
+    seam = tmp_path / "hook.py"
+    seam.write_text("def compose_catering(): pass\n", encoding="utf-8")
+    monkeypatch.setattr(ch, "PRE_SPAWN_WRITER_FILE", seam)
+    assert ch.params_writer_bound(tmp_path, "ask-1") is False
+    monkeypatch.setattr(ch, "PRE_SPAWN_WRITER_FILE", tmp_path / "absent.py")
+    assert ch.params_writer_bound(tmp_path, "ask-1") is False
+
+
 @pytest.mark.spawns_process
 def test_js_and_python_block_agree():
     node = shutil.which("node")

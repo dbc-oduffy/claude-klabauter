@@ -1,12 +1,13 @@
-"""The unclassified-name refusal's remedy names --pending for every untracked
-pathspec path under a published-tree row, not only the refused names."""
+"""A peer's dirty setup/publish-targets.portable outside the pathspec is never
+overwritten: the HEAD-based regenerated field 7 lands as an index-only blob.
+
+Replaces the refusal-remedy pin, whose premise 56fa06679f retired."""
 
 import subprocess
 
 import pytest
 
 from coordinator_core.git import commit as gcommit
-from coordinator_core.git.commit import CommitRefused
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -46,26 +47,14 @@ def repo(tmp_path):
     return r
 
 
-def test_remedy_names_untracked_classified_sibling_and_skips_tracked(repo):
-    _write(repo / "coordinator" / "bin" / "classified-tool.py", "x = 1\n")
+def test_peer_dirty_portable_is_regenerated_from_head_and_lands_index_only(repo):
     _write(repo / "coordinator" / "bin" / "new-tool.py", "x = 1\n")
-    (repo / "coordinator" / "bin" / "existing_cli.py").write_text(
-        "x = 2\n", encoding="utf-8", newline="\n"
-    )
-    # 56fa06679f: a clean or pathspec-carried setup/publish-targets.portable is
-    # regenerated and lands; the refusal (and its remedy) survives only when a
-    # peer's uncommitted edit makes the portable file dirty and outside the pathspec.
-    _write(repo / "setup" / "publish-targets.portable", _PORTABLE + "# peer edit\n")
-    paths = [
-        "coordinator/bin/existing_cli.py",
-        "coordinator/bin/classified-tool.py",
-        "coordinator/bin/new-tool.py",
-    ]
+    peer = _PORTABLE + "# peer edit\n"
+    _write(repo / "setup" / "publish-targets.portable", peer)
 
-    with pytest.raises(CommitRefused) as excinfo:
-        gcommit.commit_paths(repo, paths, "bin tools")
+    gcommit.commit_paths(repo, ["coordinator/bin/new-tool.py"], "bin tools")
 
-    msg = str(excinfo.value)
-    assert "--pending coordinator/bin/new-tool.py" in msg
-    assert "--pending coordinator/bin/classified-tool.py" in msg
-    assert "--pending coordinator/bin/existing_cli.py" not in msg
+    landed = _git(repo, "show", "HEAD:setup/publish-targets.portable").stdout
+    assert "new-tool.py" in landed
+    assert "# peer edit" not in landed
+    assert (repo / "setup" / "publish-targets.portable").read_text(encoding="utf-8") == peer

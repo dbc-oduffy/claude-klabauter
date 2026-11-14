@@ -84,7 +84,7 @@ from typing import List, Optional, Tuple
 from coordinator_core import machine_local_spawn
 from coordinator_core._settings_home import resolve_machine_local_cli
 from coordinator_core._content_root_primitive import content_root_for
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import managed_temp_dir
 from coordinator_core.content_root import read_content_root
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.machine_resolver import registry_get as _registry_get
@@ -587,8 +587,8 @@ def main(argv: List[str]) -> int:
             print("ERROR: render-template-tree.sh not found or not executable", file=sys.stderr)
             return 1
 
-        staging = tempfile.mkdtemp(dir=managed_tempdir())
-        try:
+        with managed_temp_dir("scaffold-staging-") as staging_path:
+            staging = str(staging_path)
             try:
                 proc = subprocess.run(
                     [*resolve_launchable(render_tree), template_src, staging, f"PROJECT_NAME={project_name}"],
@@ -607,14 +607,11 @@ def main(argv: List[str]) -> int:
             except (OSError, shutil.Error) as exc:
                 print(f"{_PROG}: copying rendered tree into {target} failed: {exc}", file=sys.stderr)
                 return 1
-            staging_path = Path(staging)
             target_path = Path(target)
             for rendered_file in staging_path.rglob("*"):
                 if rendered_file.is_file():
                     declare_write(target_path / rendered_file.relative_to(staging_path))
                     written.add(rendered_file.relative_to(staging_path).as_posix())
-        finally:
-            shutil.rmtree(staging, ignore_errors=True)
 
     like_type = sibling_info["project_type"] if sibling_info else ""
     like_subtypes = sibling_info["subtypes"] if sibling_info else []

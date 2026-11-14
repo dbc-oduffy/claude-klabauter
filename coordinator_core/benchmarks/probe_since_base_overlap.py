@@ -20,7 +20,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence
@@ -29,7 +28,7 @@ from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.git.commit_walk import commit_meta
 from coordinator_core.git.run import run_git
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import make_managed_temp_dir
 from coordinator_core.git.git_objects import read_object, read_ref_loose_or_packed
 from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
 
@@ -233,7 +232,7 @@ def _fast_import(repo: Path, stream: bytes, delta: bool = False) -> None:
 def build_fixture(root: Path, n_paths: int, depth: int, touches: int, file_lines: int = 4500, delta: bool = False) -> Dict[str, object]:
     """Repo with `n_paths` files of `file_lines` lines: a base commit, then `depth` foreign
     commits that each edit `touches` paths round-robin (a path sees ~depth*touches/n_paths versions)."""
-    repo = Path(tempfile.mkdtemp(prefix="fx_", dir=root))
+    repo = make_managed_temp_dir(prefix="fx_")
     _git_checked(["init", "-q", "-b", "main"], repo)
     paths = [f"pkg/m{i}.py" for i in range(n_paths)]
     state = {p: _src_lines(i, file_lines) for i, p in enumerate(paths)}
@@ -346,7 +345,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     repo_root = Path(__file__).resolve().parents[2]
     out: Dict[str, object] = {"replay": replay_incident(repo_root)}
     if not args.replay_only:
-        tmp = Path(tempfile.mkdtemp(prefix="since_base_probe_", dir=managed_tempdir()))
+        tmp = make_managed_temp_dir(prefix="since_base_probe_")
         try:
             out["matrix"] = run_matrix(tmp)
         finally:

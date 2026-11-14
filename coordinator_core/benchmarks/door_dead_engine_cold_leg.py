@@ -44,7 +44,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Iterator, Optional, Sequence
@@ -307,7 +306,8 @@ class DeadEngine:
         self.settings = self._parent / "settings"
         self.settings.mkdir()
         # sun_path is 104 bytes on macOS: the socket's runtime base must be short.
-        self.runtime = Path(tempfile.mkdtemp(prefix="dec", dir="/tmp" if os.name != "nt" else None))
+        from coordinator_core.temp_layout import mkdtemp_in
+        self.runtime = mkdtemp_in("dec", "/tmp" if os.name != "nt" else None)
         self.entry_original = (self.root / ENTRY_REL).read_text(encoding="utf-8")
         sources = export_door_sources(repo_root, door_ref, door, self._parent / "door-src")
         self.door_path = build_door(door, sources, self.root, self._parent / "door-bin")

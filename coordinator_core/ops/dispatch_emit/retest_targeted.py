@@ -27,7 +27,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Callable, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops._path_guard import contained_path, safe_id
@@ -432,6 +432,22 @@ def _scopes_conflict(root: Path, scopes: dict[str, list[str]]) -> bool:
     return sum(1 for s in scopes if (root / s / "conftest.py").is_file()) > 1
 
 
+def _config_root(root: Path) -> Path:
+    """The directory whose ``coordinator.local.md`` configures the test command for a pass at ``root``:
+    ``root`` itself when it holds one, else the repo owning an isolated export
+    (``<repo>/scratch/warp/<run>/export*``) when that repo does, else ``root``."""
+    if (root / "coordinator.local.md").is_file():
+        return root
+    parts = root.parts
+    for i in range(len(parts) - 3, 0, -1):
+        if parts[i] == "scratch" and parts[i + 1] == "warp":
+            repo = Path(*parts[:i])
+            if (repo / "coordinator.local.md").is_file():
+                return repo
+            break
+    return root
+
+
 def _launch_plan(root: Path, tests: list[str], *, keep_tier: bool = False) -> "tuple[list[str], list[list[str]]] | str":
     """``(base, groups)``: the command prefix and the test groups it runs, one session per group. Both
     arms share one grouping: every node id in one group (input order) unless the scopes' conftests
@@ -452,7 +468,8 @@ def _launch_plan(root: Path, tests: list[str], *, keep_tier: bool = False) -> "t
     groups = [chunk for group in groups for chunk in _chunks(group)]
     cap = worker_cap()
 
-    declared = resolve_validation_cmd.read_local_md_key(str(root), ti.LAUNCHER_KEY).strip()
+    config = _config_root(root)
+    declared = resolve_validation_cmd.read_local_md_key(str(config), ti.LAUNCHER_KEY).strip()
     if declared:
         script = declared.split()[0]
         if Path(script).is_absolute() or ".." in re.split(r"[\/]", script) or not (root / script).is_file():
@@ -460,9 +477,9 @@ def _launch_plan(root: Path, tests: list[str], *, keep_tier: bool = False) -> "t
         pin = ti.resolve_targeted_test_python(root)
         python = pin.command if pin.command and pin.defect is None else sys.executable
         return [python, *_cap_workers(shlex.split(declared), cap)], groups
-    resolved = resolve_validation_cmd.resolve_fast_test_cmd(str(root))
+    resolved = resolve_validation_cmd.resolve_fast_test_cmd(str(config))
     if resolved.returncode != 0:
-        return f"fast_test_cmd unresolved: {resolved.stderr.strip()}"
+        return f"fast_test_cmd unresolved (read {config.as_posix()}/coordinator.local.md): {resolved.stderr.strip()}"
     base = _cap_workers(_strip_collection_roots(root, resolved.stdout.strip()), cap)
     return (base if keep_tier else _drop_tier_options(base)), groups
 
@@ -972,11 +989,16 @@ def _isolated_body(
     status, reason, codes, export_log_used = _run_pass(run, export_root, tests, export_log, deadline)
     live_status, live_reason, live_codes, live_log_used = _run_pass(run, root, tests, log_path, deadline)
     baseline: dict = {}
-    if status == "fail" and export_log_used and 1 in codes and _failed_node_ids(export_log, export_root):
+    reverify_ids = _reverify_failing_ids(params)
+    export_red = status == "fail" and export_log_used and 1 in codes and bool(_failed_node_ids(export_log, export_root))
+    if export_red or (status == "pass" and reverify_ids):
         baseline = _head_baseline(
             root, run, tests, export_root, export_log, path.with_suffix(".head.log"), deadline,
             landing_retest.run_base_for(root, run_id, params) or None, meta["head"], write_set,
+            reverify_ids, export_passed=not export_red,
         )
+        if export_red:
+            baseline.update(_guard_hits(root, export_root, export_log, path.with_suffix(".head.log"), baseline, write_set))
     return _write_dual(
         root, path, log_path, export_log, run_id, tests, dropped, drop_note, meta, dirty, head_sha,
         (status, reason, codes, export_log_used), (live_status, live_reason, live_codes, live_log_used), _fail,
@@ -984,10 +1006,39 @@ def _isolated_body(
     )
 
 
+def _guard_hits(
+    root: Path, export_root: Path, export_log: Path, head_log: Path, baseline: Mapping,
+    touched: Sequence[str],
+) -> dict:
+    """``{GUARD_HITS_KEY: {guard: {"tree": {path: n}, "head": {path: n}}}}`` for each declared always-run
+    guard red in the export pass, counted from the export log and the HEAD log ``_head_baseline`` already
+    wrote (``head_log``, or its ``.node.log`` on the head-node-measure path): no new pytest session. ``{}``
+    when no guard is red, or when the baseline was skipped or its HEAD log is absent: the gate then reads
+    the guard as unmeasured, never as baseline-only. Trap: a whole-file HEAD log also carries the file's
+    other tests' output, so a path those tests name counts on both sides."""
+    from coordinator_core.ops.dispatch_emit import always_run_guards as arg
+
+    base = baseline.get("baseline")
+    if not isinstance(base, Mapping) or not touched:
+        return {}
+    failed = _failed_node_ids(export_log, export_root)
+    red = [g for g in arg.declared_guards(root) if any(f == g or f.startswith((g + "::", g + "[")) for f in failed)]
+    if not red:
+        return {}
+    log = head_log.with_suffix(".node.log") if base.get("method") == "head-node-measure" else head_log
+    try:
+        tree_text = export_log.read_text(encoding="utf-8", errors="replace")
+        head_text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    tree, head = arg.touched_hits(tree_text, touched), arg.touched_hits(head_text, touched)
+    return {arg.GUARD_HITS_KEY: {g: {"tree": tree, "head": head} for g in red}}
+
+
 def _head_baseline(
     root: Path, run, tests: list[str], export_root: Path, export_log: Path, head_log: Path,
     deadline: float, base_sha: Optional[str] = None, export_sha: Optional[str] = None,
-    write_set: Sequence[str] = (),
+    write_set: Sequence[str] = (), reverify_ids: Sequence[str] = (), export_passed: bool = False,
 ) -> dict:
     """``{"baseline": {method, base_sha, caused, foreign, evidence}}`` plus the ``_landing_checks`` keys
     (``head_red``, ``owed_cleared``, ``head_sha``); ``export_sha`` the sha of ``export_root``. ``base_sha`` is the sha measured
@@ -1000,7 +1051,8 @@ def _head_baseline(
     for a file present at HEAD (named), the HEAD pass is not pass/fail, or the HEAD run's summary totals
     (passed+failed+error+skipped+xfailed+xpassed, the log carries no per-id results) are below the HEAD
     collected count. Collection runs before the HEAD pass so a skip avoids the costly run. The HEAD export
-    is always removed.
+    is always removed. ``export_passed`` (a green export carrying ``reverify_ids``): no HEAD pass, an empty
+    ``caused``/``foreign`` baseline, and only the ``_landing_checks`` measurements of ``reverify_ids``.
 
     Traps: the ran-vs-collected check is an aggregate lower bound (a teardown error counts twice, a
     shortfall in one session can hide behind an excess in another). A file present at HEAD that collects
@@ -1037,12 +1089,19 @@ def _head_baseline(
         }
         baseline.update(_landing_checks(
             root, run, baseline, export_root, head_root, head_log, deadline, measured_sha, base_sha, export_sha,
-            write_set,
+            write_set, reverify_ids,
         ))
         return {"baseline": baseline}
 
     try:
         measured_sha = le.build_head_export(root, head_root, [], base_sha).head_sha
+        if export_passed:
+            baseline = {"method": "reverify-export-measure", "base_sha": measured_sha, "caused": [], "foreign": [], "evidence": []}
+            baseline.update(_landing_checks(
+                root, run, baseline, export_root, head_root, head_log, deadline, measured_sha, base_sha, export_sha,
+                write_set, reverify_ids,
+            ))
+            return {"baseline": baseline}
         head_tests = list(dict.fromkeys(f for f in (t.split("::")[0] for t in tests) if (head_root / f).exists()))
         if not head_tests:
             return _skip("no targeted test file exists at HEAD")
@@ -1078,7 +1137,7 @@ def _head_baseline(
         }
         baseline.update(_landing_checks(
             root, run, baseline, export_root, head_root, head_log, deadline, measured_sha, base_sha, export_sha,
-            write_set,
+            write_set, reverify_ids,
         ))
     except (le.LandingExportError, RuntimeError) as exc:
         return _skip(f"HEAD export failed: {exc}")
@@ -1128,39 +1187,54 @@ def _head_red_not_the_runs(
 def _landing_checks(
     root: Path, run, baseline: dict, export_root: Path, head_root: Path, head_log: Path, deadline: float,
     measured_sha: str, base_sha: Optional[str], export_sha: Optional[str], write_set: Sequence[str] = (),
+    reverify_ids: Sequence[str] = (),
 ) -> dict:
-    """The two landing base checks, so ``dispatch.land_run`` only reads them: ``head_red`` the ``caused``
-    ids red at a pure-HEAD export (``head_root`` itself when ``measured_sha`` is HEAD, where ``caused`` is
-    green by construction), ``owed_cleared`` the owed ids (``unevidenced_ids(baseline)``) green at
-    ``export_root`` (HEAD plus the landing paths), and ``head_sha`` the sha ``head_red`` was measured at.
-    ``head_red`` drops what ``_head_red_not_the_runs`` taints. A key whose measurement is broken or ran fewer tests than named is omitted: the landing keeps those
-    ids caused. Rebuilds ``head_root`` at HEAD when the run base differs; the caller removes it."""
+    """The landing base checks, so ``dispatch.land_run`` only reads them: ``head_red`` the ``caused`` and
+    ``reverify_ids`` red at a pure-HEAD export (``head_root`` itself when ``measured_sha`` is HEAD, where
+    ``caused`` is green by construction), ``owed_cleared`` the owed ids (``unevidenced_ids(baseline)``) and
+    ``reverify_ids`` green at ``export_root`` (HEAD plus the landing paths), ``reverify_export_red`` the
+    ``reverify_ids`` red there (omitted without ``reverify_ids``), and ``head_sha`` the sha ``head_red`` was
+    measured at. ``head_red`` drops what ``_head_red_not_the_runs`` taints. A key whose measurement is
+    broken or ran fewer tests than named is omitted: the landing keeps those ids caused. Rebuilds
+    ``head_root`` at HEAD when the run base differs and ``caused`` or ``reverify_ids`` is non-empty (at
+    most that one build); the caller removes it."""
     from coordinator_core.git.git_state import head_sha as current_head
     from coordinator_core.ops.dispatch_emit import landing_export as le
 
     out: dict = {}
     caused = baseline["caused"]
+    reverify = list(dict.fromkeys(reverify_ids))
     head, red = measured_sha, set()
     try:
         current = measured_sha if base_sha is None else current_head(root, fresh=True)
-        if caused and current != measured_sha:
+        if (caused or reverify) and current != measured_sha:
             head = le.build_head_export(root, head_root, [], None).head_sha
-            if head != measured_sha:
-                measured = _measure(run, head_root, caused, head_log.with_suffix(".red.log"), deadline)
-                red = None if measured is None else measured[1]
-                if red:
-                    red = _head_red_not_the_runs(root, base_sha, head, write_set, red)
+        probe = reverify if head == measured_sha else list(dict.fromkeys([*caused, *reverify]))
+        if probe:
+            measured = _measure(run, head_root, probe, head_log.with_suffix(".red.log"), deadline)
+            red = None if measured is None else measured[1]
+            if red and head != measured_sha:
+                red = _head_red_not_the_runs(root, base_sha, head, write_set, red)
     except (le.LandingExportError, RuntimeError):
         red = None
     if red is not None:
         out[landing_targeted_tests.HEAD_RED_KEY] = sorted(red)
         out[landing_targeted_tests.HEAD_SHA_KEY] = head
     owed = landing_targeted_tests.unevidenced_ids(baseline)
-    owed_run = (set(), set()) if not owed else _measure(run, export_root, owed, head_log.with_suffix(".owed.log"), deadline)
+    wanted = list(dict.fromkeys([*owed, *reverify]))
+    owed_run = (set(), set()) if not wanted else _measure(run, export_root, wanted, head_log.with_suffix(".owed.log"), deadline)
     if owed_run is not None:
         out[landing_targeted_tests.OWED_CLEARED_KEY] = sorted(owed_run[0] - owed_run[1])
+        if reverify:
+            out[landing_targeted_tests.REVERIFY_EXPORT_RED_KEY] = sorted(owed_run[1] & set(reverify))
         out.setdefault(landing_targeted_tests.HEAD_SHA_KEY, export_sha or measured_sha)
     return out
+
+
+def _reverify_failing_ids(params: dict) -> list[str]:
+    """The review re-verify record's ``failing`` node ids, posix-normalised, minus the ids the record
+    names red at the run base (``BASE_RED_KEYS``). Empty when the run carries no re-verify record."""
+    return landing_targeted_tests.reverify_live_failing(landing_targeted_tests.reverify_record(params))
 
 
 def _names_own_path(log: Path, nodes: Sequence[str], write_set: Sequence[str]) -> set[str]:
@@ -1170,55 +1244,6 @@ def _names_own_path(log: Path, nodes: Sequence[str], write_set: Sequence[str]) -
     except OSError:
         return set()
     return red_attribution.names_own_path(text, nodes, write_set)
-
-
-_SECTION_HEAD = re.compile(r"^_{2,} (.+?) _{2,}$", re.MULTILINE)
-_SUMMARY_HEAD = re.compile(r"^=+ short test summary info =+$", re.MULTILINE)
-_PATH_TOKEN = re.compile(r"(?<![\w./\\-])((?:[\w.-]+/)+[\w.-]+\.\w+)")
-_MAX_NAMED_PATHS = 200
-
-
-def _named_paths(log: Path, strip: Sequence[Path], ids: Sequence[str]) -> dict[str, set[str]]:
-    """``{id: repo-relative POSIX paths its failure text names}`` from the pytest FAILURES section headed by the
-    id's test name and the id's ``FAILED`` summary message in ``log``; an absolute ``strip`` root prefix is cut
-    first. An id with no text maps to an empty set."""
-    try:
-        text = log.read_text(encoding="utf-8", errors="replace").replace("\\", "/")
-    except OSError:
-        return {i: set() for i in ids}
-    for base in strip:
-        text = text.replace(base.as_posix() + "/", "")
-    cut = _SUMMARY_HEAD.search(text)
-    body, summary = (text[:cut.start()], text[cut.start():]) if cut else (text, "")
-    heads = list(_SECTION_HEAD.finditer(body))
-    sections: dict[str, str] = {}
-    for n, m in enumerate(heads):
-        end = heads[n + 1].start() if n + 1 < len(heads) else len(body)
-        sections[m.group(1)] = sections.get(m.group(1), "") + body[m.end():end]
-    named: dict[str, set[str]] = {}
-    for i in ids:
-        test = i.replace("\\", "/").partition("::")[2].replace("::", ".")
-        message = "".join(re.findall(rf"^FAILED {re.escape(i)} - (.*)$", summary, flags=re.MULTILINE))
-        named[i] = set(_PATH_TOKEN.findall(sections.get(test, "") + "\n" + message))
-    return named
-
-
-def _peer_held_reds(
-    root: Path, export_root: Path, export_log: Path, run_id: str, write_set: Sequence[str], ids: Sequence[str],
-) -> dict[str, list[str]]:
-    """``{id: [peer-held paths]}`` for each of ``ids`` whose failure text names a path outside ``write_set``
-    that a live peer run holds (one claim lookup over every named path) and names none of ``write_set``: a
-    red on the run's own paths stays the run's. Empty when nothing is named or held. No git spawn per id."""
-    from coordinator_core.ops.dispatch_emit.run_write_set import _split_peer_held
-
-    own = {str(w).replace("\\", "/") for w in write_set}
-    named = _named_paths(export_log, (export_root, root), ids)
-    candidates = sorted({p for paths in named.values() for p in paths} - own)[:_MAX_NAMED_PATHS]
-    if not candidates:
-        return {}
-    held = _split_peer_held(root, candidates, "", run_id)[1]
-    out = {i: sorted(p for p in paths if p in held) for i, paths in named.items() if not paths & own}
-    return {i: hit for i, hit in out.items() if hit}
 
 
 def _write_dual(
@@ -1247,16 +1272,6 @@ def _write_dual(
     }
     record.update(baseline or {})
     measured_baseline = record.get("baseline")
-    if isinstance(measured_baseline, dict) and measured_baseline.get("caused") and export_log_used:
-        peer = _peer_held_reds(
-            root, Path(meta["root"]), export_log, run_id, meta["write_set"], measured_baseline["caused"],
-        )
-        if peer:
-            measured_baseline["caused"] = [n for n in measured_baseline["caused"] if n not in peer]
-            measured_baseline["foreign"] = [*measured_baseline.get("foreign", []), *peer]
-            measured_baseline["foreign_reason"] = {
-                **measured_baseline.get("foreign_reason", {}), **{n: landing_targeted_tests.PEER_HELD_PATH for n in peer},
-            }
     if isinstance(measured_baseline, dict) and export_log_used and _ran_total(export_log) is not None:
         live_only = [n for n in live_failed if n not in export_failed and n not in measured_baseline.get("foreign", [])]
         own = _names_own_path(log_path, live_only, meta["write_set"])

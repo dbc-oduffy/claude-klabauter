@@ -655,6 +655,37 @@ def test_a_stage_ref_wins_over_base_ref(tmp_path):
 
 
 @pytest.mark.spawns_process
+@pytest.mark.parametrize("lane", ["row", "carry"])
+def test_row_or_carry_contradicted_on_own_paths_is_reanchored(monkeypatch, tmp_path, lane):
+    """df88cd gap (b): a premise-checker row's CONTRADICTED on a file only the run's own work changed
+    took no own-run regrade (only the engine-check branch did)."""
+    from coordinator_core.ops import _anchor_premise as ap
+
+    sha = _repo_with_baseline(tmp_path)
+    monkeypatch.setattr(ap, "_own_context", lambda text, root: (sha, {"mod.py": "ask-1"}))
+    row = {"anchor": "AP1", "verdict": "CONTRADICTED"}
+    rows, carry = ([row], []) if lane == "row" else ([], [{**row, "line_hash": _h("p")}])
+    (v,) = ap.anchor_verdicts([BASELINE_ONLY], rows, carry, "p", tmp_path)
+    assert (v["verdict"], v["source"]) == ("RESOLVES", lane)
+    assert v["observed"].startswith(ap.REANCHORED)
+    assert ap.anchor_findings([BASELINE_ONLY], rows, carry, "p", tmp_path) == []
+
+
+@pytest.mark.spawns_process
+def test_row_contradicted_on_a_path_the_run_did_not_write_still_contradicts(monkeypatch, tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    sha = _repo_with_baseline(tmp_path)
+    row = {"anchor": "AP1", "verdict": "CONTRADICTED"}
+    monkeypatch.setattr(ap, "_own_context", lambda text, root: (sha, {"other.py": "ask-1"}))
+    (v,) = ap.anchor_verdicts([BASELINE_ONLY], [row], [], "p", tmp_path)
+    assert (v["verdict"], v["source"]) == ("CONTRADICTED", "row")
+    monkeypatch.setattr(ap, "_own_context", lambda text, root: None)
+    (v,) = ap.anchor_verdicts([BASELINE_ONLY], [row], [], "p", tmp_path)
+    assert v["verdict"] == "CONTRADICTED"
+
+
+@pytest.mark.spawns_process
 def test_base_ref_skips_reanchor(monkeypatch, tmp_path):
     from coordinator_core.ops import _anchor_premise as ap
 

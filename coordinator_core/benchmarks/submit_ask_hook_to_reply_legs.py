@@ -44,7 +44,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -468,10 +467,10 @@ def measure(concurrent_runs: int = DEFAULT_CONCURRENT_RUNS, runs: int = DEFAULT_
     door = door or installed_door()
     if door is None:
         raise RuntimeError(f"no installed {ENTRYPOINT} door under the settings home")
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
     source_root = Path(__file__).resolve().parents[2]
-    scratch = Path(tempfile.mkdtemp(prefix="submit-legs-", dir=str(managed_tempdir())))
+    scratch = make_managed_temp_dir(prefix="submit-legs-")
     rounds: list[list[dict]] = []
     try:
         repo = scratch / "repo"
@@ -523,11 +522,11 @@ def measure_installed(runs: int = DEFAULT_RUNS, door: Optional[Path] = None,
     door = door or installed_door()
     if door is None:
         raise RuntimeError(f"no installed {ENTRYPOINT} door under the settings home")
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
     log = _fail_open_log()
     before = log.stat().st_size if log.exists() else 0
-    scratch = Path(tempfile.mkdtemp(prefix="submit-legs-inst-", dir=str(managed_tempdir())))
+    scratch = make_managed_temp_dir(prefix="submit-legs-inst-")
     rows: list[dict] = []
     try:
         payload = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": "legs-installed-probe",

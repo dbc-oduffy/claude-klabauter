@@ -86,11 +86,9 @@ import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import managed_temp_dir
 from coordinator_core.testing import spawn_depth
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -311,8 +309,7 @@ def run_selected(
     pytest_timeout_s: float = _DEFAULT_PYTEST_TIMEOUT_S,
 ) -> dict | None:
     if runner == "pytest":
-        tmp_dir = tempfile.mkdtemp(prefix="source-edit-gate-pytest-", dir=managed_tempdir(repo_root))
-        try:
+        with managed_temp_dir("source-edit-gate-pytest-", repo_root, strict=True) as tmp_dir:
             junit_path = Path(tmp_dir) / "source-edit-gate-report.xml"
             basetemp_path = Path(tmp_dir) / "basetemp"
             argv = [
@@ -338,15 +335,12 @@ def run_selected(
             if not completed:
                 raise GroupTimeout(f"pytest group exceeded {group_timeout_s}s: {repo_root}")
             return parse_junitxml(junit_path)
-        finally:
-            rmtree_or_raise(Path(tmp_dir), label="source-edit-gate")
 
     if runner == "vitest":
         vitest_bin = shutil.which("pnpm") or shutil.which("npx")
         if not vitest_bin:
             return None
-        tmp_dir = tempfile.mkdtemp(prefix="source-edit-gate-vitest-", dir=managed_tempdir(repo_root))
-        try:
+        with managed_temp_dir("source-edit-gate-vitest-", repo_root, strict=True) as tmp_dir:
             out_path = Path(tmp_dir) / "source-edit-gate-report.json"
             argv = [
                 vitest_bin,
@@ -364,7 +358,5 @@ def run_selected(
             except OSError:
                 raw = ""
             return parse_vitest_json(raw)
-        finally:
-            rmtree_or_raise(Path(tmp_dir), label="source-edit-gate")
 
     return None

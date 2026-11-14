@@ -540,6 +540,9 @@ def _unmarked_run(tmp_path, stage="halted"):
     rd.mkdir(parents=True)
     (rd / "run.json").write_text(json.dumps({"sizing_rel": halted.sizing_rel}), encoding="utf-8")
     (rd / "run-stage.json").write_text(json.dumps({"stage": stage}), encoding="utf-8")
+    from coordinator_core.ops.dispatch_emit import live_run_index
+
+    live_run_index.add(halted.repo, run_id, time.time())  # `_unmarked_emitted_run` lists live runs only
     return halted, run_id
 
 

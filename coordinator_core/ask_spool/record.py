@@ -389,16 +389,62 @@ def coalesce_key(payload: dict) -> Optional[str]:
     return None
 
 
-def withdraw(repo_root: str, spool_id: str, reason: str, *, by: str = "em") -> dict:
+def raw_ask_text(payload: dict) -> Optional[str]:
+    """The free-text ask a bare entry carries: a string `args`, or a dict `args["ask"]`."""
+    tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
+    args = tool_input.get("args") if isinstance(tool_input, dict) else None
+    if isinstance(args, dict):
+        args = args.get("ask")
+    return args if isinstance(args, str) and args.strip() else None
+
+
+def same_ask(a: dict, b: dict) -> bool:
+    """True when two spooled/submitted payloads ask for the same thing: the same sizing or resumed
+    run key, or, with no key on either, the same normalized free-text ask."""
+    key_a, key_b = coalesce_key(a), coalesce_key(b)
+    if key_a or key_b:
+        return key_a == key_b
+    text_a, text_b = raw_ask_text(a), raw_ask_text(b)
+    if not (text_a and text_b):
+        return False
+    from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
+
+    return normalized_ask_hash(text_a) == normalized_ask_hash(text_b)
+
+
+def supersede_pending(repo_root: str, payload: dict, run_id: str) -> list:
+    """Retire every pending entry of `repo_root`'s spool that asks what `payload` asked, as superseded
+    by `run_id` (named in the header). A claimed entry is left to the drain. Returns the retired ids.
+    Reads entries only when `payload` names a key or a free-text ask."""
+    if not (coalesce_key(payload) or raw_ask_text(payload)):
+        return []
+    retired = []
+    for spool_id in list_pending(repo_root):
+        try:
+            _, raw = read_entry(entry_path(repo_root, spool_id))
+            other = json.loads(raw)
+            if isinstance(other, dict) and same_ask(payload, other) and withdraw(
+                repo_root, spool_id, f"superseded by {run_id}", by="hook", superseded_by=run_id
+            )["withdrawn"]:
+                retired.append(spool_id)
+        except (OSError, ValueError):
+            continue
+    return retired
+
+
+def withdraw(
+    repo_root: str, spool_id: str, reason: str, *, by: str = "em", superseded_by: Optional[str] = None
+) -> dict:
     """Retire one entry by rename to <id>.withdrawn and record why in its header.
 
-    by="em" retires a pending <id>.json only; by="drain" retires the <id>.claimed
-    the caller holds. Returns {"spool_id", "state", "withdrawn"}; state names the
+    by="em" or "hook" retires a pending <id>.json only; by="drain" retires the <id>.claimed
+    the caller holds. `superseded_by` names the run that made the entry redundant (header
+    `superseded_by`). Returns {"spool_id", "state", "withdrawn"}; state names the
     entry's state when it is not retired ("claimed", "minted", "absent") and
     "withdrawn" when it is. ValueError on an empty reason.
     """
-    if by not in ("em", "drain"):
-        raise ValueError("ask_spool withdraw: by must be 'em' or 'drain'")
+    if by not in ("em", "drain", "hook"):
+        raise ValueError("ask_spool withdraw: by must be 'em', 'drain' or 'hook'")
     reason = (reason or "").strip()[:WITHDRAW_REASON_MAX]
     if not reason:
         raise ValueError("ask_spool withdraw requires a non-empty reason")
@@ -423,6 +469,8 @@ def withdraw(repo_root: str, spool_id: str, reason: str, *, by: str = "em") -> d
     header["withdraw_reason"] = reason
     header["withdrawn_by"] = by
     header["withdrawn_at"] = time.time()
+    if superseded_by:
+        header["superseded_by"] = superseded_by
     body = json.dumps(header, separators=(",", ":")).encode("utf-8") + b"\n" + payload
     tmp = entry_path(repo_root, spool_id, f".{os.getpid()}-{secrets.token_hex(4)}{TMP_SUFFIX}")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, FILE_MODE)

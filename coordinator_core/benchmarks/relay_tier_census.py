@@ -16,7 +16,6 @@ import argparse
 import json
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -24,6 +23,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from coordinator_core.distill.prompt_tier import LONG_PROMPT_TIER_TOKENS, estimate_tokens, over_tier
+from coordinator_core.temp_layout import managed_temp_dir
 from coordinator_core.win_portability import no_console_creationflags
 
 SURFACES = ("distill", "update-docs", "architecture-atlas", "learn-lessons")
@@ -77,7 +77,7 @@ def census_distill(repo: Path) -> dict[str, Any]:
 
 def census_update_docs(repo: Path) -> dict[str, Any]:
     """The single worklist op result is engine output, not a relay agent: relays 0; prompt = result bytes / 4."""
-    with tempfile.TemporaryDirectory(prefix="relay-tier-") as tmp:
+    with managed_temp_dir(prefix="relay-tier-") as tmp:
         pfile = Path(tmp) / "params.json"
         pfile.write_text("{}", encoding="utf-8")
         proc = subprocess.run(
@@ -143,7 +143,7 @@ def _largest_triage_batch_bytes(repo: Path) -> int:
     validate_graph(loaded)
     knobs = resolve_appetite(loaded, grind_cost.DEFAULT_APPETITE, None)
     queue_dir = Path(record_homes.home_dir(str(repo), "lessons"))
-    with tempfile.TemporaryDirectory(prefix="relay-tier-grind-") as tmp:
+    with managed_temp_dir(prefix="relay-tier-grind-") as tmp:
         manifest = select_rows(
             [queue_dir], where=knobs.get("where"),
             order=(loaded.priority["field"], loaded.priority["order"]), limit=knobs.get("limit"),

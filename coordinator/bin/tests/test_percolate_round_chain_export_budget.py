@@ -94,7 +94,7 @@ def test_chain_export_on_the_real_tree_is_a_pathspec_subset_under_the_bar(rnd, t
 
 def test_cold_engine_adds_only_publishs_own_two_spawns(rnd, tmp_path, monkeypatch):
     repo = tmp_path / "repo"
-    for rel in (*rnd._CHAIN_EXPORT_PATHS[:5], "coordinator/bin/lib/h.py", "setup/s.txt",
+    for rel in (*rnd._CHAIN_EXPORT_PATHS[:5], *rnd._CHAIN_EXPORT_PATHS[8:], "coordinator/bin/lib/h.py", "setup/s.txt",
                 "coordinator_core/percolate/e.py", "coordinator/lib/percolate/t.py"):
         f = repo / rel
         f.parent.mkdir(parents=True, exist_ok=True)

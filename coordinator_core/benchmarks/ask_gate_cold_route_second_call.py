@@ -26,7 +26,6 @@ import argparse
 import json
 import os
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -240,9 +239,9 @@ def measure(dirs: int = DEFAULT_DIRS, hold_secs: float = DEFAULT_HOLD_SECS) -> d
     from coordinator_core.benchmarks import fixture_settings_home
     from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
     from coordinator_core.benchmarks.process_time import single_invocation_tree_process_time
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
-    scratch = Path(tempfile.mkdtemp(prefix="ask-gate-cold-", dir=str(managed_tempdir())))
+    scratch = make_managed_temp_dir(prefix="ask-gate-cold-")
     try:
         root = scratch / "repo"
         root.mkdir()

@@ -86,7 +86,7 @@ def _gates(monkeypatch, tmp_path: Path) -> io.StringIO:
     monkeypatch.setattr(publish, "_round_pin_source_sha", lambda root, pinned, *, out=None, late=False: "SHA")
     shadow = tmp_path / "shadow"
     shadow.mkdir()
-    monkeypatch.setattr(publish, "_git_materialize_ref", lambda root, ref="HEAD": shadow)
+    monkeypatch.setattr(publish, "_git_materialize_ref", lambda root, ref="HEAD", withheld=None: shadow)
     src = tmp_path / "src"
     src.mkdir()
     dest = tmp_path / "dest"

@@ -21,7 +21,6 @@ import importlib.util
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -156,7 +155,9 @@ def main(argv: list[str] | None = None) -> int:
         return _caller(args.caller)
 
     results: list[tuple[int, int]] = []
-    with tempfile.TemporaryDirectory(prefix="ml-dump-storm-") as tmp:
+    from coordinator_core.temp_layout import managed_temp_dir
+
+    with managed_temp_dir(prefix="ml-dump-storm-") as tmp:
         work = Path(tmp)
         for index, mode in enumerate(MODES, start=1):
             if mode == "force-spawn" and (args.no_force_spawn or not _helper_present()):

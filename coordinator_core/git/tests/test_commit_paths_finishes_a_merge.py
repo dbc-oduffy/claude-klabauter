@@ -172,11 +172,13 @@ def test_busy_index_lock_refuses_merge_commit_and_leaves_state_as_found(merging,
     cached_before = _git(merging, "diff", "--cached").stdout
     unmerged_before = _git(merging, "ls-files", "-u").stdout
     lock = merging / ".git" / "index.lock"
-    lock.write_bytes(b"")
+    lock.write_bytes(b"held\n")
     monkeypatch.setattr(gcommit, "_SPLICE_LOCK_BACKOFF_SECS", ())
 
-    with pytest.raises(CommitRefused, match="nothing committed"):
-        commit_paths(merging, _MERGE_PATHS, "merge other", finish_merge=True)
+    # An ownerless unheld lock is reclaimed (824e603f93); a handle held open keeps it a peer's.
+    with open(lock, "rb"):
+        with pytest.raises(CommitRefused, match="nothing committed"):
+            commit_paths(merging, _MERGE_PATHS, "merge other", finish_merge=True)
 
     assert lock.exists()
     assert _heads(merging) == old_head

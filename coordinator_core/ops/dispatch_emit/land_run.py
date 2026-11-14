@@ -321,8 +321,76 @@ def _script_read_stall_retryable(mode: str, exc: land_deadline.LandDeadlineExcee
     return left is None or left >= land_deadline.LAND_BUDGET_SECS + dispatch_abandon.REPLY_MARGIN_SECS
 
 
+PARTIAL_COMMIT_REFUSED = "land-deadline-partial-commit"
+
+
+def _committing_evidence(
+    root: Path, run_base: object, run_id: Optional[str], commit_set: Sequence[str],
+    commit_deleted: Sequence[str], settled_blobs: dict, expected: dict,
+) -> dict:
+    """`mark` kwargs for the committing phase: the base and the value each landed path must hold
+    (`{"blob"}` for a supplied blob, `{"sha256"}` for a fingerprinted path, None for a deletion).
+    Built from what the commit is built with, never the worktree; empty outside a keyed dispatch."""
+    from coordinator_core.ops.dispatch_emit import land_intent
+
+    if land_intent._held is None:
+        return {}
+    base = _close_job_run_base(root, run_base, run_id)
+    if base is None:
+        from coordinator_core.git.git_state import head_sha
+
+        base = head_sha(root, fresh=True)  # the commit is not made yet: HEAD now precedes it
+    wanted: dict = {}
+    for path in commit_set:
+        blob, digest = settled_blobs.get(path), expected.get(path)
+        if isinstance(blob, str) and blob:
+            wanted[path] = {"blob": blob}
+        elif isinstance(digest, str) and digest:
+            wanted[path] = {"sha256": digest}
+    for path in commit_deleted:
+        wanted[path] = None
+    return {"base": base, "expected_blobs": wanted}
+
+
+def _git_verdict_after_commit_began() -> dict:
+    """`reconcile_landing` over the base and expected map the committing mark recorded; `unknown`
+    when no commit began or the record carries no map."""
+    from coordinator_core.ops.dispatch_emit import land_intent
+    from coordinator_core.ops.dispatch_emit.land_reconcile import reconcile_landing
+
+    held = land_intent._held
+    if not _commit_started() or held is None:
+        return {"verdict": "unknown"}
+    body = held[2]
+    expected = body.get("expected_blobs")
+    root = body.get("repo_root")
+    if not isinstance(expected, dict) or not expected or not root:
+        return {"verdict": "unknown"}
+    return reconcile_landing(Path(str(root)), body.get("base"), expected)
+
+
 def _deadline_halt(root: Path, params: dict, exc: land_deadline.LandDeadlineExceeded) -> dict:
     reply = land_deadline.halt_reply(exc)
+    verdict = _git_verdict_after_commit_began()
+    if verdict.get("verdict") == "committed" and verdict.get("sha"):
+        reply = {
+            "committed": True, "sha": verdict["sha"], "reconciled_from": "git",
+            "leg_costs": reply["leg_costs"],
+        }
+        rel = land_leg_record.write(
+            root, params.get("run_id"), outcome=land_leg_record.OUTCOME_LANDED,
+            leg=None, bound_by=None, legs=reply["leg_costs"],
+        )
+        if rel:
+            reply["leg_record"] = rel
+        return reply
+    if verdict.get("verdict") == "partial":
+        missing = ", ".join(verdict.get("missing") or ())
+        reply["refused"] = PARTIAL_COMMIT_REFUSED
+        reply["error"] = (
+            f"land-deadline-partial-commit: commit {verdict.get('sha')} carries part of the landing; "
+            f"missing: {missing}. Reconcile by hand before any re-fire."
+        )
     rel = land_leg_record.write(
         root, params.get("run_id"), outcome=land_leg_record.OUTCOME_HALT,
         leg=exc.leg, bound_by=exc.bound_by, legs=reply["leg_costs"],
@@ -2549,12 +2617,17 @@ def _peer_held(
         pass
     try:
         from coordinator_core.ops import warp_run_deliverable
-        from coordinator_core.ops.dispatch_emit import own_checkpoint_paths
+        from coordinator_core.ops.dispatch_emit import own_checkpoint_paths, sibling_claims
 
-        claims = warp_run_deliverable.live_run_write_claims(
-            root, list(paths), exclude_session=_submitter_session(root, run_id), cwd=str(root),
-            minted_before=minted_before,
-            exclude_run=run_id if isinstance(run_id, str) else None,
+        submitter = _submitter_session(root, run_id)
+        own_run = run_id if isinstance(run_id, str) else None
+        claims = sibling_claims.live_unreleased(
+            root,
+            warp_run_deliverable.live_run_write_claims(
+                root, list(paths), exclude_session=submitter, cwd=str(root), minted_before=minted_before,
+                exclude_run=own_run,
+            ),
+            own_run, minted_before, submitter,
         )
         own = (
             own_checkpoint_paths.checkpoint_landed_paths(root, plan_rel, run_base, list(claims or ()))
@@ -4750,8 +4823,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             if not (isinstance(verified.get(p), str) and _worktree_blob(root, p) == verified[p])
         }
 
-    # Only a measured "pre_existing" overlay lands with an advisory; red, inconclusive, missing and
-    # mismatch refuse.
+    # A "pre_existing" overlay (measured) or a "missing" one (the engine never produced a verdict) lands with
+    # an advisory; red, inconclusive and mismatch refuse.
     reach_dirt_foreign: dict = {}
     reach_dirt_overlay: dict = {}
     if measured is not None and merge_plan is None and not (anchor_only or request.review_only):
@@ -4817,7 +4890,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             if overlay.verdict == "mismatch":
                 overlay = clean_overlay_verify.reverify_on_mismatch(root, measured_run, measured, overlay)
             reach_dirt_overlay = {"verdict": overlay.verdict, "seeds": list(overlay.seeds)}
-            if overlay.verdict == "pre_existing":
+            if overlay.verdict in ("pre_existing", "missing"):
                 reach_dirt_overlay["advisory"] = f"clean-overlay verdict {overlay.verdict}: {overlay.detail}"
                 # The landing is recoverable so it proceeds, but unverified: the trailer is what a release
                 # gate reads to list the commits the full-tree regate alone covers.
@@ -4861,7 +4934,13 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                           supplied_blobs=settled_blobs, merging=merge_plan is not None)
         from coordinator_core.ops.dispatch_emit import land_intent
 
-        land_intent.mark(land_intent.PHASE_COMMITTING)
+        land_intent.mark(
+            land_intent.PHASE_COMMITTING,
+            **_committing_evidence(
+                root, run_base, sibling_run_id, commit_set, commit_deleted, settled_blobs,
+                {k: v for k, v in expected.items() if k in merge_keep} if merge_plan is not None else expected,
+            ),
+        )
         try:
             return commit_paths(
                 root, commit_set, message, deleted_paths=commit_deleted,

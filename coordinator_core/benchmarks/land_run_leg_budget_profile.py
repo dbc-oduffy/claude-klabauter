@@ -57,7 +57,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
@@ -888,7 +887,13 @@ def main(argv: list) -> int:
     if args.real_record:
         rows = run_real_record(args.real_record, Path(args.source_repo), args.attribute, args.halted_scale, not args.cold_parse)
     else:
-        workdir = Path(tempfile.mkdtemp(prefix="lrlb-", dir=args.dir))
+        if args.dir is None:
+            from coordinator_core.temp_layout import make_managed_temp_dir
+
+            workdir = make_managed_temp_dir(prefix="lrlb-")
+        else:
+            from coordinator_core.temp_layout import mkdtemp_in
+            workdir = mkdtemp_in("lrlb-", args.dir)
         try:
             with fixture_settings_home(workdir):
                 if args.live_siblings:

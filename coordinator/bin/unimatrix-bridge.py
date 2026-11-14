@@ -41,6 +41,7 @@ LOOPBACK = "localhost"
 SESSIONS = "~/.claude/sessions"
 # Registry field the mirror entries carry for the far session's real socket.
 FAR_SOCKET_FIELD = "macSocketPath"
+BOX_FIELD = "unimatrixBox"  # the peer contract's mirror-row box stamp
 
 log = None
 cfg = None
@@ -335,57 +336,106 @@ def relay_send(conn):
     for line in lines:
         log.write(f"relay >> {line!r}\n")
     ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    box = mine.get(BOX_FIELD) or "unknown"
+    transport = "none"
     far_name = mine.get("unimatrixFarName")
     if not isinstance(far_name, str) or not far_name:
         log.write("relay: mirror lacks far name; re-mirror\n")
         for line in lines:
-            _record_outcome(line, target, ts, 0, "mirror lacks far name; re-mirror")
+            _record_outcome(line, target, ts, 0, "mirror lacks far name; re-mirror", box, transport)
         return
     if not isinstance(far_sid, str) or not far_sid:
         log.write("relay: mirror lacks far session id; re-mirror\n")
         for line in lines:
-            _record_outcome(line, target, ts, 0, "mirror lacks far session id; re-mirror")
+            _record_outcome(line, target, ts, 0, "mirror lacks far session id; re-mirror", box, transport)
         return
     addressed = mine.get("name")
     if not _roster_wrote_name(addressed, far_name, cfg.remote, mine.get("box")):
         error = f"addressed {addressed}, endpoint is {far_name}; re-mirror"
         log.write(f"relay refused: {error}\n")
         for line in lines:
-            _record_outcome(line, target, ts, 0, error)
+            _record_outcome(line, target, ts, 0, error, box, transport)
         _mark_misroute()
         return
     started = time.monotonic()
+    started_wall = time.time()
     far_digest = hashlib.sha256(mine[FAR_SOCKET_FIELD].encode("utf-8")).hexdigest()[:16]
     name_digest = hashlib.sha256(far_name.encode("utf-8")).hexdigest()[:16]
     r = _ssh_relay(f"send-session {far_pid} {far_digest} {name_digest} {far_sid}", b"".join(l + b"\n" for l in lines))
     ms = round((time.monotonic() - started) * 1000)
-    if r.returncode and r.stderr.lstrip().startswith(b"usage:"):
-        log.write("relay: far relay lacks send-session; upgrade it\n")
-        for line in lines:
-            _record_outcome(line, target, ts, ms, "far relay lacks send-session; upgrade it")
-        return
+    transport = getattr(r, "transport", "ssh")
     stderr = r.stderr.decode(errors="replace").strip()
     if r.returncode and stderr.startswith(("target mismatch", "ambiguous")):
         log.write(f"relay refused: {stderr}\n")
         for line in lines:
-            _record_outcome(line, target, ts, ms, stderr[-300:])
+            _record_outcome(line, target, ts, ms, stderr[-300:], box, transport)
         if stderr.startswith("target mismatch"):
             _mark_misroute()
         return
     replies = _batch_replies(r.stdout)
-    for i, line in enumerate(lines):
+    if r.returncode and not replies and r.returncode != 255:
+        skew = _skew_of_send_session(far_pid)
+        if skew:
+            log.write(f"relay: {skew}\n")
+            for line in lines:
+                _record_outcome(line, target, ts, ms, skew, box, transport)
+            return
+    acks = _caps().ingest_acked(lines, replies)
+    if r.returncode and not all(ok for ok, _ in acks):
+        acks = _reconcile_acks(lines, acks, far_sid, started_wall)
+    for i, (line, (ok, unacked)) in enumerate(zip(lines, acks)):
         error = None
-        if i < len(replies):
-            if replies[i].get("ok") is False:
-                error = f"relay: {replies[i].get('error', 'delivery refused')}"
-            elif replies[i].get("digest") != hashlib.sha256(line.rstrip(b"\n")).hexdigest():
-                error = "unconfirmed: no far receipt for this line"
-        elif r.returncode:
-            log.write(f"relay send failed {r.returncode}: {r.stderr!r}\n")
-            error = f"ssh exit {r.returncode}: " + r.stderr.decode(errors="replace").strip()[-300:]
-        else:
-            error = "relay: no delivery reply for this message"
-        _record_outcome(line, target, ts, ms, error)
+        if not ok:
+            if i < len(replies):
+                error = f"relay: {replies[i].get('error', 'delivery refused')}" if replies[i].get("ok") is False else unacked
+            elif r.returncode:
+                log.write(f"relay send failed {r.returncode}: {r.stderr!r}\n")
+                error = f"ssh exit {r.returncode}: " + stderr[-300:]
+            else:
+                error = "relay: no delivery reply for this message"
+        _record_outcome(line, target, ts, ms, error, box, transport)
+
+
+def _caps():
+    path = Path(__file__).resolve().parent / "lib" / "unimatrix_capabilities.py"
+    mod = sys.modules.get("unimatrix_capabilities")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("unimatrix_capabilities", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["unimatrix_capabilities"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
+def _skew_of_send_session(far_pid):
+    """The named skew when the far relay cannot serve `send-session`, else "".
+
+    Asks `capabilities` once, only after a failed send-session; a relay that rejects the verb with
+    `usage:` predates it and send-session together. Any other fault (ssh down) is not a skew."""
+    r = _ssh_relay("capabilities", b"")
+    if r.returncode == 0:
+        reply = next(iter(_batch_replies(r.stdout)), {})
+        caps = reply.get("capabilities") if isinstance(reply.get("capabilities"), list) else None
+        return _caps().skew_reason(caps, "send-session") if caps is not None else ""
+    if r.stderr.lstrip().startswith(b"usage:"):
+        return _caps().skew_reason((), "send-session")
+    return ""
+
+
+def _reconcile_acks(lines, acks, far_sid, started_wall):
+    """Re-ack unacked lines from the far `receipts` verb when a reply was lost after the write.
+
+    `since` is the near send time minus 60s, not a cross-box clock comparison; a missed read leaves `acks` as is."""
+    r = _ssh_relay(f"receipts {far_sid} {started_wall - 60:.3f}", b"")
+    rows = next((x.get("rows") for x in _batch_replies(r.stdout) if isinstance(x.get("rows"), list)), None) if r.returncode == 0 else None
+    if not rows:
+        return acks
+    pending = [i for i, (ok, _) in enumerate(acks) if not ok]
+    again = _caps().ingest_acked([lines[i] for i in pending], rows)
+    out = list(acks)
+    for i, res in zip(pending, again):
+        out[i] = res
+    return out
 
 
 def _mark_misroute():
@@ -412,11 +462,17 @@ def _box_mux():
 
 def _ssh_relay(command, data):
     """The far relay running `command` with `data` on stdin, through the far box's one channel; any fault is a 255 result."""
+    label = "ssh"
     try:
         remote = pick_remote(cfg.remote, getattr(cfg, "tunnel_remote", None))
-        return _box_mux().for_remote(remote, key=cfg.key, extra=["-o", "ConnectTimeout=10"]).run(command, data, timeout=30)
+        label = "ssh" if remote == cfg.remote else "tunnel"
+        r = _box_mux().for_remote(remote, key=cfg.key, extra=["-o", "ConnectTimeout=10"]).run(command, data, timeout=30)
+        r.transport = label
+        return r
     except Exception as e:  # any send-leg fault is a failed delivery, never a silent one
-        return subprocess.CompletedProcess([], 255, b"", f"{type(e).__name__}: {e}".encode())
+        r = subprocess.CompletedProcess([], 255, b"", f"{type(e).__name__}: {e}".encode())
+        r.transport = label
+        return r
 
 
 def _batch_replies(stdout):
@@ -432,9 +488,11 @@ def _batch_replies(stdout):
     return replies
 
 
-def _record_outcome(line, target, ts, ms, error):
-    """Record one line's outcome; `digest` is the sha256 the far relay's receipt row carries for the same line."""
-    row = {"ts": ts, "at": time.time(), "target": target, "ok": not error, "ms": ms,
+def _record_outcome(line, target, ts, ms, error, box="unknown", transport="none"):
+    """Record one line's outcome; `digest` is the sha256 the far relay's receipt row carries for the same line.
+
+    `box` is the mirror row's BOX_FIELD; `transport` is the leg label: `ssh`, `tunnel`, or `none` when refused before any ssh."""
+    row = {"ts": ts, "at": time.time(), "target": target, "ok": not error, "ms": ms, "box": box, "transport": transport,
            "digest": hashlib.sha256(line.rstrip(b"\n")).hexdigest()}
     if error:
         row["error"] = error

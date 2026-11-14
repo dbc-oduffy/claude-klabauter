@@ -1167,6 +1167,35 @@ def _compose_docs_checker_rag_leg(
     return "\n\n" + DOCS_CHECKER_RAG_CLAUSE
 
 
+COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
+
+
+def _compose_params_prewrite_leg(
+    payload: Dict[str, Any], cwd: Optional[str], agent_type: str, subagent_type: str
+) -> str:
+    """Write the run's land_run params file before a commit agent's first tool call; "" unless it refuses.
+
+    Fires only for `coordinator:git-commit-agent` whose spawn prompt holds one params block. The
+    write goes only through `prewrite_for_spawn` (run-token check intact); a refusal leg comes
+    back as one line. A prompt that cannot be read or holds no block stays silent: an ordinary
+    commit agent has none. One file write, no subprocess.
+    """
+    if COMMIT_AGENT_TYPE not in (agent_type, subagent_type, payload.get("agent_type")):
+        return ""
+    root = cwd or payload.get("cwd")
+    if not isinstance(root, str) or not root:
+        return ""
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    prompt = chan.read_spawn_prompt(chan.spawn_transcript_path(payload))
+    if chan.prompt_params(prompt) is None:
+        return ""
+    _path, leg = chan.prewrite_for_spawn(_show_toplevel_no_spawn(root) or root, prompt)
+    if leg is None:
+        return ""
+    return f"\n\nparams file not written ({leg}); return error naming it and run nothing."
+
+
 def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> str:
     """Compose the SubagentStart `hookSpecificOutput.additionalContext`
     catering string for `payload`, or `""` when there is nothing to cater.
@@ -1241,6 +1270,12 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
     except Exception:
         docs_checker_text = ""
 
+    params_text = ""
+    try:
+        params_text = _compose_params_prewrite_leg(payload, cwd, agent_type, subagent_type)
+    except Exception:
+        params_text = ""
+
     parts: list[str] = []
     blocks_idx = -1
     if sidecar_text:
@@ -1250,6 +1285,8 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
         parts.append(blocks_leg_text)
     if docs_checker_text:
         parts.append(docs_checker_text)
+    if params_text:
+        parts.append(params_text)
     if role_append:
         parts.append("\n\n" + role_append)
 

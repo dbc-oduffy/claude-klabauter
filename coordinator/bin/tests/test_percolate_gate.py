@@ -556,6 +556,64 @@ def test_tier_medium_real_identities_and_rooted_paths_still_gate(tmp_path):
     assert payload["counts"]["medium_gating"] == len(lines)
 
 
+def test_tier_medium_any_drive_letter_and_home_roots_gate(tmp_path):
+    lines = [
+        "see E:/ptbase/run-output",
+        "see E:/Ptbase/run-output",
+        "see D:/1x/cache",
+        "see e:\\ptbase\\run-output",
+        'path = "D:\\\\ptbase\\\\cache"',
+        "cache at /Users/jdoe/projects",
+        "cache at /home/jdoe/projects",
+        "at E:/ptbase  # abs-path-ok:",
+    ]
+    target_file = tmp_path / "leaks.md"
+    target_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, payload = _run_json(["--files", str(file_list)])
+    assert rc == 0
+    panel = _gating_panel(payload["render"])
+    for line in lines:
+        assert line in panel
+    assert payload["counts"]["medium_gating"] == len(lines)
+
+
+def test_tier_medium_capitalized_drive_segment_gates(tmp_path):
+    drive = "D" + ":"
+    lines = [
+        "profile at " + drive + "\\" + "Users" + "\\" + "jdoe",
+        "profile at " + drive + "/" + "Users" + "/" + "jdoe",
+    ]
+    target_file = tmp_path / "caps.md"
+    target_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, payload = _run_json(["--files", str(file_list)])
+    assert rc == 0
+    assert payload["counts"]["medium_gating"] == len(lines)
+
+
+def test_tier_medium_any_drive_letter_and_home_roots_discharge(tmp_path):
+    target_file = tmp_path / "fine.md"
+    target_file.write_text(
+        "root at D:/<placeholder>/x and E:\\<repo>\n"
+        "home /Users/<name>/ and /home/${USER}/src and /home/alice/x\n"
+        "see E:/ptbase  # abs-path-ok: historical citation\n"
+        "see /home/jdoe/x  # foreign-path-ok: other machine's log\n"
+        "url https://example.org/ptbase and key a:b\n",
+        encoding="utf-8",
+    )
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, payload = _run_json(["--files", str(file_list)])
+    assert rc == 0
+    assert payload["counts"]["medium_gating"] == 0
+
+
 def test_tier_medium_placeholder_under_an_extension_does_not_gate(tmp_path):
     target_file = tmp_path / "fixtures.py"
     target_file.write_text(

@@ -27,7 +27,6 @@ import os
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -37,6 +36,7 @@ if str(_REPO) not in sys.path:
 
 from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
 from coordinator_core.git.run import run_git  # noqa: E402
+from coordinator_core.temp_layout import managed_temp_dir  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 CORPUS_HANDOFFS = 757
@@ -236,7 +236,7 @@ def case_halt_not_terminal(parent: Path) -> dict:
 def case_job_legs() -> dict:
     totals: list[float] = []
     for _ in range(CASE_RUNS):
-        with tempfile.TemporaryDirectory(prefix="bench-job-") as tmp:
+        with managed_temp_dir(prefix="bench-job-") as tmp:
             out = json.loads(_run_child(["--job-child", tmp])[-1])
         totals.append(out["job_ms"])
     median, worst = _stats(totals)
@@ -291,7 +291,7 @@ def main(argv: list[str]) -> int:
         return 2
     declare_benchmark_origin()
     os.environ["COORDINATOR_SESSION_ID"] = SESSION_ID
-    with tempfile.TemporaryDirectory(prefix="bench-cascade-") as tmp:
+    with managed_temp_dir(prefix="bench-cascade-") as tmp:
         parent = Path(tmp)
         repo_a, base_a = build_corpus(parent, peer=False)
         repo_b, base_b = build_corpus(parent, peer=True)

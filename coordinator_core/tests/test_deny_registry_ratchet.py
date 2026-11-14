@@ -225,7 +225,7 @@ def test_subagent_destructive_action_denies_a_subagent_only(monkeypatch):
         monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
         mp.reset_cache()
         assert mp.apply_guard_level("block-subagent-destructive-action", env, subagent=True) is env, level
-        assert not _denies(mp.apply_guard_level("block-subagent-destructive-action", env)), level
+        assert _denies(mp.apply_guard_level("block-subagent-destructive-action", env)), level
 
 
 @pytest.mark.parametrize(
@@ -262,6 +262,12 @@ def test_subagent_destructive_action_still_denies_unguarded_ref_move():
         "agent_type": "coordinator:executor",
     }
     assert _denies(envelope_of(guard.check(payload)))
+
+
+def test_drive_root_new_dir_guards_are_box_degrading_denies():
+    for name in ("block-drive-root-new-dir-write", "block-drive-root-new-dir-bash-write"):
+        assert dr.GUARD_DENY_CLASS[name] == dr.BOX_DEGRADING
+        assert name not in dr.ADVISORY_BY_RULING
 
 
 def test_malformed_request_is_op_only():

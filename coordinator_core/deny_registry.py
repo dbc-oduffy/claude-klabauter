@@ -58,11 +58,18 @@ GUARD_DENY_CLASS: Dict[str, str] = {
     "block-worktree-tool": BOX_DEGRADING,
     "block-workflow-foreign-emission": DISRUPTIVE,
     "runaway-find": BOX_DEGRADING,
+    #: PM R2 (abs-path-gate run): nobody heeds the warn and stray drive-root folders add up as box
+    #: degradation. general-work and Group EM cwds are exempt in `_drive_root`.
+    "block-drive-root-new-dir-write": BOX_DEGRADING,
+    "block-drive-root-new-dir-bash-write": BOX_DEGRADING,
     #: PM-ruled exception (DR-502), R1: "ignoring the guard's warning is a sign that the guard
     #: needs to be reinstated for CLAUDE.md and for rules." An EM write to CLAUDE.md-class and
     #: rules files is denied unless a fresh doctrine-edit sentinel is in the git dir.
     "guard-doctrine-surface-edits": DISRUPTIVE,
     "guard-doctrine-surface-bash-write": DISRUPTIVE,
+    #: R2 (ref-only merge): the guard denies an EM or subagent update-ref of the checked-out branch to
+    #: a merge commit with no `read-tree -m -u`; every other verdict it issues is subagent-only.
+    "block-subagent-destructive-action": BOX_DEGRADING,
 }
 
 
@@ -107,8 +114,6 @@ SUBAGENT_DENY_CLASS: Dict[str, str] = {
 #: ``tests/test_guard_classification_ratchet.py`` fails on a guard in none of the four maps.
 ADVISORY_BY_RULING: Dict[str, str] = {
     "block-derived-global-doctrine-write": "a derived copy; the next derive rewrites it",
-    "block-drive-root-new-dir-write": "recoverable clutter at a drive root",
-    "block-drive-root-new-dir-bash-write": "recoverable clutter at a drive root",
     "block-home-root-write": "recoverable clutter at the home root",
     "block-home-root-bash-write": "recoverable clutter at the home root",
     "block-em-post-fire-product-write": "an EM write into a live run's paths; recoverable by revert",
@@ -279,6 +284,7 @@ OP_REFUSAL_CLASS: Dict[str, OpClass] = {
     _OPS + "verdict_record_op:TestVerdictRefused": MALFORMED_REQUEST,
     _OPS + "tracker.push_suggestion:PushSuggestionRefused": MALFORMED_REQUEST,
     _OPS + "diagnostics_probes:DiagnosticsRefusal": MALFORMED_REQUEST,
+    _OPS + "rag_freshness:FreshnessRefusal": MALFORMED_REQUEST,
     # The terminal finalizer refuses to land an engine-authored commit when the branch or HEAD
     # moved, the receipt or terminal marker is forged, or the finalizer is replayed.
     _OPS + "workflow_fire.finalizer:FinalizerRefused": HEAD_INTEGRITY,
@@ -304,6 +310,15 @@ OP_REFUSAL_CLASS: Dict[str, OpClass] = {
 #: Landing refusal reasons (``landing_integrity`` finding kinds) allowed to withhold or refuse a
 #: landing, each with its class.
 LANDING_REFUSAL_CLASS: Dict[str, str] = {"lost-definition": HEAD_INTEGRITY}
+
+#: Percolate preflight refusals keyed by reason. ``percolate.source_preflight.check_source_published``
+#: returns a ``Refusal`` string whose ``.reason`` is the key emitted. A publish that
+#: rolls back the last publish's commits, or has no stamp to show it does not, reaches every
+#: consumer and cannot be recalled.
+PERCOLATE_REFUSAL_CLASS: Dict[str, str] = {
+    "source-lacks-published-head": IRREVERSIBLE_EXTERNAL,
+    "mirror-without-source-head-stamp": IRREVERSIBLE_EXTERNAL,
+}
 
 _RAISE_REFUSAL = re.compile(r"^\s*raise\s+(?:\w+\.)*(\w*Refus\w*)", re.M)
 _PENDING_OWNER = re.compile(r"^(C\d+|[A-Za-z0-9][A-Za-z0-9_-]{3,})$")
@@ -337,6 +352,7 @@ def registry_problems(
     op_classes: Dict[str, OpClass] | None = None,
     refusal_sites: Iterable[str] = (),
     landing_classes: Dict[str, str] | None = None,
+    percolate_classes: Dict[str, str] | None = None,
 ) -> List[Tuple[str, str]]:
     """``(site, reason)`` for every registry entry or op refusal that breaks the rule.
 
@@ -346,7 +362,11 @@ def registry_problems(
     guards = GUARD_DENY_CLASS if guard_classes is None else guard_classes
     ops = OP_REFUSAL_CLASS if op_classes is None else op_classes
     landing = LANDING_REFUSAL_CLASS if landing_classes is None else landing_classes
+    percolate = PERCOLATE_REFUSAL_CLASS if percolate_classes is None else percolate_classes
     problems: List[Tuple[str, str]] = []
+    for reason, cls in percolate.items():
+        if cls not in IRREVERSIBLE_CLASSES:
+            problems.append((reason, f"percolate refusal class {cls!r} is not in IRREVERSIBLE_CLASSES"))
     for reason, cls in landing.items():
         if cls not in IRREVERSIBLE_CLASSES:
             problems.append((reason, f"landing refusal class {cls!r} is not in IRREVERSIBLE_CLASSES"))

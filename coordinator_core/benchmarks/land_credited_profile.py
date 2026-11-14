@@ -464,9 +464,9 @@ def main(argv: list) -> int:
     args = ap.parse_args(argv)
     source = Path(args.source_repo)
     report: dict = {"run_id": args.real_record, "halted_scale": args.halted_scale, "baseline_ref": BASELINE_REF}
-    import tempfile
+    from coordinator_core.temp_layout import managed_temp_dir
 
-    with tempfile.TemporaryDirectory(prefix="lcp-home-") as home, fixture_settings_home(home):
+    with managed_temp_dir(prefix="lcp-home-") as home, fixture_settings_home(home):
         return _main(args, source, report)
 
 

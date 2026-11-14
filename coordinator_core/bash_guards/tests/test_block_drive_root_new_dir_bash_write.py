@@ -45,11 +45,9 @@ def _denied(result):
     if result is None:
         return False
     out = result["hookSpecificOutput"]
-    # Ruled advisory (deny_registry.ADVISORY_BY_RULING, DR-475, landed b17ec35251): the would-be
-    # deny surfaces as an allow carrying the deny text, never a refusal.
-    assert out["permissionDecision"] == "allow"
-    assert result["guardLevel"] == "log"
-    text = out["additionalContext"]
+    # Box-degrading deny (deny_registry.GUARD_DENY_CLASS, PM R2): a refusal, not an advisory.
+    assert out["permissionDecision"] == "deny"
+    text = out["permissionDecisionReason"]
     assert "DENY:" in text
     assert "<repo>/scratch/" in text
     assert "COORDINATOR_" not in text
@@ -121,6 +119,16 @@ def test_cwd_at_root(world):
     assert _denied(_enveloped(guard.check)(_payload("mkdir new", "Bash", root)))
     assert _enveloped(guard.check)(_payload("grep -o foo f", "Bash", root)) is None
     assert _enveloped(guard.check)(_payload("mkdir existing", "Bash", root)) is None
+
+
+def test_general_work_cwd_is_exempt_other_cwd_still_denied(world, monkeypatch):
+    from coordinator_core.session import general_work_scope as gws
+
+    root, _, work = world
+    cmd = f"mkdir {root.as_posix()}/new"
+    monkeypatch.setattr(gws, "general_work_root", lambda: str(work))
+    assert _enveloped(guard.check)(_payload(cmd, "Bash", work)) is None
+    assert _denied(_enveloped(guard.check)(_payload(cmd, "Bash", root / "existing")))
 
 
 def test_home_rules(world):

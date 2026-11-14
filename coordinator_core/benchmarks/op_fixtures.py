@@ -40,12 +40,11 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Dict, Optional
 
 from coordinator_core.benchmarks.timer import SUBPROCESS_CREATIONFLAGS, SUBPROCESS_TIMEOUT_S
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import make_managed_temp_dir
 
 
 FIXTURE_CONTENT_DIR: Path = Path(__file__).parent / "fixtures" / "repo"
@@ -67,7 +66,7 @@ def materialize_fixture_repo(dest: Optional[Path] = None) -> Path:
 
     Args:
         dest: destination directory for the materialized repo. When omitted, a
-              fresh ``tempfile.mkdtemp()`` directory is used (caller is responsible
+              fresh managed-temp directory is used (caller is responsible
               for cleanup in that case — the harness/CLI runner owns the lifetime
               of a benchmark-run's fixture instance).
 
@@ -79,7 +78,7 @@ def materialize_fixture_repo(dest: Optional[Path] = None) -> Path:
     writes back into the checked-in tree.
     """
     if dest is None:
-        dest = Path(tempfile.mkdtemp(prefix="claude-klabauter-bench-fixture-", dir=str(managed_tempdir(Path(__file__).resolve().parents[2]))))
+        dest = make_managed_temp_dir(prefix="claude-klabauter-bench-fixture-")
     dest = Path(dest)
     if dest.exists():
         shutil.rmtree(dest)

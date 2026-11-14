@@ -2,7 +2,6 @@
 
 import pytest
 
-from coordinator_core.ops.review_mint import execute_review as er
 from coordinator_core.ops.review_mint.tests.test_execute_review import _FULL, _run_in_wave
 
 pytestmark = pytest.mark.complete
@@ -41,13 +40,19 @@ def test_a_reply_naming_the_plus_joined_id_as_a_string_is_accepted():
     _accepted(f"[{_JOINED!r}]")
 
 
-def test_an_id_outside_the_merged_group_still_halts():
+def _reconciled(body):
     spawned = len(_run_in_wave(_TWO, 1)["spawned"])
-    patch = _reply_slices("[{ id: 'manifest-x-prep-1' }, { id: 'manifest-x-prep-2' }]", retry_at=spawned)
-    assert _run_in_wave(_TWO, 1, patch=patch)["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
+    result = _run_in_wave(_TWO, 1, patch=_reply_slices(body, retry_at=spawned))
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][0]["slice_id"] == _JOINED
+    return result
 
 
-def test_a_joined_id_naming_a_non_member_still_halts():
-    spawned = len(_run_in_wave(_TWO, 1)["spawned"])
-    patch = _reply_slices(f"[{{ id: {_IDS[0] + '+zz-nonexistent'!r} }}]", retry_at=spawned)
-    assert _run_in_wave(_TWO, 1, patch=patch)["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
+def test_an_id_outside_the_merged_group_is_rebound_to_the_group_and_named():
+    result = _reconciled("[{ id: 'manifest-x-prep-1' }, { id: 'manifest-x-prep-2' }]")
+    assert result["prep"]["advisories"]
+
+
+def test_a_joined_id_naming_a_non_member_is_rebound_to_the_group_and_named():
+    result = _reconciled(f"[{{ id: {_IDS[0] + '+zz-nonexistent'!r} }}]")
+    assert result["prep"]["advisories"]

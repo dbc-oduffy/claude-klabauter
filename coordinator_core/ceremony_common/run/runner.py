@@ -138,7 +138,7 @@ _STDIN_SHIM = (
 
 
 def _measure_cold(
-    cmd: Sequence[str], *, repo_root: Path, deadline_s: float, io_dir: Path | None = None,
+    cmd: Sequence[str], *, repo_root: Path, deadline_s: float,
     stdin_text: str | None = None,
 ) -> ChildOutcome:
     """Run `cmd` once under process-time accounting; a child past the deadline is reported, not awaited.
@@ -146,11 +146,11 @@ def _measure_cold(
     `stdin_text` reaches a `python <script> ...` command as its stdin through a shim that stands
     in for the child's interpreter entry, so it adds no process.
     """
-    import tempfile
-
     from coordinator_core.benchmarks.process_time import single_invocation_tree_process_time
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
-    out_dir = Path(tempfile.mkdtemp(prefix="run-io-", dir=str(io_dir) if io_dir else None))
+    # A child past its deadline still holds the dir, so removal is left to atexit / the dead-owner reap.
+    out_dir = make_managed_temp_dir("run-io-", repo_root)
     out_path, err_path = out_dir / "stdout", out_dir / "stderr"
     if stdin_text is not None:
         in_path = out_dir / "stdin"

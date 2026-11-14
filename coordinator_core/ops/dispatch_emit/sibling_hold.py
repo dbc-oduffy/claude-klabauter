@@ -219,6 +219,23 @@ def reconcile_running(root: Any, run_id: str) -> Optional[str]:
     return head
 
 
+def landed_without_close(root: Any, run_id: str) -> Optional[str]:
+    """HEAD sha when halted *run_id*'s terminal commit is on HEAD though its close recorded no verdict.
+
+    Read-only: a close-record gap, never a hold. None when the status file is not ``halted`` or HEAD
+    carries no terminal landing for the run.
+    """
+    from coordinator_core.ops._path_guard import safe_id
+
+    if not isinstance(run_id, str) or not safe_id(run_id):
+        return None
+    base = Path(root)
+    status = _read_json(base / contract.status_rel(run_id))
+    if not status or status.get("status") != contract.STATUS_HALTED:
+        return None
+    return _terminal_landing_head(base, run_id)
+
+
 def supersede_refusal(root: Any, run_id: str, by: str) -> Optional[str]:
     """Refusal text for marking *run_id* superseded by *by*, else None.
 

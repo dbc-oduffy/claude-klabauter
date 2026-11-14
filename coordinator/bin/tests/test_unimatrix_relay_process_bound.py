@@ -43,6 +43,8 @@ def _rig(tmp_path, monkeypatch):
         spawned.append(cmd)
         return p
 
+    # The pair's mirror owner is the lower box name; pin this box below every far box the cases name.
+    monkeypatch.setattr(mod.socket, "gethostname", lambda: "aaa-near")
     monkeypatch.setattr(mod.R, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(mod.R, "pid_alive", lambda pid: pid != DEAD_PID)
     monkeypatch.setattr(mod.R, "spawn", fake_spawn)

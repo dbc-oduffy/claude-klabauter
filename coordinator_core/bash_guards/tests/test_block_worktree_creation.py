@@ -141,6 +141,40 @@ class TestMentionIsNotInvocation:
         _reason(out)
 
 
+class TestProseInArgumentOfUntokenizableCommand:
+    """A `worktree` word inside a JSON argument of a command the shell
+    tokenizer cannot parse (an apostrophe unbalances quoting) is prose, not a
+    `git worktree` subcommand."""
+
+    _LAND_RUN = (
+        "coordinator-invoke dispatch.land_run --params "
+        "'{\"consumed_returns\": [{\"report\": \"C8: the guard denied the "
+        "worktree creation; it's a false positive\"}]}'"
+    )
+
+    def test_fixture_really_is_untokenizable(self):
+        assert guard._tokenize_full_command(self._LAND_RUN) is None
+
+    def test_land_run_payload_with_worktree_prose_allows(self):
+        assert _enveloped(guard.check)(_payload(self._LAND_RUN)) is None
+
+    def test_untokenizable_real_git_worktree_add_still_denies(self):
+        out = _enveloped(guard.check)(_payload("git worktree add ../wt-1 x # it's"))
+        _reason(out)
+
+    def test_untokenizable_git_global_option_worktree_add_still_denies(self):
+        out = _enveloped(guard.check)(_payload("git -C /repo worktree add ../wt-1 x # it's"))
+        _reason(out)
+
+    def test_untokenizable_git_exe_worktree_add_still_denies(self):
+        out = _enveloped(guard.check)(_payload("git.exe worktree add ../wt-1 x # it's"))
+        _reason(out)
+
+    def test_untokenizable_git_worktree_default_deny_still_denies(self):
+        out = _enveloped(guard.check)(_payload("git worktree frobnicate # it's"))
+        _reason(out)
+
+
 class TestPowerShellIdiomDialectNeutral:
 
     def test_semicolon_chained_powershell_style_denies(self):

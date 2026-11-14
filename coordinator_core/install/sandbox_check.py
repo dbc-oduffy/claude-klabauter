@@ -115,14 +115,13 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import traceback
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from coordinator_core import machine_resolver, resolve_coordinator_clone
 from coordinator_core._settings_home import native_path_form
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import create_managed_temp_dir
 from coordinator_core.content_root import CONTENT_ROOT_KEY, POINTER_NAME, migrate_legacy_config
 from coordinator_core.install import gen_settings_hooks
 from coordinator_core.win_portability import is_executable, no_console_creationflags
@@ -1168,10 +1167,10 @@ def run_all(
     )
 
     try:
-        # Managed fleet root (gettempdir-derived, addendum A4): a run killed before its
-        # finally leaves the sandbox where the SessionStart pruner reaps it by age.
-        tmp_base = str(managed_tempdir())
-        sandbox = tempfile.mkdtemp(prefix="install-sandbox-check.", dir=tmp_base)
+        # `create_managed_temp_dir` registers no atexit hook, so `--keep-sandbox` survives
+        # exit; the run-temp reap spares its ``kept-`` name until it is a week old.
+        sandbox_path, remove_sandbox = create_managed_temp_dir("install-sandbox-check.", None)
+        sandbox = str(sandbox_path)
     except OSError as exc:
         raise SandboxCheckTransportError(f"could not create sandbox tempdir: {exc}") from exc
 
@@ -1187,7 +1186,10 @@ def run_all(
         _tier1d_registry_manifest_integrity(r, coordinator_root)
     finally:
         if not keep_sandbox:
-            shutil.rmtree(sandbox, ignore_errors=True)
+            try:
+                remove_sandbox()
+            except OSError:
+                pass
         else:
             r.info(f"Sandbox preserved at: {sandbox}")
 

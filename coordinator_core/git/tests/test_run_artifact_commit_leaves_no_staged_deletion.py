@@ -59,7 +59,9 @@ def test_a_commit_paths_under_held_lock_refuses_and_leaves_index_intact(repo, mo
     head_before = _git(["rev-parse", "HEAD"], repo)
     cached_before = _git(["diff", "--cached"], repo)
     lock = repo / ".git" / "index.lock"
-    lock.write_text("", encoding="utf-8")
+    lock.write_text("held\n", encoding="utf-8")
+    # An ownerless unheld lock is reclaimed (824e603f93); a handle held open keeps it a peer's.
+    holder = open(lock, "rb")
     try:
         with pytest.raises(commit.CommitRefused):
             commit.commit_paths(
@@ -67,6 +69,7 @@ def test_a_commit_paths_under_held_lock_refuses_and_leaves_index_intact(repo, mo
                 blob_fallback=partial(commit.hash_worktree_blobs_via_spawn, cwd=repo),
             )
     finally:
+        holder.close()
         lock.unlink(missing_ok=True)
     assert _git(["rev-parse", "HEAD"], repo) == head_before
     assert _git(["diff", "--cached"], repo) == cached_before == ""

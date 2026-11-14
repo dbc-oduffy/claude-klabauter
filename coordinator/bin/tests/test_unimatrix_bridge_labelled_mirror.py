@@ -63,7 +63,9 @@ def send(bridge, monkeypatch, ok=True):
 
     def run(argv, **k):
         calls.append(argv[-1])
-        return subprocess.CompletedProcess(argv, 0, b'{"ok": true}\n', b"")
+        acks = b"".join(json.dumps({"ok": True, "digest": hashlib.sha256(l).hexdigest()}).encode() + b"\n"
+                        for l in k.get("input", b"").splitlines())
+        return subprocess.CompletedProcess(argv, 0, acks, b"")
 
     monkeypatch.setattr(subprocess, "run", run)
     bridge.relay_send(FakeConn(json.dumps({"from": "uds:" + SENDER, "message": "hi"}).encode() + b"\n"))

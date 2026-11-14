@@ -15,7 +15,6 @@ import argparse
 import json
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -25,6 +24,7 @@ if str(_REPO) not in sys.path:
 
 from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
 from coordinator_core.git.run import run_git  # noqa: E402
+from coordinator_core.temp_layout import managed_temp_dir  # noqa: E402
 
 BAR_MS = 500.0
 IMPORTERS = 20
@@ -109,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     declare_benchmark_origin()
-    with tempfile.TemporaryDirectory(prefix="lostdef-profile-") as tmp:
+    with managed_temp_dir(prefix="lostdef-profile-") as tmp:
         rows = profile(Path(tmp))
     if args.json:
         print(json.dumps(rows))

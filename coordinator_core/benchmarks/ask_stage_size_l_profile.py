@@ -18,7 +18,6 @@ import importlib
 import io
 import pstats
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -94,11 +93,11 @@ def profile(
     plan: str | None = None,
 ) -> dict:
     from coordinator_core import warp_live
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
     from coordinator_core.ops.dispatch_emit import ask_stage, ask_stage_receipt
     from coordinator_core.ops.dispatch_emit.tests._size_l_plan import build_size_l_plan
 
-    scratch = Path(tempfile.mkdtemp(prefix="ask-stage-size-l-", dir=managed_tempdir()))
+    scratch = make_managed_temp_dir(prefix="ask-stage-size-l-")
     mp = pytest.MonkeyPatch()
     try:
         managed = scratch / "managed"
@@ -182,9 +181,9 @@ def main() -> None:
     ap.add_argument("--handler", action="store_true")
     ap.add_argument("--plan", default=None)
     args = ap.parse_args()
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import managed_temp_dir
 
-    with tempfile.TemporaryDirectory(prefix="ask-stage-home-", dir=managed_tempdir()) as home, fixture_settings_home(home):
+    with managed_temp_dir(prefix="ask-stage-home-") as home, fixture_settings_home(home):
         result = profile(
             args.rows,
             args.tokens,

@@ -39,7 +39,7 @@ spawn-to-exit `perf_counter` wrapper) even though there is no `invoke <op>`
 to spawn -- `_read_events_probe.py` stands in for it.
 
 Never point this at the real `state/` tree -- every fixture is materialized
-under a fresh `tempfile.mkdtemp` root and torn down in a `finally`.
+under a fresh managed-temp root and torn down in a `finally`.
 
 Spec backlink: pln-sat-01-sovereign-tracker-subst-a66742 § C5 (AC3).
 """
@@ -51,7 +51,6 @@ import shutil
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -61,7 +60,7 @@ from coordinator_core.benchmarks import budget as budget_mod
 from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.timer import SUBPROCESS_CREATIONFLAGS, SUBPROCESS_TIMEOUT_S
 from coordinator_core.tracker_store import EVENTS_DIR_RELPATH
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import make_managed_temp_dir
 
 DEFAULT_N = 10
 """Default timed-sample count per measured point (post warm-up)."""
@@ -141,7 +140,7 @@ def measure(
     n: int = DEFAULT_N,
     warmup: int = DEFAULT_WARMUP,
 ) -> dict:
-    tmp_root = Path(tempfile.mkdtemp(prefix="sat01-read-events-bench-", dir=str(managed_tempdir(Path(__file__).resolve().parents[2]))))
+    tmp_root = make_managed_temp_dir(prefix="sat01-read-events-bench-")
     try:
         materialize_fixture(tmp_root, events_per_shard=events_per_shard, shard_count=shard_count)
 

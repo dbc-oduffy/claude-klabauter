@@ -126,7 +126,7 @@ def test_send_cli_on_a_mac_reports_sent_via_the_mirror_and_exit_1_without_a_rout
     for with_mirror, code in ((True, 0), (False, 1)):
         r, sent = make_router(tmp_path / str(with_mirror), roster(tmp_path / str(with_mirror), with_mirror))
         monkeypatch.setattr(send_cli, "_router", lambda r=r: RouterOverDispatch(r))
-        argv = ["--as", "cli", "--to", TARGET, "--endpoint-dir", str(tmp_path / "eps"), "hello"]
+        argv = ["--to", TARGET, "--endpoint-dir", str(tmp_path / "eps"), "hello"]
         assert send_cli.main(argv) == code
         err = capsys.readouterr().err
         if with_mirror:

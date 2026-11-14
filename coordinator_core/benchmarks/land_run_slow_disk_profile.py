@@ -44,7 +44,6 @@ import os
 import pstats
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import traceback
@@ -186,7 +185,7 @@ class Injector:
 
 
 def _git(args, cwd: Path, stdin: bytes | None = None) -> str:
-    result = run_git(list(args), cwd=str(cwd), input=stdin)
+    result = run_git(["-c", "core.longpaths=true", *args], cwd=str(cwd), input=stdin)
     if result.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed rc={result.returncode}: {result.stderr.strip()}")
     return result.stdout
@@ -744,7 +743,13 @@ def main(argv: list) -> int:
         help="one op through ipc.dispatch_message with every op-latency sink disk call wedged",
     )
     args = ap.parse_args(argv)
-    workdir = Path(tempfile.mkdtemp(prefix="lrsd-", dir=args.dir))
+    if args.dir is None:
+        from coordinator_core.temp_layout import make_managed_temp_dir
+
+        workdir = make_managed_temp_dir(prefix="lrsd-")
+    else:
+        from coordinator_core.temp_layout import mkdtemp_in
+        workdir = mkdtemp_in("lrsd-", args.dir)
     try:
         with fixture_settings_home(workdir):
             if args.op_latency_wedged:

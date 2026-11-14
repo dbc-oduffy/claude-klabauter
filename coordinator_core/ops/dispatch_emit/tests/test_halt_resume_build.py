@@ -7,6 +7,7 @@ import json
 import pytest
 import yaml
 
+from coordinator_core.git.git_objects import PackReadDeadline, PackReadStalled
 from coordinator_core.ops.dispatch_emit import ask_compose, halt_resume_build as hrb, halt_resume_record as hrr, halted_run, op
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
@@ -260,3 +261,35 @@ def test_recompose_script_rebuilds_a_kept_script_with_no_record(repo, monkeypatc
 def test_recompose_script_names_a_run_with_no_halt_marker(repo):
     text, why = hrb.recompose_script(repo, RUN)
     assert text is None and why
+
+
+def _fail_reads(monkeypatch, excs):
+    """Make the sizing load raise each exception in `excs` in turn, then read normally."""
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+
+    real, queue, calls = sizing_fire.load_sizing_effective, list(excs), []
+
+    def flaky(*a, **kw):
+        calls.append(1)
+        if queue:
+            raise queue.pop(0)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(sizing_fire, "load_sizing_effective", flaky)
+    return calls
+
+
+@pytest.mark.parametrize("exc", [PackReadDeadline("wall"), PackReadStalled("stalled")])
+def test_recompose_script_retries_one_pack_read_stall(repo, monkeypatch, exc):
+    _halt(repo, monkeypatch)
+    calls = _fail_reads(monkeypatch, [exc])
+    text, why = hrb.recompose_script(repo, RUN)
+    assert why == "" and text and len(calls) >= 2  # the sizing load is also read inside the gate
+
+
+def test_recompose_script_reports_a_persistent_stall_as_retryable_not_a_refusal(repo, monkeypatch):
+    _halt(repo, monkeypatch)
+    _fail_reads(monkeypatch, [PackReadStalled("a"), PackReadStalled("b")])
+    text, why = hrb.recompose_script(repo, RUN)
+    assert text is None and why.startswith(hrb.STALL_REASON_PREFIX)
+    assert hrr.read(record_dir(repo, RUN), 1000) is hrr.MISSING

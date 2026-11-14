@@ -104,8 +104,6 @@ from __future__ import annotations
 import enum
 import os
 import re
-import shutil
-import tempfile
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -119,7 +117,7 @@ from coordinator_core.guard_messages.alternative_record import (
     CapabilityRef,
     ReadyCommand,
 )
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import managed_temp_dir
 
 
 # ---------------------------------------------------------------------------
@@ -283,11 +281,10 @@ def _trigger_multiprobe_banner_still_violates() -> bool:
 
 
 def _trigger_inprocess_search_still_violates() -> bool:
-    tmp = tempfile.mkdtemp(
-        prefix="firing-shape-inprocess-search-",
-        dir=managed_tempdir(Path(__file__).resolve().parents[2]),
-    )
-    try:
+    with managed_temp_dir(
+        "firing-shape-inprocess-search-", Path(__file__).resolve().parents[2]
+    ) as tmp_path:
+        tmp = str(tmp_path)
         os.makedirs(os.path.join(tmp, ".git"), exist_ok=True)
         sid_var = _gis._SESSION_ID_ENV_VAR
         old_sid = os.environ.get(sid_var)
@@ -302,8 +299,6 @@ def _trigger_inprocess_search_still_violates() -> bool:
                 os.environ[sid_var] = old_sid
         violated, _reason = evaluate_report_repetition(first, second)
         return violated
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _trigger_nudge_dispatch_brief_still_violates() -> bool:

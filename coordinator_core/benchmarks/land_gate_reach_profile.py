@@ -24,7 +24,6 @@ import pstats
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field
@@ -357,7 +356,13 @@ def main(argv: list) -> int:
     ap.add_argument("--overlay", action="append", default=[], metavar="REL_PATH",
                     help="repo-relative file copied from the source working tree into every clone (repeatable)")
     args = ap.parse_args(argv)
-    workdir = Path(tempfile.mkdtemp(prefix="lgrp-", dir=args.dir))
+    if args.dir is None:
+        from coordinator_core.temp_layout import make_managed_temp_dir
+
+        workdir = make_managed_temp_dir(prefix="lgrp-")
+    else:
+        from coordinator_core.temp_layout import mkdtemp_in
+        workdir = mkdtemp_in("lgrp-", args.dir)
     try:
         with fixture_settings_home(workdir):
             rows = run(Path(args.source_repo), workdir, tuple(args.overlay))

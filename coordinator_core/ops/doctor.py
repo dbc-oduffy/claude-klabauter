@@ -1140,6 +1140,10 @@ def _check_engine_site_currency() -> Layer:
             "unknown",
             [Finding("info", f"{name}: neither python3 nor python resolves on PATH — nothing to check.")],
         )
+    # Only a PEP-668 interpreter needs an engine-site; decide that first, so a Windows
+    # `python.exe` (no minor in its basename) is ok rather than an exit-1 `unknown`.
+    if not _interpreter_is_externally_managed(interpreter):
+        return Layer(name, "ok", [])
     result = engine_interpreter.health(interpreter)
     if result.status == "ok":
         return Layer(name, "ok", [])
@@ -1153,8 +1157,6 @@ def _check_engine_site_currency() -> Layer:
                 f"engine-site currency not checked; if it is externally managed, run {result.remedy} from the claude-klabauter checkout root.",
             )],
         )
-    if not _interpreter_is_externally_managed(interpreter):
-        return Layer(name, "ok", [])
 
     def fmt(m):
         return f"{m[0]}.{m[1]}" if m else "none"
@@ -1303,6 +1305,9 @@ def run_doctor(
     report.layers.append(_check_install_drift())
     report.layers.append(_check_spotlight_exclusion())
     report.layers.append(_check_box_identity())
+    from coordinator_core.ops.doctor_staged_behind import staged_behind_layer
+
+    report.layers.append(staged_behind_layer())
     from coordinator_core.ops.doctor_boot_banners import boot_banner_layers
 
     report.layers.extend(boot_banner_layers(_config_dir()))

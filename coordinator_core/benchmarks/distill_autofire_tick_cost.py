@@ -21,7 +21,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -32,6 +31,7 @@ if __package__ in (None, ""):
 from coordinator_core.distill import autofire
 from coordinator_core.distill.autofire_contract import AUTOFIRE_THRESHOLD
 from coordinator_core.ops.workflow_fire import fire
+from coordinator_core.temp_layout import managed_temp_dir
 
 NO_CHANGE_BAR_MS = 5.0
 DECIDING_BAR_MS = 200.0
@@ -114,7 +114,7 @@ def _synthetic_below_threshold(root: Path) -> Path:
 def measure(repo: Path, iterations: int = 200) -> dict[str, Any]:
     original_claim = autofire.CLAIM_REL
     original_registry_dir = fire._registry_dir
-    with tempfile.TemporaryDirectory(prefix="autofire-bench-") as scratch:
+    with managed_temp_dir(prefix="autofire-bench-") as scratch:
         scratch_dir = Path(scratch)
         # An absolute CLAIM_REL makes `repo / CLAIM_REL` resolve to the scratch claim, so the
         # measured repo is never written.

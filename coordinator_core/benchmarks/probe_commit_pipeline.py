@@ -1,4 +1,4 @@
-import os, shutil, sys, tempfile, time
+import os, shutil, sys, time
 from functools import partial
 from pathlib import Path
 
@@ -11,7 +11,7 @@ from coordinator_core.benchmarks.process_time import LiveTreeAccountant
 from coordinator_core.git.commit import CommitRefused, FilterUnsupported, commit_paths
 from coordinator_core.git.commit import hash_worktree_blobs_via_spawn
 from coordinator_core.git.run import run_git
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import make_managed_temp_dir
 from coordinator_core.ops.ceremony.commit_message import compose_message
 
 
@@ -50,7 +50,7 @@ def main(n=40, reps=3):
 
 
 def _one_window(label, tracked, n, rep):
-    tmp = Path(tempfile.mkdtemp(prefix="pipeprobe-", dir=str(managed_tempdir(Path(__file__).resolve().parents[2]))))
+    tmp = make_managed_temp_dir(prefix="pipeprobe-")
     repo = tmp / "r"
     build_repo(repo)
     names = [f"src/m{i:03d}.py" for i in range(n + WARMUP)]

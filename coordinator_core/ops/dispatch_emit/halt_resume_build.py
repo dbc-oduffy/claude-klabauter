@@ -17,11 +17,15 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.git_objects import PackReadDeadline, retry_past_stall
 from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_PM, HALT_PLAN_FIELD, RUN_DIR_ROOT, record_dir
 
 COMPOSED_SCRIPT_FILE = "resume-script.workflow.mjs"
 REFUSAL_BACKOFF_S = 300
+# recompose_script's reason prefix for a persisting storage stall: retryable, never a refusal.
+STALL_REASON_PREFIX = "pack-read-stall:"
 
 
 def _jsonable(value):
@@ -96,9 +100,12 @@ def build(root, run_id: str) -> Optional[dict]:
     resume_plan_rel = None
     retry_not_before: Optional[float] = None
     try:
-        ask_sizing = _gate_sizing_at_emit(root, sizing_rel, [])
-        sizing = load_sizing_effective(root, sizing_rel)
-        resume = resumable_plan(sizing, sizing_rel, root, resolve_arm(sizing))
+        def _read_only():
+            gated = _gate_sizing_at_emit(root, sizing_rel, [])
+            effective = load_sizing_effective(root, sizing_rel)
+            return gated, resumable_plan(effective, sizing_rel, root, resolve_arm(effective))
+
+        ask_sizing, resume = retry_past_stall(resolve_git_common_dir(root), _read_only)
         resume_plan_rel = resume.plan_rel if resume else None
         verdict = {"ask_sizing": _jsonable(ask_sizing), "resume": _jsonable(resume)}
         roster, schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
@@ -173,7 +180,9 @@ def recompose_script(root, run_id: str) -> tuple[Optional[str], str]:
     ``COMPOSED_SCRIPT_FILE`` already under the run dir is returned as is only when the run's resume
     record names the running engine's sha; a kept script composed by another engine, or with no
     record, runs `build` inline, which persists the resume record, the receipt and that file
-    (overwriting them). Call it only on a path that already lost its script."""
+    (overwriting them). A pack-read stall retries once; a persisting one returns a reason starting
+    ``STALL_REASON_PREFIX``, which a caller must read as retryable, not as a refusal. Call it only on a
+    path that already lost its script."""
     root = Path(root)
     try:
         rd = record_dir(root, run_id)
@@ -183,7 +192,14 @@ def recompose_script(root, run_id: str) -> tuple[Optional[str], str]:
     except (OSError, UnicodeDecodeError):
         pass  # an unreadable kept script falls through to a fresh build
     try:
-        record = build(root, run_id)
+        try:
+            record = build(root, run_id)
+        except PackReadDeadline:
+            # `build`'s own retry re-raises a stall at once; one more pass runs its read-only leg under a fresh retry.
+            try:
+                record = build(root, run_id)
+            except PackReadDeadline as exc:
+                return None, f"{STALL_REASON_PREFIX} {exc}"
         if record is None:
             return None, "the run has no halted marker naming a sizing"
         rel = record.get("composed_script_rel")

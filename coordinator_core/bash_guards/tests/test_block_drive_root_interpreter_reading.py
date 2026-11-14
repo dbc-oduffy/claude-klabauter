@@ -55,7 +55,8 @@ def test_incident_command_is_denied(fake_fs):
     res = _enveloped(guard.check)(_payload(INCIDENT, "F:\\dev"))
     assert res is not None
     out = res["hookSpecificOutput"]
-    # block-drive-root-new-dir-bash-write is ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403).
+    # An interpreter-body write is an uncertain parse: `_warn` stays an advisory even though the
+    # guard's certain-parse path is a box-degrading deny.
     assert out["permissionDecision"] == "allow"
     assert "'e'" in out["additionalContext"]
     assert "<repo>/scratch/" in out["additionalContext"]

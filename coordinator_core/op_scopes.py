@@ -714,6 +714,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # ask_spool.withdraw — "show_top", MUTATING: the spool lives under the calling worktree's
     # .coordinator-local/ask-spool, the same root the submit hook spooled into.
     "ask_spool.withdraw":                     "show_top",
+    # landing.guard_selection — "show_top", COMPUTE_ONLY: reads the calling worktree's
+    # coordinator.local.md; a caller-named repo_root param overrides.
+    "landing.guard_selection":                "show_top",
     # scratch.record_run_path, scratch.keep — "show_top", MUTATING: same run-record lookup as scratch.delete.
     "scratch.record_run_path":                "show_top",
     "scratch.keep":                           "show_top",

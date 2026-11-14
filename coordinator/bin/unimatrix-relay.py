@@ -79,7 +79,7 @@ import socket
 import stat
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 SESS = "~/.claude/sessions"
@@ -134,9 +134,17 @@ def mark_stale(name, state, until, box):
     return {"ok": True}
 
 
+# Every verb parse_mode accepts; a sender probes this list instead of guessing a far mirror's version.
+CAPABILITIES = ["roster", "source", "specs", "capabilities", "send", "send-batch", "send-to", "send-named",
+                "send-session", "receipts", "inbox-mux", "inbox", "reply-inbox", "mirror-stale",
+                "membership", "grant", "revoke", "keypin"]
+
+
 def parse_mode(original_command):
     """Map an SSH_ORIGINAL_COMMAND string to (mode, arg) or None when it is not allowed."""
     cmd = (original_command or "").split()
+    if cmd == ["capabilities"]:
+        return "capabilities", None
     if cmd == ["roster"]:
         return "roster", None
     if cmd == ["source"]:
@@ -522,7 +530,9 @@ def _router_resolve(name):
         answer = router.request_line(ctl, {"op": "resolve", "name": name}, 2)
     except Exception:  # no router, an older router without the op, or an unreadable answer: local checks stand
         return None
-    return answer if isinstance(answer, dict) and "ok" in answer else None
+    if not isinstance(answer, dict) or "ok" not in answer or answer.get("error") == "unknown op":
+        return None
+    return answer
 
 
 def _session_path(pid, expected_digest=None, expected_name_digest=None, expected_session_id=None):
@@ -728,11 +738,11 @@ def record_receipt(session_id, line, now=None):
     stamp = time.time() if now is None else now
     digest = hashlib.sha256(line.rstrip(b"\n")).hexdigest()
     row = {"session": session_id, "digest": digest, "at": stamp,
-           "ts": datetime.fromtimestamp(stamp).astimezone().isoformat(timespec="seconds")}
+           "ts": datetime.fromtimestamp(stamp, timezone.utc).astimezone().isoformat(timespec="seconds")}
     data = (json.dumps(row) + "\n").encode("utf-8")
     path = receipts_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
+    fd = _open_append(path)
     try:
         os.write(fd, data)
         size = os.fstat(fd).st_size
@@ -741,6 +751,22 @@ def record_receipt(session_id, line, now=None):
     if size > 2 * RECEIPT_KEEP * len(data):
         _trim_receipts(path)
     return digest
+
+
+def _open_append(path):
+    """fd whose every write lands at end-of-file atomically.
+
+    The Windows CRT emulates O_APPEND as seek-then-write, which racing writers interleave and
+    lose rows to; a handle opened with FILE_APPEND_DATA only makes the kernel do the append."""
+    if os.name != "nt":
+        return os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    import msvcrt
+    import win32file
+    handle = win32file.CreateFile(
+        str(path), 0x0004,  # FILE_APPEND_DATA
+        win32file.FILE_SHARE_READ | win32file.FILE_SHARE_WRITE | win32file.FILE_SHARE_DELETE,
+        None, win32file.OPEN_ALWAYS, win32file.FILE_ATTRIBUTE_NORMAL, None)
+    return msvcrt.open_osfhandle(handle.Detach(), os.O_APPEND | os.O_BINARY)
 
 
 def _trim_receipts(path):
@@ -1684,7 +1710,7 @@ def main():
         pass
     parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
-        sys.exit("usage: roster | specs | send <pid> | send-batch <pid> | send-to <pid> <digest> | send-named <pid> <digest> <name-digest> | send-session <pid> <digest> <name-digest> <session-id> | receipts <session-id> <since> | inbox <name> | inbox-mux | reply-inbox <name> | source | "
+        sys.exit("usage: roster | capabilities | specs | send <pid> | send-batch <pid> | send-to <pid> <digest> | send-named <pid> <digest> <name-digest> | send-session <pid> <digest> <name-digest> <session-id> | receipts <session-id> <since> | inbox <name> | inbox-mux | reply-inbox <name> | source | "
                  "grant <grantee> <note> <ttl> <repo> | revoke <grantee> | keypin <box_id> | membership get | membership put")
     mode, arg = parsed
     if mode == "membership":
@@ -1716,6 +1742,8 @@ def main():
         sys.exit(0 if reply.get("ok") is True else 1)
     if mode == "mirror-stale":
         print(json.dumps(mark_stale(*arg)))
+    elif mode == "capabilities":
+        print(json.dumps({"ok": True, "capabilities": CAPABILITIES, "relay_sha": relay_sha()}))
     elif mode == "roster":
         roster()
     elif mode == "specs":

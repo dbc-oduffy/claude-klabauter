@@ -11,10 +11,10 @@ absent from HEAD (the halted-hold history walk), and at least `MIN_HISTORY` comm
 - `legs`: per `review_prep_legs` leg, inclusive `wall_ms`, `cpu_ms` (own thread) and `spawns`.
 
     python coordinator_core/benchmarks/review_prep_peer_scale.py [--peers 20] [--dirty 150]
-        [--small-peers 5 --small-dirty 30] [--runs 3] [--enforce]
+        [--small-peers 5 --small-dirty 30] [--runs 5] [--enforce]
 
-`--enforce` exits 1 when `process_ms` >= `PROCESS_BAR_MS` or the spawn count differs between the small
-and the large scenario.
+`--enforce` exits 1 when any sample's `process_ms` >= `PROCESS_BAR_MS`, the median `process_ms` (reported
+as `median_ms`) >= `REVIEW_PREP_BAR_MS`, or the spawn count differs between the small and the large scenario.
 """
 
 from __future__ import annotations
@@ -28,8 +28,10 @@ import time
 from collections import Counter
 from pathlib import Path
 
-PROCESS_BAR_MS = 500.0
-RUNS = 3
+PROCESS_BAR_MS = 500.0  # kill bar: the slowest sample must stay under it
+REVIEW_PREP_BAR_MS = 200.0  # CLAUDE.md's per-process fix bar: the median sample must stay under it
+RUNS = 5
+SETUP_SAMPLES = 3  # the import-only baseline is a median: one 15ms-quantised sample would land its jitter in every delta
 MIN_HISTORY = 120
 PEER_PATHS = 2
 WITHHELD_PER_PEER = 4
@@ -183,6 +185,7 @@ _WARM_MODULES = (
     "coordinator_core.ops.dispatch_emit.emission_receipt",
     "coordinator_core.ops.dispatch_emit.run_scratch",
     "coordinator_core.ops.review_mint.roster",
+    "coordinator_core.git.ref_cas_retry",
 )
 
 
@@ -239,7 +242,7 @@ def measure(peers: int, dirty: int, tree: bool) -> dict:
         params = seed_peer_scale(repo, peers, dirty)
         params_path = repo.parent / "params.json"
         params_path.write_text(json.dumps(params), encoding="utf-8")
-        setup = _run_child(repo, params_path, repo.parent, "setup", True) if tree else None
+        setups = [_run_child(repo, params_path, repo.parent, f"setup{i}", True) for i in range(SETUP_SAMPLES)] if tree else []
         full = _run_child(repo, params_path, repo.parent, "full", False)
     payload = full["payload"]
     if payload["error"]:
@@ -247,6 +250,7 @@ def measure(peers: int, dirty: int, tree: bool) -> dict:
     result = {"peers": peers, "dirty_declared": dirty, "spawn_count": payload["spawn_count"],
               "git_verbs": payload["git_verbs"], "verdict": payload["verdict"], "legs": payload["legs"]}
     if tree:
+        setup = sorted(setups, key=lambda m: m["process_time_ms"])[len(setups) // 2]
         result["process_ms"] = round(full["process_time_ms"] - setup["process_time_ms"], 1)
         result["procs"] = full["procs"] - setup["procs"]
     return result
@@ -271,9 +275,9 @@ def main(argv=None) -> int:
         with fixture_settings_home(Path(args.repo).parent):
             return child_main(Path(args.repo), json.loads(Path(args.params).read_text(encoding="utf-8")), args.setup_only)
 
-    import tempfile
+    from coordinator_core.temp_layout import managed_temp_dir
 
-    with tempfile.TemporaryDirectory(prefix="review-prep-peer-") as parent, fixture_settings_home(parent):
+    with managed_temp_dir(prefix="review-prep-peer-") as parent, fixture_settings_home(parent):
         declare_benchmark_origin()
         small = measure(args.small_peers, args.small_dirty, tree=False)
         runs = sorted((measure(args.peers, args.dirty, tree=True) for _ in range(max(1, args.runs))),
@@ -282,13 +286,17 @@ def main(argv=None) -> int:
     large["spawn_count_small"] = small["spawn_count"]
     large["spawn_constant"] = all(small["spawn_count"] == r["spawn_count"] for r in runs)
     large["within_bar"] = all(r["process_ms"] < PROCESS_BAR_MS for r in runs)
-    print(f"[peers={args.peers} dirty={args.dirty}] process_ms={large['process_ms']} procs={large['procs']} "
+    large["median_ms"] = large["process_ms"]
+    large["within_review_bar"] = large["process_ms"] < REVIEW_PREP_BAR_MS
+    print(f"[peers={args.peers} dirty={args.dirty}] process_ms={large['process_ms']} "
+          f"within_review_bar={large['within_review_bar']} procs={large['procs']} "
           f"spawn_count={large['spawn_count']} (peers={args.small_peers} dirty={args.small_dirty}: "
           f"{small['spawn_count']}) git_verbs={large['git_verbs']}")
     for name, b in sorted(large["legs"].items(), key=lambda kv: -kv[1]["wall_ms"]):
         print(f"  {name:24s} calls={b['calls']:<3d} spawns={b['spawns']:<4d} wall_ms={b['wall_ms']:<9} cpu_ms={b['cpu_ms']}")
     print(json.dumps(large))
-    return 1 if (args.enforce and not (large["spawn_constant"] and large["within_bar"])) else 0
+    ok = large["spawn_constant"] and large["within_bar"] and large["within_review_bar"]
+    return 1 if (args.enforce and not ok) else 0
 
 
 if __name__ == "__main__":

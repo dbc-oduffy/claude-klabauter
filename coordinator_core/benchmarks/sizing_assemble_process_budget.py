@@ -22,7 +22,6 @@ import importlib.util
 import io
 import statistics
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -144,7 +143,9 @@ def _reset(repo: Path) -> None:
 
 def measure(runs: int = DEFAULT_RUNS) -> dict:
     """Build the fixture, then a cold call and the median of `runs` warm calls; returns the report."""
-    scratch = Path(tempfile.mkdtemp(prefix="sizing-assemble-bench-", dir=_scratch_parent()))
+    from coordinator_core.temp_layout import make_managed_temp_dir
+
+    scratch = make_managed_temp_dir(prefix="sizing-assemble-bench-")
     try:
         root = scratch / "repo"
         root.mkdir()
@@ -174,11 +175,6 @@ def measure(runs: int = DEFAULT_RUNS) -> dict:
     finally:
         rmtree_or_raise(scratch, label="sizing-assemble-bench")
 
-
-def _scratch_parent() -> str:
-    from coordinator_core.temp_layout import managed_tempdir
-
-    return str(managed_tempdir())
 
 
 def main() -> int:

@@ -13,7 +13,6 @@ import builtins
 import os
 import statistics
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Optional, Sequence
@@ -87,7 +86,13 @@ def seed(root: Path, peers: int, agents: int, own_agents: int = 5, claims_per_pe
 
 def measure(peers: int, agents: int, scratch_parent: Optional[str] = None) -> dict:
     """One seeded release: `{process_ms, files_opened, peers, agents}`."""
-    tmp = tempfile.mkdtemp(prefix="claim-release-bench-", dir=scratch_parent)
+    if scratch_parent is None:
+        from coordinator_core.temp_layout import make_managed_temp_dir
+
+        tmp = str(make_managed_temp_dir(prefix="claim-release-bench-"))
+    else:
+        from coordinator_core.temp_layout import mkdtemp_in
+        tmp = mkdtemp_in("claim-release-bench-", scratch_parent)
     try:
         root = Path(tmp) / "repo"
         base = seed(root, peers, agents)

@@ -326,6 +326,7 @@ def _slice_record(
     context: tuple[Optional[str], tuple[str, ...]] = (None, ()),
     stop_after: Optional[str] = None,
     sized: Optional[Mapping] = None, deliverable_id: Optional[str] = None,
+    repo_root: Optional[Path] = None,
 ) -> dict:
     """A slice sizing. A relayed or unmarked asks item (it arrives with no `turns`) is stamped relayed,
     carries its text and sender in `em_analysis`, and never gets a `pm_verbatims` row.
@@ -353,7 +354,7 @@ def _slice_record(
     prose_block, context_paths = context
     if prose_block:
         record["em_analysis"][EM_BRIEF_KEY] = prose_block
-    paths_value = em_context_paths_value(context_paths)
+    paths_value = em_context_paths_value(context_paths, repo_root)
     if paths_value is not None:
         record["em_analysis"][EM_CONTEXT_PATHS_KEY] = paths_value
     if route_pref is not None:
@@ -859,6 +860,7 @@ def _fanout(
             sender=relay[i][0], relayed_text=relay[i][1], route_pref=route_prefs[i],
             context=contexts[i], stop_after=stop_afters[i],
             sized=sized, deliverable_id=deliverable_id if sized and sl.label == contract.SEAM_PASS_LABEL else None,
+            repo_root=root,
         )
         errors = validate_frontmatter(record, _SIZING_SCHEMA_PATH)
         if errors:

@@ -295,9 +295,9 @@ def _print_attribution_vacated(results: dict) -> None:
 
 
 def main(n=12):
-    import tempfile
+    from coordinator_core.temp_layout import managed_temp_dir
 
-    with tempfile.TemporaryDirectory(prefix="probe-commit-gates-") as parent, fixture_settings_home(parent):
+    with managed_temp_dir(prefix="probe-commit-gates-") as parent, fixture_settings_home(parent):
         return _main(n)
 
 

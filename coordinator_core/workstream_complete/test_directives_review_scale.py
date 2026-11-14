@@ -50,6 +50,7 @@ from coordinator_core.ops.ceremony.wsc_disposition import (
 )
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import scope as _session_scope
+from coordinator_core.temp_layout import managed_temp_dir
 from coordinator_core.workstream_complete import directives_review, judgments
 from coordinator_core.workstream_complete.directives_review import (
     decide_review_scale,
@@ -547,10 +548,7 @@ def test_measure_session_review_scale_inputs_counts_committed_and_uncommitted_to
     half would reproduce the exact defect this chunk fixes — and untracked
     files must count, since a session whose whole output is new `state/`
     artifacts is invisible to `git diff`."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+    with managed_temp_dir("directives-review-scale-") as root:
         _init_git_repo(root)
         session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
@@ -579,10 +577,7 @@ def test_measure_session_review_scale_inputs_excludes_peer_work_on_a_shared_work
     5 surfaces of peers' in-flight work, forcing a spurious
     PARTITION-MANDATORY and inviting a review attestation over changes the
     closing session never authored."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+    with managed_temp_dir("directives-review-scale-") as root:
         _init_git_repo(root)
         session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
@@ -621,10 +616,7 @@ def test_split_tracked_partitions_mixed_tracked_and_untracked_with_normalization
     tracked+untracked list partitions correctly, and a Windows-style
     backslash path is normalized (`git ls-files` itself emits forward
     slashes) before the tracked/untracked comparison."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+    with managed_temp_dir("directives-review-scale-") as root:
         _init_git_repo(root)
         (root / "sub").mkdir()
         (root / "sub" / "tracked.py").write_text("x = 1\n", encoding="utf-8")
@@ -648,10 +640,7 @@ def test_measure_session_review_scale_inputs_counts_backslash_tracked_modified_f
     was meant to close, one call site downstream. Regression pin: a tracked,
     modified file passed with a backslash separator must still contribute
     its diff lines."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+    with managed_temp_dir("directives-review-scale-") as root:
         _init_git_repo(root)
         session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
         (root / "sub").mkdir()
@@ -681,10 +670,7 @@ def test_measure_session_review_scale_inputs_expands_untracked_directory():
     returned `resolved=False`. That fails toward reviewing LESS, the exact
     direction `_measure_session_review_scale_inputs`'s negative-spec forbids.
     """
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+    with managed_temp_dir("directives-review-scale-") as root:
         _init_git_repo(root)
         session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
         (root / "seed.py").write_text("x = 1\n", encoding="utf-8")
@@ -720,10 +706,7 @@ def test_measure_session_review_scale_inputs_exhausted_walk_budget_trips_brightl
     Regression pin: if a future change lowers the raise, drops it, or
     restores a `None` return on overflow, `decide_review_scale` silently
     stops selecting `partitioned` for the largest diffs in the fleet."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+    with managed_temp_dir("directives-review-scale-") as root:
         _init_git_repo(root)
         session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
         (root / "seed.py").write_text("x = 1\n", encoding="utf-8")
@@ -773,10 +756,7 @@ def test_measure_session_review_scale_inputs_propagates_none_on_split_tracked_gi
     inputs` -- the pre-fix behaviour this pins against silently fell back to
     `(list(paths), [])`, scoring the untracked share of `paths` at zero LOC
     while still returning a real, resolved-looking triple."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+    with managed_temp_dir("directives-review-scale-") as root:
         _init_git_repo(root)
         (root / "present.py").write_text("x = 1\n", encoding="utf-8")
 
@@ -796,10 +776,7 @@ def test_measure_session_review_scale_inputs_propagates_none_on_unreadable_untra
     with a peer's write or a staged-for-deletion path) must propagate as the
     FULL `(None, None, None)` triple, never a triple with the unreadable
     file's contribution silently scored as zero."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+    with managed_temp_dir("directives-review-scale-") as root:
         _init_git_repo(root)
         session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
@@ -816,10 +793,7 @@ def test_measure_session_review_scale_inputs_no_owned_commits_and_none_session_s
     the fixture, that degrades to an empty uncommitted set, so this is a
     genuinely successful measurement of an empty change set: `(0, 0, 0)`,
     not a `None` triple."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+    with managed_temp_dir("directives-review-scale-") as root:
         _init_git_repo(root)
 
         result = _measure(root, _SESSION_ID, [])
@@ -1351,10 +1325,7 @@ def test_measure_session_review_scale_inputs_excludes_touch_claimed_peer_dirty_f
     file, which passes `uncommitted_paths` explicitly and so never reaches
     `classify_session_authored_files`/`resolve_known_concurrent_paths` at
     all)."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+    with managed_temp_dir("directives-review-scale-") as root:
         _init_git_repo(root)
         session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
@@ -1390,10 +1361,7 @@ def test_measure_session_review_scale_inputs_still_misattributes_untouch_claimed
     commit-time pass) carries no positive authorship signal and is still
     swept into this session's own measurement. Guards against silently
     regressing this residual into a falsely-reported "closed" state."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+    with managed_temp_dir("directives-review-scale-") as root:
         _init_git_repo(root)
         session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 

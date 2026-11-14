@@ -311,13 +311,14 @@ def run_hook_fire_breakdown(n: int = 25, k_process: int = 20, warmup: int = 3,
 
     `tmp_engine_root` is a caller-supplied directory to stamp as the test
     listener's engine root (a pytest `tmp_path`, typically); a fresh
-    `tempfile.TemporaryDirectory` is used if omitted, e.g. for ad hoc
+    a managed Temp dir is used if omitted, e.g. for ad hoc
     `python -m coordinator_core.benchmarks.hook_seam_bench` runs.
     """
     import subprocess
     import sys
-    import tempfile
     from pathlib import Path
+
+    from coordinator_core.temp_layout import managed_temp_dir
 
     def _run(root):
         httpd, port = _bind_test_http_listener(Path(root))
@@ -377,7 +378,7 @@ def run_hook_fire_breakdown(n: int = 25, k_process: int = 20, warmup: int = 3,
     if tmp_engine_root is not None:
         wall_summaries, process_rows = _run(tmp_engine_root)
     else:
-        with tempfile.TemporaryDirectory(prefix="hook-seam-bench-") as td:
+        with managed_temp_dir(prefix="hook-seam-bench-") as td:
             wall_summaries, process_rows = _run(td)
 
     return {

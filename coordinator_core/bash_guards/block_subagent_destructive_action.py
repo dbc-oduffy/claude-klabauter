@@ -153,7 +153,12 @@ deliberate carve-out -- the safe-forward allowlist gated bare `git stash`
 and `git stash push` (with no pathspec) through to allow on BOTH the
 anchored path (`subcmd == "stash": return None`, unconditional) and the
 legacy path (`_STASH_WORD_RE.search(seg): return None`, unconditional).
-Only `pop`/`apply` (`_STASH_POP_APPLY_RE`) and `drop`/`clear`
+STASH POP ALLOWED (2026-11-13): `git stash pop` restores a stash, so only
+`apply` (`_STASH_APPLY_RE`) denies; create/apply/push/save/bare stay denied
+(coordinator-content-repo 8b2a1c5acb floor verbs). Earlier notes below that say pop/apply
+deny are superseded for pop.
+
+Only `apply` (`_STASH_APPLY_RE`) and `drop`/`clear`
 (`_STASH_DROP_CLEAR_RE`) were ever denied; the write-side verb itself was
 open. This is the single most dangerous stash shape for a shared working
 tree: it sweeps EVERY other live session's uncommitted changes into a
@@ -174,8 +179,8 @@ the pre-existing checks above).
 STASH-POP/DROP DENY-MESSAGE ALTERNATIVE (2026-07-29, this change): executor
 doctrine's "prove the failure is pre-existing" recipe used to read
 `git stash push -u -- <own paths>` / `git checkout $MB` / `git stash pop` --
-the last step is unconditionally denied here (`_POP_APPLY_ACTION_RE`, no
-override), so a subagent following the doctrine as written could never
+the last step was unconditionally denied here (since allowed for pop; apply
+still denied via `_APPLY_ACTION_RE`, no override), so a subagent following the doctrine as written could never
 finish it. Confirmed live: a subagent that got stuck this way recovered
 by hand via `git show stash@{0}:<path>` + `cp`, and separately, ten
 orphaned stash entries were found on this branch, most named
@@ -197,9 +202,9 @@ make the new recipe work. What DID change here is the `pop`/`apply` and
 `drop`/`clear` deny messages: they used to fall through to the generic
 catch-all reason with no forward path at all; they now name the no-stash
 recipe explicitly (design-as-offers: "did you mean X", not a bare "no").
-Deny-side behavior (pop/apply/drop/clear still hard-denied, unconditionally,
-for subagents) is UNCHANGED -- see `test_git_stash_pop_still_denies_as_pop_
-apply`/`test_git_stash_drop_still_denies_as_drop_clear` et al., still green.
+Deny-side behavior (apply/drop/clear hard-denied, unconditionally, for
+subagents; pop allowed since 2026-11-13) -- see `test_git_stash_apply_still_
+denies`/`test_git_stash_drop_still_denies_as_drop_clear` et al.
 
 SAFE-FORWARD OPTION-SURFACE HARDENING (2026-07-25, THIS change, P0 security
 fix): the ANCHORED classifier's safe-forward allowlist
@@ -255,7 +260,7 @@ Fix, in two parts:
      denies ``-f``/``--force`` (replaces an existing tag ref, confirmed via
      ``git tag -h``). ``restore`` and ``stash`` were reviewed against their
      own ``-h`` output and found to have no analogous ungated write vector
-     beyond what the existing staged/worktree and pop/apply/drop/clear
+     beyond what the existing staged/worktree and apply/drop/clear
      gates already cover -- no change made there.
 The LEGACY free-text classifier (``_evaluate_git_segment_legacy``) is
 intentionally UNCHANGED -- per its own docstring, it is the "fall back to
@@ -1627,7 +1632,7 @@ _RESET_STRIP_PREFIX_RE = re.compile(r".*(?:^|\s)reset(?:\s|$)")
 _RESET_REF_RE = re.compile(r"(?:HEAD|@\{|[0-9a-f]{7,40}|/)")
 _DASHDASH_SEP_RE = re.compile(r"--(?:\s|$)")
 
-_STASH_POP_APPLY_RE = re.compile(r"\bstash\b.*\b(?:pop|apply)\b")
+_STASH_APPLY_RE = re.compile(r"\bstash\b.*\bapply\b")
 #: `stash` subcommands OTHER than the sweep-everything push/bare shape --
 #: read-only (`list`/`show`) or a different write shape entirely
 #: (`branch`/`store`) not targeted by the 2026-07-26
@@ -1639,7 +1644,7 @@ _STASH_POP_APPLY_RE = re.compile(r"\bstash\b.*\b(?:pop|apply)\b")
 #: working-tree effect, so listing it here as a non-sweep "other action"
 #: exempted a real unscoped sweep from the rule below.
 _STASH_OTHER_ACTION_WORD_RE = re.compile(
-    r"\bstash\b\s+(?:list|show|branch|store)\b"
+    r"\bstash\b\s+(?:list|show|branch|store|pop)\b"
 )
 #: `git stash create` writes a stash commit of every uncommitted change
 #: (DoE floor verb set: bare, push, save, create, apply, pop); denied for a
@@ -1921,6 +1926,101 @@ def _plumbing_verdict(subcmd: str, args: List[str]) -> Optional[str]:
 
 
 _PLUMBING_SUBCOMMANDS = _OBJECT_PLUMBING_SUBCOMMANDS | {"read-tree", "update-ref"}
+
+_REF_ONLY_MERGE_DENY_KIND = "git update-ref of the checked-out branch to a merge commit (index and worktree left behind)"
+_REF_ONLY_MERGE_ROUTE = (
+    "coordinator-invoke dispatch.commit_merge --repo <repo-root> "
+    """'{"theirs_ref":"<ref>","resolved_dir":"<dir>","conflicted":[],"message":"<msg>","expected_head":"<sha>"}'"""
+)
+_UNRESOLVED_VALUE_RE = re.compile(r"[$`(]")
+
+
+def _checked_out_branch_ref(start: Optional[str]) -> Optional[str]:
+    """`refs/heads/<branch>` that HEAD names at the repo holding ``start``; None when detached or unreadable. No spawn."""
+    if not start:
+        return None
+    here = Path(start)
+    for cand in (here, *here.parents):
+        dot_git = cand / ".git"
+        try:
+            if dot_git.is_file():
+                text = dot_git.read_text(encoding="utf-8", errors="replace").strip()
+                if not text.startswith("gitdir:"):
+                    return None
+                gitdir = Path(text[len("gitdir:"):].strip())
+                if not gitdir.is_absolute():
+                    gitdir = cand / gitdir
+            elif dot_git.is_dir():
+                gitdir = dot_git
+            else:
+                continue
+            head = (gitdir / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            return None
+        return head[len("ref: "):].strip() if head.startswith("ref: refs/heads/") else None
+    return None
+
+
+def _flag_letters(tok: str) -> str:
+    return tok[1:] if tok.startswith("-") and not tok.startswith("--") else ""
+
+
+def _syncs_worktree(seg: List[str]) -> bool:
+    """True for a `read-tree` segment that rewrites the shared index and worktree (`-m -u` or `--reset -u`)."""
+    if "read-tree" not in seg:
+        return False
+    letters = "".join(_flag_letters(t) for t in seg)
+    return "u" in letters and ("m" in letters or "--reset" in seg)
+
+
+def _ref_only_merge_verdict(cmd_norm: str, cwd: Optional[str]) -> Optional[str]:
+    """Deny kind when the command moves the checked-out branch to a merge commit with no earlier `read-tree -m -u`.
+
+    A new value is a merge when the command builds it with a two-parent `commit-tree`, or when it is a
+    literal commit with a second parent (one `rev-parse`, spent only on a HEAD-branch update-ref).
+    """
+    if "update-ref" not in cmd_norm:
+        return None
+    tokens = _tokenize_full_command(cmd_norm)
+    if tokens is None:
+        return None
+    segments = [seg for seg, _pipe in _segments_from_tokens(tokens)]
+    two_parent_build = any(
+        "commit-tree" in seg and sum(1 for t in seg if t in ("-p", "--parent")) >= 2 for seg in segments
+    )
+    for index, seg in enumerate(segments):
+        if "update-ref" not in seg:
+            continue
+        verb = seg.index("update-ref")
+        workdir = cwd
+        if "-C" in seg[:verb] and seg.index("-C") + 1 < verb:
+            workdir = seg[seg.index("-C") + 1]
+            if cwd and not os.path.isabs(workdir):
+                workdir = os.path.join(cwd, workdir)
+        positional: List[str] = []
+        skip = False
+        for tok in seg[verb + 1:]:
+            if skip:
+                skip = False
+            elif tok in _UPDATE_REF_OPTS_WITH_ARG:
+                skip = True
+            elif not tok.startswith("-"):
+                positional.append(tok)
+        if len(positional) < 2:
+            continue
+        ref, new = positional[0], positional[1]
+        branch = _checked_out_branch_ref(workdir)
+        if branch is None or ref not in ("HEAD", branch):
+            continue
+        if _UNRESOLVED_VALUE_RE.search(new):
+            merge = two_parent_build
+        else:
+            from coordinator_core.git.run import run_git
+
+            merge = run_git(["rev-parse", "--verify", "-q", f"{new}^2"], cwd=workdir, timeout=2.0).returncode == 0
+        if merge and not any(_syncs_worktree(prior) for prior in segments[:index]):
+            return _REF_ONLY_MERGE_DENY_KIND
+    return None
 
 #: Verbs that stay denied when unrecognized: each can lose work another session has not committed
 #: or published, or move a ref off-box.
@@ -3296,8 +3396,8 @@ def _evaluate_git_segment_anchored(
         if _RESET_REF_RE.search(reset_after) and not _DASHDASH_SEP_RE.search(reset_after):
             return "git reset <prior-ref>"
 
-    if subcmd == "stash" and _POP_APPLY_ACTION_RE.search(seg):
-        return "git stash pop/apply"
+    if subcmd == "stash" and _APPLY_ACTION_RE.search(seg):
+        return "git stash apply"
 
     if subcmd == "stash":
         # 2026-07-26 fix (module docstring "UNSCOPED-STASH GAP CLOSE"): bare
@@ -3508,10 +3608,10 @@ def _evaluate_git_segment_anchored(
     return None
 
 
-#: Action-only counterparts of `_STASH_POP_APPLY_RE`/`_STASH_DROP_CLEAR_RE`
+#: Action-only counterparts of `_STASH_APPLY_RE`/`_STASH_DROP_CLEAR_RE`
 #: for the anchored path -- subcommand identity is already confirmed via
 #: argv position, so only the action word itself needs a text search.
-_POP_APPLY_ACTION_RE = re.compile(r"\b(?:pop|apply)\b")
+_APPLY_ACTION_RE = re.compile(r"\bapply\b")
 _DROP_CLEAR_ACTION_RE = re.compile(r"\b(?:drop|clear)\b")
 
 
@@ -3845,7 +3945,7 @@ def _evaluate_git_segment(seg: str, strict: bool = True) -> Optional[str]:
     segment merely CONTAINS the word "git" (the `\\bgit\\b` gate in
     `_unwrap_and_classify`) without matching any of the specific
     destructive-verb patterns above it (push --force, rebase, reset --hard,
-    stash pop/apply, ...). That terminal catchall is correct default-deny
+    stash apply, ...). That terminal catchall is correct default-deny
     posture for a REAL shell segment (`strict=True`'s only path here is a
     genuinely unparseable shell command, where failing closed on an
     unrecognized verb is exactly the intended "novel verb" protection) --
@@ -3860,7 +3960,7 @@ def _evaluate_git_segment(seg: str, strict: bool = True) -> Optional[str]:
     (the `-c`-payload recursive scan) suppresses ONLY that terminal
     catchall -- every specific destructive-verb pattern above it in
     `_evaluate_git_segment_legacy` (push --force, rebase, reset --hard,
-    commit --amend, branch -D, stash pop/apply/drop/clear, stash unscoped,
+    commit --amend, branch -D, stash apply/drop/clear, stash unscoped,
     tag -d, reflog delete/expire, filter-branch/filter-repo, clean -fd,
     worktree <mutate>, remote <mutate>, checkout <pathspec>, restore
     <worktree>) is UNCHANGED and still fires on free-text co-occurrence,
@@ -3931,8 +4031,8 @@ def _evaluate_git_segment_legacy(
         if _RESET_REF_RE.search(reset_after) and not _DASHDASH_SEP_RE.search(reset_after):
             return "git reset <prior-ref>"
 
-    if _STASH_POP_APPLY_RE.search(seg):
-        return "git stash pop/apply"
+    if _STASH_APPLY_RE.search(seg):
+        return "git stash apply"
 
     # 2026-07-26 fix (module docstring "UNSCOPED-STASH GAP CLOSE"): bare
     # `git stash`, the IMPLICIT-push flag-only form (`git stash -u`), and
@@ -4456,6 +4556,17 @@ def _build_reason(
             "2026-07-28 for this reason — a brief cannot grant it, because there is\n"
             "nothing to grant."
         )
+    if deny_kind == _REF_ONLY_MERGE_DENY_KIND:
+        return (
+            "BLOCKED: update-ref moved the checked-out branch to a merge commit without syncing "
+            "the shared index and worktree; the other parent's files read as staged deletions "
+            "and the next landing reverts them.\n\n"
+            f"  Denied:   {deny_kind}\n"
+            f"  Command:  {cmd_safe}\n\n"
+            "Commit the merge through the engine:\n"
+            f"    {_REF_ONLY_MERGE_ROUTE}\n"
+            "Or run `git read-tree -m -u <old> <merge>` earlier in the same command."
+        )
     if deny_kind == _GIT_MERGE_DENY_KIND:
         return (
             "BLOCKED: a subagent may not start a merge in the shared checkout.\n\n"
@@ -4473,18 +4584,19 @@ def _build_reason(
             f"  Command:  {cmd_safe}\n\n"
             "Use `git merge-file -p ...` (or `--stdout`) to write the result to stdout."
         )
-    if deny_kind == "git stash pop/apply":
+    if deny_kind == "git stash apply":
         return (
-            "BLOCKED: `git stash pop`/`git stash apply` — this is a STACK-POSITION\n"
+            "BLOCKED: `git stash apply` — this is a STACK-POSITION\n"
             "operation (it always acts on `stash@{0}` unless you name a different\n"
             "index), so on a shared tree with concurrent sessions it can restore a\n"
             "SIBLING session's stash instead of your own, and a conflicted pop can\n"
             "clobber uncommitted work that landed after you pushed. There is no\n"
-            "scoped/pathspec form of pop/apply that would make this safe to allow.\n\n"
+            "scoped/pathspec form of apply that would make this safe to allow.\n"
+            "`git stash pop` is allowed: it restores a stash and removes it.\n\n"
             f"  Subagent: {agent_id} ({effective_type})\n"
             f"  Denied:   {deny_kind}\n"
             f"  Command:  {cmd_safe}\n\n"
-            "You almost certainly don't need pop/apply at all — the common reason\n"
+            "You almost certainly don't need apply at all — the common reason\n"
             "to reach for it is proving a test failure is pre-existing (see executor\n"
             "doctrine § Pre-Existing-Failure Verification), and that recipe no longer\n"
             "uses stash:\n"
@@ -4519,7 +4631,7 @@ def _build_reason(
             "    your report: a stash entry costs nothing, and a sibling session may\n"
             "    still need the one at that position.\n"
             "  - Never needed the stash in the first place? Use the no-stash\n"
-            "    pre-existing-failure recipe instead (see the `stash pop/apply`\n"
+            "    pre-existing-failure recipe instead (see the `stash apply`\n"
             "    deny message, or executor doctrine § Pre-Existing-Failure\n"
             "    Verification) so no entry is created to clean up later.\n\n"
             "There is NO subagent-honored override for this guard — the lock keys on\n"
@@ -5361,6 +5473,9 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cmd_norm = _normalize_windows_argv0_head_path_with_spaces(cmd_norm)
 
     cmd_norm = _normalize_windows_wrapper_argv0(cmd_norm)
+
+    if _ref_only_merge_verdict(cmd_norm, payload.get("cwd")) is not None:
+        return _build_record(_REF_ONLY_MERGE_DENY_KIND, "", "", _sanitize_command(cmd), cmd)
 
     is_git_surface = bool(_GIT_SURFACE_RE.search(cmd_norm))
     is_rm_surface = bool(_RM_SURFACE_RE.search(cmd_norm))

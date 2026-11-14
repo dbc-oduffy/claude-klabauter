@@ -30,7 +30,6 @@ import os
 import random
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -359,9 +358,9 @@ def over_bar(row: dict) -> bool:
 
 def run(lines: int, cap_secs: float, axes: tuple = AXES) -> list:
     from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
-    base = Path(tempfile.mkdtemp(prefix="hunk_split_budget_", dir=managed_tempdir()))
+    base = make_managed_temp_dir(prefix="hunk_split_budget_")
     # Both homes point inside `base`: land_run mints and spends run tokens and rewrites the live-run
     # index under the machine-local registry, and the real one is shared with every live session.
     homes = {"COORDINATOR_SETTINGS_HOME": str(base / "settings"), "CLAUDE_CONFIG_DIR": str(base / "config")}

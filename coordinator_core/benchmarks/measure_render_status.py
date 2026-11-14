@@ -48,7 +48,7 @@ entry point takes the median of `DEFAULT_N` post-warmup samples per point,
 not a single draw.
 
 Never points at the real `state/` tree -- every fixture is materialized
-under a fresh `tempfile.mkdtemp` root and torn down in a `finally`,
+under a fresh managed-temp root and torn down in a `finally`,
 exactly as `measure_read_events.materialize_fixture` does.
 
 Spec backlink: pln-sat-03-event-sourced-completio-c270a1
@@ -62,7 +62,6 @@ import shutil
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -78,7 +77,7 @@ from coordinator_core.benchmarks.measure_read_events import (
 )
 from coordinator_core.benchmarks.timer import SUBPROCESS_CREATIONFLAGS, SUBPROCESS_TIMEOUT_S
 from coordinator_core.tracker_store import EVENTS_DIR_RELPATH
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import make_managed_temp_dir
 
 DEFAULT_N = 10
 """Default timed-sample count per measured point (post warm-up) -- matches
@@ -343,7 +342,7 @@ def measure(
     n: int = DEFAULT_N,
     warmup: int = DEFAULT_WARMUP,
 ) -> dict:
-    tmp_root = Path(tempfile.mkdtemp(prefix="sat03-render-status-bench-", dir=str(managed_tempdir(Path(__file__).resolve().parents[2]))))
+    tmp_root = make_managed_temp_dir(prefix="sat03-render-status-bench-")
     try:
         total_events = materialize_fixture(
             tmp_root,

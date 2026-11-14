@@ -1,4 +1,5 @@
 """Relay send failure: sender inbox notice and the delivery status record (ssh stubbed, tmp_path only)."""
+import hashlib
 import importlib.util
 import json
 import os
@@ -93,9 +94,17 @@ def test_watcher_exits_the_process_once_the_supervisor_is_gone(bridge, monkeypat
     assert exits == [0]
 
 
+def ack_replies(data, bad=()):
+    """The far send-session replies for `data`: a digest ack per line, a refusal for the indexes in `bad`."""
+    rows = [{"ok": False, "error": "ConnectionRefusedError: gone"} if i in bad
+            else {"ok": True, "digest": hashlib.sha256(line).hexdigest()}
+            for i, line in enumerate(data.splitlines())]
+    return "".join(json.dumps(r) + "\n" for r in rows).encode()
+
+
 def stub_ssh(monkeypatch, code, stderr=b""):
-    out = b'{"ok": true}\n' if code == 0 else b""
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, code, out, stderr))
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a, code, ack_replies(k.get("input", b"")) if code == 0 else b"", stderr))
 
 
 def send(bridge):
@@ -173,8 +182,7 @@ def record_ssh(monkeypatch, responder):
 
 
 def test_n_lines_go_in_one_ssh_and_each_gets_a_record(bridge, monkeypatch):
-    replies = b'{"ok": true}\n{"ok": false, "error": "ConnectionRefusedError: gone"}\n{"ok": true}\n'
-    calls = record_ssh(monkeypatch, lambda cmd, data: subprocess.CompletedProcess([], 0, replies, b""))
+    calls = record_ssh(monkeypatch, lambda cmd, data: subprocess.CompletedProcess([], 0, ack_replies(data, bad={1}), b""))
     send_many(bridge, 3)
     assert len(calls) == 1 and re.fullmatch(SEND_SESSION, calls[0][0])
     assert calls[0][1].count(b"\n") == 3
@@ -187,7 +195,8 @@ def test_old_relay_usage_error_is_a_recorded_failure_not_a_per_line_resend(bridg
     calls = record_ssh(monkeypatch, lambda cmd, data: subprocess.CompletedProcess(
         [], 1, b"", b"usage: roster | send <pid> | inbox <name>\n"))
     send_many(bridge, 2)
-    assert len(calls) == 1 and re.fullmatch(SEND_SESSION, calls[0][0])
+    assert [c[0] for c in calls if c[0].startswith("send-session")] == [calls[0][0]] and re.fullmatch(SEND_SESSION, calls[0][0])
+    assert [c[0] for c in calls[1:]] == ["capabilities"]
     status = bridge.delivery_status()
     assert [s.split()[0] for s in status] == ["FAILED", "FAILED"] and "lacks send-session" in status[0]
     assert len(bridge.written) == 2
@@ -306,7 +315,7 @@ def test_an_addressed_name_that_differs_from_the_endpoint_identity_writes_nothin
 
 
 def test_a_matching_addressed_name_still_delivers(bridge, monkeypatch):
-    calls = record_ssh(monkeypatch, lambda cmd, data: subprocess.CompletedProcess([], 0, b'{"ok": true}\n', b""))
+    calls = record_ssh(monkeypatch, lambda cmd, data: subprocess.CompletedProcess([], 0, ack_replies(data), b""))
     send_many(bridge, 1)
     assert len(calls) == 1
     assert [s.split()[0] for s in bridge.delivery_status()] == ["delivered"]
@@ -325,7 +334,7 @@ def test_a_relay_refusal_is_recorded_failed_and_not_retried_per_line(bridge, mon
     calls = record_ssh(monkeypatch, lambda cmd, data: subprocess.CompletedProcess(
         [], 1, b"", b"no live session with pid 4242\n"))
     send_many(bridge, 2)
-    assert len(calls) == 1 and calls[0][0].startswith("send-session 4242 ")
+    assert [c[0] for c in calls if c[0].startswith("send-session")] == [calls[0][0]] and calls[0][0].startswith("send-session 4242 ")
     status = bridge.delivery_status()
     assert [s.split()[0] for s in status] == ["FAILED", "FAILED"] and "no live session" in status[0]
     assert len(bridge.written) == 2

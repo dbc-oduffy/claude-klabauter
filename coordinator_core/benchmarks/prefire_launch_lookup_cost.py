@@ -17,7 +17,6 @@ import contextlib
 import glob
 import os
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -156,9 +155,9 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     owned = args.workdir is None
     if owned:
-        scratch = os.path.join(_REPO_ROOT, "scratch")
-        os.makedirs(scratch, exist_ok=True)
-        workdir = tempfile.mkdtemp(prefix="prefire-lookup-", dir=scratch)
+        from coordinator_core.temp_layout import make_managed_temp_dir
+
+        workdir = str(make_managed_temp_dir(prefix="prefire-lookup-"))
     else:
         workdir = args.workdir
     try:

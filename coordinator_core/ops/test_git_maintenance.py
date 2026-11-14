@@ -575,8 +575,9 @@ def test_every_tier_is_under_the_500ms_brightline(tmp_path):
 
 
 def _pack_dir(tmp_path: Path) -> Path:
-    d = tmp_path / "objects" / "pack"
+    d = tmp_path / ".git" / "objects" / "pack"
     d.mkdir(parents=True)
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     return d
 
 
@@ -701,3 +702,97 @@ def test_env_knob_overrides_the_age_floor(tmp_path, monkeypatch):
     result = gm.sweep_orphan_packs(d, on_wait=lambda: None)
 
     assert result.reaped == [orphan]
+
+
+# --------------------------------------------------------------------------
+# Object-store writer lock: another engine writer holding it defers the tier
+# --------------------------------------------------------------------------
+
+_HOLDER_CHILD = """
+import sys
+from pathlib import Path
+from coordinator_core.git.object_store_lock import hold
+with hold(Path(sys.argv[1]), wait_s=30.0, holder_label="test-holder"):
+    Path(sys.argv[2]).write_text("ready")
+    sys.stdin.read()
+"""
+
+
+@pytest.fixture()
+def foreign_holder(tmp_path):
+    """Start a real process holding the object-store lock of `<repo>/.git`."""
+    import sys
+
+    procs = []
+
+    def start(common: Path) -> None:
+        ready = tmp_path / "holder-ready"
+        env = dict(os.environ)
+        root = str(Path(__file__).resolve().parents[2])
+        env["PYTHONPATH"] = root + os.pathsep + env.get("PYTHONPATH", "")
+        proc = subprocess.Popen(
+            [sys.executable, "-c", _HOLDER_CHILD, str(common), str(ready)],
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **no_console_creationflags(),
+        )
+        procs.append(proc)
+        deadline = time.monotonic() + 30
+        while not ready.exists():
+            assert time.monotonic() < deadline, "holder never took the lock"
+            time.sleep(0.02)
+
+    yield start
+    for proc in procs:
+        proc.stdin.close()
+        proc.wait(timeout=60)
+
+
+@pytest.mark.parametrize("tier", ["hourly", "daily", "weekly"])
+def test_a_held_object_store_lock_defers_every_tier_with_no_git_spawned(
+    tmp_path, monkeypatch, foreign_holder, tier
+):
+    repo = _init_repo(tmp_path)
+    foreign_holder(repo / ".git")
+
+    def no_git(*args, **kwargs):
+        raise AssertionError(f"git spawned under a held object-store lock: {args}")
+
+    monkeypatch.setattr(gm, "run_git", no_git)
+    monkeypatch.setattr(gm, "absolute_git_dir", lambda r: str(repo / ".git"))
+    monkeypatch.setattr(gm, "git_common_dir", lambda r: str(repo / ".git"))
+
+    result = gm.run_tier(repo, tier)
+
+    assert result.deferred is not None and "object-store lock" in result.deferred
+    assert result.ran is False and result.pruned is False
+    assert result.rc == 0
+
+
+def test_a_held_object_store_lock_defers_the_orphan_sweep_and_unlinks_nothing(
+    tmp_path, foreign_holder
+):
+    d = _pack_dir(tmp_path)
+    common = d.parent.parent
+    orphan = _write(d / ".tmp-1234-pack-abcdef.pack", age_sec=3600)
+    foreign_holder(common)
+
+    result = gm.sweep_orphan_packs(d, on_wait=lambda: pytest.fail("window paid under a held lock"))
+
+    assert result.deferred is not None
+    assert result.reaped == [] and orphan.exists()
+
+
+def test_the_tier_runs_once_the_foreign_holder_is_gone(tmp_path):
+    repo = _init_repo(tmp_path)
+    result = gm.run_tier(repo, "hourly")
+    assert result.deferred is None and result.ran is True
+
+
+def test_sweep_refuses_a_pack_dir_not_shaped_objects_pack(tmp_path):
+    odd = tmp_path / "elsewhere"
+    odd.mkdir()
+    with pytest.raises(ValueError):
+        gm.sweep_orphan_packs(odd, on_wait=lambda: None)

@@ -448,11 +448,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--repo-root", default=None)
     ap.add_argument("--skip-gates", action="store_true", help="skip measure (e)")
     args = ap.parse_args(argv)
-    import tempfile
-
     from coordinator_core.benchmarks import fixture_settings_home
+    from coordinator_core.temp_layout import managed_temp_dir
 
-    with tempfile.TemporaryDirectory(prefix="claim-spike-home-") as home, fixture_settings_home(home):
+    with managed_temp_dir(prefix="claim-spike-home-") as home, fixture_settings_home(home):
         return _run(args)
 
 

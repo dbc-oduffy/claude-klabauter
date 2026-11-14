@@ -28,7 +28,6 @@ import socket
 import statistics
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -177,7 +176,8 @@ class _FakeEngine:
 
     def __init__(self, delay_ms: Optional[int]) -> None:
         self.delay_ms = delay_ms
-        self.base = Path(tempfile.mkdtemp(prefix="dhrl", dir="/tmp"))
+        from coordinator_core.temp_layout import mkdtemp_in
+        self.base = mkdtemp_in("dhrl", "/tmp")
         self.root = self.base / "e"
         self.runtime = self.base / "r"
         self.settings = self.base / "s"

@@ -216,7 +216,7 @@ from coordinator_core.ops.dispatch_emit.ask_footprint import (
     footprint_owed,
     footprint_prompt,
 )
-from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import PARAMS_BLOCK_JS, params_path
+from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import PARAMS_BLOCK_JS, params_path, params_writer_bound
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME as LAND_RUN_OP, RECONCILE_CLAUSE as LAND_RUN_RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.halted_run_route import ROUTE_OP as _HALTED_ROUTE_OP
 from coordinator_core.ops.dispatch_emit.ask_stage_receipt import ALREADY_STAGED_KEY, STAGE_IN_FLIGHT_KEY
@@ -2956,8 +2956,12 @@ def _intake_sizing(repo_root: str, sizing_rel: Optional[str]) -> Optional[dict]:
 
 
 def _static_baton_fields(repo_root: str, prompt: Optional[str], sizing_rel: Optional[str]) -> dict:
-    """Emit-time title and exit-criterion statement for the plan-blitz baton; None where unknown."""
-    intent, statement = (prompt or ""), None
+    """Emit-time title, exit-criterion statement, tshirt and route for the plan-blitz baton; None where unknown.
+
+    tshirt and route are the fallback for a fire whose `_gate` carries none (a chained or staged-resume
+    gate seeds route null): plan-blitz single mode refuses a baton without both.
+    """
+    intent, statement, tshirt, route = (prompt or ""), None, None, None
     if sizing_rel:
         try:
             sizing = load_sizing(Path(repo_root), sizing_rel)
@@ -2967,8 +2971,16 @@ def _static_baton_fields(repo_root: str, prompt: Optional[str], sizing_rel: Opti
             intent = str(sizing.get("intent") or intent)
             crit = sizing.get("exit_criterion")
             statement = crit.get("statement") if isinstance(crit, dict) else crit
+            est = sizing.get("estimate")
+            tshirt = est.get("tshirt") if isinstance(est, dict) else None
+            route = sizing.get("route")
     title = next((ln.strip() for ln in intent.splitlines() if ln.strip()), "")[:200] or None
-    return {"title": title, "exitCriterion": str(statement) if statement else None}
+    return {
+        "title": title,
+        "exitCriterion": str(statement) if statement else None,
+        "tshirt": str(tshirt) if tshirt else None,
+        "route": str(route) if route else None,
+    }
 
 
 def _source_memo_clause(repo_root: str, prompt: Optional[str], sizing_rel: Optional[str]) -> str:
@@ -5109,7 +5121,10 @@ def compose_ask_script(
                 "names paths no row could derive; each is owed work): ",
                 f"js:JSON.stringify({rl}.{RESUME_LEDGER_UNSERVED_FIELD} ?? [])",
                 ". Every row you add carries register_rows naming the register id it serves, and its writes may "
-                "name any path the work needs (the landing fence admits the writes of serving rows)",
+                "name any path the work needs (the landing fence admits the writes of serving rows). The added "
+                "row's writes MUST cover every file the owed register row's remaining items name, even a file "
+                "outside the plan's existing writes; a row whose writes omit one of those files leaves that item "
+                "unexecuted",
                 ". Revise the plan at ",
                 "js:_planRel",
                 " IN PLACE with Edit -- never scaffold a new plan, never change its path -- adding one new row, "
@@ -5405,7 +5420,9 @@ def compose_ask_script(
                 "|| (() => { throw new Error('plan-blitz baton has no id: the gate returned none and no sizing stem'); })()), "
                 f"title: _gate.baton?.title ?? {json.dumps(_static_baton['title'])}, "
                 f"exitCriterion: _gate.baton?.exitCriterion ?? _gate.exit_criterion ?? {json.dumps(_static_baton['exitCriterion'])}, "
-                "sized: true, sizingObject: _sizingRel, tshirt: _gate.tshirt, route: _gate.baton?.route ?? _gate.route, "
+                "sized: true, sizingObject: _sizingRel, "
+                f"tshirt: _gate.tshirt ?? {json.dumps(_static_baton['tshirt'])}, "
+                f"route: _gate.baton?.route ?? _gate.route ?? {json.dumps(_static_baton['route'])}, "
                 f"{'anchorPremises: _anchorPremises, ' if anchor_lines else ''}"
                 f"planPath: {plan_path_js}, executionOpen: true }}] }});"
             )
@@ -7740,6 +7757,16 @@ def _invariant_retest_call(*, head: str, anchor: str, repo_root: str, run_id: st
     )
 
 
+def _bound_params_path(repo_root: object, run_id: str) -> Path:
+    """The run's params path for a commit brief; refuses when the id is invalid or no pre-spawn writer would write it."""
+    path = params_path(repo_root, run_id)
+    if path is None:
+        raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
+    if not params_writer_bound(repo_root, run_id):
+        raise AskComposeRefused(f"no pre-spawn writer would write the params file for run {run_id!r}")
+    return path
+
+
 def _commit_stage_call(
     *, head: str, anchor: str, repo_root: str, run_id: str, script_path: Optional[str] = None
 ) -> str:
@@ -7748,9 +7775,7 @@ def _commit_stage_call(
     The params block always carries `script_path` (the `_nextAction.params` value wins, else
     `script_path`, else ''): `prompt_params` refuses a block without it, and the run-token hook then
     never writes the params file."""
-    params_file = params_path(repo_root, run_id)
-    if params_file is None:
-        raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
+    params_file = _bound_params_path(repo_root, run_id)
     commit_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         "phase: commit\n\nThis is a run's commit stage (`coordinator:git-commit-agent`, § A run's commit "
@@ -7758,7 +7783,7 @@ def _commit_stage_call(
         f"prefix, no edit to it. `{LAND_RUN_OP}` derives the paths from the run's commit "
         "request, so no `paths` array is owed.\n\n",
         f"coordinator-invoke {LAND_RUN_OP} --params-file {params_file.as_posix()} --repo {Path(repo_root).as_posix()}",
-        "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
+        f"\n\nThe params are already written to {params_file.as_posix()} before you start; the block below is their source. Do not copy, edit or pass it.\n\n",
         "js:_terminalCommitParamsBlock({ ..._nextAction.params, " + _TARGETED_TESTS_JS + " "
         f"script_path: _nextAction.params.script_path ?? {_lit(script_path or '')}, "
         "run_id: _runId, run_token: _RUN_TOKEN, "
@@ -7787,15 +7812,13 @@ def _halt_record_commit_fn(
     Trap: the command stays one bare `coordinator-invoke` segment, as in the commit stage, and the
     params ride the same fenced block: the agent types only the file path, never JSON.
     """
-    params_file = params_path(repo_root, run_id)
-    if params_file is None:
-        raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
+    params_file = _bound_params_path(repo_root, run_id)
     prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         "phase: commit\n\nThis run halted. Run exactly this one command as its own Bash call: no "
         "`cd &&`, no wrapper, no env prefix, no edit to it.\n\n",
         f"coordinator-invoke {LAND_RUN_OP} --params-file {params_file.as_posix()} --repo {Path(repo_root).as_posix()}",
-        "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
+        f"\n\nThe params are already written to {params_file.as_posix()} before you start; the block below is their source. Do not copy, edit or pass it.\n\n",
         f"js:_terminalCommitParamsBlock({{ script_path: {_lit(script_path or '')}, run_id: _runId, "
         f"run_token: _RUN_TOKEN, {HALTED_RECORD_PARAM}: _halted, {_CONSUMED_RETURNS_PARAM}: _consumedReturns, "
         f"doc_paths: {_DOC_PATHS_JS}, "

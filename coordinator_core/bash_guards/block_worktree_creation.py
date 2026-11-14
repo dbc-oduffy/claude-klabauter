@@ -239,16 +239,38 @@ def _classify_worktree_subcommand(second: Optional[str]) -> Optional[str]:
     return "unrecognized subcommand (default-deny)"
 
 
-def _evaluate_legacy(text: str) -> Optional[str]:
+#: `git [global-options] worktree` -- the only free-text shape that is a
+#: worktree subcommand. A bare `worktree` word elsewhere (prose inside a quoted
+#: argument of an un-tokenizable command) is not one.
+_GIT_ANCHORED_WORKTREE_RE = re.compile(
+    r"(?<![\w-])git(?:\.exe)?"
+    r"(?:\s+(?:-[Cc]\s+\S+|--(?:git-dir|work-tree|namespace|exec-path)\s+\S+|-\S+))*"
+    r"\s+(worktree)\b"
+)
+
+
+def _evaluate_legacy(text: str, *, git_anchored: bool = False) -> Optional[str]:
     """Narrow free-text fallback -- see module docstring "FAIL-CLOSED
     FALLBACK, narrowly scoped". Only ever called on text already known to
     contain a genuine (non-flag) `worktree` word; never the guard's primary
     classification path.
+
+    `git_anchored=True` (the un-tokenizable-command route) denies only a
+    `worktree` word that follows `git` and its global options; the
+    ambiguous-option route passes text already known to be a git segment and
+    keeps the unanchored search.
     """
-    m = _WORKTREE_WORD_RE.search(text)
-    if not m:
-        return None
-    nxt = _NEXT_WORD_AFTER_RE.match(text, m.end())
+    if git_anchored:
+        m = _GIT_ANCHORED_WORKTREE_RE.search(text)
+        if not m:
+            return None
+        end = m.end(1)
+    else:
+        m = _WORKTREE_WORD_RE.search(text)
+        if not m:
+            return None
+        end = m.end()
+    nxt = _NEXT_WORD_AFTER_RE.match(text, end)
     second = nxt.group(1).rstrip(";&|") if nxt else None
     return _classify_worktree_subcommand(second)
 
@@ -256,7 +278,7 @@ def _evaluate_legacy(text: str) -> Optional[str]:
 def _evaluate(cmd: str) -> Optional[str]:
     tokens = _tokenize_full_command(cmd)
     if tokens is None:
-        return _evaluate_legacy(cmd)
+        return _evaluate_legacy(cmd, git_anchored=True)
 
     for seg_tokens, _pipe_before in _segments_from_tokens(tokens):
         if not seg_tokens:

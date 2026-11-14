@@ -25,13 +25,14 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
-import tempfile
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator, List, Optional
 from unittest import mock
+
+from coordinator_core.temp_layout import managed_temp_dir
 
 PROCESS_BAR_MS = 500.0
 WALL_FLOOR_MS = 1000.0
@@ -127,7 +128,7 @@ def run_benchmark() -> List[Row]:
 
     declare_benchmark_origin()
     rows: List[Row] = []
-    with tempfile.TemporaryDirectory(prefix="hook-latency-") as raw:
+    with managed_temp_dir(prefix="hook-latency-") as raw:
         base = Path(raw)
         spawns = [0]
 

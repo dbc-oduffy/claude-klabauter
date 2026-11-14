@@ -130,6 +130,37 @@ def test_head_run_collection_error_fails_the_export(monkeypatch):
     assert result["passed_at_base"] == [GREEN]
 
 
+def test_head_pass_covers_ids_absent_at_base_and_runs_when_every_id_is_absent(monkeypatch):
+    seen = {}
+
+    def fake_run(sha, ids, cwd):
+        seen[sha] = list(ids)
+        if sha == "base":
+            return "ok", 4, [f"{rbm._DROPPED}{i}" for i in ids], []
+        return "ok", 1, [f"FAILED {ABSENT} - assert"], []
+
+    monkeypatch.setattr(rbm, "_run", fake_run)
+    result = rbm.measure("base", "head", [ABSENT, GREEN], ".")
+    assert seen["head"] == [ABSENT, GREEN]
+    assert result["export"] == "ok" and result["red"] == [ABSENT]
+    assert result["passed_at_base"] == []
+
+
+def test_head_pass_skips_ids_red_at_base_and_still_runs_for_absent_ones(monkeypatch):
+    seen = {}
+
+    def fake_run(sha, ids, cwd):
+        seen[sha] = list(ids)
+        if sha == "base":
+            return "ok", 1, [f"FAILED {RED_AT_BASE} - assert", f"{rbm._DROPPED}{ABSENT}"], []
+        return "ok", 0, [], []
+
+    monkeypatch.setattr(rbm, "_run", fake_run)
+    result = rbm.measure("base", "head", [RED_AT_BASE, ABSENT, GREEN], ".")
+    assert seen["head"] == [ABSENT, GREEN]
+    assert result["red"] == [RED_AT_BASE]
+
+
 def test_head_run_exit_one_keeps_the_export_ok(monkeypatch):
     def fake_run(sha, ids, cwd):
         if sha == "base":

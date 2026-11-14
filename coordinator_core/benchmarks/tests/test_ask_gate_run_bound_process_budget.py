@@ -1,6 +1,6 @@
 """The run-bound ask_gate benchmark builds the requested run-dir tree and reports both shapes.
 
-Behaviour pinned: the fixture holds exactly the requested number of run dirs plus the two bound
+Behaviour pinned: the fixture holds exactly the requested number of run dirs plus the bound
 runs, the call is run-bound (its reply names the bound sizing), and every leg and spawn figure the
 report promises is present for the non-`-build` (incident) and `-build` shapes.
 """
@@ -50,3 +50,14 @@ def test_both_shapes_are_measured_run_bound_with_every_promised_figure(report):
 def test_the_incident_shape_is_not_a_build_stem():
     assert not bench.SHAPES["non_build"][0].endswith("-build")
     assert bench.SHAPES["build"][0].endswith("-build")
+
+
+def test_the_plan_resume_shape_reaches_the_resume_read_and_spends_its_one_history_log(report):
+    res = report["shapes"][bench.PLAN_SHAPE]
+    assert res["resume_plan"] == f"docs/plans/{bench.SHAPES[bench.PLAN_SHAPE][0]}.md", res
+    argv = res["spawn_argv"][0] if res["spawn_argv"] else ()
+    sub = [a for a in argv[1:] if a not in ("-c", "gc.auto=0")][:1]
+    assert res["spawns"] == 1 and sub == ["log"], res["spawn_argv"]
+    assert "resumable_plan" in res["cold_legs_ms"]
+    for shape in ("non_build", "build"):
+        assert report["shapes"][shape]["spawns"] == 0 and report["shapes"][shape]["resume_plan"] is None

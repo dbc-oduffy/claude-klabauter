@@ -101,6 +101,8 @@ def _new_top_level_entry(
     try:
         if not target or not target.strip():
             return None
+        if _cwd_is_exempt_session(cwd):
+            return None
         target = target.strip()
         nt = _sinks._native_path()
         windows = _sinks._host_is_windows()
@@ -154,6 +156,22 @@ def _new_top_level_entry(
         return name
     except Exception:
         return None
+
+
+def _cwd_is_exempt_session(cwd: Optional[str]) -> bool:
+    """True when `cwd` is at or under the general-work root or the Group EM root; unset or unreadable exempts nothing."""
+    if not cwd:
+        return False
+    try:
+        from coordinator_core.group_em import gem_home
+        from coordinator_core.session import general_work_scope
+
+        if general_work_scope.in_general_work_session(cwd):
+            return True
+        root = gem_home.gem_root()
+        return bool(root) and gem_home.contains(root, cwd)
+    except Exception:
+        return False
 
 
 def _is_pinned_general_work(nt, cand: str) -> bool:

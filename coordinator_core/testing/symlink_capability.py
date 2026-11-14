@@ -34,39 +34,22 @@ Spec backlink: pln-one-shared-symlink-capability-62c20a § C1
 from __future__ import annotations
 
 import os
-import tempfile
-from pathlib import Path
 
 import pytest
 
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import managed_temp_dir
 
 
 def _probe_symlink_capability() -> bool:
-    base = Path(tempfile.mkdtemp(prefix="symlink-capability-probe-", dir=managed_tempdir()))
-    target = base / "target"
-    link = base / "link"
-    try:
-        target.mkdir()
-        os.symlink(str(target), str(link), target_is_directory=True)
-        return True
-    except OSError:
-        return False
-    finally:
+    with managed_temp_dir("symlink-capability-probe-") as base:
+        target = base / "target"
+        link = base / "link"
         try:
-            if link.is_symlink() or link.exists():
-                link.unlink()
+            target.mkdir()
+            os.symlink(str(target), str(link), target_is_directory=True)
+            return True
         except OSError:
-            pass
-        try:
-            if target.exists():
-                target.rmdir()
-        except OSError:
-            pass
-        try:
-            base.rmdir()
-        except OSError:
-            pass
+            return False
 
 
 CAN_CREATE_SYMLINK = _probe_symlink_capability()

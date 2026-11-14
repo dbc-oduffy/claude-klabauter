@@ -89,21 +89,28 @@ brightline. This module does NOT set that key and must not — `git_perf_config`
 owns it, per-repo, once at install. This module only measures under the bar once
 it is set.
 
-NO `maintenance.lock` GATE HERE, BY MEASUREMENT, NOT OVERSIGHT. An earlier
-version of this module polled `<common>/objects/maintenance.lock` (and, per
-review, `<common>/maintenance.lock` was the other candidate) before running,
-on the theory that `git maintenance run` takes such a lock and a peer holding
-it means a lost race worth reporting rather than failing. Direct measurement
-against git 2.55.0.windows.5 (n=1 machine; a future git version could differ)
-found this false at both candidate paths: holding a file at either location
-does not stop `git maintenance run` (`--task=commit-graph` or
-`--schedule=weekly`) from running anyway, leaving both files untouched, and 8
-concurrent `git maintenance run --schedule=weekly` invocations against one
-repo all exited 0 with no lock-related stderr. The gate never fired and the
-concurrency it claimed to arbitrate is git's own to arbitrate, not ours — so
-the check, the result field, and the report branch were deleted rather than
-pointed at a corrected path. No replacement locking mechanism was added: the
-measurement says none is needed.
+GIT'S OWN `maintenance.lock` IS STILL NOT GATED ON; ENGINE WRITERS SHARE
+`object_store_lock` INSTEAD. An earlier version of this module polled
+`<common>/objects/maintenance.lock` (and `<common>/maintenance.lock`) before
+running. Measured against git 2.55.0.windows.5 (n=1 machine), holding a file
+at either path does not stop `git maintenance run` (`--task=commit-graph` or
+`--schedule=weekly`), and 8 concurrent `git maintenance run
+--schedule=weekly` invocations against one repo all exited 0: git's file does
+not exclude, so the gate was deleted and stays deleted.
+
+That measurement left no mutual exclusion between ENGINE writers, and on
+2026-11-14 at 00:54:56 an unattended writer (pid 26264) refreshed every pack's
+mtime in this repo's object store and left an unfinished `.tmp-26264-pack-*`
+body with no `.idx`; 426 in-pack objects and 182 reachable ones (HEAD's tree
+among them) went missing. A repack reading a pack while a fold deletes it, or
+two repacks racing, is the shape that loses objects. So `run_tier` (every
+tier, every leg) and `sweep_orphan_packs` now run under
+`object_store_lock.hold(common_dir, wait_s=0)`, the one kernel-released lock
+every engine pack writer shares (`store_hygiene.consolidate_small_packs`,
+`git_objects._write_pack`/`_flush_pack`). It tries ONCE: a held lock means
+another engine writer is mid-mutation, so the tier DEFERS and reports (the
+`index.lock` contract) and the next ceremony retries; it never queues. The
+lock does not gate a user's or third party's own `git gc`.
 
 DEFER AND REPORT — do not run, do not fail — on a live `.git/index.lock`, an
 in-progress rebase/merge/bisect, or unmerged index entries. A ceremony boundary
@@ -165,6 +172,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
+from coordinator_core.git.object_store_lock import ObjectStoreBusy, hold
 from coordinator_core.git.repo_root import absolute_git_dir, git_common_dir
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
@@ -217,6 +225,7 @@ class OrphanPackSweep:
     reaped: List[Path]
     failed: List[Path]
     skipped: int
+    deferred: Optional[str] = None
 
 
 def _orphan_pack_candidates(pack_dir: Path) -> List[Path]:
@@ -327,7 +336,28 @@ def sweep_orphan_packs(
 
     `on_wait`, when given, replaces the real sleep entirely — the injectable
     re-sample seam, mirroring `stale_and_stable`'s own.
+
+    Holds the object-store lock (try once) around the whole sweep; a held
+    lock returns an empty sweep with `deferred` set and unlinks nothing.
+    Raises ValueError when an existing `pack_dir` is not shaped `<common>/objects/pack`
+    (the lock key is derived from that shape).
     """
+    if not pack_dir.is_dir():
+        return OrphanPackSweep(reaped=[], failed=[], skipped=0)
+    if pack_dir.name != "pack" or pack_dir.parent.name != "objects":
+        raise ValueError(f"pack_dir must be <common>/objects/pack, got {pack_dir}")
+    try:
+        with hold(pack_dir.parent.parent, wait_s=0, holder_label="git-maintenance:orphan-sweep"):
+            return _sweep_orphan_packs_locked(pack_dir, on_wait=on_wait)
+    except ObjectStoreBusy as exc:
+        return OrphanPackSweep(reaped=[], failed=[], skipped=0, deferred=str(exc))
+
+
+def _sweep_orphan_packs_locked(
+    pack_dir: Path,
+    *,
+    on_wait: Optional[Callable[[], None]] = None,
+) -> OrphanPackSweep:
     age_floor = _env_int("COORDINATOR_ORPHAN_PACK_REAP_AGE_SEC", _ORPHAN_PACK_AGE_SEC)
     stability_sec = _env_float(
         "COORDINATOR_ORPHAN_PACK_REAP_STABILITY_SEC", _ORPHAN_PACK_STABILITY_SEC
@@ -418,6 +448,17 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
     if not common.is_absolute():
         common = (repo / common).resolve()
 
+    try:
+        with hold(common, wait_s=0, holder_label=f"git-maintenance:{tier}"):
+            return _run_tier_locked(repo, tier, result, git_dir, common)
+    except ObjectStoreBusy as exc:
+        result.deferred = f"object-store lock is held -- another engine pack writer is mid-mutation ({exc})"
+        return result
+
+
+def _run_tier_locked(
+    repo: Path, tier: str, result: MaintenanceResult, git_dir: Path, common: Path
+) -> MaintenanceResult:
     reason = defer_reason(repo, git_dir)
     if reason is not None:
         result.deferred = reason

@@ -23,7 +23,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -32,6 +31,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from coordinator_core.benchmarks import process_time as pt
+from coordinator_core.temp_layout import managed_temp_dir
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -298,7 +298,7 @@ def _measure_setup(limit: int) -> dict:
 def run(limit: int = DEFAULT_LIMIT) -> dict:
     if not IS_WINDOWS:
         return {"supported": False, "platform": sys.platform}
-    with tempfile.TemporaryDirectory(prefix="spawn_guard_overhead_") as tmp:
+    with managed_temp_dir(prefix="spawn_guard_overhead_") as tmp:
         work = Path(tmp)
         tree = _measure_tree(limit, work)
         nested = _measure_nested(limit, work)

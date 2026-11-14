@@ -26,6 +26,14 @@ def clock(monkeypatch):
     return fake
 
 
+@pytest.fixture
+def cpu(monkeypatch):
+    fake = FakeClock()
+    fake.now = 0.0
+    monkeypatch.setattr(land_deadline, "_cpu", fake)
+    return fake
+
+
 @pytest.mark.parametrize(
     "leg",
     [
@@ -66,10 +74,11 @@ def test_leg_without_an_open_integrity_leg_halts_inside_the_reserve(clock):
             land_deadline.check("peer_hunk_gate.sibling_spine")
 
 
-def test_nested_reserved_leg_is_still_bounded_by_the_hard_deadline(clock):
+def test_nested_reserved_leg_is_still_bounded_by_the_hard_deadline(clock, cpu):
     with land_deadline.scope():
         land_deadline.check("land_run.integrity")
         clock.now += BUDGET + RESERVE + 0.1
+        cpu.now += BUDGET + RESERVE + 0.1
         with pytest.raises(land_deadline.LandDeadlineExceeded) as exc:
             land_deadline.check("peer_hunk_gate.sibling_spine")
     assert exc.value.bound_by == land_deadline.BOUND_BUDGET
@@ -84,20 +93,22 @@ def test_integrity_open_in_one_scope_does_not_reserve_the_next(clock):
             land_deadline.check("peer_hunk_gate.sibling_spine")
 
 
-def test_reserved_leg_halts_past_the_full_budget(clock):
+def test_reserved_leg_halts_past_the_full_budget(clock, cpu):
     with land_deadline.scope():
         clock.now += BUDGET + RESERVE + 0.1
+        cpu.now += BUDGET + RESERVE + 0.1
         with pytest.raises(land_deadline.LandDeadlineExceeded):
             land_deadline.check("land_run.integrity")
         assert land_deadline.expired()
 
 
-def test_outer_dispatcher_clamp_binds_reserved_legs(clock, monkeypatch):
+def test_outer_dispatcher_clamp_binds_non_reserved_legs(clock, monkeypatch):
     monkeypatch.setattr(dispatch_abandon, "remaining", lambda: 2.0 + dispatch_abandon.REPLY_MARGIN_SECS)
     with land_deadline.scope():
         clock.now += 2.5
-        with pytest.raises(land_deadline.LandDeadlineExceeded):
-            land_deadline.check("land_run.commit")
+        with pytest.raises(land_deadline.LandDeadlineExceeded) as exc:
+            land_deadline.check("land_run.script_read")
+    assert exc.value.bound_by == land_deadline.BOUND_DISPATCHER
 
 
 def test_server_window_clamp_binds_reserved_legs(clock):
@@ -127,7 +138,7 @@ def test_excepted_never_moves_a_deadline_past_the_dispatcher_clamp(clock, monkey
             clock.now += 15.0
         clock.now += 5.5
         with pytest.raises(land_deadline.LandDeadlineExceeded):
-            land_deadline.check("land_run.commit")
+            land_deadline.check("land_run.script_read")
 
 
 def test_a_first_leg_halt_attributes_the_time_before_it_to_scope_entry(clock):

@@ -12,7 +12,7 @@ pytestmark = pytest.mark.complete
 def test_no_unmanaged_temp_creation_site():
     findings = m.scan()
     report = "\n".join(
-        f"{f.path}:{f.line} {f.kind} {f.function}  -> root it under temp_layout.managed_tempdir"
+        f"{f.path}:{f.line} {f.kind} {f.function}  -> create it via temp_layout.managed_temp_dir / make_managed_temp_dir"
         for f in findings
     )
     assert not findings, f"unmanaged temp creation sites:\n{report}"

@@ -23,7 +23,6 @@ import importlib.util
 import json
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import zlib
@@ -37,6 +36,7 @@ if str(_REPO) not in sys.path:
 
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.git import git_objects as _default_go  # noqa: E402
+from coordinator_core.temp_layout import make_managed_temp_dir  # noqa: E402
 
 BATCH_READS = 500
 BIG_LOOSE_BYTES = 8 * 1024 * 1024
@@ -477,9 +477,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--git-objects-file", default=None, help="run against this git_objects.py instead of the working tree")
     args = ap.parse_args(argv)
     go = load_git_objects(args.git_objects_file)
-    scratch_root = _REPO / "scratch"
-    scratch_root.mkdir(exist_ok=True)
-    tmp = Path(tempfile.mkdtemp(prefix="object-read-stall-", dir=scratch_root))
+    tmp = make_managed_temp_dir(prefix="object-read-stall-")
     saved = go.PACK_READ_DEADLINE_SECS
     try:
         report = profile(go, args.deadline, tmp)

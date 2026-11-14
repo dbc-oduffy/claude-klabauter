@@ -87,7 +87,7 @@ from coordinator_core.ops import (
     readiness_declared_absent,
 )
 from coordinator_core.ops._major_finding_answer import unanswered
-from coordinator_core.ops.dispatch_emit import ask_contract
+from coordinator_core.ops.dispatch_emit import ask_contract, requirements_ledger
 from coordinator_core.ops._param_alias import aliased_param, spellings
 from coordinator_core.ops.plan_prep_gate import prep_gate_with_text
 from coordinator_core.ops.review_findings_ledger import read_ledger
@@ -820,6 +820,39 @@ def _resolve_base_ref(param: Any, root: Path, sizing_rel: Any) -> Optional[dict]
     return {"ref": marked, "source": "run"} if marked else None
 
 
+_ANCHOR_FINDING = re.compile(r"anchor-premise-[A-Za-z]+: (\S+) -- ")
+
+
+def _discharge_by_j_ruling(findings: List[str], root: Path, sizing_rel: Any) -> tuple:
+    """``(kept, discharged)``: a verdict finding whose anchor id a live revise note of the sizing's newest
+    run names, the note opening with a J-id, is discharged; ``discharged`` holds one line per such finding.
+    No sizing, run or notes: every finding is kept."""
+    if not findings or not isinstance(sizing_rel, str) or not sizing_rel.strip():
+        return findings, []
+    found = _own_run_premise._newest_run_for(root, sizing_rel.strip())
+    if found is None:
+        return findings, []
+    try:
+        notes = requirements_ledger.read_notes(requirements_ledger.run_dir(root, found[0]))
+    except requirements_ledger.LedgerRefused:
+        return findings, []
+    rulings = [n.strip() for n in notes if requirements_ledger.RULING_ID_RE.match(n.strip())]
+    kept: List[str] = []
+    discharged: List[str] = []
+    for finding in findings:
+        match = _ANCHOR_FINDING.match(finding)
+        anchor_id = match.group(1) if match else None
+        ruling = next(
+            (n for n in rulings if anchor_id and re.search(rf"(?<!\w){re.escape(anchor_id)}(?!\w)", n)), None
+        )
+        if ruling is None:
+            kept.append(finding)
+        else:
+            ruled = requirements_ledger.RULING_ID_RE.match(ruling).group(0)
+            discharged.append(f"anchor {anchor_id} discharged by EM ruling {ruled} in run {found[0]}")
+    return kept, discharged
+
+
 @register_op("plan.readiness_verdict")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "plan.readiness_verdict" handler. See module docstring."""
@@ -840,7 +873,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         }
         corrects, spine_rows, ref, absent, questions = None, None, None, None, ""
         anchor, verdicts, anchor_entries, census = [_anchor_premise.unjudged(reason)], [], None, None
-        base_ref = None
+        base_ref, ruled = None, []
     else:
         corrects, spine_rows, ref, absent, questions, text, fm = _plan_inputs(plan_text)
         from coordinator_core.lifecycle import main_worktree_root
@@ -868,10 +901,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # the git read happens only when some UNRESOLVED premise row exists to rule on.
         if any(r.get("verdict") == "UNRESOLVED" and "anchor" not in r for r in premise_rows or []):
             declared = readiness_declared_absent.declared_absent_paths(repo_root, ref, spine_rows, fm)
+        anchor, ruled = _discharge_by_j_ruling(anchor, anchor_root, fm.get("sizing_object"))
     out = readiness_verdict(
         prep_gate, coverage, reviews, repo_root, premise_rows, corrects, spine_rows, ref,
         absent, questions, anchor, verdicts, checker_ran, declared, anchor_entries, census,
     )
+    if ruled:
+        out["reason"] = (out["reason"] + "; " if out["reason"] else "") + "; ".join(ruled)
     # A host may keep only a byte-bounded slice of the reply: the verdict fields lead.
     # `blocking` is uncapped in count, so on a pull verdict it can still outrun that slice.
     lead = {k: out[k] for k in ("verdict", "pull_class", "reason", "blocking")}

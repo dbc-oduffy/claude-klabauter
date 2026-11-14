@@ -127,7 +127,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     read_spine,
     with_canonical_disposition,
 )
-from coordinator_core.ops.dispatch_emit import review_floor, run_notes
+from coordinator_core.ops.dispatch_emit import in_run_widen, review_floor, run_notes
 from coordinator_core.ops.dispatch_emit.requirements_ledger import NOTES_FILE
 from coordinator_core.ops.dispatch_emit.wave_map import (
     _RUNTIME_ORDER_GATE_KINDS,
@@ -379,7 +379,7 @@ def scaffold_markers(text: str) -> dict[str, int]:
     return found
 
 
-from coordinator_core.ops.dispatch_emit.ask_stage_blocks import AskStageError  # noqa: E402
+from coordinator_core.ops.dispatch_emit.ask_stage_blocks import AskStageError, served_rows_block  # noqa: E402
 
 
 def _write(path: Path, text: str) -> None:
@@ -1539,6 +1539,7 @@ def stage(
     declared: list[str] = []
     brief_sizes: dict[str, int] = {}
     kept_ids: set[str] = set()
+    served_widen_rows: set[str] = set()
     try:
         sizing_family = stage_family.resolve((run_sizing or {}).get("family"))
     except ValueError as exc:
@@ -1605,6 +1606,11 @@ def stage(
                             row_family, "write" if paths else "other", _rel(root, brief),
                             f"scratch/family-stage/{row.id}", paths,
                         ) + "\n" + text
+                    served_regs = (raw_by_id.get(row.id) or {}).get("register_rows") or ()
+                    if ledger_resume and served_regs and run_sizing_rel:
+                        served = served_rows_block(root, run_id, served_regs)
+                        if served:
+                            text = served + "\n" + text
                     if intent:
                         text = intent + "\n" + text
                     if row.id in clauses:
@@ -1640,6 +1646,9 @@ def stage(
                 brief_sizes[row.id] = len(text.encode("utf-8"))
                 paths = _widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root)
                 declared.extend(paths)
+                if ledger_resume and agent_type != REVIEWER_AGENT_TYPE and (raw_by_id.get(row.id) or {}).get("register_rows"):
+                    in_run_widen.record_widens(run_dir, [{"row": row.id, "path": p} for p in paths])
+                    served_widen_rows.add(row.id)
                 manifest_rows.append(
                     ManifestRow(
                         id=row.id,
@@ -1752,6 +1761,11 @@ def stage(
     _write(marker_path, f"{marker}\n" if marker else "")
 
     review_paths = [*declared, *kept_review]
+    if served_widen_rows:
+        widened = in_run_widen.widened_by_row(run_dir)
+        review_paths.extend(
+            p for rid in sorted(served_widen_rows) for p in widened.get(rid, ()) if p not in review_paths
+        )
     if only_rows is not None and not ledger_resume:
         # Twin of emit.py prior_landed_rows -> prior_surface. Trap: the review base is the halted
         # run's base, so a dropped row landed before that base adds no hunk.

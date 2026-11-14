@@ -688,6 +688,24 @@ def test_non_repo_cwd_refusal_shows_the_repo_argument_shape(tmp_path):
     assert 'repo: "<abs path>"' in _hso(out)["permissionDecisionReason"]
 
 
+def test_a_bare_registered_repo_name_resolves_and_others_keep_their_behaviour(tmp_path, monkeypatch):
+    from coordinator_core import machine_resolver
+
+    root = _repo(tmp_path)
+    reg = {"repos.claude_klabauter": str(root)}
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: reg.get(key))
+    assert mod._registry_repo("claude-klabauter") == (str(root), None)
+    assert mod._registry_repo("repos.claude_klabauter") == (str(root), None)
+    assert mod._registry_repo(str(root)) == (str(root), None)
+    assert mod._registry_repo("unregistered-name") == ("unregistered-name", None)
+    assert "no registry key" in mod._registry_repo("repos.nope")[1]
+    emit = _Emit()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    mod.evaluate(_payload(root, {"ask": "a", "repo": "claude-klabauter"}, cwd=str(outside)), emit=emit)
+    assert emit.calls[0][1] == root
+
+
 def test_a_repo_argument_that_is_not_a_repo_is_refused_naming_it(tmp_path):
     root = _repo(tmp_path)
     bad = tmp_path / "not-a-repo"
@@ -1871,16 +1889,23 @@ def _count_mints(monkeypatch) -> list:
     return minted
 
 
+def _set_budget(monkeypatch, cell: list) -> None:
+    """Install `cell` as the unspent-ms budget `_budget()` reads, undone with the monkeypatch."""
+    import contextvars
+
+    monkeypatch.setattr(mod, "_BUDGET_VAR", contextvars.ContextVar("submit_budget", default=cell))
+
+
 def test_launcher_run_token_is_minted_while_hook_budget_remains(tmp_path, monkeypatch):
     minted = _count_mints(monkeypatch)
-    monkeypatch.setattr(mod, "_BUDGET", [5000.0])
+    _set_budget(monkeypatch, [5000.0])
     mod._ensure_launcher_run_token(_repo(tmp_path), "ask-r1", "state/sizings/x.yaml", "sess-1")
     assert len(minted) == 1
 
 
 def test_launcher_run_token_mint_still_lands_once_hook_budget_is_spent(tmp_path, monkeypatch):
     minted = _count_mints(monkeypatch)
-    monkeypatch.setattr(mod, "_BUDGET", [0.0])
+    _set_budget(monkeypatch, [0.0])
     mod._ensure_launcher_run_token(_repo(tmp_path), "ask-r1", "state/sizings/x.yaml", "sess-1")
     assert len(minted) == 1
 
@@ -1895,7 +1920,7 @@ def test_spent_budget_mint_joins_only_the_short_window(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mod, "_write_leg", spy)
     _count_mints(monkeypatch)
-    monkeypatch.setattr(mod, "_BUDGET", [0.0])
+    _set_budget(monkeypatch, [0.0])
     mod._ensure_launcher_run_token(_repo(tmp_path), "ask-r1", "state/sizings/x.yaml", "sess-1")
     assert joins == [mod._SPENT_WINDOW_MINT_JOIN_S]
 
@@ -1933,3 +1958,63 @@ def test_an_ask_with_a_brief_file_keeps_the_refire_join_listing(tmp_path, monkey
     calls = _refire_listings(monkeypatch, tmp_path)
     mod.evaluate(_payload(root, {"ask": "build the thing", "source": "relayed", "brief_file": "brief.md"}))
     assert len(calls) == 1
+
+_STORED_SIZING = "state/sizings/2026-10-29-stored-prompts.yaml"
+_STORED_RUN = "warp-2026-10-29-stored-prompts-20261029T010101-abc123"
+
+
+def _halted_with_stored_script(root: Path, *, prompts_present: set[str]) -> None:
+    from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
+
+    stored_rel = f"scratch/warp/{_STORED_RUN}.workflow.mjs"
+    rd = root / RECORD_DIR_ROOT / _STORED_RUN
+    named = ("gate.md", "halt-commit.md")
+    body = "".join(f"// Read {RECORD_DIR_ROOT}/{_STORED_RUN}/prompts/{n} in full\n" for n in named)
+    for rel, text in ((_STORED_SIZING, "schema: sizing-object\n"), (stored_rel, body)):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    (rd / "prompts").mkdir(parents=True, exist_ok=True)
+    for name in prompts_present:
+        (rd / "prompts" / name).write_text("p", encoding="utf-8")
+    write_halt_marker(rd, halted="ledger-check", sizing_rel=_STORED_SIZING, run_base_sha="a" * 40)
+    fp = hrr.fingerprint_for_run(root, rd, _STORED_SIZING, None)
+    hrr.write(rd, hrr.build_record(
+        composed_script_rel=stored_rel, hoisted_fragments=[], gate_verdict=None,
+        landed_state_sha=None, fingerprint=fp, resume_plan_rel=None,
+    ))
+
+
+@pytest.mark.parametrize(("present", "launches_stored"), [({"gate.md", "halt-commit.md"}, True), ({"gate.md"}, False)])
+def test_a_refire_launches_the_stored_script_only_when_every_prompt_it_names_exists(tmp_path, monkeypatch, present, launches_stored):
+    root = _repo(tmp_path)
+    _halted_with_stored_script(root, prompts_present=present)
+    spawned: list = []
+    monkeypatch.setattr(mod, "_spawn_recompose", lambda r, run_id: spawned.append(run_id) or True)
+    env = mod.evaluate(_payload(root, {"sizing": _STORED_SIZING}))
+    launched = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    stored = root / f"scratch/warp/{_STORED_RUN}.workflow.mjs"
+    assert (launched == stored) is launches_stored
+    assert spawned == ([] if launches_stored else [_STORED_RUN])
+
+
+@pytest.mark.parametrize("failure", ["oserror", "stalled"])
+def test_a_refire_recomposes_when_the_prompt_check_fails_or_stalls(tmp_path, monkeypatch, failure):
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
+
+    root = _repo(tmp_path)
+    _halted_with_stored_script(root, prompts_present={"gate.md", "halt-commit.md"})
+    if failure == "oserror":
+        def _boom(*_a):
+            raise OSError("unreadable")
+        monkeypatch.setattr(mod, "_script_names_missing_prompt", _boom)
+    else:
+        real = mod._bounded_call
+        monkeypatch.setattr(mod, "_bounded_call", lambda key, fn, *a, **k: STALLED if key[0] == "script-prompts" else real(key, fn, *a, **k))
+    spawned: list = []
+    monkeypatch.setattr(mod, "_spawn_recompose", lambda r, run_id: spawned.append(run_id) or True)
+    env = mod.evaluate(_payload(root, {"sizing": _STORED_SIZING}))
+    launched = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    assert launched != root / f"scratch/warp/{_STORED_RUN}.workflow.mjs"
+    assert spawned == [_STORED_RUN]

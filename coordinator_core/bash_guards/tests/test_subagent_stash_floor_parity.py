@@ -1,7 +1,7 @@
 """Subagent stash deny parity with the DoE fail-open floor's verb set.
 
 FLOOR_VERBS is pinned as a literal from coordinator-content-repo
-a33c3a680925814e48c7d42e3fd0c6881122c28b
+8b2a1c5acb851187456409e6adec68cab0f18978
 coordinator/hooks/scripts/preuse-bash-dispatch.py `_STASH_CREATE_RE`; no
 sibling checkout is read.
 """
@@ -15,9 +15,9 @@ from coordinator_core.guard_messages.testing import envelope_of
 
 pytestmark = pytest.mark.complete
 
-# Source: coordinator-content-repo a33c3a6809 coordinator/hooks/scripts/preuse-bash-dispatch.py
-# `_STASH_CREATE_RE` lookahead: bare | push|save|create|apply|pop.
-FLOOR_VERBS = ("", "push", "save", "create", "apply", "pop")
+# Source: coordinator-content-repo 8b2a1c5acb coordinator/hooks/scripts/preuse-bash-dispatch.py
+# `_STASH_CREATE_RE` lookahead: bare | push|save|create|apply (pop dropped).
+FLOOR_VERBS = ("", "push", "save", "create", "apply")
 
 
 def _payload(command, subagent=True):
@@ -75,3 +75,13 @@ def test_quoted_literal_not_denied(verb):
 def test_heredoc_body_not_denied(verb):
     cmd = f"cat <<'EOF'\ngit stash {verb}\nEOF"
     assert _verdict(cmd) is None
+
+
+def test_subagent_pop_allowed_anchored_and_legacy():
+    assert _verdict("git stash pop") is None
+    assert _verdict("git stash pop stash@{1}") is None
+    assert guard._evaluate_git_segment_legacy("git stash pop") is None
+
+
+def test_em_pop_never_denied():
+    assert _verdict("git stash pop", subagent=False) is None

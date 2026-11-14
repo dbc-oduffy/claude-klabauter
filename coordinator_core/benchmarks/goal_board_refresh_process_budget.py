@@ -20,7 +20,6 @@ import argparse
 import json
 import statistics
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -78,9 +77,9 @@ def _call_once() -> dict:
 
 def measure(runs: int = DEFAULT_RUNS) -> dict:
     """Cold call, then the median of `runs` warm calls over a freshly seeded board."""
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
-    scratch = Path(tempfile.mkdtemp(prefix="goal-board-bench-", dir=str(managed_tempdir())))
+    scratch = make_managed_temp_dir(prefix="goal-board-bench-")
     try:
         with fixture_settings_home(scratch):
             seed_home(scratch)

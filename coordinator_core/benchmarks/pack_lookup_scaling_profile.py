@@ -18,7 +18,6 @@ import argparse
 import hashlib
 import json
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -27,6 +26,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from coordinator_core.git import git_objects  # noqa: E402
+from coordinator_core.temp_layout import make_managed_temp_dir  # noqa: E402
 
 DEFAULT_PACK_COUNTS = (16, 512, 4096)
 LOOKUPS = 1000
@@ -113,10 +113,8 @@ def _real_repo_hits(common_dir: Path) -> list[str]:
 
 def profile(pack_counts=DEFAULT_PACK_COUNTS, real_repo: str | None = None) -> dict:
     rows = []
-    scratch = _REPO / "scratch"
-    scratch.mkdir(exist_ok=True)
     for n in pack_counts:
-        tmp = Path(tempfile.mkdtemp(prefix="pack-lookup-scaling-", dir=scratch))
+        tmp = make_managed_temp_dir(prefix="pack-lookup-scaling-")
         try:
             common = tmp / ".git"
             (common / "objects" / "pack").mkdir(parents=True)

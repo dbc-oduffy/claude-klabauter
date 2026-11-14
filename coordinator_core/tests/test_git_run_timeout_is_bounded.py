@@ -221,6 +221,7 @@ def test_windows_inherited_writer_returns_before_grandchild_eof(tmp_path,monkeyp
         f'pathlib.Path({str(pid_file)!r}).write_text(json.dumps({{"pid":p.pid}})); '
         'time.sleep(30)')
     monkeypatch.setattr(git_run,'_git_exe',lambda:sys.executable)
+    monkeypatch.setattr(git_run,'_GC_AUTO_OFF',())
     monkeypatch.setattr(git_run,'_wall_bound',lambda *_:.7)
     started=time.monotonic()
     result=git_run.run_git(['-I','-S','-c',program],cwd=str(tmp_path))

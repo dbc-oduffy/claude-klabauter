@@ -17,7 +17,6 @@ import functools
 import os
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -25,6 +24,7 @@ import pytest
 import coordinator_core.ops.install_publish_repo_precommit_hook as _mod
 from coordinator_core.ops.install_publish_repo_precommit_hook import main
 from coordinator_core.testing import symlink_capability
+from coordinator_core.temp_layout import managed_temp_dir
 from coordinator_core.testing.sh_interpreter import require_sh_interpreter
 from coordinator_core.win_portability import (
     no_console_creationflags,
@@ -422,8 +422,8 @@ def _tool_survives_a_narrowed_path(candidate: str, name: str) -> bool:
     """
     if not symlink_capability.CAN_CREATE_SYMLINK:
         return False
-    with tempfile.TemporaryDirectory() as probe_root:
-        probe_dir = Path(probe_root) / "probe-bindir"
+    with managed_temp_dir("precommit-probe-") as probe_root:
+        probe_dir = probe_root / "probe-bindir"
         probe_dir.mkdir(parents=True)
         (probe_dir / name).symlink_to(candidate)
         env = dict(os.environ)

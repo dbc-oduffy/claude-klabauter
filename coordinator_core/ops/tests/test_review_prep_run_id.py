@@ -100,7 +100,7 @@ def test_footprint_writes_join_the_write_set_with_or_without_leg(repo):
     assert with_leg["product_files"] == without["product_files"] == 2
 
 
-def test_run_id_handler_keeps_a_path_a_halted_peer_withholds(repo, monkeypatch):
+def test_run_id_handler_drops_a_path_a_halted_peer_withholds_into_foreign_claims(repo, monkeypatch):
     from coordinator_core.ops.dispatch_emit import land_run
 
     _write(repo, ["a/theirs.py"], 3)
@@ -108,8 +108,8 @@ def test_run_id_handler_keeps_a_path_a_halted_peer_withholds(repo, monkeypatch):
     monkeypatch.setattr(land_run, "foreign_halted_withheld", lambda root, rid, plan, paths: {"a/theirs.py": "peer"})
     reply = rp._handler(_params(repo, "prep-w", run_id=RUN), repo)
     assert reply["error"] is None
-    assert [f for s in reply["slices"] for f in s["files"]] == ["a/theirs.py"]
-    assert reply["peer_held"] == ["a/theirs.py"] and reply["excluded"] == []
+    assert [f for s in reply["slices"] for f in s["files"]] == []
+    assert reply["foreign_claims"] == ["a/theirs.py"]
 
 
 def test_credited_chunk_paths_slice_when_manifest_list_is_empty(repo):

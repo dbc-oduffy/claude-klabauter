@@ -43,6 +43,8 @@ if __name__ == "__main__":  # direct `python coordinator_core/ops/claude_home_ce
     if _repo not in sys.path:
         sys.path.insert(0, _repo)
 
+from coordinator_core.temp_layout import managed_temp_dir  # noqa: E402 - after the direct-run sys.path bootstrap
+
 GENERATES = []
 
 KEY_MAX_MB = "transcript_retention.max_mb"
@@ -391,8 +393,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             root.mkdir(parents=True, exist_ok=True)
             result = fixture_ratchet(root)
         else:
-            with tempfile.TemporaryDirectory(prefix="claude-home-ratchet-") as tmp:
-                result = fixture_ratchet(Path(tmp))
+            with managed_temp_dir("claude-home-ratchet-") as tmp:
+                result = fixture_ratchet(tmp)
     else:
         result = census(budget=args.budget or None)
     json.dump(result, sys.stdout, indent=2, default=str)

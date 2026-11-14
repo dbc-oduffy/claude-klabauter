@@ -102,6 +102,36 @@ def revisions_block(root: Path, run_id: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+SERVED_ROWS_HEADING = "## Register rows this row serves (ledger resume)"
+
+
+def served_rows_block(root: Path, run_id: str, register_ids: Sequence[str]) -> str:
+    """The brief's section for a ledger-resume row: the text of each register row it serves and the
+    ids still to deliver on the run, so the executor does that row's work and not only the plan text.
+    Empty when the row serves no ledger item or the run has no readable ledger."""
+    try:
+        ledger = requirements_ledger.read_ledger(root, requirements_ledger.run_dir(root, run_id))
+    except requirements_ledger.LedgerRefused:
+        return ""
+    if not ledger:
+        return ""
+    wanted = {str(r) for r in register_ids}
+    served = [i for i in ledger.items if i.id in wanted]
+    if not served:
+        return ""
+    lines = [SERVED_ROWS_HEADING, ""]
+    for item in served:
+        lines.append(f"{item.id}:")
+        lines.extend("> " + ln if ln else ">" for ln in item.text.strip().splitlines())
+        lines.append("")
+    lines.append("Still to deliver on this run: " + ", ".join(i.id for i in ledger.items) + ".")
+    lines.append(
+        "Make each row above true in the files this row writes; verify halts at the ledger check "
+        "when a served row has no delta."
+    )
+    return "\n".join(lines) + "\n"
+
+
 def em_brief_block(sizing: Optional[Mapping], root: Optional[Path] = None) -> str:
     """The brief's EM-diagnosis section (the sizing's `em_analysis.em_brief`), marked as not the
     PM's words and placed below the PM-intent and relayed-ask blocks. Empty when none is recorded.

@@ -220,7 +220,7 @@ def test_cold_measure_reports_exit_and_output(tmp_path):
     import sys
 
     out = runner._measure_cold(
-        [sys.executable, "-c", "print('hi')"], repo_root=tmp_path, deadline_s=30.0, io_dir=tmp_path
+        [sys.executable, "-c", "print('hi')"], repo_root=tmp_path, deadline_s=30.0
     )
     assert out.exit_code == 0 and out.stdout.strip() == "hi"
     assert out.process_ms is not None and out.spawns and out.spawns >= 1
@@ -333,7 +333,7 @@ def test_cold_stdin_reaches_the_child(tmp_path):
     script = tmp_path / "echo.py"
     script.write_text("import sys\nprint(sys.stdin.read().upper(), sys.argv[1:])\n", encoding="utf-8")
     out = runner._measure_cold(
-        [sys.executable, str(script), "x"], repo_root=tmp_path, deadline_s=30.0, io_dir=tmp_path, stdin_text="hello"
+        [sys.executable, str(script), "x"], repo_root=tmp_path, deadline_s=30.0, stdin_text="hello"
     )
     assert out.exit_code == 0 and out.stdout.strip() == "HELLO ['x']"
 

@@ -1362,6 +1362,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      Returns {"plan", "verdict", "withheld_rows", "classes", "message", "stamp"}.
     # Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-authoring-bar.md
     "plan.prep_gate": OpClass.COMPUTE_ONLY,
+    # landing.guard_selection — COMPUTE_ONLY: returns the test nodes a landing path list owes
+    # (repo-wide invariants plus always_run_guards) and the retest command naming them.
+    #   1. Writes, deletes, or reorders any state? No.  2. rag store? No.
+    #   3. Opens any file for write? No.  4. Shared mutable state? No.
+    #   5. Persistent state changes observable across processes? No.
+    "landing.guard_selection": OpClass.COMPUTE_ONLY,
     # plan.set_code_done — COMPUTE_ONLY: reads the named plans' task spines and RETURNS
     # {"code_complete", "plans"}. Writes nothing, spawns nothing, invokes no git.
     #   1. Writes, deletes, or reorders any state? No.  2. rag store? No.

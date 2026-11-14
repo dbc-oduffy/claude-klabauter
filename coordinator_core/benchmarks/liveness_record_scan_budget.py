@@ -29,7 +29,6 @@ import contextlib
 import json
 import os
 import sys
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -238,9 +237,9 @@ def run_benchmark(base: Optional[Path] = None) -> dict:
     """Measure the three surfaces under `base` (a fresh temp dir when None, removed after)."""
     owned = base is None
     if owned:
-        from coordinator_core.temp_layout import managed_tempdir
+        from coordinator_core.temp_layout import make_managed_temp_dir
 
-        base = Path(tempfile.mkdtemp(prefix="liveness-budget-", dir=str(managed_tempdir())))
+        base = make_managed_temp_dir(prefix="liveness-budget-")
     else:
         base = Path(base)
     try:

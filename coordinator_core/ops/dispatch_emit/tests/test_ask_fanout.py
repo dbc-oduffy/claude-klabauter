@@ -166,6 +166,14 @@ def test_slice_sizing_carries_verbatim_intent_and_parent_marker(repo):
         assert "parent_id" not in doc
 
 
+def test_context_path_under_the_repo_root_is_written_repo_relative(repo):
+    absolute = (repo / "docs" / "a.md").as_posix()
+    out = _go(repo, {"asks": [{"ask": "fix a", "writes": ["a.py"], "context": [absolute]}]})
+    assert out["exit_code"] == 0, out
+    paths = _sizing(repo, out["ready"][0]["sizing"])["em_analysis"]["em_context_paths"]
+    assert paths == "docs/a.md"
+
+
 def test_mixed_sources_stamp_only_the_relayed_slice(repo):
     out = _go(repo, {"asks": [
         {"ask": "fix a", "source": "relayed", "writes": ["a"]},

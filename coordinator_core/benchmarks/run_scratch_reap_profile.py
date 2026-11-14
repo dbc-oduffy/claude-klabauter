@@ -23,7 +23,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -177,14 +176,14 @@ def render(rows: list) -> str:
 def main(argv: list) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--dir", default=None)
     args = ap.parse_args(argv)
 
     from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
     from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
     declare_benchmark_origin()
-    workdir = Path(tempfile.mkdtemp(prefix="rsrp-", dir=args.dir))
+    workdir = make_managed_temp_dir(prefix="rsrp-")
     try:
         with fixture_settings_home(workdir):
             rows = run(workdir / "fx")

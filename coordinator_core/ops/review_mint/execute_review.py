@@ -701,13 +701,13 @@ _PREP_FROM_WAVE_JS = (
     "_waveRaw[i] = n; _reviewWave[i] = n.review; }\n"
     "    });\n"
     "  }\n"
-    "  const _outOfGroupAt = _waveRaw.findIndex(r => (_checksGroup && _isOutOfGroup(r)) || _hasRange(r));\n"
+    "  // Only a range halts; a stray non-range id (a stale prep generation) is dropped and named by the foreign path below.\n"
+    "  const _outOfGroupAt = _waveRaw.findIndex(r => _hasRange(r));\n"
     "  if (_outOfGroupAt >= 0) { "
     f"return {{ halted: {_js_string_literal(SLICE_ID_UNKNOWN_HALT)} + ' (wave agent ' + _outOfGroupAt + "
     "' prep named slices ' + JSON.stringify(_waveRaw[_outOfGroupAt].prep.slices.map(s => s.id)) + "
     "' with slice_id ' + JSON.stringify(_waveRaw[_outOfGroupAt].review ? _waveRaw[_outOfGroupAt].review.slice_id : null) + "
-    "' outside its dispatched group ' + _waveRaw[_outOfGroupAt]._dispatched.i + ' of ' + _waveRaw[_outOfGroupAt]._dispatched.n + "
-    "'; a slice id no run slice carries)', "
+    "'; a range names no single slice)', "
     f"reason: {_js_string_literal(_SLICE_ID_UNKNOWN_REFUSAL)}, "
     "prep: _truthReply ? _truthReply.prep : (_prepReplies[0] ?? null), wave: null, integration: null }; }\n"
     "  const _foreignAdvisories = [];\n"
@@ -925,6 +925,19 @@ _REVERIFY_SCHEMA = {
 }
 _REVERIFY_SCHEMA["properties"]["passed_alone"] = {"type": "array", "items": {"type": "string"}}
 _REVERIFY_SCHEMA["properties"]["passed_at_base"] = {"type": "array", "items": {"type": "string"}}
+#: The classed-red sets `from_reverify` and the ask projection exclude from blockers; a property the schema omits is dropped from the sidecar.
+_REVERIFY_SCHEMA["properties"]["sibling_owned"] = {"type": "array", "items": {"type": "string"}}
+_REVERIFY_SCHEMA["properties"]["foreign"] = {"type": "array", "items": {"type": "string"}}
+_REVERIFY_SCHEMA["properties"]["renamed_node"] = {"type": "array", "items": {"type": "string"}}
+_REVERIFY_SCHEMA["properties"]["foreign_red"] = {
+    "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}},
+}
+
+_CLASSED_RED_CLAUSE = (
+    " Also return `sibling_owned`, `foreign`, `renamed_node` (lists) and `foreign_red` (the object) exactly as "
+    "given, the same union across calls: they class a red as not this run's, and dropping one makes it block. "
+    "Pass every revert call `failing_output`, `{<failing node id>: <its failing_detail message>}`."
+)
 
 _REVERIFY_INDETERMINATE_CLAUSE = (
     "If any review.reverify call in this step returns a non-null `error` or fails as an engine "
@@ -1141,15 +1154,16 @@ def _reverify_phase(
             f"Call review.reverify in revert mode for EVERY prefix, each time with the same "
             f"failing set (all failing node ids) and the same `failing_at_base`: `{invoke} review.reverify '{{{sliced},"
             f"\"failing\":[<all failing node ids>],\"failing_before\":[<that prefix's "
-            f"failing_before ids>],\"failing_at_base\":[<failing_at_base ids>]{base_path_arg},\"sidecars\":[<that prefix's review_sidecars paths below>]}}'"
+            f"failing_before ids>],\"failing_at_base\":[<failing_at_base ids>]{base_path_arg},\"failing_output\":{{<node id>:<its failing_detail message>}},\"sidecars\":[<that prefix's review_sidecars paths below>]}}'"
             f"{repo_pin}` (add `session_id` as in step 1). A prefix attributes a failure only to "
             "its own files, so make every call whether or not that prefix listed anything. The "
             "review_sidecars below is keyed by slice prefix: pass each call only its own prefix's "
             "list. Return the union of the `reverted`, `pre_existing`"
             + (", `kept` and `owned_red`" if run_key else " and `kept`")
-            + " lists as given "
-            "(a test is unattributed only when every prefix reports it so), and the `record` of "
-            "the first call that returned one; re-run only the tests of the reverted paths, and "
+            + " lists as given (a test is unattributed only when every prefix reports it so), and the `record` of "
+            "the first call that returned one."
+            + _CLASSED_RED_CLAUSE
+            + " Re-run only the tests of the reverted paths, and "
             "set status_after to pass or fail from that re-run. "
             + _SETTLE_CLAUSE
             + "When nothing failed, status_after is null. `status_before` is the status after review, before any "
@@ -1195,11 +1209,12 @@ def _reverify_phase(
         f"4. {_base_measure_clause(base_ref, owned_red_path, export_path)}"
         f"Call review.reverify in revert mode: `{invoke} review.reverify "
         f"'{{{base_args},\"failing\":[<failing node ids>],\"failing_before\":[<failing_before "
-        f"ids>],\"failing_at_base\":[<failing_at_base ids>]{base_path_arg},\"sidecars\":[<the review_sidecars paths below>]}}'{repo_pin}` (add `session_id` "
+        f"ids>],\"failing_at_base\":[<failing_at_base ids>]{base_path_arg},\"failing_output\":{{<node id>:<its failing_detail message>}},\"sidecars\":[<the review_sidecars paths below>]}}'{repo_pin}` (add `session_id` "
         "as in step 1). Return its `reverted`, `pre_existing`, `kept`"
         + (", `owned_red`," if run_key else "")
-        + " and `record` as given, "
-        "re-run only the tests of the reverted paths, and set status_after to pass or fail from "
+        + " and `record` as given."
+        + _CLASSED_RED_CLAUSE
+        + " Re-run only the tests of the reverted paths, and set status_after to pass or fail from "
         "that re-run. "
         + _SETTLE_CLAUSE
         + "When nothing failed, status_after is null. `status_before` is the status "

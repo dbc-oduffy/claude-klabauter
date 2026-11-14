@@ -234,7 +234,7 @@ def test_send_cli_surfaces_a_far_relay_failure_for_the_mirror_by_full_or_bare_na
     r = make_router(tmp_path, home_roster(tmp_path, eps, monkeypatch))
     capture(r, monkeypatch)
     monkeypatch.setattr(send_cli, "_router", lambda: RouterOverDispatch(r))
-    assert send_cli.main(["--as", "cli", "--to", to, "--endpoint-dir", str(tmp_path / "eps"), "hello"]) == 1
+    assert send_cli.main(["--to", to, "--endpoint-dir", str(tmp_path / "eps"), "hello"]) == 1
     captured = capsys.readouterr()
     assert captured.err.startswith(f"undelivered: {to}:") and "sent to" not in captured.out
 

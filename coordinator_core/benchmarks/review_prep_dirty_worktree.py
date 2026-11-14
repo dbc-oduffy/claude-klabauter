@@ -426,9 +426,9 @@ def main(argv=None) -> int:
               " ".join(f"{k}={v}" for k, v in report.items()))
         return 0
 
-    import tempfile
+    from coordinator_core.temp_layout import managed_temp_dir
 
-    with tempfile.TemporaryDirectory(prefix="review-prep-dirty-") as parent, fixture_settings_home(parent):
+    with managed_temp_dir(prefix="review-prep-dirty-") as parent, fixture_settings_home(parent):
         return _measure_modes(args)
 
 

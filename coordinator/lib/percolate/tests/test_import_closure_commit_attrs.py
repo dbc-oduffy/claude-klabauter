@@ -119,3 +119,76 @@ def test_test_modules_are_not_examined(tmp_path):
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "test")
     assert [v[0] for v in _violations(repo)] == ["coordinator_core/caller.py"]
+
+
+def _cache(tmp_path: Path, version: str = "v1"):
+    from coordinator_core.percolate.gate_result_cache import GateResultCache
+
+    return GateResultCache(tmp_path / "cache", "commit-module-attr", version)
+
+
+def _count_parses(monkeypatch) -> list[int]:
+    import ast
+
+    from percolate import import_closure
+
+    calls = [0]
+    real = ast.parse
+
+    def counting(*args, **kwargs):
+        calls[0] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(import_closure.ast, "parse", counting)
+    return calls
+
+
+def test_cached_verdict_equals_uncached_and_second_run_parses_nothing(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    sha = _git(repo, "rev-parse", "HEAD")
+    uncached = find_commit_module_attr_violations(repo, sha)
+    cold = _cache(tmp_path)
+    assert find_commit_module_attr_violations(repo, sha, cache=cold) == uncached
+    cold.flush()
+    calls = _count_parses(monkeypatch)
+    warm = find_commit_module_attr_violations(repo, sha, cache=_cache(tmp_path))
+    assert warm == uncached
+    assert calls[0] == 0
+
+
+def test_cache_never_serves_a_changed_blob_or_a_changed_gate(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    cold = _cache(tmp_path)
+    find_commit_module_attr_violations(repo, _git(repo, "rev-parse", "HEAD"), cache=cold)
+    cold.flush()
+    _write(repo, "coordinator_core/ledger.py", "def advisory_text():\n    pass\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "define")
+    sha = _git(repo, "rev-parse", "HEAD")
+    assert find_commit_module_attr_violations(repo, sha, cache=_cache(tmp_path)) == (1, [])
+    calls = _count_parses(monkeypatch)
+    find_commit_module_attr_violations(repo, sha, cache=_cache(tmp_path, "v2"))
+    assert calls[0] > 0
+
+
+def test_progress_is_called_per_file(tmp_path):
+    repo = _repo(tmp_path)
+    seen: list[tuple[int, int]] = []
+    find_commit_module_attr_violations(
+        repo, _git(repo, "rev-parse", "HEAD"), progress=lambda done, total: seen.append((done, total))
+    )
+    assert seen and seen[-1][0] == seen[-1][1] == len(seen)
+
+
+def test_importer_without_a_package_import_line_is_not_parsed(tmp_path, monkeypatch):
+    mention = 'NOTE = "see coordinator_core"\n\ndef f():\n    return NOTE\n'
+    repo = _repo(tmp_path, caller=mention)
+    calls = _count_parses(monkeypatch)
+    assert find_commit_module_attr_violations(repo, _git(repo, "rev-parse", "HEAD"), cache=_cache(tmp_path)) == (0, [])
+    assert calls[0] == 0
+
+
+def test_backslash_continued_import_is_still_checked(tmp_path):
+    continued = "from \\\n    coordinator_core import ledger\n\ndef gate():\n    return ledger.advisory_text()\n"
+    repo = _repo(tmp_path, caller=continued)
+    assert _violations(repo) == [("coordinator_core/caller.py", "coordinator_core.ledger.advisory_text")]

@@ -10,6 +10,13 @@ Invariants: `LandDeadlineExceeded` is a `BaseException`, so a `except Exception`
 cannot swallow it and read an unverified check as passed. `check` is called only on legs BEFORE the
 ref moves; a leg after the commit uses `expired()` and degrades to a recorded skip, so a landed
 commit is never reported as anything but landed.
+
+Charging basis: a non-reserved leg is refused on wall clock past the budget deadline or an outer
+clamp. A reserved leg (integrity, commit) is charged by the scope's thread-CPU time against
+`LAND_BUDGET_SECS + RESERVE_SECS`, so wall-clock wait never kills a landing whose work is in budget.
+Three wall bounds still refuse a reserved leg: the server's result window, and
+`WALL_HANG_CEILING_SECS` since scope entry (a true hang). The dispatcher's remaining time and the
+budget's wall deadline do not: an abandoned caller's outcome is still recorded in land-legs.json.
 """
 
 from __future__ import annotations
@@ -31,6 +38,10 @@ RESERVE_SECS = 3.0
 
 #: Final name segments of the legs that draw on the reserve (`land_run.integrity`, `*.commit`).
 RESERVED_LEGS = frozenset({"integrity", "_integrity", "commit"})
+
+#: Wall seconds since scope entry after which a reserved leg is refused whatever its process time.
+#: Hang bound only, never a work budget: work is charged in thread-CPU seconds against the budget.
+WALL_HANG_CEILING_SECS = 25.0
 
 REFUSED = "land-deadline"
 
@@ -70,6 +81,14 @@ _SERVER_WINDOW: ContextVar[Optional[float]] = ContextVar("land_run_server_window
 BOUND_BUDGET = "budget"
 BOUND_DISPATCHER = "dispatcher"
 BOUND_SERVER_WINDOW = "server-window"
+BOUND_WALL_CEILING = "wall-ceiling"
+
+#: Wall deadline of the server-window clamp (earliest across nested scopes); None when unbound.
+#: Authoritative for reserved legs, unlike the dispatcher clamp.
+_SERVER_CLAMP: ContextVar[Optional[float]] = ContextVar("land_run_server_clamp", default=None)
+
+#: Wall deadline at which a reserved leg is refused as a hang; `excepted()` moves it later.
+_HANG_AT: ContextVar[Optional[float]] = ContextVar("land_run_hang_at", default=None)
 
 #: `(deadline_by, hard_by)` of the innermost scope; None when unbound.
 _BOUND_BY: ContextVar[Optional[tuple]] = ContextVar("land_run_bound_by", default=None)
@@ -134,6 +153,16 @@ def scope(budget_secs: Optional[float] = None) -> Iterator[None]:
         hard = current_hard
         hard_by = (_BOUND_BY.get() or (deadline_by, hard_by))[1]
     ceiling = min([clamp for clamp, _ in clamps] + [c for c in (_CEILING.get(),) if c is not None], default=None)
+    server_clamps = [c for c, source in clamps if source == BOUND_SERVER_WINDOW] + [
+        c for c in (_SERVER_CLAMP.get(),) if c is not None
+    ]
+    server_clamp = min(server_clamps, default=None)
+    hang_at = None if deadline is None else _now() + WALL_HANG_CEILING_SECS
+    outer_hang = _HANG_AT.get()
+    if outer_hang is not None and (hang_at is None or outer_hang < hang_at):
+        hang_at = outer_hang
+    server_token = _SERVER_CLAMP.set(server_clamp)
+    hang_token = _HANG_AT.set(hang_at)
     token = _DEADLINE.set(deadline)
     hard_token = _HARD.set(hard)
     bound_token = _BOUND_BY.set((deadline_by, hard_by))
@@ -155,6 +184,8 @@ def scope(budget_secs: Optional[float] = None) -> Iterator[None]:
         _BOUND_BY.reset(bound_token)
         _HARD.reset(hard_token)
         _DEADLINE.reset(token)
+        _HANG_AT.reset(hang_token)
+        _SERVER_CLAMP.reset(server_token)
 
 
 @contextmanager
@@ -173,6 +204,9 @@ def excepted() -> Iterator[None]:
             if current is not None:
                 moved = current + spent
                 var.set(moved if ceiling is None else min(moved, max(current, ceiling)))
+        hang_at = _HANG_AT.get()
+        if hang_at is not None:
+            _HANG_AT.set(hang_at + spent)
 
 
 def expired() -> bool:
@@ -185,16 +219,32 @@ def check(leg: str) -> None:
     """Raise `LandDeadlineExceeded(leg)` when the deadline has passed, carrying the started legs'
     elapsed; otherwise record the leg's start. A no-op when no deadline is bound."""
     now = _now()
-    hard = _HARD.get()
     reserved = _is_reserved(leg) or _reserved_leg_open()
     if reserved:
-        refused = hard is not None and now >= hard
+        bound = _reserved_refusal(now)
     else:
-        refused = expired()
-    if refused:
         by = _BOUND_BY.get() or (BOUND_BUDGET, BOUND_BUDGET)
-        raise LandDeadlineExceeded(leg, _legs_elapsed(now), by[1] if reserved else by[0])
+        bound = by[0] if expired() else None
+    if bound is not None:
+        raise LandDeadlineExceeded(leg, _legs_elapsed(now), bound)
     _record(leg, now)
+
+
+def _reserved_refusal(now: float) -> Optional[str]:
+    """The bound that refuses a reserved leg, or None. Charged by scope thread-CPU against
+    budget plus reserve; wall time refuses only past the server window or the hang ceiling."""
+    if _HARD.get() is None:
+        return None
+    server = _SERVER_CLAMP.get()
+    if server is not None and now >= server:
+        return BOUND_SERVER_WINDOW
+    hang_at = _HANG_AT.get()
+    if hang_at is not None and now >= hang_at:
+        return BOUND_WALL_CEILING
+    ledger = _LEGS.get()
+    if ledger and LAND_BUDGET_SECS is not None and _cpu() - ledger[0][2] >= LAND_BUDGET_SECS + RESERVE_SECS:
+        return BOUND_BUDGET
+    return None
 
 
 def _record(leg: str, now: float) -> None:

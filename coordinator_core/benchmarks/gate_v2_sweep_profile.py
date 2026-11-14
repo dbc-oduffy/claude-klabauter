@@ -26,10 +26,11 @@ import re
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
+
+from coordinator_core.temp_layout import managed_temp_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNS = 7
@@ -246,7 +247,7 @@ def cold_ms(root: Path) -> Dict[str, float]:
 
 def scaling(n: int = N_DEFAULT, runs: int = 5) -> Dict[str, float]:
     """Best-of-`runs` shape-B process time over synthetic corpora of `n` and `2n` handoffs."""
-    with tempfile.TemporaryDirectory(prefix="gate-v2-sweep-") as tmp:
+    with managed_temp_dir(prefix="gate-v2-sweep-") as tmp:
         small = build_corpus(Path(tmp) / "n", n)
         large = build_corpus(Path(tmp) / "2n", 2 * n)
         t_n = min(sweep_samples(small, runs, SCALING_K))
@@ -284,7 +285,7 @@ def main(argv=None) -> int:
         "scaling": scaling(args.n),
         "digests_live": report_digests(live),
     }
-    with tempfile.TemporaryDirectory(prefix="gate-v2-sweep-") as tmp:
+    with managed_temp_dir(prefix="gate-v2-sweep-") as tmp:
         result["digests_synthetic"] = report_digests(build_corpus(Path(tmp), args.n))
     top = cprofile_top(live)
     if args.json:

@@ -7452,6 +7452,9 @@ def _measure_static_spawn_counts(op_names, entrypoints) -> dict[str, int]:
 #: transcribed here without this file's own re-derivation, which is what these two entries are.
 #: Both pinned at their freshly measured 1.
 _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
+    # landing.guard_selection: one reachable git site (run_git in the landing invariant node
+    # selection); constant per call, never per path.
+    "landing.guard_selection": 1,
     # plan.mise_prep_probe: one reachable git site (HEAD sha read in `_head_sha`); the census
     # leg's per-entry shell spawns are the counted carve-out, bounded by `_census_deadline`.
     "plan.mise_prep_probe": 1,

@@ -38,7 +38,6 @@ import statistics
 import subprocess
 import sys
 import tarfile
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence
@@ -53,6 +52,7 @@ from coordinator_core.benchmarks.tests.test_terminal_commit_process_budget impor
 )
 from coordinator_core.git.run import run_git
 from coordinator_core.owner_safe_rmtree import make_removable
+from coordinator_core.temp_layout import make_managed_temp_dir
 from coordinator_core.win_portability import no_console_creationflags
 
 DRIVER = "coordinator_core.benchmarks.terminal_commit_full_path"
@@ -553,10 +553,9 @@ def _host_context() -> dict:
 def main(argv: Sequence[str]) -> int:
     declare_benchmark_origin()
     args = parse_args(argv)
-    out_parent = check_out_dir(args.out_dir) if args.out_dir is not None else None
-    if out_parent is not None:
-        out_parent.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="terminal-commit-ab-", dir=str(out_parent) if out_parent else None))
+    if args.out_dir is not None:
+        check_out_dir(args.out_dir).mkdir(parents=True, exist_ok=True)
+    work = make_managed_temp_dir(prefix="terminal-commit-ab-")
     with fixture_settings_home(work):
         return _measure(args, work)
 

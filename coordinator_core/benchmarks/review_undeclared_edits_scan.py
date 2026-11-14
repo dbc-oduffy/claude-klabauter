@@ -21,7 +21,6 @@ import json
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -52,7 +51,9 @@ def measure(root: Path, marker_ns: int = 0, runs: int = 5) -> dict:
         return real_init(self, *args, **kwargs)
 
     cpu_ms, spawns, digests, sizes = [], [], [], []
-    with tempfile.TemporaryDirectory(prefix="undeclared-edits-bench-") as tmp:
+    from coordinator_core.temp_layout import managed_temp_dir
+
+    with managed_temp_dir(prefix="undeclared-edits-bench-") as tmp:
         record = Path(tmp)
         _write_marker(record, marker_ns)
         subprocess.Popen.__init__ = counting_init

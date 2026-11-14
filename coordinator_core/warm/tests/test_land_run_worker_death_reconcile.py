@@ -49,10 +49,10 @@ def _land_body(msg, caller):
     if case == "before-commit":
         real_mark = land_intent.mark
 
-        def _die_at_committing(phase, sha=None):
+        def _die_at_committing(phase, sha=None, **fields):
             if phase == land_intent.PHASE_COMMITTING:
                 os._exit(_KILL_EXIT)
-            real_mark(phase, sha)
+            real_mark(phase, sha, **fields)
 
         land_intent.mark = _die_at_committing
     elif case == "before-settle":
@@ -156,6 +156,86 @@ def test_a_worker_killed_before_the_commit_polls_never_ran_and_a_rerun_lands(poo
 
     assert rerun["committed"] is True, rerun
     assert rerun["sha"] == _git(root, "rev-parse", "HEAD").strip() != head
+
+
+def _commit_files(root, files, message):
+    for rel, text in files.items():
+        (root / rel).write_text(text, encoding="utf-8", newline="\n")
+    _git(root, "add", *files)
+    _git(root, "commit", "-q", "-m", message)
+    return _git(root, "rev-parse", "HEAD").strip()
+
+
+def _record_for(root, base, files):
+    blobs = {rel: {"blob": _blob_of(root, text)} for rel, text in files.items()}
+    return {"repo_root": str(root), "run_id": "r", "token": "t", "script_path": "s",
+            "phase": "committing", "base": base, "expected_blobs": blobs}
+
+
+def _blob_of(root, text):
+    import subprocess
+
+    return subprocess.run(
+        ["git", "hash-object", "--stdin"], cwd=str(root), input=text.encode(), capture_output=True, check=True
+    ).stdout.decode().strip()
+
+
+def test_resolve_derives_committed_from_git_when_the_receipt_and_sha_are_absent(land_repo):
+    from coordinator_core.ops.dispatch_emit import land_intent
+
+    base = _git(land_repo, "rev-parse", "HEAD").strip()
+    files = {"x.txt": "x\n", "y.txt": "y\n"}
+    sha = _commit_files(land_repo, files, "landed")
+    _commit_files(land_repo, {"z.txt": "z\n"}, "later")
+
+    assert land_intent.resolve(_record_for(land_repo, base, files)) == {"verdict": "committed", "sha": sha}
+
+
+def test_resolve_is_unresolved_when_no_commit_carries_the_expected_blobs(land_repo):
+    from coordinator_core.ops.dispatch_emit import land_intent
+
+    base = _git(land_repo, "rev-parse", "HEAD").strip()
+    _commit_files(land_repo, {"other.txt": "o\n"}, "unrelated")
+
+    assert land_intent.resolve(_record_for(land_repo, base, {"x.txt": "x\n"})) is None
+
+
+def test_resolve_is_unresolved_for_a_partial_commit(land_repo):
+    from coordinator_core.ops.dispatch_emit import land_intent
+
+    base = _git(land_repo, "rev-parse", "HEAD").strip()
+    _commit_files(land_repo, {"x.txt": "x\n"}, "half")
+    record = _record_for(land_repo, base, {"x.txt": "x\n", "y.txt": "y\n"})
+
+    assert land_intent.resolve(record) is None
+
+
+def test_a_claimed_record_without_blobs_still_resolves_never_ran(land_repo):
+    from coordinator_core.ops.dispatch_emit import land_intent
+
+    record = {"repo_root": str(land_repo), "run_id": "r", "token": "t", "script_path": "s", "phase": "claimed"}
+
+    assert land_intent.resolve(record) == {"verdict": "never-ran"}
+
+
+def test_mark_stores_base_and_expected_blobs_on_the_record(tmp_path):
+    from coordinator_core.ops.dispatch_emit import land_intent
+    from coordinator_core.warm import dispatch_fence
+
+    claim_dir = tmp_path / "svc" / "dispatch-claims"
+    claim_dir.mkdir(parents=True)
+    dispatch_fence.hold(str(claim_dir), "9-9")
+    try:
+        assert land_intent.record(tmp_path, {"run_id": "r", "run_token": "t"})
+        blobs = {"a.py": {"blob": "1" * 40}}
+        land_intent.mark(land_intent.PHASE_COMMITTING, base="b" * 40, expected_blobs=blobs)
+        stored = dispatch_ack.read_land_intent(dispatch_ack.journal_dir_beside(claim_dir), "9-9")
+    finally:
+        dispatch_fence.release()
+        land_intent._held = None
+
+    assert stored["phase"] == "committing"
+    assert stored["base"] == "b" * 40 and stored["expected_blobs"] == blobs
 
 
 _GATE_STARTED = "gate-started"

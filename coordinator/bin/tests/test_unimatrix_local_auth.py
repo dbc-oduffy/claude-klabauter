@@ -51,6 +51,7 @@ def test_return_writer_uses_local_recipient_auth(writer, tmp_path, monkeypatch):
         GENERIC_READ=1, GENERIC_WRITE=2, OPEN_EXISTING=3,
         CreateFile=lambda *a: "handle",
         WriteFile=lambda handle, data: written.append(data),
+        FlushFileBuffers=lambda handle: None,
         CloseHandle=lambda handle: closed.append(handle))
     monkeypatch.setitem(sys.modules, "win32file", win32file)
     module.write_local("local-endpoint", b'{"type":"auth","token":"far-token"}\n{"type":"user"}\n')
@@ -74,6 +75,7 @@ def test_windows_relay_send_authenticates_for_local_recipient(tmp_path, monkeypa
     monkeypatch.setitem(sys.modules, "win32file", SimpleNamespace(
         GENERIC_READ=1, GENERIC_WRITE=2, OPEN_EXISTING=3,
         CreateFile=lambda *a: "handle", WriteFile=lambda handle, data: written.append(data),
+        FlushFileBuffers=lambda handle: None,
         CloseHandle=lambda handle: closed.append(handle)))
     relay.send(5)
     assert json.loads(written[0].splitlines()[0]) == {"type": "auth", "token": "local-test-token"}

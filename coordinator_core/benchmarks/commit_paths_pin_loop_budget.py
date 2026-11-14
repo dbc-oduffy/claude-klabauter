@@ -16,7 +16,6 @@ import argparse
 import os
 import statistics
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -98,9 +97,9 @@ def _call_once(root: Path, names: list[str]) -> dict:
 
 def measure(runs: int = DEFAULT_RUNS) -> dict:
     """Build the fixture; one cold call, then the median of `runs` warm calls."""
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
 
-    scratch = Path(tempfile.mkdtemp(prefix="commit-paths-pin-loop-", dir=str(managed_tempdir())))
+    scratch = make_managed_temp_dir(prefix="commit-paths-pin-loop-")
     try:
         root = scratch / "repo"
         root.mkdir()

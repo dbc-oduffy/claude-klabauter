@@ -90,6 +90,7 @@ from coordinator_core.git.git_state import (
     read_tree_spine,
 )
 from coordinator_core.ops.handoff_carry_gate import CarryGateError, evaluate_gate, read_carried_items
+from coordinator_core.session import record_homes
 
 def __getattr__(name: str):
     if name in ("_git", "diff_cached_name_status"):
@@ -1293,6 +1294,124 @@ def machine_path_leak_gate(
     if not diagnostics:
         return GateOutcome(passed=True, skipped=False, diagnostics=[])
     return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
+
+
+_ABS_PATH_CHEAP_MARKERS = ("/Users/", "/home/", ":\\", "\\\\", "claude/machine-local", "claude/plugins")
+_ABS_PATH_DRIVE_FWD_RE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:/")
+_ABS_PATH_FIX = (
+    "use a repo-relative path or a settings-home token, or mark the line "
+    "`abs-path-ok: <reason>`"
+)
+
+
+def _is_abs_path_gated(path: str) -> bool:
+    """True for a plan, brief or sizing document path."""
+    p = _norm(path)
+    if p.startswith("docs/plans/") or "/docs/plans/" in p:
+        return p.endswith(".md")
+    if p.startswith(record_homes.home_rel("sizings") + "/"):
+        return p.endswith((".yaml", ".yml", ".md"))
+    return "/briefs/" in p and p.endswith(".md")
+
+
+def abs_path_citation_gate(
+    worktree_root: Union[str, Path],
+    gate_paths: Sequence[str],
+    read_source: Callable[[str], Optional[bytes]],
+) -> GateOutcome:
+    """Refuse a commit whose landed plan, brief or sizing blob ADDS an absolute machine path over its HEAD blob.
+
+    Filter-first on path, then on a cheap substring pre-scan of the landed text; HEAD is read only for a
+    path that passes both. In-process: `new_violations` over `read_source` and the HEAD tree, no spawn."""
+    candidates = [p for p in gate_paths if _is_abs_path_gated(p)]
+    if not candidates:
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+    hot: List[Tuple[str, str]] = []
+    for rel in candidates:
+        data = read_source(rel)
+        if data is None or b"\0" in data:
+            continue
+        after = data.decode("utf-8", errors="replace")
+        if any(m in after for m in _ABS_PATH_CHEAP_MARKERS):
+            hot.append((rel, after))
+    if not hot:
+        return GateOutcome(passed=True, skipped=False, diagnostics=[])
+
+    from coordinator_core.ops.session.abs_path_carve_outs import CARVE_OUTS_FILENAME, load_carve_outs
+    from coordinator_core.ops.session.guard_concrete_path_citations import new_violations
+
+    root = Path(worktree_root)
+    common_dir = resolve_git_common_dir(root)
+    spine = read_tree_spine(root, [rel for rel, _ in hot])
+    carve_outs = load_carve_outs(root)
+    diagnostics: List[str] = []
+    for rel, after in hot:
+        if rel == CARVE_OUTS_FILENAME:
+            continue
+        before = _head_text(spine, common_dir, rel) or ""
+        for f in new_violations(before, after, rel, carve_outs):
+            diagnostics.append(f"{f.file}:{f.line} {f.rule} {f.matched} -- {_ABS_PATH_FIX}")
+    if not diagnostics:
+        return GateOutcome(passed=True, skipped=False, diagnostics=[])
+    return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
+
+
+_MACHINE_LOCAL_TEMPLATE = Path(__file__).resolve().parents[3] / "coordinator" / "templates" / "bin" / "_machine_local.py"
+
+
+@functools.lru_cache(maxsize=1)
+def _machine_local_classifier():
+    """The stdlib-only `_machine_local.py` template loaded by file path, or None when it is absent."""
+    if not _MACHINE_LOCAL_TEMPLATE.is_file():
+        return None
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_machine_local_reparse_gate", _MACHINE_LOCAL_TEMPLATE)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        return None
+    return module
+
+
+def reparse_advisory_gate(
+    worktree_root: Union[str, Path],
+    gate_paths: Sequence[str],
+) -> GateOutcome:
+    """Advisory only, never refuses: one `reparse<TAB><path> -> <target>` diagnostic per unallowlisted
+    junction or symlink among the ancestor directories of `gate_paths` below the worktree root.
+    lstat of each distinct ancestor only: bounded by the commit, no whole-tree walk, no spawn."""
+    ml = _machine_local_classifier()
+    if ml is None or not gate_paths:
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+    root = Path(worktree_root)
+    ancestors: Set[str] = set()
+    for rel in gate_paths:
+        parent = Path(rel).parent
+        while parent.parts and str(parent) != ".":
+            ancestors.add(str(parent))
+            parent = parent.parent
+    hits: List[Tuple[str, str]] = []
+    for rel in sorted(ancestors):
+        path = str(root / rel)
+        try:
+            kind, target = ml._classify_stat(os.lstat(path), path)
+        except OSError:
+            continue
+        if kind in ("junction", "symlink") and not ml._reparse_builtin_pass(path, kind, target):
+            hits.append((path, target))
+    if hits:
+        try:
+            allow = ml._reparse_allowlist(ml._build_resolution_layers(ml._registry_dir()))
+        except Exception:
+            # Unreadable registry: report every hit rather than hide one (advisory, never refuses).
+            allow = set()
+        hits = [(p, t) for p, t in hits if ml._norm_link(p) not in allow]
+    diagnostics = [f"reparse\t{p} -> {t}" for p, t in hits]
+    return GateOutcome(passed=True, skipped=False, diagnostics=diagnostics)
 
 
 _IMPORT_ERROR_NAMES = frozenset(

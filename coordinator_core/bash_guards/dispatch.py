@@ -815,7 +815,7 @@ def _crash_deny(guard_name: str, exc: BaseException, resolution_class: Optional[
 
 
 _PINNED_DICT_RETURNS: Dict[str, str] = {
-    "block-drive-root-new-dir-bash-write": "returns apply_guard_level's warn advisory below strict",
+    "block-drive-root-new-dir-bash-write": "box-degrading deny: returns the deny envelope dict",
     "block-home-root-bash-write": "returns apply_guard_level's warn advisory below strict",
     "block-worktree-sentinel-creation": "returns apply_guard_level's warn advisory below strict",
     "block-approval-sentinel-creation": "returns apply_guard_level's warn advisory below strict",

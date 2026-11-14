@@ -27,7 +27,6 @@ import importlib
 import statistics
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -789,7 +788,9 @@ def measure(runs: int = DEFAULT_RUNS, asks: int | None = None, concurrent_runs: 
     with `concurrent_runs`, only a `{sizing}` refire submitted while that many runs start; with `scenario`
     `multi-run-launch`, three sizing submissions plus a refire in one burst); returns `{shape: report}`."""
     shapes = [f"asks:{asks}"] if asks else list(SHAPES)
-    scratch = Path(tempfile.mkdtemp(prefix="submit-budget-bench-", dir=_scratch_parent()))
+    from coordinator_core.temp_layout import make_managed_temp_dir
+
+    scratch = make_managed_temp_dir(prefix="submit-budget-bench-")
     try:
         root = scratch / "repo"
         root.mkdir()
@@ -805,11 +806,6 @@ def measure(runs: int = DEFAULT_RUNS, asks: int | None = None, concurrent_runs: 
     finally:
         rmtree_or_raise(scratch, label="submit-budget-bench")
 
-
-def _scratch_parent() -> str:
-    from coordinator_core.temp_layout import managed_tempdir
-
-    return str(managed_tempdir())
 
 
 def _print_multi_run_launch(res: dict, enforce: bool) -> int:

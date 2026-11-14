@@ -21,7 +21,6 @@ import cProfile
 import io
 import pstats
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -215,7 +214,9 @@ def measure(commits: int = DEFAULT_COMMITS, top: int = 20) -> dict:
     from coordinator_core.git import commit_walk
 
     mp = pytest.MonkeyPatch()
-    scratch = Path(tempfile.mkdtemp(prefix="resume-emit-bench-", dir=_scratch_parent()))
+    from coordinator_core.temp_layout import make_managed_temp_dir
+
+    scratch = make_managed_temp_dir(prefix="resume-emit-bench-")
     try:
         root = scratch / "repo"
         root.mkdir()
@@ -478,12 +479,6 @@ def replay(
     }
 
 
-def _scratch_parent() -> str:
-    from coordinator_core.temp_layout import managed_tempdir
-
-    return str(managed_tempdir())
-
-
 def main() -> int:
     declare_benchmark_origin()
     ap = argparse.ArgumentParser(description=__doc__)
@@ -502,7 +497,9 @@ def main() -> int:
     if args.repo:
         reset = None
         # Replay runs against the real tree: a temp settings home keeps its run tokens and live-run index off the real store.
-        with tempfile.TemporaryDirectory(prefix="resume-emit-home-", dir=_scratch_parent()) as home, fixture_settings_home(home):
+        from coordinator_core.temp_layout import managed_temp_dir
+
+        with managed_temp_dir(prefix="resume-emit-home-") as home, fixture_settings_home(home):
             if args.seed_fixture:
                 repo = Path(args.repo).resolve()
                 args.sizing = seed_resume_fixture(repo)

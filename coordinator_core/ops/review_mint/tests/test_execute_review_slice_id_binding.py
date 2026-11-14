@@ -52,11 +52,13 @@ def test_a_prep_naming_the_whole_diffs_slices_beyond_its_dispatched_group_is_dro
     assert "wave agent 1" in advisory and "outside its group 1 of" in advisory
 
 
-def test_a_prep_naming_a_slice_id_no_run_slice_carries_halts():
+def test_a_prep_naming_a_slice_id_no_run_slice_carries_is_rebound_to_its_group_and_named():
     spawned = len(_run_in_wave(_FULL, 9)["spawned"])
     patch = _prep_rewrite("r.prep.slices.map(s => ({ ...s, id: s.id + 'x' }))", retry_at=spawned)
     result = _run_in_wave(_FULL, 9, patch=patch)
-    assert result["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][1]["slice_id"] == _bound_group_one("r.prep.slices")
+    assert any("outside its group 1 of" in a for a in result["prep"]["advisories"])
 
 
 def test_every_prep_naming_exactly_its_dispatched_group_is_rebound_without_halt():
@@ -134,18 +136,24 @@ def test_one_merged_group_of_two_real_slices_is_accepted_under_its_plus_joined_i
         assert result["wave"][0]["slice_id"] == "+".join(ids)
 
 
-def test_a_two_slice_group_reply_naming_an_unknown_id_still_halts():
+def test_a_two_slice_group_reply_naming_an_unknown_id_is_rebound_to_its_group_and_named():
     spawned = len(_run_in_wave(_TWO, 1)["spawned"])
     patch = f"(r, n) => (n === 0 || n === {spawned}) ? {{ ...r, prep: {{ ...r.prep, slices: [{{ id: 'manifest-x-prep-1' }}, {{ id: 'manifest-x-prep-2' }}] }} }} : r"
     result = _run_in_wave(_TWO, 1, patch=patch)
-    assert result["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][0]["slice_id"] == "+".join(s["id"] for s in _TWO["slices"])
+    [advisory] = result["prep"]["advisories"]
+    assert "manifest-x-prep-1" in advisory and "dropped" in advisory
 
 
-def test_an_id_no_run_slice_carries_still_halts_even_beside_a_member():
+def test_an_id_no_run_slice_carries_beside_a_member_is_dropped_and_named_without_halting():
     spawned = len(_run_in_wave(_FULL, 9)["spawned"])
     patch = _prep_rewrite("[r.prep.slices[0], { ...r.prep.slices[0], id: 'zz-nonexistent' }]", retry_at=spawned)
     result = _run_in_wave(_FULL, 9, patch=patch)
-    assert result["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][1]["slice_id"] == _bound_group_one("r.prep.slices")
+    [advisory] = result["prep"]["advisories"]
+    assert "zz-nonexistent" in advisory
 
 
 def test_a_clean_wave_carries_no_advisories():

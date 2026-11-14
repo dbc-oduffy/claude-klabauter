@@ -225,12 +225,12 @@ def measure_roadmap_fanout(repo_root: str) -> dict:
     The cap is left in force, so an over-cap variant reports the total its refusal names. Totals differ
     from the stub-asset ratchet; this answers which component grew."""
     import os
-    import tempfile
     from pathlib import Path
 
     import yaml
 
     from coordinator_core.ops.dispatch_emit.emission_receipt import _load_review_inputs
+    from coordinator_core.temp_layout import managed_temp_dir
 
     plugin_root = resolve_caller_context().plugin_root
     fragment, schemas = _load_review_inputs("plan")
@@ -250,7 +250,7 @@ def measure_roadmap_fanout(repo_root: str) -> dict:
         "exit_criterion": {"statement": "done", "accepted": {"pm_quote": "yes", "on": "2026-10-02", "mode": "pm"}},
     }
     cwd = os.getcwd()
-    with tempfile.TemporaryDirectory() as tmp:
+    with managed_temp_dir("compose-size-probe-") as tmp:
         sizing = Path(tmp) / _ROADMAP_SIZING_REL
         sizing.parent.mkdir(parents=True)
         sizing.write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")

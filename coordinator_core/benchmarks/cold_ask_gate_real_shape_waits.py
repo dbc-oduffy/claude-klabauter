@@ -27,7 +27,6 @@ import argparse
 import json
 import os
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -102,7 +101,7 @@ def measure(repo: Path, sizing_path: str = PROBE_SIZING, run_id: str | None = No
     from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
     from coordinator_core.benchmarks.process_time import single_invocation_tree_process_time
     from coordinator_core.ops.workflow_fire import headless
-    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.temp_layout import make_managed_temp_dir
     from coordinator_core.warm import skew
 
     home = resolve_settings_home()
@@ -111,7 +110,7 @@ def measure(repo: Path, sizing_path: str = PROBE_SIZING, run_id: str | None = No
         params["run_id"] = run_id
     root = engine_root()
     carveout = needs_unstamped_carveout(root)
-    scratch = Path(tempfile.mkdtemp(prefix="cold-ask-gate-real-shape-", dir=str(managed_tempdir())))
+    scratch = make_managed_temp_dir(prefix="cold-ask-gate-real-shape-")
     try:
         artifacts = scratch / "operations" / "1"
         artifacts.mkdir(parents=True)

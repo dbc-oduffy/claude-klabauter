@@ -488,7 +488,12 @@ def landing_invariant_nodes(
             p for p in landed_paths
             if not (norm := p.replace("\\", "/")).startswith(own_dir) and norm not in own_files
         ]
-    return list(imp.existing_invariants(worktree_root, imp.invariants_for_paths(landed_paths, worktree_root)))
+    nodes = list(imp.existing_invariants(worktree_root, imp.invariants_for_paths(landed_paths, worktree_root)))
+    if not landed_paths:
+        return nodes
+    from coordinator_core.ops.dispatch_emit import always_run_guards
+
+    return nodes + [g for g in always_run_guards.declared_guards(worktree_root) if g not in nodes]
 
 
 def _red_nodes(fresh: Optional[Mapping], foreign: set[str]) -> tuple[set[str], bool]:
@@ -505,6 +510,31 @@ def _red_nodes(fresh: Optional[Mapping], foreign: set[str]) -> tuple[set[str], b
     return red, bool(red) and not base.get("caused") and red <= foreign
 
 
+def _guard_hit_verdict(
+    node: str, fresh: Mapping, landed_paths: Sequence[str], params: Mapping,
+) -> Optional[Finding]:
+    """The finding for an always-run guard ``node`` red in the fresh retest, or None when the red is
+    baseline-only. A guard red at HEAD is judged by touched-file hits (tree above HEAD), never by its
+    verdict. No measured hits for the node: unmeasured, never credited."""
+    from coordinator_core.ops.dispatch_emit import always_run_guards as arg
+    from coordinator_core.ops.dispatch_emit.landing_targeted_tests import retest_remedy
+
+    entry = (fresh.get(arg.GUARD_HITS_KEY) or {}).get(node)
+    if not isinstance(entry, Mapping):
+        return unmeasured_finding(
+            node.split("::")[0],
+            f"always-run guard {node} is red and its touched-file hits were not measured against HEAD; "
+            f"re-run: {retest_remedy(params, [node])}",
+        )
+    touched = {p.replace("\\", "/") for p in landed_paths}
+    new = [p for p in arg.new_hits(entry.get("head") or {}, entry.get("tree") or {}) if p in touched]
+    if not new:
+        return None
+    return tests_failed_finding(
+        node.split("::")[0], f"always-run guard {node} has new hits in touched files: {', '.join(sorted(new))}",
+    )
+
+
 def invariant_findings(
     worktree_root: Path, landed_paths: Sequence[str], run_id: Optional[str], params: Mapping,
     foreign_out: Optional[dict] = None,
@@ -517,9 +547,12 @@ def invariant_findings(
     ``TARGETED_TESTS_FAILED`` (reserved for a measured failure). Paths other halted runs withhold
     (``halted_hold_release.residue_paths``) are residue at HEAD, not this run's diff: they select no
     invariant. Residue bytes are never touched."""
+    from coordinator_core.ops.dispatch_emit import always_run_guards as _arg
+
+    config = [unmeasured_finding("coordinator.local.md", p) for p in _arg.config_problems(worktree_root)]
     owed = landing_invariant_nodes(worktree_root, landed_paths, run_id)
     if not owed:
-        return []
+        return config
     fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
     ran = set(fresh.get("tests") or []) if fresh and fresh.get("status") == "pass" else set()
     foreign: set[str] = set()
@@ -530,9 +563,17 @@ def invariant_findings(
         # matches this tree's fingerprint; a carried record must pass measured=False.
         foreign = evidenced_clear_ids(fresh["baseline"], measured=True)
     red, only_base_red = _red_nodes(fresh, foreign)
-    out = []
+    guards = set(_arg.declared_guards(worktree_root))
+    out = list(config)
     for node in owed:
         if node in ran or node.split("::")[0] in ran:
+            continue
+        if node in guards and any(r == node or r.startswith((node + "::", node + "[")) for r in red):
+            verdict = _guard_hit_verdict(node, fresh, landed_paths, params)
+            if verdict is not None:
+                out.append(verdict)
+            elif foreign_out is not None:
+                foreign_out[node] = [node] if node in (fresh["baseline"].get("evidence") or []) else []
             continue
         if only_base_red and node not in red:
             continue

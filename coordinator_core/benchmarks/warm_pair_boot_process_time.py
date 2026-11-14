@@ -47,7 +47,6 @@ import json
 import os
 import shutil
 import sys
-import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -59,6 +58,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+from coordinator_core.temp_layout import make_managed_temp_dir
 from coordinator_core.warm import breadcrumb, client, skew
 from coordinator_core.warm import telemetry
 from coordinator_core.warm.telemetry import SPAWN_EPOCH_ENV
@@ -718,9 +718,7 @@ def run_boot_phases(
     """`runs` sequential traced boots of one tmp engine root built from `source_root`; one
     `attribute_boot` object per boot."""
     source = source_root if source_root is not None else Path(__file__).resolve().parents[2]
-    base = work_dir if work_dir is not None else source / "scratch"
-    base.mkdir(parents=True, exist_ok=True)
-    tmp = Path(tempfile.mkdtemp(prefix="warm-boot-phases-", dir=base))
+    tmp = make_managed_temp_dir(prefix="warm-boot-phases-")
     try:
         root = build_engine_root(tmp / "engine", source, cold_pyc=cold_pyc)
         (root / TRACE_ENTRY_NAME).write_text(_TRACE_ENTRY_SOURCE, encoding="utf-8", newline="\n")
@@ -744,9 +742,7 @@ def run(
     """Build a tmp engine root from `source_root` (default: this checkout) and measure one boot,
     or with `handover` the successor's boot under the publish handover over a freshly copied tree."""
     source = source_root if source_root is not None else Path(__file__).resolve().parents[2]
-    base = work_dir if work_dir is not None else source / "scratch"
-    base.mkdir(parents=True, exist_ok=True)
-    tmp = Path(tempfile.mkdtemp(prefix="warm-boot-process-time-", dir=base))
+    tmp = make_managed_temp_dir(prefix="warm-boot-process-time-")
     try:
         root = build_engine_root(tmp / "engine", source, cold_pyc=cold_pyc, fresh_copy=handover)
         if handover:

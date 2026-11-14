@@ -373,9 +373,19 @@ _REGISTRY_REPO_PREFIXES = ("repos.", "engine.working_repos.")
 
 def _registry_repo(repo: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """(repo, refusal): a `repos.<key>` / `engine.working_repos.<key>` value becomes its registered absolute path
-    through the single-key registry resolver; an unknown key is refused naming it; any other value passes through."""
-    if not (isinstance(repo, str) and repo.strip().startswith(_REGISTRY_REPO_PREFIXES)):
+    through the single-key registry resolver; an unknown key is refused naming it. A bare name (no separator, not a
+    path) that is a registered `repos.<name>` key resolves the same way; an unregistered bare name and any other
+    value pass through."""
+    if not isinstance(repo, str):
         return repo, None
+    if not repo.strip().startswith(_REGISTRY_REPO_PREFIXES):
+        bare = repo.strip()
+        if not bare or any(c in bare for c in "/\\:") or bare.startswith("."):
+            return repo, None
+        from coordinator_core import machine_resolver
+
+        path = machine_resolver.registry_get("repos." + bare.replace("-", "_"))
+        return (path, None) if path else (repo, None)
     from coordinator_core import machine_resolver
 
     key = repo.strip()
@@ -500,7 +510,9 @@ def _default_emit(params: dict, repo_root: Path) -> dict:
 _READ_DEADLINE_MS = 300.0
 _INFLIGHT: set = set()
 _INFLIGHT_LOCK = threading.Lock()
-_BUDGET: Optional[list] = None  # [ms still unspent] while `evaluate` runs; an orphaned worker may outlive the reset to None
+#: `evaluate`'s per-call budget. Trap: the warm engine serves a parallel tool-call pair on two threads of
+#: one process, so a module global would let one call's spend, or its exit, reach the other's reads.
+_BUDGET_VAR: "contextvars.ContextVar[Optional[list]]" = contextvars.ContextVar("submit_budget", default=None)
 
 
 class _SizingStalled(Exception):
@@ -516,14 +528,21 @@ def _in_scope(fn: Callable[[], Any]) -> Callable[[], Any]:
 def _wait_ms(deadline_ms: Optional[float]) -> float:
     """The wait a read may take now: its own cap, cut to the unspent hook budget."""
     cap = _READ_DEADLINE_MS if deadline_ms is None else deadline_ms
-    return cap if _BUDGET is None else min(cap, _BUDGET[0])
+    budget = _budget()
+    return cap if budget is None else min(cap, budget[0])
+
+
+def _budget() -> Optional[list]:
+    """The running `evaluate` call's unspent-ms cell, else None (a read outside `evaluate` is uncapped)."""
+    return _BUDGET_VAR.get()
 
 
 def _charge(started: float) -> None:
-    if _BUDGET is not None:
+    budget = _budget()
+    if budget is not None:
         import time
 
-        _BUDGET[0] -= (time.monotonic() - started) * 1000.0
+        budget[0] -= (time.monotonic() - started) * 1000.0
 
 
 #: The caller's child budget (DoE `_hook_boot.py` `_CHILD_BUDGET_S`); the caller kills the hook at it
@@ -616,6 +635,22 @@ def _note_minted(run_id: Any) -> None:
     call = _CALL.get()
     if call is not None and isinstance(run_id, str) and run_id not in call["minted"]:
         call["minted"].append(run_id)
+        _retire_spooled_twins(call, run_id)
+
+
+def _retire_spooled_twins(call: dict, run_id: str) -> None:
+    """Retire the minting repos' pending spool entries asking what this call asked, as superseded by `run_id`,
+    so a drain never starts a second run for a retried ask. Never raises: the mint's reply is unchanged."""
+    payload = call.get("payload")
+    if not isinstance(payload, Mapping):
+        return
+    try:
+        from coordinator_core.ask_spool import record
+
+        for root in list(call["roots"]):
+            record.supersede_pending(str(root), dict(payload), run_id)
+    except Exception:  # noqa: BLE001 - a spool read/rename error must not fail the submit
+        pass
 
 
 def _minted_since_start(call: dict) -> Optional[list]:
@@ -1445,7 +1480,7 @@ def _load_sizing_doc(root: Path, sizing_rel: str) -> dict:
 
 
 #: Wall time one batch of sibling sizing reads may take; the batch has its own clock, so reads
-#: here never draw on the shared `_BUDGET` and a slow earlier read cannot starve a later one.
+#: here never draw on the shared `_BUDGET_VAR` budget and a slow earlier read cannot starve a later one.
 _SIZING_BATCH_DEADLINE_MS = 300.0
 
 
@@ -1708,7 +1743,7 @@ def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
     )
 
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import read_superseded_by
-    from coordinator_core.ops.dispatch_emit.sibling_hold import predecessor_closed
+    from coordinator_core.ops.dispatch_emit.sibling_hold import landed_without_close, predecessor_closed
 
     parent_id, run_id = marker
     by = read_superseded_by(root, run_id)
@@ -1728,7 +1763,7 @@ def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
         if state == STATUS_LANDED:
             continue
         if state == STATUS_HALTED:
-            if _rows_committed(root, pred) or predecessor_closed(root, pred):
+            if _rows_committed(root, pred) or predecessor_closed(root, pred) or landed_without_close(root, pred):
                 continue
             return (
                 f"Predecessor {pred} halted, so {run_id} cannot start. "
@@ -1758,6 +1793,25 @@ def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
             f"Check it: coordinator-invoke dispatch.sibling_status {{parent_id: {parent_id}}}."
         )
     return None
+
+
+def _slice_advisory(root: Path, marker: tuple[str, str]) -> str:
+    """Advisory sentence for each `after` predecessor that landed with a close-record gap; "" when none.
+
+    Mirrors the halted-predecessor chain in `_slice_deny`; change both together.
+    """
+    from coordinator_core.ops.dispatch_emit.sibling_hold import landed_without_close, predecessor_closed
+
+    parent = _read_parent(root, marker[0], run_id=marker[1])
+    mine = next((r for r in (parent.runs if parent else ()) if r.run_id == marker[1]), None)
+    gaps = [
+        p for p in (mine.after if mine else ())
+        if _status_of(root, p) == "halted" and not _rows_committed(root, p)
+        and not predecessor_closed(root, p) and landed_without_close(root, p)
+    ]
+    if not gaps:
+        return ""
+    return f" Advisory: predecessor {', '.join(gaps)} landed but its close recorded no judge verdict; close-record gap, not a hold."
 
 
 def _supersedes(tool_input: Mapping[str, Any]) -> tuple[Optional[str], Optional[str]]:
@@ -2937,6 +2991,37 @@ def _record_refire(rd: Path, script, kind: str, composed_by: Optional[str]) -> N
         pass
 
 
+def _script_names_missing_prompt(script: Path, rd: Path, run_id: str) -> bool:
+    """True when the stored script reads a `<run_id>/prompts/<name>.md` the run's prompts dir lacks.
+
+    One read of the script and one stat per distinct prompt it names; a script naming none is clean.
+    """
+    text = script.read_text(encoding="utf-8", errors="replace")
+    names = set(re.findall(re.escape(run_id) + r"/prompts/([\w.~-]+\.md)", text))
+    prompts = rd / "prompts"
+    return any(not (prompts / name).is_file() for name in names)
+
+
+def _reopen_own_records_run(root: Path, sizing_rel: str) -> Optional[str]:
+    """The run a refire resumes at landing from its own records (`sizing_fire.own_records_run`), else None.
+
+    A `resumed` marker is invisible to the halted lookup, so the plain emit would mint a fresh run; it is
+    rewritten `halted` here so the lookups downstream (recompose, the launched emit) resolve the same run."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.sizing_fire import own_records_run
+
+    run_id = own_records_run(root, sizing_rel)
+    if run_id is None:
+        return None
+    rd = record_dir(root, run_id)
+    marker = halted_run._read(rd)
+    if marker is not None and marker.get("status") == halted_run.STATUS_RESUMED:
+        halted_run._write(rd, {**marker, "status": halted_run.STATUS_HALTED})
+        halted_run._index_call("add_run", rd, halted_run.halted_withheld(rd), sizing_rel=halted_run._norm(sizing_rel))
+    return run_id
+
+
 def _resume_route(
     root: Path,
     sizing_rel: str,
@@ -2996,6 +3081,13 @@ def _resume_route(
             return _taken_as_deferred(root, params), None
         if isinstance(halted_id, str) and session_id:
             _adopt_unmarked_run(root, halted_id, session_id)
+    if halted_id is None and reserved_run_id is None:
+        try:
+            halted_id = _bounded_call(("own-records", str(root), sizing_rel), lambda: _reopen_own_records_run(root, sizing_rel))
+        except (OSError, ValueError):
+            return None, None
+        if halted_id is hrr.STALLED:
+            return _taken_as_deferred(root, params), None
     if not isinstance(halted_id, str):
         return None, None
     _note_resume(halted_id)
@@ -3025,7 +3117,10 @@ def _resume_route(
     call_specific = any(k not in _RESUME_NEUTRAL_PARAMS for k in params)
     script_rel = stored.get("composed_script_rel") if stored else None
     refusal = _stored_refusal(stored) if stored else None
-    refused_in_backoff = refusal is not None and hrr.in_backoff(stored, time.time())
+    from coordinator_core.ops.dispatch_emit.halt_resume_build import STALL_REASON_PREFIX
+
+    stalled = refusal is not None and STALL_REASON_PREFIX in refusal  # a storage stall is retryable, not a refusal
+    refused_in_backoff = refusal is not None and not stalled and hrr.in_backoff(stored, time.time())
     if refused_in_backoff:
         return _refuse(refusal), None
     script_missing = False
@@ -3035,7 +3130,14 @@ def _resume_route(
             on_disk = _bounded_call(("script", str(script)), script.is_file)
         except OSError:
             on_disk = False
-        if on_disk is True:
+        if on_disk is True and refusal is None:
+            try:
+                absent = _bounded_call(("script-prompts", str(script)), lambda: _script_names_missing_prompt(script, rd, halted_id))
+            except OSError:
+                absent = True
+            if absent is not False:  # a missing prompt or a stalled check: recompose, never launch
+                on_disk = False
+        if on_disk is True and not stalled:
             if refusal is not None:
                 return _refuse(refusal), None
             _record_refire(rd, script, "stored", (stored.get("fingerprint") or {}).get("engine_sha"))
@@ -3165,10 +3267,9 @@ def evaluate(
     """The PreToolUse envelope for a Workflow call: the fire rewrite for a submission, else nothing.
 
     A refusal is logged whole and leads with its cause (see `_durable_refusal`)."""
-    global _BUDGET
     import time
 
-    _BUDGET = [_READ_DEADLINE_MS]
+    budget_token = _BUDGET_VAR.set([_READ_DEADLINE_MS])
     try:
         if is_submission(payload):
             from coordinator_core.ops.dispatch_emit.run_token import WriteGate
@@ -3201,7 +3302,7 @@ def evaluate(
         else:
             envelope = _evaluate(payload, emit=emit, fanout=fanout, launch=launch)
     finally:
-        _BUDGET = None
+        _BUDGET_VAR.reset(budget_token)
     if is_submission(payload):
         return _durable_refusal(payload, envelope)
     return envelope
@@ -3481,6 +3582,7 @@ def _evaluate(
             why = _slice_deny(root, marker)
             if why:
                 return deny("PreToolUse", why)
+            memo_advisory += _slice_advisory(root, marker)
             if not _reservation_spent(root, marker[1]):
                 reserved_run_id = marker[1]
             ask_parent_id = marker[0]

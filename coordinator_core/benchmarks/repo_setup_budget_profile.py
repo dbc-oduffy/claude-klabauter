@@ -20,7 +20,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -173,7 +172,9 @@ def main(argv: List[str] | None = None) -> int:
         base.mkdir(parents=True, exist_ok=True)
         rows = profile(base)
     else:
-        with tempfile.TemporaryDirectory(prefix="repo-setup-profile-") as tmp:
+        from coordinator_core.temp_layout import managed_temp_dir
+
+        with managed_temp_dir(prefix="repo-setup-profile-") as tmp:
             rows = profile(Path(tmp))
     if args.json:
         print(json.dumps([asdict(r) for r in rows], indent=2, sort_keys=True))

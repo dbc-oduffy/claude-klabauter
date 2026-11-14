@@ -348,7 +348,14 @@ class LockTimeout(Exception):
     """Raised when locked_rmw cannot acquire the flock within ``timeout`` seconds.
 
     Fail-closed: no read, no mutate, no write has occurred.
+
+    ``holder`` is the contended lock's recorded ``{"pid", "holder", "acquired_at"}`` when `held_lock`
+    could read it, else None.
     """
+
+    def __init__(self, *args: object, holder: "dict | None" = None) -> None:
+        super().__init__(*args)
+        self.holder = holder
 
 
 class LockAnchorError(ValueError):
@@ -1015,39 +1022,49 @@ def _clear_holder_metadata(lock_fd: int) -> None:
     os.ftruncate(lock_fd, _METADATA_OFFSET)
 
 
-def _describe_holder(lock_path: Path) -> str:
-    """Best-effort read of another process's holder metadata for an error message.
+def _read_holder(lock_path: Path) -> "tuple[dict | None, str]":
+    """Best-effort read of another process's holder metadata: `(record, "")`, or `(None, reason)`.
 
     Opens a fresh, non-locking fd — never attempts to acquire the lock — so this
     is safe to call while a different process holds it. Reads from
     `_METADATA_OFFSET` (see its docstring re: Windows mandatory range locks).
     Any failure (file missing, unreadable, truncated mid-write, not valid
-    JSON, wrong shape) degrades to "holder unknown" rather than raising; the
+    JSON, wrong shape) degrades to `(None, reason)` rather than raising; the
     metadata is informational only and must never itself become a new
     failure mode.
     """
     try:
         fd = os.open(str(lock_path), os.O_RDONLY)
     except OSError:
-        return "holder unknown"
+        return None, "holder unknown"
     try:
         os.lseek(fd, _METADATA_OFFSET, os.SEEK_SET)
         raw = os.read(fd, 4096)
     except OSError:
-        return "holder unknown"
+        return None, "holder unknown"
     finally:
         os.close(fd)
     if not raw:
-        return "holder unknown"
+        return None, "holder unknown"
     import json
 
     try:
         data = json.loads(raw.decode("utf-8"))
-        pid = data["pid"]
-        holder = data.get("holder") or "(unlabelled)"
-        acquired_at = data.get("acquired_at", "unknown time")
+        if not isinstance(data, dict) or "pid" not in data:
+            raise KeyError("pid")
     except (ValueError, KeyError, UnicodeDecodeError, TypeError):
-        return "holder unknown (corrupt lock metadata)"
+        return None, "holder unknown (corrupt lock metadata)"
+    return data, ""
+
+
+def _describe_holder(lock_path: Path) -> str:
+    """The holder record of `_read_holder` rendered for an error message."""
+    data, reason = _read_holder(lock_path)
+    if data is None:
+        return reason
+    pid = data["pid"]
+    holder = data.get("holder") or "(unlabelled)"
+    acquired_at = data.get("acquired_at", "unknown time")
     # Function-local — see `_lock_key`'s note on this module's cold-start budget.
     from coordinator_core import timestamps
 
@@ -1179,10 +1196,11 @@ def _held_lock_gen(
         try:
             _acquire_flock(lock_fd, timeout)
         except LockTimeout:
-            holder_desc = _describe_holder(lock_path)
+            record, _ = _read_holder(lock_path)
             raise LockTimeout(
                 f"Could not acquire lock for {target} within {timeout}s "
-                f"(held by: {holder_desc})"
+                f"(held by: {_describe_holder(lock_path)})",
+                holder=record,
             ) from None
 
         # Lock held from here through the caller's scope.

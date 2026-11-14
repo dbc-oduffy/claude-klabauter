@@ -44,15 +44,13 @@ import importlib
 import json
 import os
 import re
-import shutil
 import statistics
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 from coordinator_core import _hook_envelope as _env
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import managed_temp_dir
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = PACKAGE_ROOT.parent
@@ -464,8 +462,7 @@ def replay(corpus: Path) -> Dict[str, Any]:
     """Replay ``corpus`` as one session; return the census report."""
     lines = [ln for ln in corpus.read_text(encoding="utf-8").splitlines() if ln.strip()]
     fires: List[Tuple[str, int]] = []
-    root = Path(tempfile.mkdtemp(prefix="advisory-census-", dir=str(managed_tempdir())))
-    try:
+    with managed_temp_dir("advisory-census-") as root:
         repo = _make_sandbox(root)
         recorder = _Recorder(_provision_content_root(root))
         scrub = _path_scrubber(repo)
@@ -487,8 +484,6 @@ def replay(corpus: Path) -> Dict[str, Any]:
                 fires.extend(
                     _emitted(recorder.calls, recorder.guard_fires, _additional_context(result), scrub)
                 )
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
 
     sites: Dict[str, Dict[str, int]] = {}
     for site, size in fires:

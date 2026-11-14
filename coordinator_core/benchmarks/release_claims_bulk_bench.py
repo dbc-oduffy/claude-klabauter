@@ -22,7 +22,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -189,7 +188,9 @@ def _repo(tmp: str) -> Path:
 
 
 def _scratch(parent: Optional[str]) -> str:
-    return tempfile.mkdtemp(prefix="release-claims-bench-", dir=parent)
+    from coordinator_core.temp_layout import make_managed_temp_dir
+
+    return str(make_managed_temp_dir(prefix="release-claims-bench-"))
 
 
 def _cleanup(tmp: str) -> None:

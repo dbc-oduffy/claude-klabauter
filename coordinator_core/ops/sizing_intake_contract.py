@@ -1,7 +1,8 @@
 """The intake-sizing contract: the record `sizing.intake_mint` writes and engine-ask reads.
 
 Answers "what did the EM direct for this run" (`read_em_brief`) and "is this sizing the
-EM's intake surface" (`is_intake`). Pure: no I/O, no clock, no git.
+EM's intake surface" (`is_intake`). No clock, no git; only `normalize_machine_path` reads the
+settings home and the fleet registry.
 
 The brief rides `em_analysis.em_brief` because the sizing-object schema is vendored and a
 new top-level field is not ours to add. `premise.provenance` is a closed enum, so the intake
@@ -11,7 +12,9 @@ mark rides `em_analysis.intake` instead.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
 EM_BRIEF_KEY = "em_brief"
@@ -58,9 +61,72 @@ def is_path_shaped(item: str) -> bool:
     return "/" in text or "\\" in text or "." in text
 
 
-def em_context_paths_value(paths: Iterable[str]) -> Optional[str]:
-    """The stripped non-empty paths, one per line, as the single string the sizing schema admits; None when none remain."""
-    kept = [p.strip() for p in paths if isinstance(p, str) and p.strip()]
+_SETTINGS_TOKEN = "~/.coordinator-claude-settings"
+SCRATCHPAD_TOKEN = "<scratchpad>"
+# `<tempdir>/claude/<project-slug>/<session-id>/scratchpad/<rest>`; `ask_brief._context_path` resolves the token back.
+_SCRATCHPAD = re.compile(r"(?:^|/)claude/[^/]+/[^/]+/scratchpad/(.+)$")
+
+
+def _norm(path: str) -> str:
+    return os.path.normcase(path).replace("\\", "/").rstrip("/")
+
+
+def _normalization_roots(repo_root: Optional[Path | str]) -> list[tuple[str, str]]:
+    """(normalized root, written token) pairs; a root that cannot be resolved is skipped, never raised."""
+    roots: list[tuple[str, str]] = []
+    if repo_root is not None:
+        roots.append((_norm(str(repo_root)), ""))
+    try:
+        from coordinator_core._settings_home import settings_home
+
+        roots.append((_norm(str(settings_home())), _SETTINGS_TOKEN))
+    except Exception:
+        pass
+    try:
+        from coordinator_core import _fleet_names
+
+        for raw in _fleet_names._registry_paths():
+            name = _fleet_names._leaf(raw)
+            if name:
+                roots.append((_norm(raw), f"<repo:{name}>"))
+    except Exception:
+        pass
+    return [(r, t) for r, t in roots if r]
+
+
+def normalize_machine_path(
+    path: str, repo_root: Optional[Path | str] = None, roots: Optional[list[tuple[str, str]]] = None,
+) -> str:
+    """`path` with its machine root replaced by a portable token; a path under no known root is returned as-is.
+
+    Under `repo_root` -> repo-relative; under the settings home -> `~/.coordinator-claude-settings/...`;
+    under a registry fleet checkout -> `<repo:NAME>/...`. The longest matching root wins. `roots` is a
+    precomputed `_normalization_roots` result: a caller normalizing many paths passes it so the fleet
+    registry is read once.
+    """
+    scratch = _SCRATCHPAD.search(path.replace("\\", "/"))
+    if scratch:
+        return f"{SCRATCHPAD_TOKEN}/{scratch.group(1)}"
+    probe = _norm(path)
+    best: Optional[tuple[str, str]] = None
+    for root, token in (roots if roots is not None else _normalization_roots(repo_root)):
+        if (probe == root or probe.startswith(root + "/")) and (best is None or len(root) > len(best[0])):
+            best = (root, token)
+    if best is None:
+        return path
+    rest = path.replace("\\", "/").rstrip("/")[len(best[0]):].lstrip("/")
+    if not best[1]:
+        return rest or "."
+    return f"{best[1]}/{rest}" if rest else best[1]
+
+
+def em_context_paths_value(paths: Iterable[str], repo_root: Optional[Path | str] = None) -> Optional[str]:
+    """The stripped non-empty paths, one per line, as the single string the sizing schema admits; None when none remain.
+
+    Each path is written through `normalize_machine_path`, so the sizing never carries a machine root."""
+    stripped = [p.strip() for p in paths if isinstance(p, str) and p.strip()]
+    roots = _normalization_roots(repo_root) if stripped else []
+    kept = [normalize_machine_path(p, repo_root, roots) for p in stripped]
     return "\n".join(kept) or None
 
 

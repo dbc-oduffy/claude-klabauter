@@ -47,8 +47,15 @@ def record(root: Path, params: dict, *, script_path: object = None, kind: str = 
     return True
 
 
-def mark(phase: str, sha: Optional[str] = None) -> None:
-    """Advance this process's land record to `phase` (with `sha` once committed). A no-op
+def mark(
+    phase: str,
+    sha: Optional[str] = None,
+    *,
+    base: Optional[str] = None,
+    expected_blobs: Optional[dict] = None,
+) -> None:
+    """Advance this process's land record to `phase` (with `sha` once committed; `base` and
+    `expected_blobs` at "committing" so `resolve` can read the verdict off git). A no-op
     when `record` wrote nothing; never raises."""
     global _held
     held = _held
@@ -64,6 +71,10 @@ def mark(phase: str, sha: Optional[str] = None) -> None:
     advanced = {**body, "phase": phase}
     if sha:
         advanced["sha"] = sha
+    if base:
+        advanced["base"] = base
+    if expected_blobs:
+        advanced["expected_blobs"] = {str(p): w for p, w in expected_blobs.items()}
     if dispatch_ack.record_land_intent(journal, key, advanced):
         _held = (journal, key, advanced)
 
@@ -85,6 +96,14 @@ def resolve(land_record: dict) -> Optional[dict]:
     sha = land_record.get("sha")
     if isinstance(sha, str) and sha and land_run.landed_on_head(root, sha):
         return {"verdict": "committed", "sha": sha}
+    expected = land_record.get("expected_blobs")
+    if isinstance(expected, dict) and expected:
+        from coordinator_core.ops.dispatch_emit.land_reconcile import reconcile_landing
+
+        found = reconcile_landing(root, land_record.get("base"), expected)
+        if found.get("verdict") == "committed" and found.get("sha"):
+            return {"verdict": "committed", "sha": found["sha"]}
+        return None  # partial / not_committed / unknown: a commit may still be mid-flight
     if land_record.get("phase") == PHASE_CLAIMED:
         return {"verdict": "never-ran"}
     return None

@@ -240,7 +240,7 @@ def entry_listed(d):
     """A session entry worth listing: its pid is still its process, no dead roster owns it and,
     for a mirror, its far session was seen on a recent poll and, for an agy router face, its agy
     process is still alive."""
-    return (entry_live(d) and not mirror_orphaned(d) and not mirror_unbacked(d)
+    return (not d.get("unimatrixStale") and entry_live(d) and not mirror_orphaned(d) and not mirror_unbacked(d)
             and not _liveness().agy_face_unbacked(d) and not _liveness().codex_face_unbacked(d))
 
 
@@ -807,17 +807,21 @@ def reap_orphaned_mirrors(remote, say, unbacked=False, keep=()):
         files = os.listdir(sessions_dir())
     except OSError:
         return
-    reaped, to_kill = [], []
+    reaped, to_kill, owners, readable = [], [], [], True
     for f in files:
         m = re.fullmatch(r"(\d+)\.json", f)
         if not m:
             continue
+        path = os.path.join(sessions_dir(), f)
         try:
-            with open(os.path.join(sessions_dir(), f), encoding="utf-8") as fh:
+            with open(path, encoding="utf-8") as fh:
                 d = json.load(fh)
         except (OSError, ValueError):
+            readable = False
             continue
         pid = int(m.group(1))
+        if isinstance(d, dict):
+            owners.append((path, pid, d))
         if (not isinstance(d, dict) or d.get("pid") != pid or pid in keep
                 or not (mirror_orphaned(d) or (unbacked and mirror_unbacked(d)))
                 or box_label(d.get("unimatrixRemote") or "") != box_label(remote)):
@@ -829,6 +833,62 @@ def reap_orphaned_mirrors(remote, say, unbacked=False, keep=()):
     for pid, name in reaped:
         drop_session_files(pid)
         say(f"reaped orphaned mirror {name} bridge {pid}")
+    gone = {pid for pid, _ in reaped}
+    reap_stale_sockets([o for o in owners if o[1] not in gone], keep, readable, say)
+
+
+SOCKET_GRACE_SECONDS = 2 * POLL_SECONDS
+STALE_FIELD = "unimatrixStale"
+LOOPBACK_SOCK_RE = re.compile(r"cc-msg-[0-9a-f]{32}\.sock")
+PIPE_PREFIX = "\\\\.\\pipe\\"
+
+
+def liveness_unknown(d):
+    """True when the entry records no usable pid, so neither liveness nor death can be shown."""
+    pid = d.get("pid")
+    return not isinstance(pid, int) or isinstance(pid, bool)
+
+
+def mark_stale(path, d, say):
+    """Record `unimatrixStale` on the entry at `path` so `entry_listed` drops it; the entry is never deleted."""
+    if d.get(STALE_FIELD):
+        return
+    write_json_atomic(path, {**d, STALE_FIELD: True})
+    say(f"marked stale {d.get('name')} ({d.get('messagingSocketPath')})")
+
+
+def reap_stale_sockets(owners, keep, readable, say):
+    """Unlink loopback cc-msg-*.sock files no listed entry owns; mark ownerless win32 pipe entries stale.
+
+    `owners` is (entry path, pid, entry) for every readable session file. A win32 pipe cannot be
+    unlinked, so its dead owner's entry is marked stale instead. An owner whose liveness is unknown is
+    marked stale and its socket kept. A socket younger than `SOCKET_GRACE_SECONDS` is spared (its entry may
+    not be written yet), and an unreadable session file (a possible owner) suspends every unlink."""
+    listed = {d.get("messagingSocketPath") for _, pid, d in owners if pid in keep or entry_listed(d)}
+    for path, pid, d in owners:
+        endpoint = d.get("messagingSocketPath")
+        if not isinstance(endpoint, str) or endpoint in listed or d.get(STALE_FIELD):
+            continue
+        if liveness_unknown(d) or endpoint.startswith(PIPE_PREFIX):
+            mark_stale(path, d, say)
+    if _is_win() or not readable:
+        return
+    try:
+        socks = os.listdir(LOOPBACK_SOCKS)
+    except OSError:
+        return
+    held = {d.get("messagingSocketPath") for _, _, d in owners if liveness_unknown(d)}
+    for f in socks:
+        full = os.path.join(LOOPBACK_SOCKS, f)
+        if not LOOPBACK_SOCK_RE.fullmatch(f) or full in listed or full in held:
+            continue
+        try:
+            if time.time() - os.stat(full).st_mtime < SOCKET_GRACE_SECONDS:
+                continue
+            os.unlink(full)
+        except OSError:
+            continue
+        say(f"unlinked stale socket {full}")
 
 
 def reap_unbacked_agy_faces(say):

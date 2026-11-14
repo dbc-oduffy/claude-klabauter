@@ -145,6 +145,23 @@ def test_drifted_prep_busy_exit_refuses_composition():
         ask_compose._single_exit_review(blocks)
 
 
+def test_the_live_review_prep_block_is_rewritten_and_a_block_missing_a_halt_exit_is_refused(monkeypatch):
+    seen: list[str] = []
+    real = ask_compose._single_exit_review
+
+    def spy(blocks):
+        seen.append(blocks[0])
+        return real(blocks)
+
+    monkeypatch.setattr(ask_compose, "_single_exit_review", spy)
+    _m_plus_script(monkeypatch)
+    live = seen[0]
+    assert "return { halted:" in live
+    drifted = live.replace(f"return {{ halted: '{PREP_BUSY_HALT}'", "// gone")
+    with pytest.raises(ask_compose.AskComposeRefused):
+        real([drifted])
+
+
 def test_m_plus_script_validates_with_zero_errors(monkeypatch):
     findings = run_checks(_m_plus_script(monkeypatch))
     assert [f for f in findings if f.severity is Severity.ERROR] == []

@@ -218,6 +218,13 @@ class CommitOutcome(NamedTuple):
     sign_warning: Optional[str] = None
     #: MERGE_HEAD's sha when this commit finished a merge (`finish_merge=True`); None otherwise.
     merge_parent: Optional[str] = None
+    #: Supplied-blob paths whose worktree and index now both hold the committed blob: their
+    #: worktree still equalled the pre-commit HEAD blob, so the landing brought it forward.
+    converged: Tuple[str, ...] = ()
+    #: Supplied-blob paths NOT converged because someone's bytes may be there (worktree or index
+    #: differed from the pre-commit HEAD blob), or the shape is not rewritten in process
+    #: (filter driver, symlink, undecidable CRLF, unreadable). Their worktree is byte-identical.
+    left_alone: Tuple[str, ...] = ()
 
 
 class BlobDrift(NamedTuple):
@@ -1308,6 +1315,12 @@ def commit_paths(
     precedence over the index entry and `_mode_for`. None leaves every
     path's mode to those two.
 
+    `supplied_blobs` commits `{path: blob sha}` without reading the worktree. After the index
+    publishes, each supplied path whose worktree and pre-splice index still equal the
+    pre-commit HEAD blob is converged to the committed blob and listed in `converged`; any
+    other supplied path keeps its worktree bytes and is listed in `left_alone` when it was
+    a candidate that could not be rewritten.
+
     `untracked_paths` names files this commit removes from HEAD and the index
     while the worktree keeps them (`git rm --cached`). It is the only way to
     say so: `deleted_paths` refuses a path still on disk, because a declared
@@ -1985,6 +1998,23 @@ def commit_paths(
                     + " (`declared_reverts` in-process). Nothing was written."
                 )
 
+    # Snapshot before `_rewrite_head_spine` splices the new entries into `spine`: the pre-commit
+    # HEAD entry is what a convergence write must find still sitting in the worktree.
+    converge_plan: Dict[str, Tuple[Optional[Tuple[int, str]], Tuple[int, str], bool]] = {}
+    no_delta_set = set(no_delta)
+    for p in supplied:
+        val = assembled.get(p)
+        if val is None or val is _ABSENT or p in no_delta_set:
+            continue
+        head_dir, _, head_name = p.rpartition("/")
+        pre_head = spine.get(head_dir, {}).get(head_name)
+        pre_index = staged.get(p)
+        index_matches = (
+            pre_index is None if pre_head is None
+            else pre_index is not None and (pre_index.mode, pre_index.sha) == tuple(pre_head)
+        )
+        converge_plan[p] = (pre_head, val, index_matches)
+
     filled = _synthesize_absent_spine_dirs(spine, assembled)
     if filled is not None:
         spine = filled
@@ -2106,10 +2136,17 @@ def commit_paths(
         # An OSError here (peer-held file on Windows) propagates after the commit landed.
         merge_state.clear_merge_state(gitdir)
 
+    converged: Tuple[str, ...] = ()
+    left_alone: Tuple[str, ...] = ()
+    if publish_error is None and converge_plan:
+        converged, left_alone = _converge_supplied_worktree(repo, converge_plan)
+
     # The index is published only after the ref moved (an index matching a commit that never
     # landed is a lie), so a publish failure here is a landed commit with a stale index: reported
     # as `IndexStaleAfterCommit` -- callers must not retry -- never rolled back.
     outcome = CommitOutcome(
+        converged=converged,
+        left_alone=left_alone,
         sha=commit_sha,
         staged_preferred=tuple(staged_preferred),
         worktree_over_staged=tuple(worktree_over_staged),
@@ -2130,6 +2167,104 @@ def commit_paths(
         ) from publish_error
 
     return outcome
+
+
+def _blob_sha_of(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _worktree_equals_pre_head(
+    root: Path, rel: str, pre_head: Optional[Tuple[int, str]]
+) -> Optional[Tuple[bytes, bytes]]:
+    """`(raw worktree bytes, their check-in form)` when `rel` still holds the pre-commit HEAD
+    blob (absent iff HEAD lacked it, then `(b"", b"")`); None for anything else, including every
+    shape this module does not hash (symlink, non-file, filter driver, unreadable)."""
+    target = root / rel
+    if pre_head is None:
+        return (b"", b"") if not os.path.lexists(target) else None
+    if target.is_symlink() or not target.is_file():
+        return None
+    try:
+        data = target.read_bytes()
+    except OSError:
+        return None
+    out = checkin_form(root, rel, data)
+    if out is None or _blob_sha_of(out) != pre_head[1]:
+        return None
+    return data, out
+
+
+def _converge_supplied_worktree(
+    repo: Union[str, Path],
+    plan: Mapping[str, Tuple[Optional[Tuple[int, str]], Tuple[int, str], bool]],
+) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """Bring each supplied-blob path's worktree to the committed blob and refresh its index stat;
+    returns `(converged, left_alone)`. Zero git spawns.
+
+    INVARIANT: write only over bytes equal to the pre-commit HEAD blob (and only where the
+    pre-splice index entry equalled it too); anything else is someone's edit and stays
+    byte-identical. The check runs again after the temp file is written, immediately before
+    `os.replace`. A residual window remains -- an edit landing between that hash and the replace
+    is lost -- accepted because no lock covers peer editors of the worktree.
+
+    A CRLF checkout (every line CRLF, LF blob) receives the committed blob CRLF-converted; a
+    blob carrying CR, or a mixed-ending worktree, cannot be decided in process and is left alone.
+    """
+    root = Path(repo)
+    common = resolve_git_common_dir(repo)
+    converged: List[str] = []
+    left_alone: List[str] = []
+    for p, (pre_head, (mode, sha), index_matches) in plan.items():
+        if not index_matches or mode in (0o120000, 0o160000) or (
+            pre_head is not None and pre_head[0] in (0o120000, 0o160000)
+        ):
+            left_alone.append(p)
+            continue
+        tmp: Optional[Path] = None
+        try:
+            if checkin_attrs.clean_filter_may_apply(root, p) is not None:
+                left_alone.append(p)
+                continue
+            before = _worktree_equals_pre_head(root, p, pre_head)
+            obj = read_object(common, sha)
+            if before is None or obj is None or obj[0] != "blob":
+                left_alone.append(p)
+                continue
+            payload = obj[1]
+            data, out = before
+            if data != out:
+                if b"\r" in payload or out.replace(b"\n", b"\r\n") != data:
+                    left_alone.append(p)
+                    continue
+                payload = payload.replace(b"\n", b"\r\n")
+            target = root / p
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_name(f".{target.name}.{os.getpid()}.converge.tmp")
+            tmp.write_bytes(payload)
+            if os.name != "nt":
+                perm = target.stat().st_mode & 0o777 if pre_head is not None else 0o644
+                os.chmod(tmp, (perm | 0o111) if mode == _EXEC_MODE else (perm & ~0o111))
+            again = _worktree_equals_pre_head(root, p, pre_head)
+            if again is None or again[0] != data:
+                left_alone.append(p)
+                continue
+            os.replace(tmp, target)
+            tmp = None
+            converged.append(p)
+        except OSError:
+            left_alone.append(p)
+        finally:
+            if tmp is not None:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+    if converged:
+        try:
+            refresh_stat_in_process(repo, converged)
+        except (OSError, index_write.IndexWriteError, IndexParseError):
+            pass
+    return tuple(converged), tuple(left_alone)
 
 
 def _prepare_index_splice(

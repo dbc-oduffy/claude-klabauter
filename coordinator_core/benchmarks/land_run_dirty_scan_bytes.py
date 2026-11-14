@@ -19,7 +19,6 @@ import json
 import os
 import shutil
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -140,7 +139,8 @@ def main(argv: list | None = None) -> int:
     args = ap.parse_args(argv)
     scratch = _REPO / "scratch"
     scratch.mkdir(exist_ok=True)
-    base = Path(tempfile.mkdtemp(prefix="dirty-scan-bytes-", dir=scratch))
+    from coordinator_core.temp_layout import mkdtemp_in
+    base = mkdtemp_in("dirty-scan-bytes-", scratch)
     try:
         for variant in VARIANTS:
             print(json.dumps(run_variant(variant, base, args.files, args.changed), sort_keys=True))

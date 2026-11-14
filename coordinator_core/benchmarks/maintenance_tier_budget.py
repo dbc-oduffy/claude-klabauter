@@ -6,12 +6,11 @@ and ref volume rather than a freshly-initialized empty repo.
 from __future__ import annotations
 
 import os
-import tempfile
 import time
 from pathlib import Path
 
 from coordinator_core.git.run import run_git
-from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.temp_layout import make_managed_temp_dir, managed_tempdir
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -119,14 +118,8 @@ _DAILY_FIXTURE_PACKS = 60
 _DAILY_FIXTURE_LOOSE = 20
 
 
-def _ensure_scratch_root() -> Path:
-    root = scratch_root()
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
 def _make_throwaway_clone() -> Path:
-    work = Path(tempfile.mkdtemp(prefix="falsifier-worktree-", dir=str(_ensure_scratch_root())))
+    work = make_managed_temp_dir(prefix="falsifier-worktree-")
     run_git(["init", "-q"], cwd=str(work))
     (work / "seed.txt").write_text("seed\n", encoding="utf-8", newline="\n")
     run_git(["add", "seed.txt"], cwd=str(work))

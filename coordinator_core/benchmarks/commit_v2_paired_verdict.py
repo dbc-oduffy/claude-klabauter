@@ -202,11 +202,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--paths-max", type=int, default=2)
     ap.add_argument("--min-rows", type=int, default=5)
     args = ap.parse_args(argv)
-    import tempfile
-
     from coordinator_core.benchmarks import fixture_settings_home
+    from coordinator_core.temp_layout import managed_temp_dir
 
-    with tempfile.TemporaryDirectory(prefix="cv2-verdict-home-") as home, fixture_settings_home(home):
+    with managed_temp_dir(prefix="cv2-verdict-home-") as home, fixture_settings_home(home):
         return _report(args)
 
 

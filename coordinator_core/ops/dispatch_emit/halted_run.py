@@ -489,7 +489,25 @@ def halted_run_to_resume(repo_root: Path, sizing_rel: str, *, build: bool = True
         return halted_run_for(repo_root, sizing_rel) or STALLED
     if not runs:
         return None
-    return halted_run_for(repo_root, sizing_rel) or halted_ask_run_for(repo_root, sizing_rel)
+    picked = halted_run_for(repo_root, sizing_rel) or halted_ask_run_for(repo_root, sizing_rel)
+    return _latest_revised(repo_root, sizing_rel, runs, picked) if picked else picked
+
+
+def _latest_revised(repo_root: Path, sizing_rel: str, runs: set, picked: str) -> str:
+    """Among the sizing's indexed `halted` runs, the one the latest `workflow.revise` stamped (`revised_at`), else
+    `picked`. A refire resumes the run whose notes.jsonl holds the ruling, never a sibling halt that lacks it.
+    Only runs other than `picked` are read, so a sizing with one halt costs no extra marker read."""
+    root = Path(repo_root) / RECORD_DIR_ROOT
+    best_at, best = "", None
+    for name in sorted(runs):
+        if name == picked or not safe_id(name):
+            continue
+        at = revised_halt(root / name)
+        if at and at >= best_at:
+            best_at, best = at, name
+    if best is None or best_at <= (revised_halt(root / picked) or ""):
+        return picked
+    return halted_run_named(repo_root, best, sizing_rel) or picked
 
 
 def halted_run_for(repo_root: Path, sizing_rel: str) -> Optional[str]:

@@ -578,18 +578,20 @@ def test_bare_ask_whose_session_already_holds_the_same_normalized_ask_coalesces_
     assert [n["status"] for n in _notices(tmp_path)] == ["coalesced"]
 
 
-def test_bare_ask_of_another_session_or_another_text_or_outside_the_window_still_mints(tmp_path):
+def test_bare_ask_of_another_text_still_mints_and_the_same_text_of_any_session_or_age_is_superseded(tmp_path):
     _token_of_ask(tmp_path, "ask-20261104T160001-aaaaaa", "fix the drain bug", session="other")
     _token_of_ask(tmp_path, "ask-20261104T160002-bbbbbb", "a different ask")
     _token_of_ask(tmp_path, "ask-20261104T160003-cccccc", "stale ask", minted_at=time.time() - 3600)
     for rid in ("ask-20261104T160002-bbbbbb", "ask-20261104T160003-cccccc"):
         _write_submission(tmp_path, rid, session_id="sess1", tool_use_id="old-" + rid)
-    _spool_ask(tmp_path, "tuA", "fix the drain bug")
+    sid_a = _spool_ask(tmp_path, "tuA", "fix the drain bug")
     _spool_ask(tmp_path, "tuB", "fix the drain bug now")
-    _spool_ask(tmp_path, "tuC", "stale ask")
+    sid_c = _spool_ask(tmp_path, "tuC", "stale ask")
     engine = Engine(tmp_path)
     counts = drain.run(str(tmp_path), evaluate=engine)
-    assert engine.calls == 3 and counts["minted"] == 3 and counts["coalesced"] == 0
+    assert engine.calls == 1 and counts["minted"] == 1 and counts["coalesced"] == 0 and counts["withdrawn"] == 2
+    assert _withdrawn(tmp_path, sid_a)["superseded_by"] == "ask-20261104T160001-aaaaaa"
+    assert _withdrawn(tmp_path, sid_c)["superseded_by"] == "ask-20261104T160003-cccccc"
 
 
 def _withdrawn(root, sid):

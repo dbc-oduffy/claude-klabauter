@@ -3,6 +3,8 @@ import importlib.util
 import tempfile
 from pathlib import Path
 
+import pytest
+
 _spec = importlib.util.spec_from_file_location("unimatrix_send_c3", Path(__file__).resolve().parents[1] / "unimatrix-send.py")
 us = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(us)
@@ -42,11 +44,12 @@ def test_list_without_router_lists_sessions_dir_and_succeeds(monkeypatch, capsys
         rc = us.main(["--list", "--endpoint-dir", d])
     cap = capsys.readouterr()
     rows = _rows(cap.out)
-    assert rc == 0 and cap.out.split("\n")[0] == "NAME\tBOX\tVENDOR\tSTATE"
+    assert rc == 0 and cap.out.split("\n")[0] == "NAME\tBOX\tTHIS-BOX\tVENDOR\tSTATE"
     assert [r[0] for r in rows] == ["mac-claude", "codex-x", "dp-claude"]
-    assert [r[2] for r in rows] == ["claude", "codex", "claude"]
+    assert [r[3] for r in rows] == ["claude", "codex", "claude"]
     assert rows[2][1] == "machine-b" and rows[0][1] == rows[1][1] != "machine-b"
-    assert all(r[3] == "via SendMessage" for r in rows)
+    assert [r[2] for r in rows] == ["yes", "yes", "no"]
+    assert all(r[4] == "via SendMessage" for r in rows)
     assert "SendMessage" in cap.out.strip().split("\n")[-1]
 
 
@@ -54,10 +57,10 @@ def test_list_on_windows_uses_router_when_available(monkeypatch, capsys):
     monkeypatch.setattr(us, "_windows", lambda: True)
     monkeypatch.setattr(us, "_session_entries", lambda: _ENTRIES[:1])
     fake = _FakeRouter({"ok": True, "peers": ["codex-x"], "reachable": ["codex-x"],
-                        "agents": [{"name": "codex-x", "box": "machine-a", "vendor": "codex"}]})
+                        "agents": [{"name": "codex-x", "box": "machine-a", "vendor": "codex", "this_box": True}]})
     monkeypatch.setattr(us, "_router", lambda: fake)
     rc = us.main(["--list"])
-    assert rc == 0 and "codex-x\tmachine-a\tcodex\tready" in capsys.readouterr().out
+    assert rc == 0 and "codex-x\tmachine-a\tyes\tcodex\tready" in capsys.readouterr().out
 
 
 def test_session_entries_reads_live_pid_entries(monkeypatch, tmp_path):
@@ -97,16 +100,22 @@ def test_send_prints_sent_only_when_written(monkeypatch, capsys):
     assert rc == 0 and "sent to x" in capsys.readouterr().out
 
 
+def test_send_receipt_names_the_session_the_router_reached(monkeypatch, capsys):
+    rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True, "reached": "em.macmini",
+                               "reached_box": "macmini"}, ["--to", "em", "hi"])
+    assert rc == 0 and "sent to em (reached em.macmini on macmini)" in capsys.readouterr().out
+
+
 def test_send_ok_with_msg_id_is_confirmed_even_without_written_marker(monkeypatch, capsys):
     rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m"}, ["--to", "x", "hi"])
     cap = capsys.readouterr()
     assert rc == 0 and "sent to x" in cap.out and cap.err == ""
 
 
-def test_send_unconfirmed_is_worded_unconfirmed_and_exits_nonzero(monkeypatch, capsys):
+def test_send_unconfirmed_is_worded_unconfirmed_and_exits_zero_so_no_retry_block(monkeypatch, capsys):
     rc, _ = _run(monkeypatch, {"ok": True}, ["--to", "x", "hi"])
     cap = capsys.readouterr()
-    assert rc == 1 and "sent to" not in cap.out
+    assert rc == 0 and "sent to" not in cap.out
     assert "unconfirmed" in cap.err and "may have been delivered" in cap.err
     assert "not delivered" not in cap.err and "not confirmed" not in cap.err
 
@@ -156,13 +165,20 @@ def test_send_peer_reply_still_printed(monkeypatch, capsys):
 def test_list_prints_agents_rows_with_box_and_vendor(monkeypatch, capsys):
     resp = {"ok": True, "peers": ["p", "q"], "reachable": ["p", "sess"], "sessions": ["sess", "stale"],
             "ready": {"p": True, "q": False},
-            "agents": [{"name": "p", "box": "mac", "vendor": "codex"},
-                       {"name": "sess", "box": "machine-b", "vendor": "claude"}]}
-    rc, fake = _run(monkeypatch, resp, ["--list", "--as", "me"])
+            "agents": [{"name": "p", "box": "mac", "vendor": "codex", "this_box": False},
+                       {"name": "sess", "box": "machine-b", "vendor": "claude", "this_box": True}]}
+    rc, fake = _run(monkeypatch, resp, ["--list"])
     out = capsys.readouterr().out.split("\n")
-    assert rc == 0 and out[1:3] == ["p\tmac\tcodex\tready", "sess\tmachine-b\tclaude\tsession"]
+    assert out[0] == "NAME\tBOX\tTHIS-BOX\tVENDOR\tSTATE"
+    assert rc == 0 and out[1:3] == ["p\tmac\tno\tcodex\tready", "sess\tmachine-b\tyes\tclaude\tsession"]
     assert "stale" not in "".join(out) and "q" not in out
-    assert fake.reqs[0]["as"] == "me"
+    assert fake.reqs[0]["as"] == "cli"
+
+
+def test_as_flag_is_rejected_as_unknown_argument(monkeypatch, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run(monkeypatch, {"ok": True}, ["--as", "me", "--to", "x", "hi"])
+    assert exc.value.code == 2 and "unrecognized arguments: --as" in capsys.readouterr().err
 
 
 def test_list_marks_a_router_stale_agent_row_stale(monkeypatch, capsys):
@@ -171,7 +187,7 @@ def test_list_marks_a_router_stale_agent_row_stale(monkeypatch, capsys):
                        {"name": "q", "box": "mac", "vendor": "codex", "stale": False}]}
     rc, _ = _run(monkeypatch, resp, ["--list"])
     out = capsys.readouterr().out.split("\n")
-    assert rc == 0 and out[1:3] == ["p\tmac\tcodex\tstale", "q\tmac\tcodex\tready"]
+    assert rc == 0 and out[1:3] == ["p\tmac\t-\tcodex\tstale", "q\tmac\t-\tcodex\tready"]
 
 
 def test_send_the_router_refuses_exits_nonzero_with_nothing_sent(monkeypatch, capsys):
@@ -184,7 +200,7 @@ def test_list_from_older_router_renders_dashes(monkeypatch, capsys):
     resp = {"ok": True, "peers": ["p"], "reachable": ["p", "sess"]}
     rc, _ = _run(monkeypatch, resp, ["--list"])
     out = capsys.readouterr().out.split("\n")
-    assert rc == 0 and out[1:3] == ["p\t-\t-\tready", "sess\t-\t-\tsession"]
+    assert rc == 0 and out[1:3] == ["p\t-\t-\t-\tready", "sess\t-\t-\t-\tsession"]
 
 
 def test_list_without_reachable_field_fails(monkeypatch, capsys):
@@ -217,12 +233,13 @@ def test_send_to_a_mirror_the_relay_delivered_is_sent(monkeypatch, capsys):
     assert rc == 0 and "sent to fe" in capsys.readouterr().out
 
 
-def test_send_to_a_mirror_with_no_recorded_outcome_is_unconfirmed_never_sent(monkeypatch, capsys):
+def test_send_to_a_mirror_with_no_recorded_outcome_is_undelivered_and_exits_one(monkeypatch, capsys):
     monkeypatch.setattr(us, "_is_mirror", lambda n: True)
     monkeypatch.setattr(us, "relay_outcome", lambda n, since: None)
     rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
     cap = capsys.readouterr()
-    assert rc == 1 and "sent to" not in cap.out and "unconfirmed" in cap.err
+    assert rc == 1 and "sent to" not in cap.out
+    assert "undelivered: fe: no far ingest ack within" in cap.err and "outcome is unknown" in cap.err
 
 
 def test_hostless_mirror_rows_still_count_as_mirrors(monkeypatch):
@@ -306,3 +323,20 @@ def test_a_mirror_unmirrored_during_the_send_still_confirms_the_bridges_ok_row(m
     _mirror_unmirrored_by_the_send(monkeypatch, tmp_path, {"ok": True})
     assert us.main(["--to", "grp", "hi"]) == 0
     assert "sent to grp" in capsys.readouterr().out
+
+
+def test_sent_and_undelivered_lines_name_the_recorded_box_and_transport(monkeypatch, capsys):
+    monkeypatch.setattr(us, "_is_mirror", lambda n: True)
+    monkeypatch.setattr(us, "relay_outcome", lambda n, since: {"ok": True, "box": "macmini", "transport": "tunnel"})
+    rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
+    assert rc == 0 and "sent to fe [box macmini, transport tunnel]" in capsys.readouterr().out
+    monkeypatch.setattr(us, "relay_outcome", lambda n, since: {"ok": False, "error": "boom", "box": "macmini", "transport": "ssh"})
+    rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
+    assert rc == 1 and "undelivered: fe: boom [box macmini, transport ssh]" in capsys.readouterr().err
+
+
+def test_a_row_from_an_older_bridge_prints_box_unknown(monkeypatch, capsys):
+    monkeypatch.setattr(us, "_is_mirror", lambda n: True)
+    monkeypatch.setattr(us, "relay_outcome", lambda n, since: {"ok": True})
+    rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
+    assert rc == 0 and "sent to fe [box unknown]" in capsys.readouterr().out

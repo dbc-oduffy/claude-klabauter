@@ -234,6 +234,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.plan_overlap_edges", 'registers "plan.overlap_edges"'),
     ("coordinator_core.ops.seam_baton_mint", 'registers "seam.mint_batons"'),
     ("coordinator_core.ops.plan_prep_gate", 'registers "plan.prep_gate"'),
+    ("coordinator_core.ops.landing_guard_selection", 'registers "landing.guard_selection"'),
     ("coordinator_core.ops.plan_readiness_verdict", 'registers "plan.readiness_verdict"'),
     ("coordinator_core.ops.plan_set_code_done", 'registers "plan.set_code_done"'),
     ("coordinator_core.ops.repo_setup", 'registers "repo.setup"'),

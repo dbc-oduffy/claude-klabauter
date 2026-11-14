@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
 from coordinator_core.bounded_io import run_bounded
-from coordinator_core.git import call_io_scope
+from coordinator_core.git import call_io_scope, object_store_lock
 
 #: Ceiling on one loose-object placement; past it `write_object` raises TimeoutError.
 _WRITE_OBJECT_DEADLINE_SECS = 2.0
@@ -230,7 +230,12 @@ def _write_pack(gitdir: Path, pending: dict) -> None:
     content hash, so a peer racing the same objects writes identical bytes and
     an idx already present is success."""
     pack, idx, name = _build_pack(pending)
-    _place_pack(Path(gitdir, "objects", "pack"), pack, idx, name)
+    try:
+        with object_store_lock.hold(Path(gitdir), wait_s=object_store_lock.HOT_WAIT_S, holder_label="git_objects._write_pack"):
+            _place_pack(Path(gitdir, "objects", "pack"), pack, idx, name)
+    except object_store_lock.ObjectStoreBusy:
+        for kind, payload in pending.values():
+            write_object(gitdir, kind, payload)
 
 
 def _place_pack(pack_dir: Path, pack: bytes, idx: bytes, name: str) -> None:
@@ -343,7 +348,19 @@ def _flush_pack(gitdir: Path, pending: dict) -> None:
 
     A peer may hold a listing that still names the deleted pair; its readers re-list on a missing
     pack (`_search_packs_for_sha`). Two racing folds each keep every object they read, so the
-    worst case is an extra pack, never a lost object."""
+    worst case is an extra pack, never a lost object.
+
+    The tail read, the place and the tail delete run under the object-store lock; a lock held
+    past `HOT_WAIT_S` sends the batch loose, which no pack delete can lose."""
+    try:
+        with object_store_lock.hold(Path(gitdir), wait_s=object_store_lock.HOT_WAIT_S, holder_label="git_objects._flush_pack"):
+            _flush_pack_locked(gitdir, pending)
+    except object_store_lock.ObjectStoreBusy:
+        for kind, payload in pending.values():
+            write_object(gitdir, kind, payload)
+
+
+def _flush_pack_locked(gitdir: Path, pending: dict) -> None:
     pack_dir = Path(gitdir, "objects", "pack")
     pack_dir.mkdir(parents=True, exist_ok=True)
     tail, stale = _read_tail_marker(pack_dir)
@@ -533,11 +550,10 @@ class _PackIndex(NamedTuple):
 
 
 def _read_loose_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
-    path = common_dir / "objects" / sha[:2] / sha[2:]
-    if not path.is_file():
-        return None
+    path = os.path.join(os.fspath(common_dir), "objects", sha[:2], sha[2:])
     try:
-        raw = zlib.decompress(path.read_bytes())
+        with open(path, "rb") as fh:
+            raw = zlib.decompress(fh.read())
     except (OSError, zlib.error):
         return None
     header, _, payload = raw.partition(b"\x00")
@@ -1410,9 +1426,9 @@ def read_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
 
 
 def _read_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
-    """Reads a git object by full 40-hex sha -- packs first (v2 idx binary
-    search across every pack in `objects/pack/`), loose second. Cached per
-    (common_dir, sha), bounded (see `_OBJECT_CACHE` above)."""
+    """Reads a git object by full 40-hex sha. Packs are probed first once the repo's pack lookup source is
+    built and cheap to miss on (`_read_local_object`), loose first otherwise. Cached per (common_dir, sha),
+    bounded (see `_OBJECT_CACHE` above)."""
     sha = sha.lower()
     state = getattr(_BATCH, "state", None)
     if state is not None and sha in state[1]:
@@ -1439,8 +1455,18 @@ def _read_uncached(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
 
 
 def _read_local_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
-    """Loose first: one stat settles a loose object, whereas a pack miss parses
-    every `.idx` (~140ms cold on a 3400-pack repo)."""
+    """Packs first when this repo's lookup source is already built and cheap to miss on (a midx or at most
+    `_UNCOVERED_LAZY_MAX` uncovered packs, or a merged table), else loose first: a pack miss on a cold
+    3400-pack repo parses every `.idx` (~140ms), whereas one stat settles a loose object."""
+    if _pack_probe_is_cheap(common_dir):
+        try:
+            found = _search_packs_for_sha(common_dir, sha, revalidate=False)
+        except PackReadDeadline:
+            raise
+        except (_GitReadModelError, zlib.error, struct.error):
+            found = None
+        if found is not None and found[0] is not None:
+            return found[0]
     result = _read_loose_object(common_dir, sha)
     if result is not None:
         return result
@@ -1450,6 +1476,13 @@ def _read_local_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]
         raise
     except (_GitReadModelError, zlib.error, struct.error):
         return None
+
+
+def _pack_probe_is_cheap(common_dir: Path) -> bool:
+    """True when a pack miss for `common_dir` parses no new `.idx` beyond a handful: its lookup source exists
+    and either built its merged table or has at most `_UNCOVERED_LAZY_MAX` uncovered packs."""
+    src = _LOOKUP_SOURCES.get(str(common_dir))
+    return src is not None and (src._merged is not None or len(src.uncovered) <= _UNCOVERED_LAZY_MAX)
 
 
 _HEADER_WINDOWS = (64, 256, 1024)
