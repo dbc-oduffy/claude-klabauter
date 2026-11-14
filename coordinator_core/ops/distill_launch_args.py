@@ -14,15 +14,18 @@ Wire params:
     curated_file (str, optional) — repo-relative, confined to ``state/scratch/``; default
         ``state/scratch/artifact-distillation/<run_id>/curated.json`` (distill.write_curated_clusters).
 
-Added args keys: ``curatedFile`` (the repo-relative path) and ``curatedFileSha256`` (hex over the
-file's bytes), only when that file exists; invocation A runs before curation and carries neither.
+Added args keys, only when that file exists (invocation A runs before curation and carries none):
+``curatedTags`` (the file's ``verdicts`` list) plus the passthrough fields ``threshold_applied``,
+``threshold_auto``, ``nugget_drop_share``, ``contradictionClusters`` and
+``contradictionClusterCount`` (each copied when present). The file is never relayed by path.
+A curated file that is not a JSON object with a ``verdicts`` list raises ValueError naming it.
 
 Negative-spec: one write (``launch-args.json`` in the run dir); no git, no subprocess, no LLM call.
 """
 
 from __future__ import annotations
 
-import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -31,10 +34,16 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops.distill_scope import RUN_DIR_REL
 from coordinator_core.ops.distill_workflow_input import _handler as _workflow_input
 
-__all__ = ["CURATED_FILE_KEY", "CURATED_SHA_KEY", "curated_default_rel"]
+__all__ = ["CURATED_TAGS_KEY", "curated_default_rel"]
 
-CURATED_FILE_KEY = "curatedFile"
-CURATED_SHA_KEY = "curatedFileSha256"
+CURATED_TAGS_KEY = "curatedTags"
+_PASSTHROUGH_KEYS = (
+    "threshold_applied",
+    "threshold_auto",
+    "nugget_drop_share",
+    "contradictionClusters",
+    "contradictionClusterCount",
+)
 _SCRATCH_REL = "state/scratch"
 
 
@@ -71,9 +80,15 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
         raise ValueError("distill.launch_args: curated_file must be a string")
     curated = _curated_target(root, curated_rel)
     if curated.is_file():
-        payload = {
-            **payload,
-            CURATED_FILE_KEY: curated_rel,
-            CURATED_SHA_KEY: hashlib.sha256(curated.read_bytes()).hexdigest(),
-        }
+        payload = {**payload, **_curated_args(curated, curated_rel)}
     return build(payload)
+
+
+def _curated_args(curated: Path, rel: str) -> dict:
+    try:
+        data = json.loads(curated.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"distill.launch_args: curated file {rel} is unreadable or not JSON: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("verdicts"), list):
+        raise ValueError(f"distill.launch_args: curated file {rel} must be a JSON object with a 'verdicts' list")
+    return {CURATED_TAGS_KEY: data["verdicts"], **{k: data[k] for k in _PASSTHROUGH_KEYS if k in data}}

@@ -2,10 +2,9 @@
 coordinator_core.ops.distill_write_curated_clusters — JSON-RPC
 "distill.write_curated_clusters" operation.
 
-Purpose: persist the curation for distill-harvest invocation B,
-which would otherwise carry it inline in Workflow args (31-64KB). The curation itself
+Purpose: persist the curation for distill-harvest invocation B (31-64KB). The curation itself
 is ``distill.curate_clusters`` (compute-only); this op is the one write, kept apart so
-that op stays pure.
+that op stays pure. ``distill.launch_args`` reads the file and inlines it as ``args.curatedTags``.
 
 Wire params:
     tag_counts (dict[str, int], REQUIRED), keep_threshold (int, optional) — as for
@@ -18,8 +17,7 @@ Wire params:
 
 File shape: the ``distill.curate_clusters`` return verbatim (``verdicts``, ``counts``,
 ``threshold_applied``, ``threshold_auto``, ``nugget_drop_share``, ``contradictionClusters``,
-``degraded``) plus ``contradictionClusterCount`` — the shape distill-harvest's
-``args.curatedFile`` loader reads.
+``degraded``) plus ``contradictionClusterCount`` — the shape ``distill.launch_args`` reads.
 
 Negative-spec: writes nothing outside ``output_path``; refuses a degraded curation
 (empty or malformed tag_counts) rather than writing an empty verdict list.

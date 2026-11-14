@@ -57,6 +57,13 @@ __all__ = [
     "SCAN_BATCH_AGENTS",
     "SCAN_BATCH_TOKENS",
     "SCAN_BATCH_MINUTES",
+    "SYNTHESIS_FIXED_AGENTS",
+    "SYNTHESIS_FIXED_TOKENS",
+    "SYNTHESIS_FIXED_MINUTES",
+    "SYNTHESIS_PER_FILE_DENOMINATOR",
+    "SYNTHESIS_PER_FILE_AGENTS",
+    "SYNTHESIS_PER_FILE_TOKENS",
+    "SYNTHESIS_PER_FILE_MINUTES",
     "PLAN_ADMISSION_MIN_BYTES",
     "GUIDE_BYTE_BUDGET",
     "ManifestSchemaError",
@@ -109,6 +116,25 @@ LOAD_RELAY_MINUTES: int = 2
 SCAN_BATCH_AGENTS: int = 2
 SCAN_BATCH_TOKENS: int = 115_000
 SCAN_BATCH_MINUTES: int = 3
+
+#: Post-scan synthesis (cluster, DR-mint, writer batches, curated load relays), priced from the one
+#: measured run 2026-11-14-22h12 (44 files, wf_8365cdb4-93b): 42 agents / 1_219_209 subagent tokens,
+#: of which scan was 1 agent / 209_589. Measured actuals only; the pre-fire projection (5 agents /
+#: 105_865) is never an input. Synthesis tokens = 1_219_209 - 209_589 = 1_009_620 (the load phase's own
+#: tokens were not journaled separately and are counted as zero, so this is an upper bound). Synthesis
+#: agents = 37 = 42 less 5 load/scan agents. The measured run paid 7 curated load relays (191_009
+#: tokens by agent share, 3 minutes); distill.launch_args now inlines the curated verdicts as
+#: args.curatedTags, so SYNTHESIS_FIXED is 0 and SYNTHESIS_PER_FILE is the remainder after those
+#: relays, over the 44 calibration files, held as integer numerators over
+#: SYNTHESIS_PER_FILE_DENOMINATOR (agents 30/44 ~ 0.68 per file); the cost function applies
+#: ceil(files * numerator / denominator).
+SYNTHESIS_FIXED_AGENTS: int = 0
+SYNTHESIS_FIXED_TOKENS: int = 0
+SYNTHESIS_FIXED_MINUTES: int = 0
+SYNTHESIS_PER_FILE_DENOMINATOR: int = 44
+SYNTHESIS_PER_FILE_AGENTS: int = 30
+SYNTHESIS_PER_FILE_TOKENS: int = 818_611
+SYNTHESIS_PER_FILE_MINUTES: int = 15
 
 #: A plan/spec smaller than this is not admitted as a distill target.
 PLAN_ADMISSION_MIN_BYTES: int = 12_000

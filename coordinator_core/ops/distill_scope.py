@@ -472,9 +472,39 @@ def run_fixed_cost(wiki_slugs: dict[str, str]) -> _run_budget.UnitCost:
 
     shards = len(_slug_shards(wiki_slugs))
     return _run_budget.UnitCost(
-        agents=_schema.LOAD_RELAY_AGENTS + shards,
-        tokens=_schema.LOAD_RELAY_TOKENS + shards * (SLUG_SHARD_MAX_BYTES // 4),
-        minutes=_schema.LOAD_RELAY_MINUTES,
+        agents=_schema.LOAD_RELAY_AGENTS + shards + _schema.SYNTHESIS_FIXED_AGENTS,
+        tokens=_schema.LOAD_RELAY_TOKENS + shards * (SLUG_SHARD_MAX_BYTES // 4) + _schema.SYNTHESIS_FIXED_TOKENS,
+        minutes=_schema.LOAD_RELAY_MINUTES + _schema.SYNTHESIS_FIXED_MINUTES,
+    )
+
+
+def _per_file(rate: int, files: int) -> int:
+    return -(-files * rate // _schema.SYNTHESIS_PER_FILE_DENOMINATOR)
+
+
+def synthesis_cost(files: int) -> _run_budget.UnitCost:
+    """Per-file post-scan synthesis cost of ``files`` scanned files (the per-run curated load relays
+    are in ``run_fixed_cost``): ceil(files * measured rate) on each axis."""
+    return _run_budget.UnitCost(
+        agents=_per_file(_schema.SYNTHESIS_PER_FILE_AGENTS, files),
+        tokens=_per_file(_schema.SYNTHESIS_PER_FILE_TOKENS, files),
+        minutes=_per_file(_schema.SYNTHESIS_PER_FILE_MINUTES, files),
+    )
+
+
+def _synthesis_file_unit() -> _run_budget.UnitCost:
+    """One file's synthesis as the integer unit ``fit_units`` takes. Agents stay 0: the per-file agent
+    rate is fractional and the agent cap is already spent by ``run_fixed_cost``, so an agents axis
+    here would collapse every slice to one file; agents are priced and reported by ``synthesis_cost``."""
+    one = synthesis_cost(1)
+    return _run_budget.UnitCost(agents=0, tokens=one.tokens, minutes=one.minutes)
+
+
+def fit_files(fixed: _run_budget.UnitCost, batches: int, wanted: int) -> int:
+    """Largest file count whose scan batches plus synthesis fit the ``distill`` run budget (at least
+    one, ``fit_units``' floor, when ``wanted`` >= 1)."""
+    return _run_budget.fit_units(
+        _run_budget.load("distill"), projected_cost(fixed, batches, 0), _synthesis_file_unit(), wanted
     )
 
 
@@ -485,20 +515,24 @@ def scan_batch_cost() -> _run_budget.UnitCost:
     )
 
 
-def projected_cost(fixed: _run_budget.UnitCost, batches: int) -> _run_budget.UnitCost:
-    """``fixed`` plus ``batches`` scan batches."""
+def projected_cost(fixed: _run_budget.UnitCost, batches: int, files: int) -> _run_budget.UnitCost:
+    """``fixed`` plus ``batches`` scan batches plus the synthesis of ``files`` admitted files."""
     unit = scan_batch_cost()
+    synth = synthesis_cost(files)
     return _run_budget.UnitCost(
-        agents=fixed.agents + batches * unit.agents,
-        tokens=fixed.tokens + batches * unit.tokens,
-        minutes=fixed.minutes + batches * unit.minutes,
+        agents=fixed.agents + batches * unit.agents + synth.agents,
+        tokens=fixed.tokens + batches * unit.tokens + synth.tokens,
+        minutes=fixed.minutes + batches * unit.minutes + synth.minutes,
     )
 
 
-def budget_block(fixed: _run_budget.UnitCost, batches: int) -> dict[str, Any]:
-    """The manifest's ``budget``: cap and projected cost per axis for a run of ``batches`` scan batches."""
+def budget_block(fixed: _run_budget.UnitCost, batches: int, files: int) -> dict[str, Any]:
+    """The manifest's ``budget``: cap and projected cost per axis for a run of ``batches`` scan batches
+    over ``files`` admitted files, synthesis included."""
     budget = _run_budget.load("distill")
-    return _run_budget.budget_report(budget, projected_cost(fixed, batches), _run_budget.over_cap_fixed(budget, fixed))
+    return _run_budget.budget_report(
+        budget, projected_cost(fixed, batches, files), _run_budget.over_cap_fixed(budget, fixed)
+    )
 
 
 #: Manifest cohort label for implemented, not-yet-harvested ``docs/plans`` plans.
@@ -1477,11 +1511,15 @@ def compute_scope(
             cache, gathered, scannable_set, cohort_of, _captured_keys(cache, worktree_root, resolved_wiki_dirs)
         )
         scannable = admitted.ranked
+        file_cap = None
         if max_scan_batches is None:
             max_scan_batches = _run_budget.fit_units(
                 _run_budget.load("distill"), fixed, scan_batch_cost(), len(scannable)
             )
-        wm_plan = _plan_watermark(worktree_root, scannable, max_scan_batches * batch_size)
+            file_cap = fit_files(fixed, min(max_scan_batches, -(-len(scannable) // batch_size)), len(scannable))
+        wm_plan = _plan_watermark(
+            worktree_root, scannable, max_scan_batches * batch_size if file_cap is None else min(file_cap, max_scan_batches * batch_size)
+        )
         if wm_plan is not None:
             out_of_scope = [rel for rel in scannable if rel not in wm_plan.scoped]
             scannable = wm_plan.pack_order([rel for rel in scannable if rel in wm_plan.scoped])
@@ -1552,7 +1590,7 @@ def compute_scope(
     # re-deriving it from cohort_specs itself.
     manifest["cohort_modes"] = cohort_modes
     if admitted is not None:
-        manifest["budget"] = budget_block(fixed, len(batches))
+        manifest["budget"] = budget_block(fixed, len(batches), len(scannable))
 
     counts = {
         "harvest": len(harvest_cohort),
@@ -2006,7 +2044,7 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
         if result.settle is not None:
             watermark = result.settle(dropped)
     result.counts["batches"] = len(payload["batches"])
-    manifest["budget"] = budget_block(fixed, len(payload["batches"]))
+    manifest["budget"] = budget_block(fixed, len(payload["batches"]), len(kept))
     written_path = write_scope_manifest(worktree_root, manifest)
     shard_manifest, shards = shard_workflow_input(payload)
     for shard_name, shard_body in shards.items():

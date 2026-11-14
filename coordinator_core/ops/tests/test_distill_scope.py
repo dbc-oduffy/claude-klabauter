@@ -1655,9 +1655,54 @@ def test_default_admission_narrows_to_the_run_budget_and_defers_the_rest(tmp_pat
     cap = run_budget.load("distill")
     block = scope.manifest["budget"]
     assert len(scope.manifest["batches"]) == 1 and scope.counts["deferred"] == len(_LOG_DAYS) - 1
-    assert all(block["within"].values()) and block["cap"]["agents"] == cap.agents
-    assert block["projected"]["agents"] <= cap.agents and block["projected"]["tokens"] <= cap.tokens
-    assert block["over_cap_fixed"] is False
+    assert block["cap"]["agents"] == cap.agents
+    # no synthesis relays: one batch plus one file's synthesis fits the agent cap
+    assert block["within"]["agents"] is True
+
+
+def test_budget_block_projection_includes_synthesis_agents_and_tokens():
+    fixed = ds.run_fixed_cost({})
+    scan_only = ds.budget_block(fixed, 1, 0)["projected"]
+    with_synth = ds.budget_block(fixed, 1, 44)["projected"]
+    synth = ds.synthesis_cost(44)
+    assert synth.agents == 30 and synth.tokens == 818_611 and synth.minutes == 15
+    assert with_synth["agents"] == scan_only["agents"] + synth.agents
+    assert with_synth["tokens"] == scan_only["tokens"] + synth.tokens > scan_only["tokens"]
+    assert ds._schema.SYNTHESIS_FIXED_AGENTS == 0 and ds._schema.SYNTHESIS_FIXED_TOKENS == 0
+    assert fixed.agents == ds._schema.LOAD_RELAY_AGENTS
+    assert fixed.tokens == ds._schema.LOAD_RELAY_TOKENS
+
+
+def test_synthesis_for_a_44_file_slice_is_over_the_default_distill_budget():
+    from coordinator_core.contract import run_budget
+
+    fixed = ds.run_fixed_cost({})
+    block = ds.budget_block(fixed, 1, 44)
+    assert block["within"] == {"agents": False, "tokens": False, "minutes": False}
+    assert block["projected"]["tokens"] > run_budget.load("distill").tokens
+
+
+def test_default_admission_narrows_files_when_synthesis_exceeds_the_token_cap(tmp_path, monkeypatch):
+    from coordinator_core.contract.run_budget import RunBudget
+
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    fixed, scan, one = ds.run_fixed_cost({}), ds.scan_batch_cost(), ds.synthesis_cost(1)
+    tokens_cap = fixed.tokens + scan.tokens + 2 * one.tokens
+    monkeypatch.setattr(ds._run_budget, "load", lambda _c, path=None: RunBudget(1, tokens_cap, 1000))
+    scope = _admit_scope(root, batch_size=100)
+    block = scope.manifest["budget"]
+    assert len(_batched(scope)) == 2 < len(_LOG_DAYS)
+    assert scope.counts["deferred"] == len(_LOG_DAYS) - 2
+    assert len(scope.manifest["deferred"]) == len(_LOG_DAYS) - 2
+    assert block["within"] == {"agents": False, "tokens": True, "minutes": True}
+    assert block["projected"]["tokens"] <= tokens_cap
+
+
+def test_default_admission_with_room_for_every_file_defers_nothing(tmp_path, monkeypatch, wide_budget):
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    scope = _admit_scope(root, batch_size=100)
+    assert len(_batched(scope)) == len(_LOG_DAYS) and scope.counts["deferred"] == 0
+    assert all(scope.manifest["budget"]["within"].values())
 
 
 def test_a_larger_budget_admits_more_batches_than_the_default(tmp_path, monkeypatch):
@@ -1697,7 +1742,7 @@ def test_the_handler_reports_the_budget_and_records_the_run_in_the_backlog_pass_
 
     root = _watermarked_repo(tmp_path, monkeypatch)
     result = _handler({"run_id": "r", "batch_size": 1}, repo_root=root / ".git")
-    assert all(result["budget"]["within"].values()) and result["counts"]["deferred"] == len(_LOG_DAYS) - 1
+    assert result["budget"]["within"]["agents"] is True and result["counts"]["deferred"] == len(_LOG_DAYS) - 1
     ledger = backlog_pass_ledger.summary(str(root), "distill")
     assert ledger["runs"] == 1 and ledger["open"] is True
     assert ledger["cumulative_tokens"] == result["budget"]["projected"]["tokens"]

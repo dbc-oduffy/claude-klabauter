@@ -1,4 +1,4 @@
-"""Tests for distill.launch_args: inlined batches and slugs, curatedFile sha256, digest-verified file."""
+"""Tests for distill.launch_args: inlined batches, slugs and curated verdicts, digest-verified file."""
 
 from __future__ import annotations
 
@@ -29,16 +29,26 @@ def _params(tmp_path, **extra) -> dict:
     return {"manifest": _manifest(), "repo_root": str(tmp_path), **extra}
 
 
-def _write_curated(tmp_path, rel: str | None = None) -> bytes:
+CURATED = {
+    "verdicts": [{"tag": "alpha", "verdict": "keep", "count": 9}, {"tag": "beta", "verdict": "drop", "count": 1}],
+    "counts": {"total": 2},
+    "threshold_applied": 3,
+    "threshold_auto": True,
+    "nugget_drop_share": 0.1,
+    "contradictionClusters": [["alpha", "beta"]],
+    "contradictionClusterCount": 1,
+    "degraded": False,
+}
+
+
+def _write_curated(tmp_path, rel: str | None = None, data=CURATED) -> None:
     target = tmp_path / (rel or dla.curated_default_rel(RUN_ID))
     target.parent.mkdir(parents=True, exist_ok=True)
-    body = json.dumps({"verdicts": [], "counts": {"total": 0}}, indent=2).encode("utf-8")
-    target.write_bytes(body)
-    return body
+    target.write_text(data if isinstance(data, str) else json.dumps(data, indent=2), encoding="utf-8")
 
 
-def test_default_call_inlines_batches_slugs_and_curated_sha_and_digest_verifies(tmp_path):
-    body = _write_curated(tmp_path)
+def test_default_call_inlines_batches_slugs_and_curated_tags_and_digest_verifies(tmp_path):
+    _write_curated(tmp_path)
 
     out = dla._handler(_params(tmp_path))
 
@@ -49,24 +59,46 @@ def test_default_call_inlines_batches_slugs_and_curated_sha_and_digest_verifies(
     assert json.loads(written.read_text(encoding="utf-8")) == args
     assert [b["files"] for b in args["batches"]] == [["a.md", "b.md"], ["c.md"]]
     assert args["wikiSlugs"] == {"foo": "docs/wiki/foo.md"}
-    assert args[dla.CURATED_FILE_KEY] == dla.curated_default_rel(RUN_ID)
-    assert args[dla.CURATED_SHA_KEY] == hashlib.sha256(body).hexdigest()
+    assert args["curatedTags"] == CURATED["verdicts"]
+    for key in ("threshold_applied", "threshold_auto", "nugget_drop_share", "contradictionClusters", "contradictionClusterCount"):
+        assert args[key] == CURATED[key]
+    assert "curatedFile" not in args and "curatedFileSha256" not in args
+    assert "counts" not in args and "degraded" not in args
     assert args["argsInlined"] is True
     assert validate_workflow_input(args) == []
 
 
-def test_curated_file_override_is_hashed(tmp_path):
+def test_dead_curated_file_constants_are_gone():
+    assert not hasattr(dla, "CURATED_FILE_KEY") and not hasattr(dla, "CURATED_SHA_KEY")
+
+
+def test_curated_file_override_is_inlined(tmp_path):
     rel = "state/scratch/elsewhere/curated.json"
-    body = _write_curated(tmp_path, rel)
+    _write_curated(tmp_path, rel)
     args = dla._handler(_params(tmp_path, curated_file=rel))["args"]
-    assert args[dla.CURATED_FILE_KEY] == rel
-    assert args[dla.CURATED_SHA_KEY] == hashlib.sha256(body).hexdigest()
+    assert args["curatedTags"] == CURATED["verdicts"]
 
 
-def test_absent_curated_file_adds_neither_key_and_still_builds(tmp_path):
+def test_absent_curated_file_adds_no_curated_keys_and_still_builds(tmp_path):
     out = dla._handler(_params(tmp_path))
-    assert dla.CURATED_FILE_KEY not in out["args"] and dla.CURATED_SHA_KEY not in out["args"]
+    assert "curatedTags" not in out["args"] and "threshold_applied" not in out["args"]
     assert hashlib.sha256(open(out["path"], "rb").read()).hexdigest() == out["sha256"]
+
+
+@pytest.mark.parametrize("data", ["{not json", "[1, 2]", json.dumps({"counts": {}}), json.dumps({"verdicts": "x"})])
+def test_malformed_curated_file_raises_naming_it(tmp_path, data):
+    _write_curated(tmp_path, data=data)
+    with pytest.raises(ValueError, match="curated.json"):
+        dla._handler(_params(tmp_path))
+
+
+def test_realistic_64kb_curated_payload_inlines_whole(tmp_path):
+    verdicts = [{"tag": f"tag-{i:05d}", "verdict": "keep", "count": i % 17 + 1} for i in range(1400)]
+    data = {**CURATED, "verdicts": verdicts}
+    _write_curated(tmp_path, data=data)
+    out = dla._handler(_params(tmp_path))
+    assert out["args"]["curatedTags"] == verdicts
+    assert len((tmp_path / "state/scratch/artifact-distillation" / RUN_ID / "curated.json").read_bytes()) > 60_000
 
 
 @pytest.mark.parametrize("rel", ["../outside.json", "docs/curated.json", "state/scratch", "/abs/elsewhere.json"])

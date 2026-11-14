@@ -6,7 +6,8 @@ prices it with `project_run_cost`. Also writes a fates fixture (one synthetic fa
 file) and the disposal manifest computed from it, so before/after runs can compare the
 manifest sha and the scoped-file-set sha. Exit 0 always: this measures, it does not gate.
 
-Token proxy is bytes/4. The guide term is an upper bound (every listed guide is opened).
+Token proxy is bytes/4 for load and scan; synthesis tokens, agents and minutes are modelled per run
+and per scanned file. The guide term is an upper bound (every listed guide is opened).
 
 Usage: python coordinator_core/benchmarks/distill_run_cost.py [--repo PATH] [--out-dir PATH] [--keep]
 """
@@ -121,7 +122,7 @@ def before_after(before: dict[str, Any], after: dict[str, Any]) -> dict[str, dic
         return {
             "agents": report["dispatches_total"],
             "tokens": report["input_tokens_est_total"],
-            "minutes": modeled_minutes(report["batch_count"]),
+            "minutes": report.get("minutes_total", modeled_minutes(report["batch_count"])),
         }
 
     was, now, cap = axes(before), axes(after), after["bar"]["cap"]
@@ -162,13 +163,14 @@ def measure(repo: Path, out_dir: Optional[Path] = None, keep: bool = False) -> d
     dispatches = cost["dispatches_by_phase"]
     input_bytes = cost["input_bytes_by_phase"]
     counts = result["counts"]
-    tokens_total = sum(input_bytes.values()) // BYTES_PER_TOKEN
+    tokens_total = sum(input_bytes.values()) // BYTES_PER_TOKEN + cost["synthesis_tokens"]
+    minutes_total = modeled_minutes(len(payload["batches"])) + cost["synthesis_minutes"]
     return {
         "scope_counts": counts,
         "not_admitted_count": counts.get("not_admitted", 0),
         "deferred_count": counts.get("deferred", 0),
         "log_cited_plan_count": counts.get("log_cited_plan_count", 0),
-        "bar": bar_verdict(sum(dispatches.values()), tokens_total, modeled_minutes(len(payload["batches"]))),
+        "bar": bar_verdict(sum(dispatches.values()), tokens_total, minutes_total),
         "backlog_pass": backlog_pass_ledger.summary(str(repo), "distill"),
         "scoped_file_count": len(files),
         "scoped_files_sha256": cost["scoped_files_sha256"],
@@ -177,7 +179,9 @@ def measure(repo: Path, out_dir: Optional[Path] = None, keep: bool = False) -> d
         "input_bytes_by_phase": input_bytes,
         "scan_bytes_split": cost["scan_bytes_split"],
         "input_bytes_total": sum(input_bytes.values()),
-        "input_tokens_est_total": sum(input_bytes.values()) // BYTES_PER_TOKEN,
+        "input_tokens_est_total": tokens_total,
+        "synthesis_tokens": cost["synthesis_tokens"],
+        "minutes_total": minutes_total,
         "unreadable_files": cost["unreadable_files"],
         "batch_count": len(payload["batches"]),
         "wiki_guide_count": len(set(payload["wikiSlugs"].values())),

@@ -41,7 +41,9 @@ def test_dispatches_and_bytes_default_lists_every_guide_to_every_agent(tmp_path)
 
     cost = project_run_cost(payload, tmp_path)
 
-    assert cost["dispatches_by_phase"] == {"load": 1 + 2 + 1, "scan": 2}
+    phases = cost["dispatches_by_phase"]
+    assert {k: phases[k] for k in ("load", "scan")} == {"load": 1 + 2 + 1, "scan": 2}
+    assert phases["synthesis"] > 0
     assert cost["scan_bytes_split"] == {"files": 600, "guides": 2 * 3000}
     assert cost["input_bytes_by_phase"]["scan"] == 600 + 6000
     assert cost["input_bytes_by_phase"]["load"] > 0
@@ -99,6 +101,39 @@ def test_slug_shards_add_load_dispatches(tmp_path):
     cost = project_run_cost(_payload([["a.md"]], guides), tmp_path)
     shards = cost["dispatches_by_phase"]["load"] - 1 - 1
     assert shards > 1
+
+
+def test_synthesis_phase_is_priced_from_the_scoped_file_count(tmp_path):
+    from coordinator_core.ops.distill_scope import synthesis_cost
+
+    one = project_run_cost(_payload([["a.md"]], {}), tmp_path)
+    many = project_run_cost(_payload([[f"f{i}.md" for i in range(44)]], {}), tmp_path)
+    per = synthesis_cost(44)
+
+    assert one["dispatches_by_phase"]["synthesis"] == synthesis_cost(1).agents > 0
+    assert many["dispatches_by_phase"]["synthesis"] == schema.SYNTHESIS_FIXED_AGENTS + per.agents
+    assert many["synthesis_tokens"] == schema.SYNTHESIS_FIXED_TOKENS + per.tokens
+    assert many["synthesis_minutes"] == schema.SYNTHESIS_FIXED_MINUTES + per.minutes
+    assert many["synthesis_tokens"] > one["synthesis_tokens"]
+    assert "synthesis" not in many["input_bytes_by_phase"]
+
+
+def test_bench_bar_counts_synthesis_tokens_and_minutes(tmp_path, monkeypatch):
+    from coordinator_core.benchmarks import distill_run_cost as bench
+
+    payload = _payload([[f"f{i}.md" for i in range(44)]], {})
+    monkeypatch.setattr(bench, "run_scope", lambda repo: {"workflow_input_path": "x", "counts": {}})
+    monkeypatch.setattr(bench, "load_workflow_input", lambda repo, path: payload)
+    monkeypatch.setattr(bench.backlog_pass_ledger, "summary", lambda *a: {})
+    monkeypatch.setattr(bench, "_drop_bench_ledger_rows", lambda repo: None)
+
+    report = bench.measure(tmp_path)
+
+    assert report["dispatches_by_phase"]["synthesis"] > 0
+    assert report["input_tokens_est_total"] >= report["synthesis_tokens"] > 0
+    assert report["minutes_total"] > bench.modeled_minutes(1)
+    assert report["bar"]["met"] is False
+    assert report["bar"]["projected"]["agents"] == report["dispatches_total"]
 
 
 def test_missing_file_is_listed_not_silently_zero(tmp_path):
@@ -185,5 +220,7 @@ def test_chunked_inlined_args_are_priced_like_the_unchunked_input(tmp_path):
 
     cost = project_run_cost(args, tmp_path)
 
-    assert cost["dispatches_by_phase"] == {"load": 0, "scan": count}
+    phases = cost["dispatches_by_phase"]
+    assert {k: phases[k] for k in ("load", "scan")} == {"load": 0, "scan": count}
+    assert phases["synthesis"] > 0
     assert len(cost["unreadable_files"]) == count
