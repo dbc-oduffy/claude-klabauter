@@ -4013,6 +4013,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      changes no op's result, only how much it re-reads.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "ceremony.update_docs_worklist": OpClass.COMPUTE_ONLY,
+    # ceremony.wiki_update_candidates — COMPUTE_ONLY: read-only git log/cat-file/grep join
+    # (ops/ceremony/wiki_update_candidates.py); writes no file, no queue, no cache.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "ceremony.wiki_update_candidates": OpClass.COMPUTE_ONLY,
     "deliverable.cascade_terminal": OpClass.MUTATING,
     "deliverable.cascade_retract": OpClass.MUTATING,
     "deliverable.cascade_backstop_sweep": OpClass.COMPUTE_ONLY,

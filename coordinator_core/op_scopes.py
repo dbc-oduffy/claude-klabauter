@@ -332,6 +332,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "roadmap.blitz_land":                    "common_dir",
     "roadmap.baton_backfill":                "common_dir",
     "roadmap.blitz_stage":                   "common_dir",
+    "post_run.finish":                       "show_top",
     # plan.prep_gate — keyed on git_common_dir: reads one main-worktree-rooted
     # docs/plans/*.md plus that worktree's top-level entry names (the
     # ROOT-EXISTENCE leg), under main_worktree_root(common_dir). Without this
@@ -413,7 +414,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # main_worktree_root(common_dir), same as append_day).
     "changelog.compute_day_fields":          "common_dir",
     "changelog.daily_log":                   "common_dir",
-    "ceremony.plan_wiki_map":                  "common_dir",
     "changelog.upsert_reviewed":             "common_dir",
     "plan.append_session":                   "common_dir",
     # Backfill: records.query (strang-11 C1a COMPUTE_ONLY read op) was registered without an
@@ -429,7 +429,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "updatedocs.gates":                       "common_dir",
     "updatedocs.sweeps":                      "common_dir",
     "distill.scope":                          "common_dir",
-    "post_run.finish":                       "show_top",
     "backlog.triage_pass":                    "common_dir",
     # memo.fate_partition (C16, DR-228 § D6 scratch-tier) — keyed on git_common_dir:
     # handler resolves the caller's worktree via main_worktree_root(repo_root) and
@@ -459,6 +458,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # main worktree's docs/plans, memo archive and tasks, plus one scoped git diff.
     # Without this entry dispatch resolves repo_root=None and the handler raises.
     "ceremony.update_docs_worklist":           "common_dir",
+    "ceremony.plan_wiki_map":                  "common_dir",
+    "ceremony.wiki_update_candidates":         "common_dir",
     "deliverable.cascade_terminal":             "common_dir",
     "deliverable.cascade_retract":              "common_dir",
     "deliverable.cascade_backstop_sweep":       "common_dir",

@@ -301,6 +301,24 @@ def _err(message: str) -> dict:
     return {"exit_code": 1, "applied": False, "error": message}
 
 
+def _untracked_refusal(memo_path: Path, git_root: Path) -> dict | None:
+    """Error reply when the memo is absent from HEAD's tree, else None.
+
+    Runs before the frontmatter write: the follow-up commit cannot create a path, so
+    a memo untracked at HEAD would be stamped on disk and then refused.
+    """
+    try:
+        pathspec = rel_id(memo_path.resolve(), git_root)
+    except ValueError:
+        return None
+    if git_native._head_entry_for(git_root, pathspec.replace("\\", "/")) is not None:
+        return None
+    return _err(
+        f"memo.transition: {pathspec} is not tracked at HEAD; nothing was written. "
+        f"`git add` and commit it, then retry."
+    )
+
+
 def _attach_surface_advisory(reply: dict, params: dict | None, content: str, git_root: Path) -> dict:
     if not params or not params.get("realized_by"):
         return reply
@@ -748,6 +766,9 @@ def _claim(memo: str, session_id: str, at: str, cwd: str | None = None) -> dict:
 
     if not memo_path.is_file():
         return _err(f"memo not found: {memo_path}")
+    refusal = _untracked_refusal(memo_path, git_root)
+    if refusal is not None:
+        return refusal
 
     _sid = session_id.strip()
     _at = at.strip()
@@ -1273,6 +1294,9 @@ def _action(memo: str, params: dict, cwd: str | None = None) -> dict:
 
     if not memo_path.is_file():
         return _err(f"memo not found: {memo_path}")
+    refusal = _untracked_refusal(memo_path, git_root)
+    if refusal is not None:
+        return refusal
 
     superseded_by = params.get("superseded_by")
     if superseded_by:
@@ -1425,6 +1449,9 @@ def _release(memo: str, cwd: str | None = None) -> dict:
 
     if not memo_path.is_file():
         return _err(f"memo not found: {memo_path}")
+    refusal = _untracked_refusal(memo_path, git_root)
+    if refusal is not None:
+        return refusal
 
     _noop_result: list[dict | None] = [None]
 
@@ -1509,6 +1536,9 @@ def _lift(memo: str, cwd: str | None = None) -> dict:
 
     if not memo_path.is_file():
         return _err(f"memo not found: {memo_path}")
+    refusal = _untracked_refusal(memo_path, git_root)
+    if refusal is not None:
+        return refusal
 
     _noop_result: list[dict | None] = [None]
 
@@ -1591,6 +1621,9 @@ def _close(memo: str, at: str, cwd: str | None = None) -> dict:
 
     if not memo_path.is_file():
         return _err(f"memo not found: {memo_path}")
+    refusal = _untracked_refusal(memo_path, git_root)
+    if refusal is not None:
+        return refusal
 
     _noop_result: list[dict | None] = [None]
 
@@ -1749,6 +1782,10 @@ def _resolve(memo: str, session_id: str, at: str, params: dict, cwd: str | None 
 
     if not memo_path.is_file():
         return _err(f"memo not found: {memo_path}")
+    # A deferred batch commits through commit_scoped, which can add a new path.
+    refusal = None if params.get("defer_commit") else _untracked_refusal(memo_path, git_root)
+    if refusal is not None:
+        return refusal
 
     _sid = session_id.strip()
     _at = at.strip()

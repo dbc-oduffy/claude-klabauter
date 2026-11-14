@@ -443,6 +443,119 @@ def _subagent_deny(payload: Dict[str, Any]) -> "Optional[Dict[str, Any]]":
     )
 
 
+_GROWTH_BASELINE = ("tests", "baselines", "always-loaded-surface-bytes.json")
+
+
+def _surface_bytes(rel: str, text: str) -> int:
+    """Byte count the always-loaded ratchet uses: CRLF-normalised UTF-8; a `.py` surface
+    counts non-docstring string literals only (falls back to the raw text if unparseable)."""
+    text = text.replace("\r\n", "\n")
+    if rel.endswith(".py"):
+        try:
+            import ast
+
+            tree = ast.parse(text)
+            docs = set()
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    first = node.body[0] if node.body else None
+                    if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                        docs.add(id(first.value))
+            return sum(
+                len(n.value.encode("utf-8"))
+                for n in ast.walk(tree)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs
+            )
+        except (SyntaxError, ValueError):
+            pass
+    return len(text.encode("utf-8"))
+
+
+def _text_after_edit(tool_name: str, tool_input: Dict[str, Any], before: str) -> "str | None":
+    if tool_name == "Write":
+        content = tool_input.get("content")
+        return content if isinstance(content, str) else None
+    if tool_name == "Edit":
+        edits = [tool_input]
+    elif tool_name == "MultiEdit":
+        edits = tool_input.get("edits")
+        if not isinstance(edits, list):
+            return None
+    else:
+        return None
+    text = before
+    for edit in edits:
+        if not isinstance(edit, dict):
+            return None
+        old_s, new_s = edit.get("old_string"), edit.get("new_string")
+        if not isinstance(old_s, str) or not isinstance(new_s, str) or old_s not in text:
+            return None
+        text = text.replace(old_s, new_s) if edit.get("replace_all") else text.replace(old_s, new_s, 1)
+    return text
+
+
+_CEILINGS_CACHE: Dict[str, Any] = {}
+
+
+def _baseline_ceilings(baseline: Path) -> Any:
+    """Parsed `ceilings` of the byte baseline, cached by (path, mtime_ns)."""
+    key = (str(baseline), baseline.stat().st_mtime_ns)
+    hit = _CEILINGS_CACHE.get("k")
+    if hit and hit[0] == key:
+        return hit[1]
+    ceilings = json.loads(baseline.read_text(encoding="utf-8")).get("ceilings")
+    _CEILINGS_CACHE["k"] = (key, ceilings)
+    return ceilings
+
+
+def _growth_advisory(
+    tool_name: str, tool_input: Dict[str, Any], target: str, repo_root: "str | None"
+) -> "Optional[str]":
+    """Advisory text when the edit grows an always-loaded surface listed in the content
+    root's byte baseline; None for an equal-size or shrinking edit, a missing baseline, or
+    any unreadable input. Never denies."""
+    try:
+        if not repo_root:
+            return None
+        from coordinator_core._content_root_primitive import content_root_for
+
+        content = content_root_for(repo_root)
+        if content is None:
+            return None
+        baseline = content.joinpath(*_GROWTH_BASELINE)
+        if not baseline.is_file():
+            return None
+        ceilings = _baseline_ceilings(baseline)
+        if not isinstance(ceilings, dict):
+            return None
+        rel = None
+        for base in (Path(repo_root), content.parent):
+            try:
+                cand = Path(target).relative_to(_norm(str(base))).as_posix()
+            except ValueError:
+                continue
+            if cand in ceilings:
+                rel = cand
+                break
+        if rel is None:
+            return None
+        with open(target, "r", encoding="utf-8") as fh:
+            before = fh.read()
+        after = _text_after_edit(tool_name, tool_input, before)
+        if after is None:
+            return None
+        old_n, new_n = _surface_bytes(rel, before), _surface_bytes(rel, after)
+        if new_n <= old_n:
+            return None
+        return (
+            f"[doctrine-surface guard] advisory: this edit grows always-loaded surface "
+            f"{rel} ({old_n} -> {new_n} bytes). Put the content in a repo-gated hook, "
+            "skill or wiki page."
+        )
+    except Exception:
+        return None
+
+
 def _advisory_envelope(*texts: "Optional[str]") -> Dict[str, Any]:
     return {
         "hookSpecificOutput": {
@@ -768,26 +881,29 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if weakened:
         return _advisory_envelope(_weakening_advisory(weakened))
 
+    growth = _growth_advisory(tool_name, tool_input, target, repo_root)
+
     if gem_admitted(payload, target):
-        return _rot_token_advisory(tool_name, tool_input, target)
+        rot = _rot_token_advisory(tool_name, tool_input, target)
+        return _advisory_envelope(_rot_text(rot), growth) if growth else rot
 
     matched, _owning_root = _match_protected(target, repo_root, payload)
     rules = is_rules_path(target)
     if not matched and not rules:
-        return None
+        return _advisory_envelope(growth) if growth else None
 
     rot = _rot_token_advisory(tool_name, tool_input, target)
 
     basename = os.path.basename(target)
     if rules:
         if sentinel_present(payload.get("cwd") or ""):
-            return _advisory_envelope(_surface_advisory(target_raw, False), _rot_text(rot))
+            return _advisory_envelope(_surface_advisory(target_raw, False), _rot_text(rot), growth)
         return _doctrine_deny(payload)
     is_local_config = basename == "coordinator.local.md"
     if _is_first_time_create(tool_name, tool_input, target):
         return None
     if is_local_config and _is_unprivileged_config_edit(tool_name, tool_input, target):
-        return None
+        return _advisory_envelope(growth) if growth else None
 
     if basename == "CLAUDE.md" and _caller_is_subagent(payload):
         return _subagent_deny(payload)
@@ -804,5 +920,5 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             strong = _STRONGEST_CLAUDE_MD_WARNING
 
     return _advisory_envelope(
-        strong, _surface_advisory(target_raw, is_local_config), _rot_text(rot)
+        strong, _surface_advisory(target_raw, is_local_config), _rot_text(rot), growth
     )

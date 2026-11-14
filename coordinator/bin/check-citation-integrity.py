@@ -147,9 +147,19 @@ DEFAULT_BASELINE_PATH = REPO_ROOT / "state" / "baselines" / "citation-integrity.
 _SUBJECT = [REPO_ROOT]
 
 
+def _engine_on_path() -> None:
+    """Put the dispatch engine on `sys.path` via `cc_invoke`; never the script's own parents[2],
+    which holds no `coordinator_core` when the script is copied out of the engine tree."""
+    lib_dir = str(Path(__file__).resolve().parent / "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    from cc_invoke import require_dispatch_engine_on_path
+
+    require_dispatch_engine_on_path()
+
+
 def _cg():
-    if str(_REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(_REPO_ROOT))
+    _engine_on_path()
     import coordinator_core.citation_graph as cg
 
     return cg
@@ -167,8 +177,7 @@ def _scan_frontmatter(text: "str | None") -> dict:
 
 
 def _run_git(args: "list[str]", cwd: Path):
-    if str(_REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(_REPO_ROOT))
+    _engine_on_path()
     from coordinator_core.git.run import run_git
 
     return run_git(args, cwd=str(cwd))

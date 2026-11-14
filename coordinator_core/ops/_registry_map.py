@@ -248,6 +248,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "roadmap.blitz_land":                     "coordinator_core.ops.roadmap_blitz_land",
     "roadmap.baton_backfill":                 "coordinator_core.ops.roadmap_baton_backfill",
     "roadmap.blitz_stage":                    "coordinator_core.ops.roadmap_blitz_stage",
+    "post_run.finish":                        "coordinator_core.ops.post_run_finish",
     # plan.prep_gate — the mise-prep authoring bar, REPORTED per class. Read twin
     # of plan.stamp_prepped; the DoE-side runnable half is
     # coordinator/bin/mise-prep-gate.py and the two must agree.
@@ -326,7 +327,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "changelog.backfill_gaps":                "coordinator_core.ops.changelog_ops",
     "changelog.compute_day_fields":           "coordinator_core.ops.changelog_ops",
     "changelog.daily_log":                    "coordinator_core.ops.daily_log",
-    "ceremony.plan_wiki_map":                 "coordinator_core.ops.ceremony.plan_wiki_map",
     "changelog.inject_anchor":                "coordinator_core.ops.changelog_ops",
     "changelog.upsert_reviewed":              "coordinator_core.ops.changelog_ops",
     "cruft_sweep.run":                        "coordinator_core.ops.cruft_sweep",
@@ -403,7 +403,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "docindex.emit":                          "coordinator_core.ops.docindex_emit",
     "memo.triage":                            "coordinator_core.ops.memo_triage",
     "distill.scope":                          "coordinator_core.ops.distill_scope",
-    "post_run.finish":                        "coordinator_core.ops.post_run_finish",
     "backlog.triage_pass":                    "coordinator_core.ops.backlog_triage_pass",
     "distill.workflow_input":                 "coordinator_core.ops.distill_workflow_input",
     "memo.fate_partition":                    "coordinator_core.ops.memo_fate_partition",
@@ -575,6 +574,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "distill.apply_disposal":                 "coordinator_core.ops.distill_apply_disposal",
     "crossrepo.closure_status":               "coordinator_core.ops.crossrepo_closure_status",
     "ceremony.update_docs_worklist":          "coordinator_core.ops.ceremony.update_docs_worklist",
+    "ceremony.plan_wiki_map":                 "coordinator_core.ops.ceremony.plan_wiki_map",
+    "ceremony.wiki_update_candidates":        "coordinator_core.ops.ceremony.wiki_update_candidates",
     "tracker.advance_status":                 "coordinator_core.ops.tracker.advance_status",
     "tracker.assign":                         "coordinator_core.ops.tracker.assign",
     "tracker.fold_observed_set":              "coordinator_core.ops.tracker.fold_observed_set",

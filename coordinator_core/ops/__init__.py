@@ -163,7 +163,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
     ("coordinator_core.ops.canvas_harvest", 'registers "canvas.harvest"'),
     ("coordinator_core.ops.daily_log", 'registers "changelog.daily_log"'),
-    ("coordinator_core.ops.ceremony.plan_wiki_map", 'registers "ceremony.plan_wiki_map"'),
     ("coordinator_core.ops.design_registry_lookup", 'registers "design.registry.lookup"'),
     ("coordinator_core.ops.memo_correct_note", 'registers "memo.correct_note"'),
     ("coordinator_core.ops.handoff_transition", 'registers "handoff.transition"'),
@@ -534,7 +533,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.docindex_emit", 'registers "docindex.emit"'),
     ("coordinator_core.ops.memo_triage", 'registers "memo.triage"'),
     ("coordinator_core.ops.distill_scope", 'registers "distill.scope"'),
-    ("coordinator_core.ops.post_run_finish", 'registers "post_run.finish"'),
     ("coordinator_core.ops.backlog_triage_pass", 'registers "backlog.triage_pass"'),
     ("coordinator_core.ops.distill_workflow_input", 'registers "distill.workflow_input"'),
     ("coordinator_core.ops.workflow_validate", 'registers "workflow.validate"'),
@@ -714,6 +712,9 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.distill_apply_disposal", 'registers "distill.apply_disposal"'),
     ("coordinator_core.ops.crossrepo_closure_status", 'registers "crossrepo.closure_status"'),
     ("coordinator_core.ops.ceremony.update_docs_worklist", 'registers "ceremony.update_docs_worklist"'),
+    ("coordinator_core.ops.ceremony.plan_wiki_map", 'registers "ceremony.plan_wiki_map"'),
+    ("coordinator_core.ops.ceremony.wiki_update_candidates", 'registers "ceremony.wiki_update_candidates"'),
+    ("coordinator_core.ops.post_run_finish", 'registers "post_run.finish"'),
     (
         "coordinator_core.ops.tracker.advance_status",
         'registers "tracker.advance_status" (provisional — see module docstring\'s '

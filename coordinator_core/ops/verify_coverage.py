@@ -366,6 +366,20 @@ def walk_markdown(
 
 _SUBAGENT_RE = re.compile(r"subagent_type\s*[:=]\s*['\"]?([a-z][a-z0-9_:\-]*[a-z0-9])['\"]?")
 
+_PATTERN_TAIL_RE = re.compile(r"[:\-_]?[*<]")
+
+
+def _has_pattern_tail(body: str, end: int) -> bool:
+    """True when the text after a match is a glob/placeholder stem (`coordinator:staff-*`,
+    `coordinator:<sibling>`), not a name to resolve."""
+    return _PATTERN_TAIL_RE.match(body, end) is not None
+
+
+def _is_pattern_ref(body: str, end: int, ref: str, plugin_prefixes: List[str]) -> bool:
+    """True for a pattern tail or a bare plugin prefix."""
+    return ref in plugin_prefixes or _has_pattern_tail(body, end)
+
+
 # Marker-vocabulary discriminator: a `coordinator:<token>` ref sharing its line
 # with one of these nouns is prose DOCUMENTING a fence/sentinel/marker/block
 # token, not dispatching it -- see extract_references docstring.
@@ -445,6 +459,8 @@ def extract_references(content: str, valid_plugin_prefixes: List[str]) -> List[d
                 refs.append({"kind": "worker", "ref": m.group(1), "line": i + 1})
 
     for m in qualified_re.finditer(body):
+        if _has_pattern_tail(body, m.end()):
+            continue
         line_num = body.count("\n", 0, m.start()) + 1
         leading_slash = m.group(0).startswith("/")
         ref_name = m.group(2).replace("\n", "")
@@ -467,6 +483,8 @@ def extract_references(content: str, valid_plugin_prefixes: List[str]) -> List[d
             "line": line_num,
         })
     for m in _SUBAGENT_RE.finditer(body):
+        if _is_pattern_ref(body, m.end(), m.group(1), valid_plugin_prefixes):
+            continue
         line_num = body.count("\n", 0, m.start()) + 1
         refs.append({"kind": "subagent", "ref": m.group(1), "line": line_num})
 
