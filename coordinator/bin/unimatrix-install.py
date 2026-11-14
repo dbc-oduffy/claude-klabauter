@@ -84,6 +84,10 @@ GROK_TOOL_MATCHER = ("Bash|bash|shell|run_command|run_shell_command|"
                      "Edit|Write|MultiEdit|NotebookEdit|edit_file|write_file|"
                      "read_file|spawn_subagent")
 GROK_HOOKS_FILE = "coordinator.json"
+# agy shell plus every edit tool the engine agy adapter maps to a write guard
+# (coordinator_core/host_hooks/agy_adapter.py `_EDIT_TOOLS`); a tool missing here never reaches the guard.
+AGY_TOOL_MATCHER = ("run_command|write_file|write_to_file|edit_file|replace_file_content|"
+                    "multi_replace_file_content|sed_file|notebook_edit")
 HOST_NAMES = ("claude", "codex", "agy", "grok")
 
 _BIN_DIR = Path(__file__).resolve().parent
@@ -945,14 +949,14 @@ def _hook_group(dest_dir, script_name, matcher=None, args=()):
 
 
 def agy_hook_entry(dest_dir, engine_root=None):
-    """Our hooks.json value: a run_command PreToolUse hook and a SessionStart hook running installed scripts.
+    """Our hooks.json value: a shell-and-edit-tool PreToolUse hook and a SessionStart hook running installed scripts.
 
     agy groups only tool events under matcher/hooks; SessionStart takes bare handlers, and agy
     rejects the whole file ("command hook must specify 'command'") when it is grouped. The
     PreToolUse group is the single merged hook; `--engine-root` is how it finds the Klabauter guard.
     """
     return {
-        "PreToolUse": [_hook_group(dest_dir, AGY_HOOK_SCRIPT, "run_command", _engine_args(engine_root))],
+        "PreToolUse": [_hook_group(dest_dir, AGY_HOOK_SCRIPT, AGY_TOOL_MATCHER, _engine_args(engine_root))],
         "SessionStart": [_hook_handler(dest_dir, AGY_SESSIONSTART_SCRIPT)],
     }
 
@@ -2638,7 +2642,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     else:
         print(f"governance DEGRADED: engine root unresolved ({provenance}); guards answer the neutral "
               "fallback (ask on agy, {} on Codex), never allow", file=out)
-    print("governance scope: Codex local-tool PreToolUse (shell, projected edits, MCP, spawn briefs; native coverage limits apply); agy run_command", file=out)
+    print("governance scope: Codex local-tool PreToolUse (shell, projected edits, MCP, spawn briefs; native coverage limits apply); agy run_command and edit tools", file=out)
     return ROUTER_RESTART_REFUSED_RC if restart_failed else rc
 
 

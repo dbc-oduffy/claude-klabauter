@@ -351,7 +351,7 @@ def test_install_seeds_hooks_json_when_absent(monkeypatch, tmp_path):
     rc, out = _run(["--install"], "2.1.316", dest, hp)
     assert rc == 0 and "created" in out
     entry = json.loads(hp.read_text(encoding="utf-8"))[ui.AGY_HOOK_KEY]["PreToolUse"][0]
-    assert entry["matcher"] == "run_command"
+    assert entry["matcher"] == ui.AGY_TOOL_MATCHER
     cmd = _hook_cmd(hp)
     assert sys.executable in cmd and str(dest / ui.AGY_HOOK_SCRIPT) in cmd
     assert "coordinator/bin" not in cmd.replace("\\", "/")
@@ -487,7 +487,7 @@ def test_script_name_constants_are_pinned():
 
 def test_agy_entry_carries_pretool_and_sessionstart(tmp_path):
     entry = ui.agy_hook_entry(tmp_path)
-    assert entry["PreToolUse"][0]["matcher"] == "run_command"
+    assert entry["PreToolUse"][0]["matcher"] == ui.AGY_TOOL_MATCHER
     handler = entry["SessionStart"][0]
     # agy's SessionStart is flat: a grouped entry makes agy reject the whole hooks.json.
     assert handler["type"] == "command" and "hooks" not in handler and "matcher" not in handler
@@ -3436,3 +3436,25 @@ def test_grok_hook_seeded_when_grok_binary_on_path(monkeypatch, tmp_path):
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok"], dest_dir=tmp_path / "d", out=buf) == 0
     assert "grok hook created" in buf.getvalue()
+
+
+def test_agy_matcher_covers_every_adapter_edit_tool():
+    """An agy edit tool the engine guards but the matcher omits never reaches the guard."""
+    # Trap: DoE byte-resyncs coordinator/bin without coordinator_core, so the engine import may be absent.
+    agy_adapter = pytest.importorskip("coordinator_core.host_hooks.agy_adapter")
+    names = ui.AGY_TOOL_MATCHER.split("|")
+    assert "run_command" in names
+    assert set(agy_adapter._EDIT_TOOLS) <= set(names)
+
+
+def test_install_widens_an_older_run_command_only_entry(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    dest = tmp_path / "home" / "unimatrix"
+    hp = tmp_path / "hooks.json"
+    narrow = ui.agy_hook_entry(dest)
+    narrow["PreToolUse"][0]["matcher"] = "run_command"
+    hp.write_text(json.dumps({ui.AGY_HOOK_KEY: narrow}), encoding="utf-8")
+    rc, out = _run(["--install"], "2.1.316", dest, hp)
+    assert rc == 0 and "updated" in out
+    entry = json.loads(hp.read_text(encoding="utf-8"))[ui.AGY_HOOK_KEY]["PreToolUse"][0]
+    assert entry["matcher"] == ui.AGY_TOOL_MATCHER
