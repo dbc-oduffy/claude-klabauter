@@ -1434,9 +1434,34 @@ def unseed_grok_hook(hooks_path):
     return "removed"
 
 
-def _tui_status_command(host):
-    argv = [_console_python(), "-m", "coordinator_core.tui_status", host]
-    return subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(shlex.quote(a) for a in argv)
+TUI_STATUS_MODULE = "coordinator_core.tui_status"
+# Trap: agy and Grok run the status line from a cwd with no coordinator_core on sys.path, so a bare
+# `-m` fails on every render; the engine root rides in argv and is put on sys.path first.
+_TUI_STATUS_BOOT = ("import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
+                    f"runpy.run_module('{TUI_STATUS_MODULE}',run_name='__main__')")
+
+
+def _tui_status_command(host, engine_root=None):
+    if engine_root:
+        argv = [_console_python(), "-c", _TUI_STATUS_BOOT, str(engine_root), host]
+    else:
+        argv = [_console_python(), "-m", TUI_STATUS_MODULE, host]
+    return _quote_argv(argv)
+
+
+def _status_command_ours(value, host):
+    """True when a host's status-line value is one this installer wrote, in any engine root or form."""
+    cmd = value.get("command") if isinstance(value, dict) else None
+    if not isinstance(cmd, str):
+        return False
+    try:
+        argv = shlex.split(cmd, posix=os.name != "nt")
+    except ValueError:
+        return False
+    argv = [a.strip('"') for a in argv]
+    if argv[-3:] == ["-m", TUI_STATUS_MODULE, host]:
+        return True
+    return len(argv) == 5 and argv[1] == "-c" and argv[2] == _TUI_STATUS_BOOT and argv[4] == host
 
 
 def _host_status_value(host, text, command):
@@ -1471,7 +1496,7 @@ def _host_status_state(path):
     return state
 
 
-def seed_host_status_line(config_path, host, *, uninstall=False):
+def seed_host_status_line(config_path, host, *, uninstall=False, engine_root=None):
     """Own only the agy `statusLine` / Grok `[ui.status_line]` value; restore only while it remains our exact value.
 
     The ownership record keeps the pre-install text, so an untouched file returns byte for byte; a file
@@ -1480,7 +1505,7 @@ def seed_host_status_line(config_path, host, *, uninstall=False):
     path = Path(config_path)
     state_path = path.with_name(f".coordinator-status-line-{host}.json")
     text = path.read_bytes().decode("utf-8") if path.exists() else None
-    command = _tui_status_command(host)
+    command = _tui_status_command(host, engine_root)
     if uninstall:
         if not state_path.exists():
             return "absent"
@@ -1516,13 +1541,23 @@ def seed_host_status_line(config_path, host, *, uninstall=False):
     if current == wanted:
         return "present"
     state = _host_status_state(state_path) if state_path.exists() else None
-    if current is not None:
+    if current is not None and _status_command_ours(current, host) and (state is None or text != state["after"]):
+        # Our own older value (another engine root, or the bare `-m` form) in an edited file: swap
+        # only the command literal so the user's other edits survive.
+        old_literal = json.dumps(current["command"], ensure_ascii=False)
+        if old_literal not in text:
+            return "retained-customized"
+        base = state["before"] if state else text
+        existed = state["existed"] if state else True
+        replacement = text.replace(old_literal, json.dumps(command, ensure_ascii=False), 1)
+    elif current is not None:
         if state is None or text != state["after"]:
             return "retained-customized"
         base, existed = state["before"], state["existed"]
+        replacement = _host_status_apply(host, base, command)
     else:
         base, existed = text or "", text is not None
-    replacement = _host_status_apply(host, base, command)
+        replacement = _host_status_apply(host, base, command)
     if _host_status_value(host, replacement, command)[0] != wanted:
         raise ValueError("status-line edit did not address the host's status line")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2565,7 +2600,8 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         if not wanted:
             continue
         try:
-            print(f"{label} status line {seed_host_status_line(config, host)} in {config}", file=out)
+            res = seed_host_status_line(config, host, engine_root=engine_root)
+            print(f"{label} status line {res} in {config}", file=out)
         except (OSError, ValueError) as exc:
             missing.append(f"{label} status line")
             print(f"WARN: {label} status line not installed: {exc}", file=out)

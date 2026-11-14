@@ -2722,11 +2722,11 @@ def test_tui_status_lines_install_twice_noop_and_uninstall_restores_bytes(monkey
     assert rc == 0 and "agy status line updated" in out and "grok status line updated" in out
     data = json.loads(agy.read_text(encoding="utf-8"))
     assert data["theme"] == "dark" and data["other"] == {"k": 1}
-    assert data["statusLine"]["command"].endswith("-m coordinator_core.tui_status agy")
+    assert data["statusLine"]["command"].endswith(" agy")
     parsed = tomllib.loads(grok.read_text(encoding="utf-8"))
     assert parsed["model"] == "x" and parsed["mcp"]["foreign"] == {"url": "u"}
     assert parsed["ui"]["status_line"]["type"] == "command"
-    assert parsed["ui"]["status_line"]["command"].endswith("-m coordinator_core.tui_status grok")
+    assert parsed["ui"]["status_line"]["command"].endswith(" grok")
     once = (agy.read_bytes(), grok.read_bytes())
     rc, out = _tui_main(tmp_path, "--install")
     assert "agy status line present" in out and "grok status line present" in out
@@ -2792,6 +2792,46 @@ def test_tui_status_uninstall_after_user_edits_keeps_them_and_drops_only_ours(mo
     agy.write_text(json.dumps(data))
     _, out = _tui_main(tmp_path, "--uninstall", "agy")
     assert "agy status line retained-customized" in out and json.loads(agy.read_text())["statusLine"] == {"command": "later"}
+
+
+def _fake_engine(tmp_path):
+    pkg = tmp_path / "eng" / "coordinator_core" / "tui_status"
+    pkg.mkdir(parents=True)
+    (pkg.parent / "__init__.py").write_text("")
+    (pkg / "__init__.py").write_text("")
+    (pkg / "__main__.py").write_text("import sys\nprint('host=' + ' '.join(sys.argv[1:]))\n")
+    return tmp_path / "eng"
+
+
+def test_tui_status_command_runs_from_a_cwd_without_the_engine(tmp_path):
+    root = _fake_engine(tmp_path)
+    cmd = ui._tui_status_command("agy", root)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    proc = subprocess.run(cmd, shell=True, cwd=elsewhere, env=env, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "host=agy"
+    assert ui._status_command_ours({"command": cmd}, "agy")
+    assert not ui._status_command_ours({"command": cmd}, "grok")
+
+
+def test_tui_status_install_upgrades_our_bare_module_form(monkeypatch, tmp_path):
+    _, agy, grok = _tui_home(monkeypatch, tmp_path)
+    root = _fake_engine(tmp_path)
+    monkeypatch.setattr(ui, "resolve_engine_root", lambda: (str(root), "test"))
+    agy.parent.mkdir(parents=True)
+    grok.parent.mkdir(parents=True)
+    agy.write_text(json.dumps({"theme": "dark", "statusLine": {"command": "/py/python3 -m coordinator_core.tui_status agy"}}))
+    grok.write_text('x = 1\n[ui.status_line]\ntype = "command"\ncommand = "/py/python3 -m coordinator_core.tui_status grok"\n')
+    rc, out = _tui_main(tmp_path, "--install")
+    assert "agy status line updated" in out and "grok status line updated" in out
+    data = json.loads(agy.read_text())
+    assert data["theme"] == "dark" and data["statusLine"]["command"] == ui._tui_status_command("agy", str(root))
+    parsed = tomllib.loads(grok.read_text())
+    assert parsed["x"] == 1 and parsed["ui"]["status_line"]["command"] == ui._tui_status_command("grok", str(root))
+    rc, out = _tui_main(tmp_path, "--install")
+    assert "agy status line present" in out and "grok status line present" in out
 
 
 def test_tui_status_invalid_config_is_never_overwritten(tmp_path):
