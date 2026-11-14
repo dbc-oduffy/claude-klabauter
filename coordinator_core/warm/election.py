@@ -91,6 +91,7 @@ and never the thing relied on.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import sys
@@ -260,6 +261,81 @@ def pipe_name(
     return f"\\\\.\\pipe\\coordinator-core.{sid}.{clone_hash}.{engine_token}"
 
 
+@functools.lru_cache(maxsize=1)
+def current_logon_sid() -> Optional[str]:
+    """The calling process's logon-session SID (``S-1-5-5-X-Y``), or ``None``
+    when the token carries none or cannot be read. A restricted token (the codex
+    workspace-write sandbox) lists it among its restricting SIDs."""
+    if not _is_windows():
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    token_query = 0x0008
+    token_groups = 2
+    se_group_logon_id = 0xC0000000
+
+    class _SID_AND_ATTRIBUTES(ctypes.Structure):
+        # Trap: never name this field `the Game Dev Reviewer` -- the publish persona substitute rewrites
+        # that token to prose and the klabauter copy stops parsing (71b3d8).
+        _fields_ = [("psid", ctypes.c_void_p), ("Attributes", wintypes.DWORD)]
+
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.GetCurrentProcess.argtypes = []
+    advapi32.OpenProcessToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+    advapi32.ConvertSidToStringSidW.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.LPWSTR),
+    ]
+    advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+
+    htoken = wintypes.HANDLE()
+    if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), token_query, ctypes.byref(htoken)):
+        return None
+    try:
+        size = wintypes.DWORD(0)
+        advapi32.GetTokenInformation(htoken, token_groups, None, 0, ctypes.byref(size))
+        if not size.value:
+            return None
+        buf = ctypes.create_string_buffer(size.value)
+        if not advapi32.GetTokenInformation(htoken, token_groups, buf, size.value, ctypes.byref(size)):
+            return None
+        count = ctypes.cast(buf, ctypes.POINTER(wintypes.DWORD))[0]
+        offset = ctypes.sizeof(ctypes.c_void_p)
+        groups = (_SID_AND_ATTRIBUTES * count).from_buffer(buf, offset)
+        for group in groups:
+            if (group.Attributes & se_group_logon_id) != se_group_logon_id:
+                continue
+            str_sid = wintypes.LPWSTR()
+            if not advapi32.ConvertSidToStringSidW(group.psid, ctypes.byref(str_sid)):
+                return None
+            try:
+                return str_sid.value
+            finally:
+                kernel32.LocalFree(str_sid)
+        return None
+    finally:
+        kernel32.CloseHandle(htoken)
+
+
+def _pipe_sddl(sid: str, logon_sid: Optional[str] = None) -> str:
+    """The warm pipe DACL. A restricted token must pass the DACL for its user
+    SID and again for a restricting SID, so the server's own logon SID gets
+    read/write: the pipe stays scoped to this logon session. No Everyone ACE."""
+    sddl = f"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{sid})"
+    if logon_sid:
+        sddl += f"(A;;FRFW;;;{logon_sid})"
+    return sddl
+
+
 def _build_security_attributes(sid: str):
     import ctypes
     from ctypes import wintypes
@@ -280,7 +356,7 @@ def _build_security_attributes(sid: str):
     ]
     advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
 
-    sddl = f"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{sid})"
+    sddl = _pipe_sddl(sid, current_logon_sid())
     psd = ctypes.c_void_p()
     if not advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
         sddl, 1, ctypes.byref(psd), None
