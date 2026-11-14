@@ -171,21 +171,28 @@ def label(peer, text):
     return f"[{peer}] {text}"
 
 
-def build_frame(from_endpoint, from_name, text, msg_id=None):
-    """Cross-session user frame carrying `text` from `from_endpoint` (a socket path or pipe)."""
+def build_frame(from_endpoint, from_name, text, msg_id=None, from_box=None):
+    """Cross-session user frame carrying `text` from `from_endpoint` (a socket path or pipe).
+
+    A non-empty `from_box` adds a `from-box` attribute to the wrapper; None leaves the frame unchanged."""
     from_name = from_name.replace('"', "'")
-    content = (f'<cross-session-message from="uds:{from_endpoint}" from-name="{from_name}">\n'
+    box_attr = f' from-box="{str(from_box).replace(chr(34), chr(39))}"' if from_box else ""
+    content = (f'<cross-session-message from="uds:{from_endpoint}" from-name="{from_name}"{box_attr}>\n'
                f"{text}\n</cross-session-message>")
     return {"msgV": 1, "msg_id": msg_id or str(uuid.uuid4()), "type": "user",
             "message": {"role": "user", "content": content}, "priority": "next",
             "from": f"uds:{from_endpoint}"}
 
 
-def stamp(frame, peer, vendor, target, router_pid):
-    """Return a copy of `frame` with a `provenance` object and `from_name` set to the peer name."""
+def stamp(frame, peer, vendor, target, router_pid, from_box=None):
+    """Return a copy of `frame` with a `provenance` object and `from_name` set to the peer name.
+
+    A non-empty `from_box` adds `provenance["box"]`; None leaves provenance at PROVENANCE_FIELDS."""
     out = dict(frame)
     out["provenance"] = {"peer": peer, "vendor": vendor, "target": target,
                          "router_pid": router_pid, "msg_id": frame.get("msg_id")}
+    if from_box:
+        out["provenance"]["box"] = from_box
     out["from_name"] = peer
     return out
 
@@ -222,13 +229,38 @@ def local_box():
 
 
 def agent_row(entry, local_box):
-    """Roster row {name, box, vendor} from one session entry.
+    """Roster row {name, box, vendor, this_box} from one session entry.
 
     vendor: the entry's stamp, else "peer" for an unstamped `peer-` face (a router older than the
-    stamp), else "claude". box: the entry's stamp, else `local_box`."""
+    stamp), else "claude". box: the entry's stamp, else `local_box`. this_box: box == local_box."""
     sid = str(entry.get("sessionId") or "")
     vendor = entry.get(VENDOR_FIELD) or ("peer" if sid.startswith("peer-") else "claude")
-    return {"name": entry.get("name"), "box": entry.get(BOX_FIELD) or local_box, "vendor": vendor}
+    box = entry.get(BOX_FIELD) or local_box
+    return {"name": entry.get("name"), "box": box, "vendor": vendor, "this_box": box == local_box}
+
+
+def self_row(entries, session_id, local_box):
+    """The agent_row of the entry whose `sessionId` equals `session_id` exactly, else None.
+
+    Never a prefix match: a short id prefix names no roster row."""
+    if not session_id:
+        return None
+    for entry in entries:
+        if entry.get("sessionId") == session_id:
+            return agent_row(entry, local_box)
+    return None
+
+
+def split_by_box(rows, local_box, self_name=None):
+    """Split agent_rows into (same, other): rows on `local_box` and rows elsewhere.
+
+    `self_name` (from self_row) is excluded from both lists; None excludes nothing."""
+    same, other = [], []
+    for row in rows:
+        if self_name is not None and row.get("name") == self_name:
+            continue
+        (same if row.get("box") == local_box else other).append(row)
+    return same, other
 
 
 def main(argv=None):

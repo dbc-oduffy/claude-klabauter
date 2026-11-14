@@ -30,13 +30,16 @@ LOG_RELPATH = "taskstop-reaper/reaper.jsonl"
 @dataclass(frozen=True)
 class LaunchRecord:
     """One background launch. `mark` is a FILETIME int taken at recorder entry and is also the
-    RECORD_TTL_S age basis."""
+    RECORD_TTL_S age basis. `agent_id` is the launching subagent ("" for the main session);
+    `timed_out` marks a harness auto-backgrounded call, not an explicit run_in_background."""
 
     task_id: str
     session_id: str
     tool_use_id: str
     command: str
     mark: int
+    agent_id: str = ""
+    timed_out: bool = False
 
 
 class ReapOutcome(enum.Enum):

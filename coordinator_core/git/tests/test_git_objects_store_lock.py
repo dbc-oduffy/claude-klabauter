@@ -16,6 +16,14 @@ from coordinator_core.git import git_objects as go
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
+
+@pytest.fixture(autouse=True)
+def _unpaused(monkeypatch):
+    """These tests pin the lock around the fold; the paused behaviour is pinned in test_pack_deletion_pause."""
+    from coordinator_core.git import pack_deletion_pause
+
+    monkeypatch.setattr(pack_deletion_pause, "PACK_DELETION_PAUSED", False)
+
 _HOLDER_CHILD = textwrap.dedent(
     """
     import sys

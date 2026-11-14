@@ -4898,6 +4898,7 @@ def _commit_via_head_spine(
     refuse_noop: bool = False,
     caller: str,
     target_ref: Optional[str] = None,
+    build_only: bool = False,
 ) -> Optional[GitResult]:
     """The shared "rewrite HEAD's tree spine -> build the commit object ->
     land it via a locked ref CAS" landing helper (C4 body: "one helper, two
@@ -4911,6 +4912,11 @@ def _commit_via_head_spine(
     ref's tip: the parent, the tree the spine is read from, and the CAS
     comparand, taken against the COMMON dir. HEAD is never read and no HEAD
     reflog line is written unless HEAD itself names the ref.
+
+    `build_only` (default `False`) -- `old_head` is a bare parent commit sha,
+    not a ref tip: the tree is read from it, the commit objects are written,
+    and NO ref is resolved, lock-checked or CAS'd; the new commit's sha comes
+    back in `stdout`. HEAD, every ref, the index and the worktree are untouched.
 
     `refuse_noop` (default `False` -- `commit_authored_content` is
     byte-identical without it, unchanged) -- when `True`, a computed
@@ -5004,7 +5010,8 @@ def _commit_via_head_spine(
             stderr=f"{caller}: {canonical_refusal}",
         )
 
-    if target_ref is not None:
+    parent_rooted = target_ref is not None or build_only
+    if parent_rooted:
         parent_info = _git_state_read_commit(root, old_head)
         root_tree_sha = parent_info.tree if parent_info is not None else None
     else:
@@ -5015,7 +5022,7 @@ def _commit_via_head_spine(
     spine = read_tree_spine(
         root,
         list(assembled.keys()),
-        root_tree_sha=root_tree_sha if target_ref is not None else None,
+        root_tree_sha=root_tree_sha if parent_rooted else None,
     )
     if spine is None:
         return None
@@ -5025,16 +5032,17 @@ def _commit_via_head_spine(
         if synthesized is None:
             return None
 
-    if target_ref is not None:
-        ref_target = (resolve_git_common_dir(root), target_ref)
-    else:
-        ref_target = _resolve_cas_ref_target(root)
-    if ref_target is None:
-        return None
-    ref_gitdir, ref_relpath = ref_target
-    lock_path = ref_gitdir / (ref_relpath + ".lock")
-    if lock_path.exists():
-        return None
+    if not build_only:
+        if target_ref is not None:
+            ref_target = (resolve_git_common_dir(root), target_ref)
+        else:
+            ref_target = _resolve_cas_ref_target(root)
+        if ref_target is None:
+            return None
+        ref_gitdir, ref_relpath = ref_target
+        lock_path = ref_gitdir / (ref_relpath + ".lock")
+        if lock_path.exists():
+            return None
 
     identity = _resolve_commit_identity(root)
     if identity is None:
@@ -5118,6 +5126,9 @@ def _commit_via_head_spine(
             "utf-8"
         )
         new_commit_sha = write_object(common_dir, b"commit", header + msg_bytes)
+
+    if build_only:
+        return GitResult(returncode=0, stdout=new_commit_sha, stderr="")
 
     landed = cas_ref(
         ref_gitdir,
@@ -5514,6 +5525,162 @@ def commit_authored_content(
     )
 
 
+def _new_file_clean_pipeline_refusal(
+    path: str,
+    content: Optional[str],
+    root: Path,
+    *,
+    caller: str,
+) -> Tuple[str, Optional[GitResult]]:
+    """`(normalized_path, refusal)` -- the path/content refusals shared by every
+    zero-spawn new-file entrypoint: an absent write, a non-repo-relative or
+    Windows-illegal path, a containment escape, a directory target, CR content
+    and a path-matched clean filter. `refusal` is `None` when all pass. Each
+    message is prefixed with `caller`."""
+    normalized = path.replace("\\", "/")
+    if content is None:
+        return normalized, GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=f"{caller}: content is None -- refusing to commit an absent write",
+        )
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or ".." in Path(normalized).parts
+        or _has_windows_drive(normalized)
+    ):
+        return normalized, GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                f"{caller}: {path!r} is not a repo-relative, "
+                "in-worktree path -- refusing an absolute path or a `..` "
+                "traversal segment"
+            ),
+        )
+    # Before the containment resolve(): Windows `resolve()` reads `a:` in a component as a drive
+    # and would misreport a legality refusal as containment.
+    early_legality_refusal = illegal_path_refusal({normalized: (0, "0" * 40)})
+    if early_legality_refusal is not None:
+        return normalized, GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                f"{caller}: refused -- this commit lands a path "
+                f"Windows cannot check out:\n{early_legality_refusal}"
+            ),
+        )
+    target = root / normalized
+    try:
+        target.resolve().relative_to(root.resolve())  # fs-only: containment check, never stringified
+    except ValueError:
+        return normalized, GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=f"{caller}: {path!r} resolves outside the worktree rooted at {root}",
+        )
+    if target.is_dir():
+        return normalized, GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=f"{caller}: {directory_pathspec_diagnostic(normalized)}",
+        )
+
+    if "\r" in content:
+        return normalized, GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                f"{caller}: {normalized!r} content carries a CR byte -- "
+                "this entrypoint writes the blob in process and cannot reproduce git's "
+                "clean-direction CRLF normalization; normalize to LF before calling"
+            ),
+        )
+    filter_diagnostic = _clean_filter_may_apply(root, normalized)
+    if filter_diagnostic is not None:
+        return normalized, GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                f"{caller}: refusing {normalized!r} -- {filter_diagnostic}; "
+                "a zero-spawn blob write cannot run a clean filter, and writing the raw "
+                "bytes would store a blob `git add` would not have produced"
+            ),
+        )
+    return normalized, None
+
+
+def build_new_file_commit(
+    path: str,
+    content: str,
+    msg_file: Union[str, Path],
+    cwd: Union[str, Path],
+    *,
+    parent_sha: str,
+) -> GitResult:
+    """Build, without landing, a commit that adds `content` at `path` on top of
+    the commit `parent_sha`; `stdout` carries the new commit sha.
+
+    Object-only: the loose blob, tree and commit objects are written into the
+    common dir and NO ref is read-for-CAS or written, so HEAD, every branch,
+    the index and the worktree are untouched, and the green path spawns nothing.
+    The commit is unreachable until the caller anchors it. Same clean-pipeline
+    refusals as `commit_authored_new_file`; `path` present in `parent_sha`'s
+    tree is refused. `msg_file` must carry its trailers final."""
+    caller = "build_new_file_commit"
+    root = Path(cwd)
+    normalized, refusal = _new_file_clean_pipeline_refusal(path, content, root, caller=caller)
+    if refusal is not None:
+        return refusal
+
+    parent_info = _git_state_read_commit(root, parent_sha)
+    parent_spine = (
+        read_tree_spine(root, [normalized], root_tree_sha=parent_info.tree)
+        if parent_info is not None
+        else None
+    )
+    if parent_spine is None:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                f"{caller}: parent {parent_sha!r} is not a readable commit with a "
+                "readable tree spine -- refusing rather than falling back to the "
+                "spawning ladder"
+            ),
+        )
+    parent_dir, _, leaf = normalized.rpartition("/")
+    if parent_spine.get(parent_dir, {}).get(leaf) is not None:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=f"{caller}: {normalized!r} already exists in {parent_sha}",
+        )
+
+    blob_sha = write_object(resolve_git_common_dir(root), b"blob", content.encode("utf-8"))
+    built = _commit_via_head_spine(
+        root,
+        {normalized: (int(_SUPPLIED_BLOB_MODE, 8), blob_sha)},
+        parent_sha,
+        msg_file,
+        create_missing_dirs=True,
+        caller=caller,
+        build_only=True,
+    )
+    if built is None:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                f"{caller}: the in-process commit path declined a precondition for "
+                f"{normalized!r} (unreadable tree spine or no resolvable commit "
+                "identity) -- refusing rather than falling back to the spawning ladder"
+            ),
+        )
+    return built
+
+
 @_emit_admission_advisory
 def commit_authored_new_file(
     path: str,
@@ -5652,79 +5819,12 @@ def commit_authored_new_file(
     Returns a `GitResult`; on success `stdout` carries the new commit SHA,
     matching both sibling producers' contract.
     """
-    if content is None:
-        return GitResult(
-            returncode=-1,
-            stdout="",
-            stderr="commit_authored_new_file: content is None -- refusing to commit an absent write",
-        )
-
     root = Path(cwd)
-    normalized = path.replace("\\", "/")
-    if (
-        not normalized
-        or normalized.startswith("/")
-        or ".." in Path(normalized).parts
-        or _has_windows_drive(normalized)
-    ):
-        return GitResult(
-            returncode=-1,
-            stdout="",
-            stderr=(
-                f"commit_authored_new_file: {path!r} is not a repo-relative, "
-                "in-worktree path -- refusing an absolute path or a `..` "
-                "traversal segment"
-            ),
-        )
-    # Before the containment resolve(): Windows `resolve()` reads `a:` in a component as a drive
-    # and would misreport a legality refusal as containment.
-    early_legality_refusal = illegal_path_refusal({normalized: (0, "0" * 40)})
-    if early_legality_refusal is not None:
-        return GitResult(
-            returncode=-1,
-            stdout="",
-            stderr=(
-                "commit_authored_new_file: refused -- this commit lands a path "
-                f"Windows cannot check out:\n{early_legality_refusal}"
-            ),
-        )
-    target = root / normalized
-    try:
-        target.resolve().relative_to(root.resolve())  # fs-only: containment check, never stringified
-    except ValueError:
-        return GitResult(
-            returncode=-1,
-            stdout="",
-            stderr=f"commit_authored_new_file: {path!r} resolves outside the worktree rooted at {root}",
-        )
-    if target.is_dir():
-        return GitResult(
-            returncode=-1,
-            stdout="",
-            stderr=f"commit_authored_new_file: {directory_pathspec_diagnostic(normalized)}",
-        )
-
-    if "\r" in content:
-        return GitResult(
-            returncode=-1,
-            stdout="",
-            stderr=(
-                f"commit_authored_new_file: {normalized!r} content carries a CR byte -- "
-                "this entrypoint writes the blob in process and cannot reproduce git's "
-                "clean-direction CRLF normalization; normalize to LF before calling"
-            ),
-        )
-    filter_diagnostic = _clean_filter_may_apply(root, normalized)
-    if filter_diagnostic is not None:
-        return GitResult(
-            returncode=-1,
-            stdout="",
-            stderr=(
-                f"commit_authored_new_file: refusing {normalized!r} -- {filter_diagnostic}; "
-                "a zero-spawn blob write cannot run a clean filter, and writing the raw "
-                "bytes would store a blob `git add` would not have produced"
-            ),
-        )
+    normalized, refusal = _new_file_clean_pipeline_refusal(
+        path, content, root, caller="commit_authored_new_file"
+    )
+    if refusal is not None:
+        return refusal
 
     if onto_ref is not None:
         head_target = _resolve_cas_ref_target(root)

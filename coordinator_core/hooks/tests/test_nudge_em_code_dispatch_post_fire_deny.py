@@ -29,7 +29,6 @@ def root(tmp_path, monkeypatch):
     for target in (mod, leaf):
         monkeypatch.setattr(target, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
     monkeypatch.setattr(mp, "guard_level", lambda name: "warn")
-    monkeypatch.setattr(leaf, "_is_scratch_or_tmp", lambda p: "scratch" in Path(p).parts)
     return repo
 
 
@@ -123,12 +122,20 @@ def test_live_run_does_not_own_an_undeclared_path(root, monkeypatch):
     assert not _advised(result) and not _is_deny(result)
 
 
-@pytest.mark.parametrize("rel", ["state/handoffs/h.md", "scratch/probe.txt", ".coordinator-local/x/y.md"])
+@pytest.mark.parametrize("rel", ["state/handoffs/h.md", ".coordinator-local/x/y.md"])
 def test_fired_non_product_paths_are_not_advised(root, monkeypatch, rel):
     _fire(monkeypatch, ["run-1"])
     _declare(root, writes=(rel,))
     result = mod.op(_payload(root, "Write", rel, content="x"))
     assert not _advised(result) and not _is_deny(result)
+
+
+def test_fired_scratch_path_a_live_run_declares_gets_the_post_fire_verdict(root, monkeypatch):
+    rel = "scratch/probe.py"
+    _fire(monkeypatch, ["run-1"])
+    _declare(root, writes=(rel,))
+    result = mod.op(_payload(root, "Write", rel, content="x"))
+    assert _advised(result) and not _is_deny(result)
 
 
 def test_path_outside_the_repo_is_not_advised(root, monkeypatch, tmp_path):

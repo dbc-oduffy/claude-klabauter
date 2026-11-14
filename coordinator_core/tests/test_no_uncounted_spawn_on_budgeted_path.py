@@ -1827,6 +1827,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/taskstop_reaper.py",
         ("_handler",),
     ),
+    "hooks.agent_stop_reaper": (
+        "coordinator_core/hooks/agent_stop_reaper.py",
+        ("_handler",),
+    ),
     "hooks.group_em_autofire": (
         "coordinator_core/hooks/group_em_autofire.py",
         ("_handler",),
@@ -7455,6 +7459,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # landing.guard_selection: one reachable git site (run_git in the landing invariant node
     # selection); constant per call, never per path.
     "landing.guard_selection": 1,
+    # memo.redeliver: static reachable-site ceiling over run_git, git._invoke and
+    # write_signed_commit_object; re-delivery of a stranded memo onto the upstream tip.
+    "memo.redeliver": 3,
     # plan.mise_prep_probe: one reachable git site (HEAD sha read in `_head_sha`); the census
     # leg's per-entry shell spawns are the counted carve-out, bounded by `_census_deadline`.
     "plan.mise_prep_probe": 1,
@@ -7599,7 +7606,11 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # Added 2026-09-03: one dynamic site, `invoke_coordinator_doc_new`. Pre-dates
     # this pass; it surfaced only because the file's other failures were cleared.
     "hooks.plan_persistence_check": 1,
-    "git.maintenance": 1,
+    # 1 -> 2 (f97a69 hand-land): the daily tier gained a second spawn site,
+    # `_pack_loose_batch` (rev-list enumeration + pack-objects, the loose leg
+    # that replaced `maintenance run --task=loose-objects`). Live reach, not slack;
+    # the whole op stays paused under PACK_DELETION_PAUSED.
+    "git.maintenance": 2,
     "housekeeping.cycle": 4,
     # 1 -> 2: 98f04d91ca added scope.release_committed_claims to _commit_group, reaching
     # git/run.py::run_git via normalize_touch_path's `ls-files` slow arm (zero-spawn fast arm

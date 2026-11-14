@@ -96,7 +96,32 @@ def _make_receiver_git_repo(tmp_path: Path, name: str = "receiver-repo") -> Path
     (inbox / ".gitkeep").write_text("", encoding="utf-8")
     _git(root, "add", "-A")
     _git(root, "commit", "-m", "init receiver")
+    bare = tmp_path / f"{name}-origin.git"
+    _git(tmp_path, "init", "--bare", "-b", "main", str(bare))
+    _git(root, "remote", "add", "origin", str(bare))
+    _git(root, "push", "-q", "origin", "main")
     return root
+
+
+def _pending_records(sender: Path) -> list:
+    """The push-pending records `sender`'s outbox owes the warm engine."""
+    from coordinator_core.ops.fleet import _memo_push_pending
+
+    return _memo_push_pending.list_pending(sender)
+
+
+def _delivered_text(receiver: Path, filename_suffix: str = ".md") -> str:
+    """The bytes of the one memo anchored in `receiver`'s object store: a
+    delivery never writes the receiver's worktree, so the anchor is where the
+    delivered content is read back from."""
+    common_dir = resolve_git_common_dir(receiver)
+    blobs = [
+        resolve_anchor(common_dir, bsha)
+        for fname, _csha, bsha in anchor_names(common_dir)
+        if fname.endswith(filename_suffix)
+    ]
+    assert len(blobs) == 1, blobs
+    return blobs[0].decode("utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -363,18 +388,21 @@ class TestEndToEndDelivery:
         assert acted["committed"] is True
         assert acted["sender_committed"] is True
 
-        # Write 1: receiver inbox file, committed.
-        inbox_files = [
-            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
-            if p.name != ".gitkeep"
-        ]
-        assert len(inbox_files) == 1
-        delivered = inbox_files[0]
-        assert "claude-klabauter-engine" in delivered.name
-        assert "happy-topic" in delivered.name
-        show = _git(receiver_repo, "show", f"HEAD:cross-repo/inbox/{delivered.name}")
-        assert show.stdout.decode("utf-8") == delivered.read_text(encoding="utf-8")
-        assert "status: open" in delivered.read_text(encoding="utf-8")
+        # Write 1: the delivery is an object-only commit on the upstream tip;
+        # the receiver's checkout is untouched.
+        sha = acted["delivery_commit_sha"]
+        assert not list((receiver_repo / "cross-repo" / "inbox").glob("*.md"))
+        tree = _git(receiver_repo, "ls-tree", "--name-only", f"{sha}:cross-repo/inbox")
+        names = [n for n in tree.stdout.decode("utf-8").split() if n != ".gitkeep"]
+        assert len(names) == 1
+        assert "claude-klabauter-engine" in names[0]
+        assert "happy-topic" in names[0]
+        show = _git(receiver_repo, "show", f"{sha}:cross-repo/inbox/{names[0]}")
+        assert show.stdout.decode("utf-8") == _delivered_text(receiver_repo)
+        assert "status: open" in show.stdout.decode("utf-8")
+        assert _git(receiver_repo, "rev-parse", f"{sha}^").stdout == _git(
+            receiver_repo, "rev-parse", "refs/remotes/origin/main"
+        ).stdout
         status = _git(receiver_repo, "status", "--porcelain")
         assert status.stdout.decode("utf-8").strip() == ""
 
@@ -449,12 +477,12 @@ class TestEndToEndDelivery:
         assert acted["committed"] is True
         assert acted["sender_committed"] is True
 
-        inbox_files = [
-            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
-            if p.name != ".gitkeep"
-        ]
-        assert len(inbox_files) == 1
-        assert "new-root-topic" in inbox_files[0].name
+        assert acted["push_pending_record"]
+        tree = _git(
+            receiver_repo, "ls-tree", "--name-only",
+            f"{acted['delivery_commit_sha']}:cross-repo/inbox",
+        )
+        assert any("new-root-topic" in n for n in tree.stdout.decode("utf-8").split())
 
         # The original new-root draft is gone, moved to the new-root sent/.
         assert not (sender_repo / ".coordinator-local" / "memo-outbox" / "new-root-topic.md").exists()
@@ -495,7 +523,7 @@ class TestEndToEndDelivery:
         assert result["exit_code"] == 0, result
         row = _read_sent_records(sender_repo)[0]
         delivery_msg = _git(
-            receiver_repo, "log", "-1", "--format=%B"
+            receiver_repo, "log", "-1", "--format=%B", row["delivery_commit_sha"]
         ).stdout.decode("utf-8")
         return row, delivery_msg
 
@@ -798,46 +826,29 @@ class TestReceiverCommitDeclineFailsLoud:
         def _fake_decline(*args, **kwargs):
             return git_native.GitResult(returncode=1, stdout="", stderr="synthetic decline")
 
-        monkeypatch.setattr(
-            memo_send_module.git_native, "commit_authored_new_file", _fake_decline,
-        )
+        monkeypatch.setattr(git_native, "build_new_file_commit", _fake_decline)
 
         result = _memo_send({"dry_run": False, "topic": "declined-topic"}, repo_root=sender_repo)
 
         assert result["exit_code"] != 0
         assert result["acted"] == []
         assert len(result["failed"]) == 1
-        # The receiver's tree is left EXACTLY as it was found: the worktree
-        # write precedes the commit attempt, so a declined commit rolls its own
-        # write back rather than orphaning an uncommitted memo in a repo we do
-        # not own. Nothing sender-side is touched either.
-        #
-        # This asserts the opposite of what it once did. Leaving the file was a
-        # dead end, not untidiness: the orphan is materially delivered while
-        # every ledger says it is not, and AC6's no-clobber guard then refuses
-        # the retry against the failed attempt's own file -- leaving hand-
-        # editing a foreign tree as the only way out. Rolling back is not the
-        # spawning-commit fallback AC4 forbids; nothing is committed either way.
-        inbox_files = [
-            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
-            if p.name != ".gitkeep"
-        ]
-        assert inbox_files == []
+        assert "synthetic decline" in result["failed"][0]["reason"]
+        assert "AC4" in result["failed"][0]["reason"]
+        # Nothing receiver-side or sender-side is left behind: no checkout
+        # write, no owed push, no receipt.
+        assert not list((receiver_repo / "cross-repo" / "inbox").glob("*.md"))
+        assert _git(receiver_repo, "status", "--porcelain").stdout.decode("utf-8").strip() == ""
+        assert _pending_records(sender_repo) == []
         assert (sender_repo / "state" / "memo-outbox" / "declined-topic.md").exists()
         assert not (sender_repo / ".coordinator-local" / "memo-outbox" / "sent").exists()
         assert _read_sent_records(sender_repo) == []
 
-
     def test_retry_after_declined_commit_is_not_blocked_by_no_clobber(
         self, tmp_path, monkeypatch
     ):
-        """The regression that made the rollback necessary.
-
-        A declined commit used to leave its own file in the receiver's inbox,
-        so the identical re-run was refused by the no-clobber guard -- a memo
-        that could be neither finished nor withdrawn through this op. The retry
-        must reach the commit leg again.
-        """
+        """A declined delivery leaves nothing that makes the identical re-run a
+        collision: the retry reaches the commit leg again and lands."""
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -847,14 +858,14 @@ class TestReceiverCommitDeclineFailsLoud:
         def _fake_decline(*args, **kwargs):
             return git_native.GitResult(returncode=1, stdout="", stderr="synthetic decline")
 
-        monkeypatch.setattr(
-            memo_send_module.git_native, "commit_authored_new_file", _fake_decline,
-        )
-        first = _memo_send({"dry_run": False, "topic": "retry-topic"}, repo_root=sender_repo)
+        with monkeypatch.context() as patched:
+            patched.setattr(git_native, "build_new_file_commit", _fake_decline)
+            first = _memo_send({"dry_run": False, "topic": "retry-topic"}, repo_root=sender_repo)
         assert first["exit_code"] != 0
 
         second = _memo_send({"dry_run": False, "topic": "retry-topic"}, repo_root=sender_repo)
-        assert "no clobber" not in json.dumps(second["failed"]), second["failed"]
+        assert second["exit_code"] == 0, second
+        assert len(_pending_records(sender_repo)) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -883,10 +894,7 @@ class TestUnverifiedDeliveryCommitFailsLoud:
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "unverifiable-topic")
 
-        monkeypatch.setattr(
-            memo_send_module.git_native, "commit_authored_new_file",
-            _fake_ok_but_unverifiable_commit,
-        )
+        monkeypatch.setattr(git_native, "build_new_file_commit", _fake_ok_but_unverifiable_commit)
 
         result = _memo_send(
             {"dry_run": False, "topic": "unverifiable-topic"}, repo_root=sender_repo
@@ -904,13 +912,10 @@ class TestUnverifiedDeliveryCommitFailsLoud:
         # Half 2: no sent record written.
         assert _read_sent_records(sender_repo) == []
 
-        # Half 3: no file left behind in the receiver's inbox — the O_EXCL
-        # write is unlinked, tree restored.
-        inbox_files = [
-            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
-            if p.name != ".gitkeep"
-        ]
-        assert inbox_files == []
+        # Half 3: nothing owes a push and nothing is anchored; the receiver's
+        # tree was never written.
+        assert _pending_records(sender_repo) == []
+        assert anchor_names(resolve_git_common_dir(receiver_repo)) == []
         status = _git(receiver_repo, "status", "--porcelain")
         assert status.stdout.decode("utf-8").strip() == ""
 
@@ -942,6 +947,9 @@ class TestCollisionRefused:
         filename = _memo_filename(_dt.date.today().isoformat(), "claude-klabauter-engine", "collision-topic")
         target = receiver_repo / "cross-repo" / "inbox" / filename
         target.write_text("already here\n", encoding="utf-8")
+        _git(receiver_repo, "add", "-A")
+        _git(receiver_repo, "commit", "-q", "-m", "prior delivery")
+        _git(receiver_repo, "push", "-q", "origin", "main")
 
         result = _memo_send({"dry_run": False, "topic": "collision-topic"}, repo_root=sender_repo)
 
@@ -950,8 +958,30 @@ class TestCollisionRefused:
         assert len(result["failed"]) == 1
         assert "collision" in result["failed"][0]["reason"]
         assert target.read_text(encoding="utf-8") == "already here\n"
+        assert _pending_records(sender_repo) == []
 
-    def test_o_excl_refuses_a_race_the_precheck_misses(self, tmp_path, monkeypatch):
+    def test_a_worktree_only_file_is_not_a_collision(self, tmp_path, monkeypatch):
+        """Only the upstream base tree decides a collision: an untracked copy in
+        the receiver's checkout neither blocks the delivery nor is touched."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "worktree-only-topic")
+        from coordinator_core.ops.fleet._memo_compose import _memo_filename
+        import datetime as _dt
+        filename = _memo_filename(_dt.date.today().isoformat(), "claude-klabauter-engine", "worktree-only-topic")
+        target = receiver_repo / "cross-repo" / "inbox" / filename
+        target.write_text("local scratch\n", encoding="utf-8")
+
+        result = _memo_send({"dry_run": False, "topic": "worktree-only-topic"}, repo_root=sender_repo)
+
+        assert result["exit_code"] == 0, result
+        assert target.read_text(encoding="utf-8") == "local scratch\n"
+
+    def test_the_delivery_refuses_a_collision_the_precheck_misses(self, tmp_path, monkeypatch):
+        """The base-tree check inside the delivery is the second, independent
+        leg: with the pre-check blinded, a path already upstream is still refused."""
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -962,26 +992,20 @@ class TestCollisionRefused:
         import datetime as _dt
         filename = _memo_filename(_dt.date.today().isoformat(), "claude-klabauter-engine", "race-topic")
         target = receiver_repo / "cross-repo" / "inbox" / filename
-
-        real_exists = Path.exists
-
-        def _fake_exists(self):
-            if self == target:
-                return False  # lie: precheck sees no collision
-            return real_exists(self)
-
-        # Seed the real file AFTER the (faked) precheck would have passed —
-        # simulates the race O_EXCL is the second, independent leg for.
         target.write_text("raced in\n", encoding="utf-8")
-        monkeypatch.setattr(Path, "exists", _fake_exists)
+        _git(receiver_repo, "add", "-A")
+        _git(receiver_repo, "commit", "-q", "-m", "raced in")
+        _git(receiver_repo, "push", "-q", "origin", "main")
+        monkeypatch.setattr(memo_send_module, "_base_tree_has", lambda *a, **k: False)
 
         result = _memo_send({"dry_run": False, "topic": "race-topic"}, repo_root=sender_repo)
 
         assert result["exit_code"] != 0
         assert result["acted"] == []
         assert len(result["failed"]) == 1
-        assert "race" in result["failed"][0]["reason"]
+        assert "collision" in result["failed"][0]["reason"]
         assert target.read_text(encoding="utf-8") == "raced in\n"
+        assert _pending_records(sender_repo) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1008,22 +1032,16 @@ class TestDeliveryIsAnchored:
         assert acted["anchored"] is True
         assert "anchor_warning" not in acted
 
-        inbox_files = [
-            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
-            if p.name != ".gitkeep"
-        ]
-        assert len(inbox_files) == 1
-        delivered = inbox_files[0]
         delivery_commit_sha = acted["delivery_commit_sha"]
 
         common_dir = resolve_git_common_dir(receiver_repo)
-        triples = [
-            t for t in anchor_names(common_dir)
-            if t[0] == delivered.name and t[1] == delivery_commit_sha
-        ]
+        triples = [t for t in anchor_names(common_dir) if t[1] == delivery_commit_sha]
         assert len(triples) == 1, anchor_names(common_dir)
         blob_sha = triples[0][2]
-        assert resolve_anchor(common_dir, blob_sha) == delivered.read_bytes()
+        shown = _git(
+            receiver_repo, "show", f"{delivery_commit_sha}:cross-repo/inbox/{triples[0][0]}"
+        ).stdout
+        assert resolve_anchor(common_dir, blob_sha) == shown
 
     def test_ledger_row_carries_anchor_ref(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -1038,35 +1056,29 @@ class TestDeliveryIsAnchored:
         assert result["exit_code"] == 0, result
         delivery_commit_sha = result["acted"][0]["delivery_commit_sha"]
 
-        inbox_files = [
-            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
-            if p.name != ".gitkeep"
-        ]
-        filename = inbox_files[0].name
+        filename = anchor_names(resolve_git_common_dir(receiver_repo))[0][0]
 
         rows = _read_sent_records(sender_repo)
         assert rows[0]["anchor_ref"] == ANCHOR_REF_PREFIX + filename + "/" + delivery_commit_sha
 
-    def test_lost_anchor_cas_returns_ok_with_anchored_false_and_a_warning(
+    def test_lost_anchor_cas_refuses_the_delivery_and_owes_no_push(
         self, tmp_path, monkeypatch
     ):
         """Pre-create the anchor's own lock file so `write_anchor`'s CAS
         loses for real (`cas_ref`'s `O_CREAT|O_EXCL` on `<ref>.lock` refuses
         outright against an existing lock) -- simulating a peer holding it.
-        The delivery commit has already landed by this point, so the send
-        must still report ok, `anchored: false`, and a warning naming the
-        alternative -- never fail the send.
-        """
+        The commit is reachable only through its anchor until pushed, so an
+        unanchored delivery is refused, never recorded as owed a push."""
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "anchor-lost-topic")
 
-        real_commit = git_native.commit_authored_new_file
+        real_build = git_native.build_new_file_commit
 
-        def _commit_then_lock_the_anchor(rel_path, content, msg_file, repo_path, **kwargs):
-            result = real_commit(rel_path, content, msg_file, repo_path, **kwargs)
+        def _build_then_lock_the_anchor(rel_path, content, msg_file, repo_path, **kwargs):
+            result = real_build(rel_path, content, msg_file, repo_path, **kwargs)
             if result.ok:
                 sha = result.stdout.strip()
                 filename = Path(rel_path).name
@@ -1078,24 +1090,17 @@ class TestDeliveryIsAnchored:
                 lock_path.write_bytes(b"held by a peer\n")
             return result
 
-        monkeypatch.setattr(
-            memo_send_module.git_native, "commit_authored_new_file",
-            _commit_then_lock_the_anchor,
-        )
+        monkeypatch.setattr(git_native, "build_new_file_commit", _build_then_lock_the_anchor)
 
         result = _memo_send(
             {"dry_run": False, "topic": "anchor-lost-topic"}, repo_root=sender_repo
         )
 
-        assert result["exit_code"] == 0, result
-        acted = result["acted"][0]
-        assert acted["anchored"] is False
-        assert "anchor_warning" in acted
-        assert "re-run memo.send" in acted["anchor_warning"]
-        assert "workday-start adopts it" in acted["anchor_warning"]
-
-        rows = _read_sent_records(sender_repo)
-        assert rows[0]["anchor_ref"] is None
+        assert result["exit_code"] != 0, result
+        assert result["acted"] == []
+        assert "anchor" in result["failed"][0]["reason"]
+        assert _pending_records(sender_repo) == []
+        assert _read_sent_records(sender_repo) == []
 
     def test_lost_cas_where_the_ref_already_matches_reports_anchored_true_no_warning(
         self, tmp_path, monkeypatch
@@ -1112,10 +1117,10 @@ class TestDeliveryIsAnchored:
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "anchor-race-topic")
 
-        real_commit = git_native.commit_authored_new_file
+        real_build = git_native.build_new_file_commit
 
         def _commit_then_preanchor_and_force_a_loss(rel_path, content, msg_file, repo_path, **kwargs):
-            result = real_commit(rel_path, content, msg_file, repo_path, **kwargs)
+            result = real_build(rel_path, content, msg_file, repo_path, **kwargs)
             if result.ok:
                 sha = result.stdout.strip()
                 filename = Path(rel_path).name
@@ -1129,10 +1134,7 @@ class TestDeliveryIsAnchored:
                 monkeypatch.setattr(anchor_module, "cas_ref", lambda *a, **k: False)
             return result
 
-        monkeypatch.setattr(
-            memo_send_module.git_native, "commit_authored_new_file",
-            _commit_then_preanchor_and_force_a_loss,
-        )
+        monkeypatch.setattr(git_native, "build_new_file_commit", _commit_then_preanchor_and_force_a_loss)
 
         result = _memo_send(
             {"dry_run": False, "topic": "anchor-race-topic"}, repo_root=sender_repo
@@ -1153,9 +1155,7 @@ class TestDeliveryIsAnchored:
         def _fake_decline(*args, **kwargs):
             return git_native.GitResult(returncode=1, stdout="", stderr="synthetic decline")
 
-        monkeypatch.setattr(
-            memo_send_module.git_native, "commit_authored_new_file", _fake_decline,
-        )
+        monkeypatch.setattr(git_native, "build_new_file_commit", _fake_decline)
 
         result = _memo_send(
             {"dry_run": False, "topic": "anchor-declined-topic"}, repo_root=sender_repo
@@ -1172,10 +1172,7 @@ class TestDeliveryIsAnchored:
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "anchor-unverified-topic")
 
-        monkeypatch.setattr(
-            memo_send_module.git_native, "commit_authored_new_file",
-            _fake_ok_but_unverifiable_commit,
-        )
+        monkeypatch.setattr(git_native, "build_new_file_commit", _fake_ok_but_unverifiable_commit)
 
         result = _memo_send(
             {"dry_run": False, "topic": "anchor-unverified-topic"}, repo_root=sender_repo
@@ -1202,10 +1199,10 @@ class TestDeliveryIsAnchored:
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "anchor-no-spawn-topic")
 
-        real_commit = git_native.commit_authored_new_file
+        real_build = git_native.build_new_file_commit
 
-        def _commit_then_disable_spawns(rel_path, content, msg_file, repo_path, **kwargs):
-            result = real_commit(rel_path, content, msg_file, repo_path, **kwargs)
+        def _build_then_disable_spawns(rel_path, content, msg_file, repo_path, **kwargs):
+            result = real_build(rel_path, content, msg_file, repo_path, **kwargs)
 
             def _forbidden(*a, **k):
                 raise AssertionError(
@@ -1217,10 +1214,7 @@ class TestDeliveryIsAnchored:
             monkeypatch.setattr(subprocess, "run", _forbidden)
             return result
 
-        monkeypatch.setattr(
-            memo_send_module.git_native, "commit_authored_new_file",
-            _commit_then_disable_spawns,
-        )
+        monkeypatch.setattr(git_native, "build_new_file_commit", _build_then_disable_spawns)
 
         result = _memo_send(
             {"dry_run": False, "topic": "anchor-no-spawn-topic"}, repo_root=sender_repo
@@ -1233,17 +1227,24 @@ class TestDeliveryIsAnchored:
 
 
 # ---------------------------------------------------------------------------
-# The receiver's index records the delivery: `git status` there stays clean
+# The receiver's HEAD, index and worktree are never written by a delivery
 # ---------------------------------------------------------------------------
 
 def _receiver_status(receiver_repo: Path) -> str:
     return _git(receiver_repo, "status", "--porcelain").stdout.decode("utf-8")
 
 
-class TestReceiverIndexRecordsTheDelivery:
-    """A delivery committed into the receiver but absent from its index reads
-    as `D  <path>` plus `?? <path>` -- and the receiver's next `git add -A`
-    deletes the memo in its own history."""
+def _receiver_checkout_state(receiver_repo: Path) -> tuple:
+    return (
+        _git(receiver_repo, "rev-parse", "HEAD").stdout,
+        _git(receiver_repo, "symbolic-ref", "HEAD").stdout,
+        (receiver_repo / ".git" / "index").read_bytes(),
+    )
+
+
+class TestReceiverCheckoutIsNeverWritten:
+    """A delivery is an object-only commit on the upstream tip: the receiver's
+    HEAD, index and worktree stay byte-identical, whatever state they are in."""
 
     def _send(self, tmp_path, monkeypatch, topic, *, prepare=None, env=None):
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -1267,11 +1268,11 @@ class TestReceiverIndexRecordsTheDelivery:
         assert "receiver_index_warning" not in result["acted"][0]
         assert _receiver_status(receiver_repo) == ""
 
-    def test_an_inherited_git_index_file_does_not_redirect_the_index_write(
+    def test_an_inherited_git_index_file_does_not_redirect_anything(
         self, tmp_path, monkeypatch
     ):
-        """Inside a git hook `GIT_INDEX_FILE` names the CALLER's index; the
-        receiver's index must still be the one written."""
+        """Inside a git hook `GIT_INDEX_FILE` names the CALLER's index; no index
+        is created or written for it."""
         foreign_index = tmp_path / "foreign.index"
         result, receiver_repo = self._send(
             tmp_path, monkeypatch, "inherited-index-topic",
@@ -1282,28 +1283,25 @@ class TestReceiverIndexRecordsTheDelivery:
         assert _receiver_status(receiver_repo) == ""
         assert not foreign_index.exists()
 
-    def test_an_index_the_splice_refuses_falls_back_and_stays_clean(
-        self, tmp_path, monkeypatch
-    ):
-        """A v4 index is refused by the in-process writer; the hookless
-        fallback must still record the delivery."""
+    def test_an_unspliceable_index_is_irrelevant(self, tmp_path, monkeypatch):
+        """A v4 index is refused by the in-process writer; the delivery never
+        asks for it, so the send lands and the index stays byte-identical."""
+        before: dict = {}
+
+        def _prepare(repo: Path) -> None:
+            _git(repo, "update-index", "--index-version", "4")
+            before["state"] = _receiver_checkout_state(repo)
+
         result, receiver_repo = self._send(
-            tmp_path, monkeypatch, "v4-index-topic",
-            prepare=lambda repo: _git(repo, "update-index", "--index-version", "4"),
+            tmp_path, monkeypatch, "v4-index-topic", prepare=_prepare,
         )
 
         assert result["exit_code"] == 0, result
-        assert "receiver_index_warning" not in result["acted"][0]
-        assert _receiver_status(receiver_repo) == ""
+        assert _receiver_checkout_state(receiver_repo) == before["state"]
 
-    def test_a_held_index_lock_is_reported_not_stolen(self, tmp_path, monkeypatch):
-        """A peer holding `index.lock` past the bounded wait leaves the
-        delivery landed and says how to restore the index -- never a failed
-        send, never a stolen lock."""
-        monkeypatch.setattr(memo_send_module, "_RECEIVER_INDEX_LOCK_SLEEP_SECS", 0)
-        from coordinator_core.git import index_write
-        monkeypatch.setattr(index_write, "preflight_reap_stale_lock", lambda *_: None)
-
+    def test_a_held_index_lock_neither_blocks_nor_is_stolen(self, tmp_path, monkeypatch):
+        """A peer holding `index.lock` has no effect on the delivery: it never
+        takes the lock, and leaves the peer's lock in place."""
         def _hold_lock(repo: Path) -> None:
             (repo / ".git" / "index.lock").write_bytes(b"")
 
@@ -1314,8 +1312,52 @@ class TestReceiverIndexRecordsTheDelivery:
         assert result["exit_code"] == 0, result
         acted = result["acted"][0]
         assert acted["committed"] is True
-        assert "reset -q --" in acted["receiver_index_warning"]
+        assert "receiver_index_warning" not in acted
         assert (receiver_repo / ".git" / "index.lock").exists()
+
+    def test_a_dirty_tree_on_a_branch_behind_upstream_is_untouched(
+        self, tmp_path, monkeypatch
+    ):
+        """The R1 shape: the receiver's local branch is behind upstream and its
+        tree is dirty. The delivery parents on the upstream tip and every
+        checkout fact stays byte-identical."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "behind-topic")
+        from coordinator_core import daily_day, machine_resolver
+
+        day = f"work/{machine_resolver.compute_machine()}/{daily_day.local_day(str(receiver_repo))}"
+        _git(receiver_repo, "checkout", "-q", "-b", day)
+        _git(receiver_repo, "push", "-q", "-u", "origin", day)
+        bare = tmp_path / "receiver-repo-origin.git"
+        peer = tmp_path / "peer-clone"
+        _git(tmp_path, "clone", "-q", "-b", day, str(bare), str(peer))
+        _git(peer, "config", "user.email", "peer@claude-klabauter.test")
+        _git(peer, "config", "user.name", "Peer")
+        (peer / "upstream-only.txt").write_text("upstream\n", encoding="utf-8")
+        _git(peer, "add", "-A")
+        _git(peer, "commit", "-q", "-m", "upstream moves on")
+        _git(peer, "push", "-q", "origin", day)
+        _git(receiver_repo, "fetch", "-q", "origin")
+        (receiver_repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+        (receiver_repo / "cross-repo" / "inbox" / ".gitkeep").write_text("x\n", encoding="utf-8")
+        before = _receiver_checkout_state(receiver_repo)
+        status_before = _receiver_status(receiver_repo)
+        branch_before = _git(receiver_repo, "rev-parse", f"refs/heads/{day}").stdout
+        tip = _git(receiver_repo, "rev-parse", f"refs/remotes/origin/{day}").stdout
+        assert tip != branch_before
+
+        result = _memo_send({"dry_run": False, "topic": "behind-topic"}, repo_root=sender_repo)
+
+        assert result["exit_code"] == 0, result
+        sha = result["acted"][0]["delivery_commit_sha"]
+        assert _git(receiver_repo, "rev-parse", f"{sha}^").stdout == tip
+        assert _receiver_checkout_state(receiver_repo) == before
+        assert _receiver_status(receiver_repo) == status_before
+        assert _git(receiver_repo, "rev-parse", f"refs/heads/{day}").stdout == branch_before
+        assert [r["commit_sha"] for r in _pending_records(sender_repo)] == [sha]
 
 
 # ---------------------------------------------------------------------------
@@ -1482,7 +1524,8 @@ class TestIndexLockOnReceiptIsNotAFailedSend:
         self, tmp_path, monkeypatch
     ):
         """The claim above rests on the delivery having really landed, so it is
-        asserted against the receiver's tree rather than the envelope alone."""
+        asserted against the receiver's object store rather than the envelope
+        alone: the memo is in the anchored delivery commit's tree."""
         from coordinator_core.git.index_write import IndexWriteLockBusy
 
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -1499,14 +1542,14 @@ class TestIndexLockOnReceiptIsNotAFailedSend:
             ),
         )
 
-        _memo_send(
+        result = _memo_send(
             {"dry_run": False, "topic": "peer-holds-index-2"}, repo_root=sender_repo
         )
 
-        inbox = receiver_repo / "cross-repo" / "inbox"
-        delivered = list(inbox.glob("*peer-holds-index-2*"))
-        assert delivered, (
-            f"the memo must be in the receiver's inbox: {list(inbox.iterdir())}"
+        sha = result["acted"][0]["delivery_commit_sha"]
+        tree = _git(receiver_repo, "ls-tree", "--name-only", f"{sha}:cross-repo/inbox")
+        assert any("peer-holds-index-2" in n for n in tree.stdout.decode("utf-8").split()), (
+            "the memo must be in the delivery commit's inbox tree"
         )
 
 
@@ -1953,11 +1996,8 @@ class TestDischargesBlockSurvivesDelivery:
         result = _memo_send({"dry_run": False, "topic": "carries-discharge"}, repo_root=sender_repo)
 
         assert result["exit_code"] == 0, result
-        delivered = next(
-            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md") if p.name != ".gitkeep"
-        )
         from coordinator_core.ops.fleet.memo_send import parse_frontmatter
-        dfm = parse_frontmatter(delivered.read_text(encoding="utf-8"))["frontmatter"]
+        dfm = parse_frontmatter(_delivered_text(receiver_repo))["frontmatter"]
         assert dfm["discharges"] == {
             "closure_key": {"kind": "deliverable", "id": "some-deliverable"},
             "evidence": "inline",

@@ -256,7 +256,6 @@ def _agent_write(dispatch, root: Path, tmp_path: Path, agent_id: str, path: str 
 def test_size_stage_subagent_cannot_write_product_code(tmp_path, monkeypatch):
     from coordinator_core.hooks import nudge_em_code_dispatch as dispatch
 
-    monkeypatch.setattr(dispatch, "_is_scratch_or_tmp", lambda _p: False)  # tmp_path is under the temp dir
     root = _repo(tmp_path)
     emit = _Emit()
     mod.evaluate(_payload(root, {"ask": "fix detect()"}), emit=emit)
@@ -268,6 +267,7 @@ def test_size_stage_subagent_cannot_write_product_code(tmp_path, monkeypatch):
 
     assert write("pkg/mod.py")["hookSpecificOutput"]["permissionDecision"] == "allow"
     assert "Advisory" in write("pkg/mod.py")["hookSpecificOutput"]["additionalContext"]
+    assert "Advisory" in write("scratch/probe.py")["hookSpecificOutput"]["additionalContext"]
     assert write("DELIVERY.md") is None
     run_token.bind_sizing(root, "ask-20261013T000000-abcdef", "state/sizings/a.yaml")
     assert write("pkg/mod.py") is None
@@ -276,7 +276,6 @@ def test_size_stage_subagent_cannot_write_product_code(tmp_path, monkeypatch):
 def test_a_second_live_run_is_never_denied_by_the_size_stage_guard(tmp_path, monkeypatch):
     from coordinator_core.hooks import nudge_em_code_dispatch as dispatch
 
-    monkeypatch.setattr(dispatch, "_is_scratch_or_tmp", lambda _p: False)
     root = _repo(tmp_path)
     run_a, run_b = "ask-20261013T000000-aaaaaa", "ask-20261013T000001-bbbbbb"
     agent_a, agent_b = "a1", "b1"

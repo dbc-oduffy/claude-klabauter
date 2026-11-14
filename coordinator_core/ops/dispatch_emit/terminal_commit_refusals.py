@@ -556,6 +556,29 @@ def _review_floor_note(
     return review_floor.floor_reason(code, review_floor.verdict_count(inline_review, root))
 
 
+REFUSED_UNREVIEWED = "unreviewed"
+_UNREVIEWED_SHOWN = 8
+
+
+def _staged_outside_slices_refusal(inline_review: object, staged: Sequence[str]) -> Optional[dict]:
+    """The ``unreviewed`` refusal naming review-owed ``staged`` paths that no ``inline_review.prep``
+    ``slice_files`` entry covers (``review_floor.slice_gap_paths``), else None. An absent or empty
+    slice list is not a comparison: the zero-product-file floor stays a trailer note. No git."""
+    prep = inline_review.get("prep") if isinstance(inline_review, dict) else None
+    reviewed = prep.get("slice_files") if isinstance(prep, dict) else None
+    if not (isinstance(reviewed, list) and reviewed):
+        return None
+    gap = review_floor.slice_gap_paths(staged, reviewed)
+    if not gap:
+        return None
+    shown = ", ".join(gap[:_UNREVIEWED_SHOWN]) + (f" (+{len(gap) - _UNREVIEWED_SHOWN} more)" if len(gap) > _UNREVIEWED_SHOWN else "")
+    return _error(
+        f"{len(gap)} staged path(s) sit in no reviewed slice: {shown}. Re-run review prep and "
+        "review them, then re-fire",
+        refused=REFUSED_UNREVIEWED, unreviewed_paths=gap,
+    )
+
+
 def _error(message: str, **extra: object) -> dict:
     result: dict = {"committed": False, "sha": None, "error": message}
     result.update(extra)

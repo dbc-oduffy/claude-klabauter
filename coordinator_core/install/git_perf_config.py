@@ -80,6 +80,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
         ),
         StaticClause(
             entries=(
+                WriteSurfaceEntry(kind="git-config-key", key="gc.auto"),
                 WriteSurfaceEntry(kind="git-config-key", key="maintenance.strategy"),
                 WriteSurfaceEntry(kind="git-config-key", key="maintenance.auto"),
                 WriteSurfaceEntry(kind="git-config-key", key="maintenance.prefetch.enabled"),
@@ -94,6 +95,18 @@ def filesystem_supports_untracked_cache(repo: Path) -> bool:
 
 
 def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
+    """Apply the untracked-cache key, then ALWAYS the maintenance-suppression keys.
+
+    The maintenance keys must land on every path: a repo whose untrackedCache
+    is deliberately differing, unreadable or fs-probe-failed would otherwise be
+    skipped by an early return and keep git's auto-gc/auto-maintenance defaults.
+    """
+    report = _apply_untracked_cache(repo, dry_run=dry_run)
+    report.extend(_apply_maintenance_keys(repo, dry_run=dry_run))
+    return report
+
+
+def _apply_untracked_cache(repo: Path, *, dry_run: bool = False) -> List[str]:
     # This was a loop over a
     # one-entry SETTINGS dict, but the entry's real behaviour (the fs-probe gate
     # and the index-extension step below) was reached by two literal
@@ -138,11 +151,10 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
         if extend.returncode != 0:
             report[-1] += " (index not extended: %s)" % extend.stderr.strip()
 
-    report.extend(_apply_maintenance_keys(repo, dry_run=dry_run))
     return report
 
 
-# The three keys that hand maintenance to the ceremony leg. They live HERE and
+# The keys (gc.auto=0 plus the three maintenance keys) that hand maintenance to the ceremony leg. They live HERE and
 # not in configure_git's _SETTINGS because they are actions taken against a
 # repo at install time, not declarations -- the same reason
 # `update-index --untracked-cache` lives here.
@@ -192,6 +204,7 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
 # worktree reverting to git's own defaults is what an uninstall is supposed to
 # do -- not a residue needing its own removal step.
 _MAINTENANCE_KEYS: tuple[tuple[str, str], ...] = (
+    ("gc.auto", "0"),
     ("maintenance.strategy", "incremental"),
     ("maintenance.auto", "false"),
     ("maintenance.prefetch.enabled", "false"),

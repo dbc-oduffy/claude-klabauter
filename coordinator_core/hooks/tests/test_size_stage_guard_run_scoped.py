@@ -34,7 +34,6 @@ def _touch(path: Path) -> None:
 def _session(tmp_path: Path, monkeypatch) -> tuple[Path, Path, Path]:
     """A repo with one live unsized run and its resolved launch record; returns (root, session
     transcript, the run's workflow transcript dir)."""
-    monkeypatch.setattr(dispatch, "_is_scratch_or_tmp", lambda _p: False)  # tmp_path is under the temp dir
     launches = tmp_path / "launches"
     launches.mkdir()
     monkeypatch.setattr(warp_live, "managed_tempdir", lambda: launches)
@@ -56,15 +55,26 @@ def _session(tmp_path: Path, monkeypatch) -> tuple[Path, Path, Path]:
     return root, session_transcript, run_dir
 
 
-def _edit(root: Path, session_transcript: Path, agent_id: str) -> dict | None:
+def _edit(root: Path, session_transcript: Path, agent_id: str, rel: str = "pkg/mod.py") -> dict | None:
     return dispatch.op({
         "tool_name": "Edit",
         "agent_id": agent_id,
         "session_id": SESSION,
         "cwd": str(root),
         "transcript_path": str(session_transcript),
-        "tool_input": {"file_path": str(root / "pkg" / "mod.py"), "old_string": "a", "new_string": "b"},
+        "tool_input": {"file_path": str(root / rel), "old_string": "a", "new_string": "b"},
     })
+
+
+def test_size_stage_spawn_write_under_scratch_is_advised(tmp_path, monkeypatch):
+    root, session_transcript, run_dir = _session(tmp_path, monkeypatch)
+    _touch(run_dir / f"agent-{AGENT_A}.jsonl")
+
+    advised = _edit(root, session_transcript, AGENT_A, "scratch/x.py")
+    assert advised is not None
+    assert "Size stage: change no file but the sizing" in advised["hookSpecificOutput"]["additionalContext"]
+    run_token.bind_sizing(root, RUN_ID, "state/sizings/a.yaml")
+    assert _edit(root, session_transcript, AGENT_A, "scratch/x.py") is None
 
 
 def test_run_agent_is_advised_and_unrelated_executor_is_allowed(tmp_path, monkeypatch):

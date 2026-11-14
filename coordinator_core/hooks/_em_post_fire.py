@@ -137,13 +137,10 @@ def _owned_by_live_run(path: str, base: str, session_id: str) -> bool:
 
 def is_product_path(abs_path: str, root: str, session_id: str) -> bool:
     """True for a path inside `root` that a live run of `session_id` declares (manifest or
-    commit-request) and that is not scratch/tmp, under `state/` or `.coordinator-local/`, a
+    commit-request) and that is not under `state/` or `.coordinator-local/`, a
     bootstrap/out-of-repo dir, or the surface an open `performer: em` row names in `writes:`.
     The bare repo root counts as product."""
-    from coordinator_core.hooks._em_write_budget import (
-        _is_bootstrap_or_out_of_repo,
-        _is_scratch_or_tmp,
-    )
+    from coordinator_core.hooks._em_write_budget import _is_bootstrap_or_out_of_repo
 
     if not abs_path or not root:
         return False
@@ -159,8 +156,6 @@ def is_product_path(abs_path: str, root: str, session_id: str) -> bool:
     else:
         # the work-tree probe looks at the parent dir; give it the root's own
         probe = os.path.join(abs_path, ".")
-    if _is_scratch_or_tmp(abs_path):
-        return False
     if _is_bootstrap_or_out_of_repo(probe):
         return False
     if path == base:

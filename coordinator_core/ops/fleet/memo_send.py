@@ -11,18 +11,15 @@ machinery, the self-receipt arm and the HTTP/UDS transport gating the old
 3,623-line module carried do NOT come back. What comes back is the PM's own
 three-write requirement:
 
-  1. Receiver: `_receiver_landing.resolve_receiver_landing` picks the ref the
-     delivery lands on (DR-214 A3): HEAD's work branch, or the receiver's day
-     branch (minted if absent; HEAD moved onto it only off a clean `main`).
-     Then write `cross-repo/inbox/<name>.md` (O_EXCL) in the receiver's own
-     repo, commit it via `git_native.commit_authored_new_file` and record it
-     in the receiver's index in process (`_record_delivery_in_receiver_index`)
-     — ZERO git spawns on the green path, no hook from the receiver's tree
-     ever fires (AC3). In the `ref-direct` arm (HEAD stays on another branch)
-     there is no worktree write or index record: the commit goes onto the
-     day-branch ref and the anchor carries the bytes. The verified delivery
-     registers its branch with `push_cadence.note_foreign_delivery`; the push
-     is the warm engine's, never inline.
+  1. Receiver: `_upstream_delivery.deliver_onto_upstream` builds the
+     delivery as an object-only commit on the receiver's fetched upstream tip
+     (`refs/remotes/<remote>/<branch>`, the branch `resolve_receiver_landing`
+     names), anchors it under `refs/coordinator/inbox/*` and writes a durable
+     push-pending record in the SENDER's outbox — ZERO git spawns on the green
+     path, no hook from the receiver's tree ever fires (AC3). The receiver's
+     HEAD, branch refs, index and worktree are never written. The warm
+     engine's push-pending sweep pushes the commit (never inline) and retries
+     a failed push from the record.
   2. Sender: move `state/memo-outbox/<topic>.md` -> `sent/`, deriving the
      sent-copy's `status: sent` / `sent_at:` / `delivered_to:` stamp from
      the draft's OWN frontmatter (never re-authored).
@@ -33,8 +30,8 @@ three-write requirement:
      lock is taken, and readers derive the bounded ledger view from the
      records (`memo_sent_records.iter_view`).
 
-Ordering is load-bearing: the receiver-side commit lands BEFORE the anchor
-write (C4), which lands BEFORE the sender's receipt is written. A receipt
+Ordering is load-bearing: the receiver-side commit and its anchor land BEFORE
+the push-pending record, which lands BEFORE the sender's receipt. A receipt
 for an undelivered memo is a lie; an uncredited delivery is merely untidy —
 the durable record is the `refs/coordinator/inbox/*` anchor `write_anchor`
 lands in the receiver's own object store (`_memo_anchor.py`, C3), which
@@ -56,15 +53,19 @@ Negative-spec:
   - Does NOT fan out to multiple receivers, generate a `campaign_id`, write
     a self-receipt, or accept any transport-gating param — all retired with
     the kill, not ported (Out of scope in the governing plan).
-  - Does NOT commit to the receiver's `main` or push inline (DR-214 A3): a
-    delivery lands on a `work/*` ref only, and the push is registered, not run.
+  - Does NOT write the receiver's HEAD, branch refs, index or worktree, fetch,
+    or push inline (DR-214 A3): the delivery is an anchored commit on the
+    upstream tip for a `work/*` branch only, and the push is owed through the
+    push-pending record, not run.
   - Does NOT fall back to a spawning, hook-running commit in the receiver's
-    tree when `commit_authored_new_file` declines (AC4) — a decline fails
-    the receiver item loud; the sender-side receipt is never written for
-    that item (see the ordering note above). A decline also leaves NO file
-    behind: the O_EXCL write this op made is rolled back, so the receiver's
-    tree is exactly as it was found and a re-run is not blocked by AC6's
-    no-clobber guard tripping over this op's own orphan.
+    tree when the delivery declines (AC4) — a decline (no push remote, no
+    base, a refused build, a failed anchor or record write) fails the
+    receiver item loud; the sender-side receipt is never written for that
+    item (see the ordering note above). A decline leaves no push-pending
+    record, so nothing owes a push for a delivery that did not land.
+  - Does NOT treat a path present only in the receiver's worktree as a
+    collision: a collision is the path in the upstream base tree (inbox or
+    archive), or a receiver-local archive copy.
   - Does NOT deliver an unattributed memo SILENTLY — when `sent_by` lands as
     the sentinel, `acted[0].sender_unattributed` says so on the result
     envelope and `cross-repo-memo send` prints it. The delivery still
@@ -107,7 +108,8 @@ Negative-spec:
     already-composed content, then lets the existing validator refuse a
     malformed value loud.
   - Does NOT overwrite an existing receiver-inbox file — refused twice,
-    independently: an existence pre-check AND the `O_EXCL` open flag (AC6).
+    independently: a pre-check against the upstream base tree AND the
+    delivery's own base-tree check (AC6).
   - Does NOT trust a wire-supplied inbox path — `to` is resolved solely via
     `memo_wire.resolve_delivery_target` (registry-enumerated); the
     receiver-side write target is never wire-derived.
@@ -181,9 +183,11 @@ from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import feature_refusal
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet.archive_actioned_memos import memo_archive_dest
+from coordinator_core.ops.fleet import _memo_push_pending
 from coordinator_core.ops.fleet import _receiver_landing
+from coordinator_core.ops.fleet import _upstream_delivery
 from coordinator_core.ops.fleet import memo_sent_records
-from coordinator_core.warm import push_cadence
+from coordinator_core.ops.push_outstanding import resolve_push_remote
 from coordinator_core.ops.fleet._common import (
     build_act_result,
     build_dry_run_result,
@@ -194,7 +198,6 @@ from coordinator_core.ops.fleet._memo_anchor import (
     ANCHOR_REF_PREFIX,
     anchor_names,
     present_filenames,
-    write_anchor,
 )
 from coordinator_core.ops.fleet._memo_compose import (
     _TOPIC_SLUG_RE,
@@ -219,6 +222,9 @@ _LOG = logging.getLogger(__name__)
 _MODE = "send"
 
 _HEADS_PREFIX = "refs/heads/"
+
+#: `landing_mode` of a dry-run row: every delivery builds on the upstream tip.
+_LANDING_MODE_UPSTREAM_TIP = "upstream-tip"
 
 # sent_by (2026-08-13 session-identity-earns-its-keep, C7) — explicit sentinel
 # for "this send could not resolve its own session id" — a memo that cannot
@@ -284,7 +290,7 @@ def _delivery_commit_message(topic: str, from_id: str, sent_by: str) -> str:
     sender through this trailer alone; that is the case for carrying both.
 
     Stamped programmatically here because the receiver-side commit takes
-    `git_native.commit_authored_new_file`'s zero-spawn arm, which runs no
+    `git_native.build_new_file_commit`'s zero-spawn arm, which runs no
     hooks and no `interpret-trailers` — so this does NOT ride the
     prepare-commit-msg shim that fails open when its path goes stale.
 
@@ -764,13 +770,13 @@ def _ledger_row(
     delivery_branch: Optional[str] = None,
     anchor_ref: Optional[str] = None,
 ) -> dict:
-    """`delivery_branch` — the repo-relative ref (`git_native.GitResult.
-    cas_ref_relpath`, e.g. `refs/heads/main`) the delivery commit was CAS'd
-    onto in the receiver, taken verbatim from the commit call's own result —
-    never re-resolved, since a later read of the receiver's HEAD would name
-    wherever the receiver has since moved, not where this delivery landed.
+    """`delivery_branch` — the repo-relative ref (e.g. `refs/heads/work/x/2026-11-13`)
+    the delivery commit is owed a push to, taken from the delivery's own
+    result — never re-resolved, since a later read of the receiver's HEAD would
+    name wherever the receiver has since moved. The receiver's local branch ref
+    itself is never written.
     `None` on rows written before this field existed (and on any row whose
-    commit result did not carry one) — C5 must read that as UNKNOWN, never
+    delivery did not carry one) — C5 must read that as UNKNOWN, never
     as a mismatch against a receiver's current ref.
 
     `anchor_ref` — the `refs/coordinator/inbox/*` ref name (C4) the delivery
@@ -856,23 +862,29 @@ def _same_memo(landed: str, composed: str) -> bool:
 
 def _landed_delivery(
     receiver_repo_path: Path, target_file: Path, filename: str, content: str,
+    *, only_shas: Optional[frozenset] = None,
 ) -> Optional[_LandedDelivery]:
     """The receiver already holds this exact memo under `filename` — a prior
     send landed the delivery and stalled before its sender receipt. Reads the
     anchor blob first (survives the receiver's branch gestures), else the
     working-tree file. `None` when the receiver's copy is a different memo or
-    unreadable: the collision then refuses as before. Zero spawns."""
+    unreadable: the collision then refuses as before. Zero spawns.
+
+    `only_shas` restricts the match to anchors of those delivery commits and
+    skips the working-tree read: the in-flight (push still owed) lookup."""
     common_dir = resolve_git_common_dir(receiver_repo_path)
     sha: Optional[str] = None
     landed_text: Optional[str] = None
     for fname, csha, bsha in anchor_names(common_dir):
-        if fname != filename:
+        if fname != filename or (only_shas is not None and csha not in only_shas):
             continue
         found = _read_object(common_dir, bsha)
         if found is not None and found[0] == "blob":
             sha = csha
             landed_text = found[1].decode("utf-8", errors="replace")
             break
+    if landed_text is None and only_shas is not None:
+        return None
     if landed_text is None:
         try:
             landed_text = target_file.read_text(encoding="utf-8")
@@ -881,38 +893,91 @@ def _landed_delivery(
     return _LandedDelivery(sha) if _same_memo(landed_text, content) else None
 
 
-def _finish_delivery(
-    *, commit_result, ref_direct: bool, target_file: Path, receiver_repo_path: Path,
-):
-    """Verify the receiver-side commit. Returns `(sha, branch, refusal)`;
-    `refusal` is the act envelope to return, else `None`.
+class _UpstreamProbe(NamedTuple):
+    """Where a delivery to `receiver` would land: `branch` and `remote` as
+    `_upstream_delivery.deliver_onto_upstream` resolves them, `base` the commit
+    it would parent onto (`None` when either is unresolvable)."""
 
-    AC4: a declined commit never falls back to a spawning, hook-running commit.
-    This op's own O_EXCL write is removed on either refusal, so a retry is not
-    blocked by AC6's no-clobber guard tripping over its own orphan."""
-    if not commit_result.ok:
-        rollback_detail = "" if ref_direct else _rollback_unwritten_file(target_file)
-        return None, None, build_act_result(_MODE, [], [], [{
-            "id": str(target_file),
-            "reason": (
-                f"receiver-side commit declined: {commit_result.stderr} — "
-                f"not retried, per AC4;{rollback_detail}"
-            ),
-        }])
-    sha = commit_result.stdout.strip() or None
-    # `commit_result.ok` is a return value, not a verified fact.
-    if sha is None or not _delivery_commit_is_object(receiver_repo_path, sha):
-        rollback_detail = "" if ref_direct else _rollback_unwritten_file(target_file)
-        return None, None, build_act_result(_MODE, [], [], [{
-            "id": str(target_file),
-            "reason": (
-                f"receiver-side commit could not be verified: "
-                f"{sha or ''!r} is not a commit object in "
-                f"the receiver's repository — not sent."
-                + rollback_detail
-            ),
-        }])
-    return sha, commit_result.cas_ref_relpath, None
+    branch: str
+    remote: Optional[str]
+    base: Optional[str]
+
+
+def _upstream_probe(receiver_repo_path: Path) -> _UpstreamProbe:
+    """Read-only, zero-spawn: the same branch, remote and base the delivery uses."""
+    landing = _receiver_landing.resolve_receiver_landing(receiver_repo_path)
+    branch = landing.ref_relpath[len(_HEADS_PREFIX):]
+    remote = resolve_push_remote(receiver_repo_path, branch)
+    base = (
+        _upstream_delivery.resolve_base(resolve_git_common_dir(receiver_repo_path), remote, branch)
+        if remote else None
+    )
+    return _UpstreamProbe(branch, remote, base)
+
+
+def _base_tree_has(receiver_repo_path: Path, base: Optional[str], rel_path: str) -> bool:
+    """True iff `rel_path` is in `base`'s tree; an unreadable tree reads False
+    (the delivery then declines loud)."""
+    if base is None:
+        return False
+    return _upstream_delivery.path_in_tree(receiver_repo_path, base, rel_path) is True
+
+
+def _unpushed_delivery(
+    sender_worktree: Path, receiver_repo_path: Path, rel_path: str, filename: str, content: str,
+) -> Optional[_LandedDelivery]:
+    """This memo's delivery commit when its push is still owed (a push-pending
+    record names it) — a prior send built it and stalled before its receipt.
+    A mere anchor with no record is a finished delivery, never reconciled."""
+    receiver_key = os.path.normcase(str(receiver_repo_path))
+    owed = frozenset(
+        row["commit_sha"]
+        for row in _memo_push_pending.list_pending(sender_worktree)
+        if row.get("path") == rel_path
+        and os.path.normcase(str(row.get("receiver_root"))) == receiver_key
+    )
+    if not owed:
+        return None
+    return _landed_delivery(
+        receiver_repo_path, receiver_repo_path / rel_path, filename, content, only_shas=owed
+    )
+
+
+def _deliver_upstream(
+    *, receiver_repo_path: Path, sender_worktree: Path, rel_path: str, content: str,
+    topic: str, from_id: Optional[str], sent_by: str,
+) -> "_upstream_delivery.UpstreamDelivery":
+    """Build, anchor and record one delivery through `deliver_onto_upstream`.
+
+    A verified outcome only: a delivery commit that is not a readable object
+    in the receiver's store, or whose record write failed, comes back non-ok
+    with no record left behind. Never raises."""
+    msg_file = _write_msg_file(_delivery_commit_message(topic, from_id, sent_by))
+    try:
+        out = _upstream_delivery.deliver_onto_upstream(
+            receiver_repo_path, sender_worktree, rel_path, content, msg_file
+        )
+    except (OSError, ValueError) as exc:
+        return _upstream_delivery.UpstreamDelivery(
+            False, _upstream_delivery.STATUS_REFUSED, error=f"delivery not written: {exc}"
+        )
+    finally:
+        try:
+            msg_file.unlink()
+        except OSError:
+            pass
+    if out.ok and not _delivery_commit_is_object(receiver_repo_path, out.commit_sha or ""):
+        _memo_push_pending.remove_pending(sender_worktree, out.commit_sha)
+        if out.anchor_ref:
+            try:
+                (resolve_git_common_dir(receiver_repo_path) / out.anchor_ref).unlink()
+            except OSError:
+                pass
+        return _upstream_delivery.UpstreamDelivery(
+            False, _upstream_delivery.STATUS_REFUSED,
+            error=f"{out.commit_sha!r} is not a commit object in the receiver's repository — not sent",
+        )
+    return out
 
 
 #: Deadline for the receiver-inbox mkdir + O_EXCL create. A kernel-blocked create (defrag pass,
@@ -1082,35 +1147,28 @@ def _cc_refusal_text(name: str, message: str) -> str:
 
 
 def _deliver_cc_copy(
-    *, name: str, inbox_dir: Path, receiver_repo_path: Path, filename: str,
-    content: str, topic: str, from_id: str, sent_by: str,
+    *, name: str, inbox_dir: Path, receiver_repo_path: Path, sender_worktree: Path,
+    filename: str, content: str, topic: str, from_id: str, sent_by: str,
 ) -> dict:
-    """Write+commit+anchor one `cc:` receiver's OWN copy of the already-
-    composed (cc-stamped) delivered content — the second half of
-    klabauter#46: `to:` and every `cc:` name each get a real receiver-side
-    write, not just a `cc:` line inside the one file `to:` receives.
+    """Deliver one `cc:` receiver's OWN copy of the already-composed
+    (cc-stamped) content onto that receiver's upstream tip — the second half
+    of klabauter#46: `to:` and every `cc:` name each get a real receiver-side
+    delivery, not just a `cc:` line inside the one file `to:` receives.
 
-    Same write discipline `_memo_send` uses for `to:` (O_EXCL create, zero-
-    spawn `commit_authored_new_file`, verify the commit object, best-effort
-    anchor) — duplicated rather than shared with the `to:` arm because the
-    `to:` arm is entangled with the dry-run preview / no-clobber / warn-once
-    gates that only ever apply to `to:`; a cc leg is resolved-and-committed
-    only, never previewed or gated on reader-liveness of its own.
+    Same `_deliver_upstream` primitive `_memo_send` uses for `to:`, duplicated
+    only around the gates that apply to `to:` (dry-run preview, warn-once,
+    reconcile); a cc leg is resolved-and-delivered only.
 
-    Returns one dict, always carrying `ok: bool`. On failure the O_EXCL
-    write (if it happened) is rolled back via `_rollback_unwritten_file`,
-    same as `to:`'s own AC4/verify-failure arms — a failed cc leg never
-    leaves an uncommitted orphan file behind in that receiver's tree either.
+    Returns one dict, always carrying `ok: bool`. A failed leg leaves no
+    push-pending record and writes nothing in that receiver's tree.
     """
     target_file = inbox_dir / filename
     rel_path = os.path.relpath(target_file, receiver_repo_path).replace(os.sep, "/")
-    landing = _receiver_landing.resolve_receiver_landing(receiver_repo_path)
-    ref_direct = landing.mode == _receiver_landing.MODE_REF_DIRECT
-    collides = (
-        _landing_tree_has(receiver_repo_path, landing, [rel_path])
-        if ref_direct else target_file.exists()
+    out = _deliver_upstream(
+        receiver_repo_path=receiver_repo_path, sender_worktree=sender_worktree,
+        rel_path=rel_path, content=content, topic=topic, from_id=from_id, sent_by=sent_by,
     )
-    if collides:
+    if out.status == _upstream_delivery.STATUS_COLLISION:
         return {
             "ok": False, "id": str(target_file), "to": name,
             "reason": (
@@ -1118,91 +1176,21 @@ def _deliver_cc_copy(
                 f"{name!r}'s inbox — refuse (no clobber)."
             ),
         }
-
-    landing = _receiver_landing.apply_receiver_landing(landing)
-    ref_direct = landing.mode == _receiver_landing.MODE_REF_DIRECT
-    if not ref_direct:
-        try:
-            _create_inbox_file(inbox_dir, target_file, content)
-        except FileExistsError:
-            return {
-                "ok": False, "id": str(target_file), "to": name,
-                "reason": (
-                    f"collision (race): {target_file} appeared between the "
-                    f"collision-check and the O_EXCL write in cc receiver "
-                    f"{name!r} — refuse (no clobber)."
-                ),
-            }
-        except OSError as exc:
-            return {
-                "ok": False, "id": str(target_file), "to": name,
-                "reason": f"write-failed for cc receiver {name!r}: {exc}",
-            }
-
-    msg_file = _write_msg_file(
-        _delivery_commit_message(topic, from_id, sent_by)
-    )
-    try:
-        commit_result = git_native.commit_authored_new_file(
-            rel_path, content, msg_file, receiver_repo_path,
-            refresh_shared_index=False,
-            onto_ref=landing.ref_relpath if ref_direct else None,
-        )
-    finally:
-        try:
-            msg_file.unlink()
-        except OSError:
-            pass
-
-    if not commit_result.ok:
-        rollback_detail = "" if ref_direct else _rollback_unwritten_file(target_file)
+    if not out.ok:
         return {
             "ok": False, "id": str(target_file), "to": name,
             "reason": (
-                f"cc receiver {name!r} commit declined: "
-                f"{commit_result.stderr} — not retried, per AC4;"
-                f"{rollback_detail}"
+                f"cc receiver {name!r} delivery declined: {out.error} — "
+                f"not retried, per AC4."
             ),
         }
-
-    delivery_commit_sha = commit_result.stdout.strip() or None
-    if delivery_commit_sha is None or not _delivery_commit_is_object(
-        receiver_repo_path, delivery_commit_sha
-    ):
-        rollback_detail = "" if ref_direct else _rollback_unwritten_file(target_file)
-        return {
-            "ok": False, "id": str(target_file), "to": name,
-            "reason": (
-                f"cc receiver {name!r} commit could not be verified: "
-                f"{delivery_commit_sha or ''!r} is not a commit object in "
-                f"the receiver's repository — not sent." + rollback_detail
-            ),
-        }
-
-    index_warning = (
-        None if ref_direct
-        else _record_delivery_in_receiver_index(receiver_repo_path, rel_path, content)
-    )
-    common_dir = resolve_git_common_dir(receiver_repo_path)
-    anchored_bytes = (
-        content.encode("utf-8") if ref_direct else target_file.read_bytes()
-    )
-    anchor_blob_sha = write_anchor(
-        common_dir, filename, delivery_commit_sha, anchored_bytes
-    )
-    push_cadence.note_foreign_delivery(
-        receiver_repo_path, landing.ref_relpath[len(_HEADS_PREFIX):]
-    )
-    delivered = {
+    return {
         "ok": True, "id": str(target_file), "to": name,
         "written": True, "committed": True,
-        "delivery_commit_sha": delivery_commit_sha,
-        "anchored": anchor_blob_sha is not None,
+        "delivery_commit_sha": out.commit_sha,
+        "anchored": True,
+        "push_pending_record": str(out.record_path),
     }
-    if index_warning is not None:
-        _LOG.warning("%s", index_warning)
-        delivered["receiver_index_warning"] = index_warning
-    return delivered
 
 
 class _SenderCommit(NamedTuple):
@@ -2099,7 +2087,8 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         return build_setup_error_result(_MODE, dry_run, _held_once_refusal(held))
 
     target_file = inbox_dir / filename
-    # AC6 leg 1 — existence pre-check, independent of the O_EXCL leg below.
+    # AC6 leg 1 — existence pre-check against the upstream base tree, independent
+    # of the delivery's own base-tree check.
     # Extended beyond the inbox (item 52): a memo already ARCHIVED under this
     # exact filename is just as much a collision as one still sitting in the
     # inbox — checking the inbox alone let a resend of an already-actioned
@@ -2108,16 +2097,14 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     # already dispositioned.
     archive_file = memo_archive_dest(receiver_repo_path, target_file)
     rel_path = os.path.relpath(target_file, receiver_repo_path).replace(os.sep, "/")
-    landing = _receiver_landing.resolve_receiver_landing(receiver_repo_path)
-    if landing.mode == _receiver_landing.MODE_REF_DIRECT:
-        archive_rel = os.path.relpath(archive_file, receiver_repo_path).replace(os.sep, "/")
-        collision_exists = _landing_tree_has(
-            receiver_repo_path, landing, [rel_path, archive_rel]
-        )
-        collision_path = archive_file if collision_exists else target_file
-    else:
-        collision_exists = target_file.exists() or archive_file.exists()
-        collision_path = target_file if target_file.exists() else archive_file
+    probe = _upstream_probe(receiver_repo_path)
+    archive_rel = os.path.relpath(archive_file, receiver_repo_path).replace(os.sep, "/")
+    in_inbox = _base_tree_has(receiver_repo_path, probe.base, rel_path)
+    in_archive = not in_inbox and (
+        _base_tree_has(receiver_repo_path, probe.base, archive_rel) or archive_file.exists()
+    )
+    collision_exists = in_inbox or in_archive
+    collision_path = archive_file if in_archive else target_file
 
     if dry_run:
         return build_dry_run_result(_MODE, [{
@@ -2125,14 +2112,20 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             "topic": topic,
             "to": to,
             "target_path": str(target_file),
-            "landing_mode": landing.mode,
-            "landing_ref": landing.ref_relpath,
+            "landing_mode": _LANDING_MODE_UPSTREAM_TIP,
+            "landing_ref": _HEADS_PREFIX + probe.branch,
+            "landing_base": probe.base,
             "collision": collision_exists,
             "note": (
                 "collision: a memo already exists at this receiver-inbox path "
                 "(or was already archived under this filename) — refuse (no "
                 "clobber)."
-                if collision_exists else None
+                if collision_exists
+                else (
+                    f"no upstream base for {probe.branch!r} (remote "
+                    f"{probe.remote!r}): the send will be refused."
+                    if probe.base is None else None
+                )
             ),
         }])
 
@@ -2151,13 +2144,16 @@ def _memo_send(params: dict, repo_root=None) -> dict:
                     f"inbox or archive — refuse (no clobber)."
                 ),
             }])
+    else:
+        reconciled = _unpushed_delivery(
+            sender_worktree, receiver_repo_path, rel_path, filename, content
+        )
 
     delivery_commit_sha = None
     delivery_branch = None
     anchored = False
     anchor_ref = None
-    anchor_warning = None
-    receiver_index_warning = None
+    push_pending_record = None
 
     if reconciled is not None:
         delivery_commit_sha = reconciled.sha
@@ -2165,106 +2161,38 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         anchor_ref = (
             ANCHOR_REF_PREFIX + filename + "/" + reconciled.sha if anchored else None
         )
-        # The stalled first send may have died before registering the push.
-        if landing.ref_relpath.startswith(_HEADS_PREFIX):
-            push_cadence.note_foreign_delivery(
-                receiver_repo_path, landing.ref_relpath[len(_HEADS_PREFIX):]
-            )
     else:
-        landing = _receiver_landing.apply_receiver_landing(landing)
-        ref_direct = landing.mode == _receiver_landing.MODE_REF_DIRECT
-        if not ref_direct:
-            try:
-                # C1 (git_native.commit_authored_new_file) never writes the
-                # worktree itself — it commits bytes the caller already holds. This
-                # write IS that caller-side write. newline="\n" is pinned per the
-                # plan's own instruction: CR content is one of the two cases the
-                # zero-spawn commit arm refuses outright.
-                _create_inbox_file(inbox_dir, target_file, content)
-            except FileExistsError:
-                # AC6 leg 2 — the race the pre-check above cannot close alone.
-                return build_act_result(_MODE, [], [], [{
-                    "id": str(target_file),
-                    "reason": (
-                        f"collision (race): {target_file} appeared between the "
-                        f"collision-check and the O_EXCL write — refuse (no clobber)."
-                    ),
-                }])
-            except OSError as exc:
-                return build_act_result(_MODE, [], [], [{
-                    "id": str(target_file), "reason": f"write-failed: {exc}",
-                }])
-
         # target_file was resolved via `_resolve_receiver_inbox` ->
         # `memo_corpus.receiver_inbox_root` above, so it already reflects
         # whichever root (legacy `cross-repo/` or migrated `state/cross-repo/`)
         # THIS receiver actually resolves to — never a fixed `cross-repo/inbox/`
         # literal, which is wrong for any receiver that has migrated.
-        msg_file = _write_msg_file(
-            _delivery_commit_message(topic, from_id, sent_by)
+        delivered = _deliver_upstream(
+            receiver_repo_path=receiver_repo_path, sender_worktree=sender_worktree,
+            rel_path=rel_path, content=content, topic=topic, from_id=from_id,
+            sent_by=sent_by,
         )
-        try:
-            commit_result = git_native.commit_authored_new_file(
-                rel_path, content, msg_file, receiver_repo_path,
-                refresh_shared_index=False,
-                onto_ref=landing.ref_relpath if ref_direct else None,
-            )
-        finally:
-            try:
-                msg_file.unlink()
-            except OSError:
-                pass
-
-        delivery_commit_sha, delivery_branch, early_refusal = _finish_delivery(
-            commit_result=commit_result, ref_direct=ref_direct,
-            target_file=target_file, receiver_repo_path=receiver_repo_path,
-        )
-        if early_refusal is not None:
-            return early_refusal
-
-        receiver_index_warning = (
-            None if ref_direct
-            else _record_delivery_in_receiver_index(receiver_repo_path, rel_path, content)
-        )
-        if receiver_index_warning is not None:
-            _LOG.warning("%s", receiver_index_warning)
-
-        # ── anchor: the durable record (C4) ─────────────────────────────
-        # `target_file`'s bytes on disk are exactly the bytes the commit above
-        # hashed -- read them back rather than reuse in-memory `content`, so the
-        # anchored blob is provably identical to what the receiver's own history
-        # committed. Common dir resolved the same way `_delivery_commit_is_object`
-        # already does, in-process, zero spawns.
-        common_dir = resolve_git_common_dir(receiver_repo_path)
-        anchored_bytes = (
-            content.encode("utf-8") if ref_direct else target_file.read_bytes()
-        )
-        anchor_blob_sha = write_anchor(
-            common_dir, filename, delivery_commit_sha, anchored_bytes
-        )
-        push_cadence.note_foreign_delivery(
-            receiver_repo_path, landing.ref_relpath[len(_HEADS_PREFIX):]
-        )
-        anchored = anchor_blob_sha is not None
-        anchor_ref = (
-            ANCHOR_REF_PREFIX + filename + "/" + delivery_commit_sha
-            if anchored else None
-        )
-        if not anchored:
-            # A failed anchor does NOT fail the send -- the delivery commit has
-            # already landed, and refusing now would be a false negative. One
-            # fact, one alternative: register style, no apology, no override key.
-            anchor_warning = (
-                f"memo.send: anchor write for {filename} lost its CAS race — "
-                f"re-run memo.send, or the receiver's next workday-start "
-                f"adopts it."
-            )
-            _LOG.warning(
-                "memo_send: delivery to %s landed and committed (%s), but the "
-                "anchor write lost its CAS race for %s — re-run memo.send, or "
-                "the receiver's next workday-start adopts it.",
-                to, delivery_commit_sha, filename,
-            )
+        if delivered.status == _upstream_delivery.STATUS_COLLISION:
+            return build_act_result(_MODE, [], [], [{
+                "id": str(target_file),
+                "reason": (
+                    f"collision: {target_file} already exists in the receiver's "
+                    f"upstream tree — refuse (no clobber)."
+                ),
+            }])
+        if not delivered.ok:
+            return build_act_result(_MODE, [], [], [{
+                "id": str(target_file),
+                "reason": (
+                    f"receiver-side delivery declined: {delivered.error} — "
+                    f"not retried, per AC4."
+                ),
+            }])
+        delivery_commit_sha = delivered.commit_sha
+        delivery_branch = _HEADS_PREFIX + (delivered.branch or probe.branch)
+        anchored = True
+        anchor_ref = delivered.anchor_ref
+        push_pending_record = str(delivered.record_path)
 
     delivered_to = _portable_delivered_to_form(receiver_repo_path, target_file, all_repos)
 
@@ -2281,8 +2209,9 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     for cc_name, cc_inbox_dir, cc_receiver_repo_path in (cc_targets or []):
         cc_result = _deliver_cc_copy(
             name=cc_name, inbox_dir=cc_inbox_dir,
-            receiver_repo_path=cc_receiver_repo_path, filename=filename,
-            content=content, topic=topic, from_id=from_id, sent_by=sent_by,
+            receiver_repo_path=cc_receiver_repo_path, sender_worktree=sender_worktree,
+            filename=filename, content=content, topic=topic, from_id=from_id,
+            sent_by=sent_by,
         )
         if cc_result["ok"]:
             cc_delivered.append(cc_result)
@@ -2493,10 +2422,8 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             f"command-and-output block — paste the command and its output in "
             f"a fenced block."
         )
-    if anchor_warning is not None:
-        acted_item["anchor_warning"] = anchor_warning
-    if receiver_index_warning is not None:
-        acted_item["receiver_index_warning"] = receiver_index_warning
+    if push_pending_record is not None:
+        acted_item["push_pending_record"] = push_pending_record
     if not sender_commit.ok:
         # The stderr is the whole diagnosis, and a WARNING alone loses it: the
         # engine's log is not retained, so an operator sees only the CLI's

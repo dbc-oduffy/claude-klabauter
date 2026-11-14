@@ -33,6 +33,13 @@ def test_reap_row_defaults():
     assert row.killed == () and row.competing == () and row.candidates == 0
 
 
+def test_launch_record_new_fields_are_last_and_defaulted():
+    r = c.LaunchRecord("t", "s", "u", "cmd", 1)
+    assert (r.agent_id, r.timed_out) == ("", False)
+    assert list(c.LaunchRecord.__dataclass_fields__)[-2:] == ["agent_id", "timed_out"]
+    assert c.LaunchRecord("t", "s", "u", "cmd", 1, "ag", True).agent_id == "ag"
+
+
 def test_kill_primitives_protocol_is_structural():
     class Stub:
         def terminate_verified(self, pid, ctime):

@@ -137,7 +137,45 @@ def test_import_runs_no_compile_io_or_subprocess(script, monkeypatch):
 
 def test_agent_row_plain_claude_entry_is_claude_on_local_box():
     row = pc.agent_row({"name": "em-1", "sessionId": "abc"}, "mac")
-    assert row == {"name": "em-1", "box": "mac", "vendor": "claude"}
+    assert row == {"name": "em-1", "box": "mac", "vendor": "claude", "this_box": True}
+
+
+def test_agent_row_this_box_flag_both_sides():
+    assert pc.agent_row({"name": "a", pc.BOX_FIELD: "mac"}, "mac")["this_box"] is True
+    assert pc.agent_row({"name": "b", pc.BOX_FIELD: "machine-a"}, "mac")["this_box"] is False
+
+
+def test_self_row_matches_session_id_exactly_never_prefix():
+    entries = [{"name": "claude-klabauter-a1", "sessionId": "8776ca63-188a", pc.BOX_FIELD: "machine-a"},
+               {"name": "other", "sessionId": "zzz"}]
+    row = pc.self_row(entries, "8776ca63-188a", "machine-a")
+    assert row["name"] == "claude-klabauter-a1" and row["box"] == "machine-a" and row["this_box"] is True
+    assert pc.self_row(entries, "8776ca63", "machine-a") is None
+    assert pc.self_row(entries, "", "machine-a") is None
+    assert pc.self_row([], "zzz", "machine-a") is None
+
+
+def test_split_by_box_partitions_and_excludes_self():
+    rows = [pc.agent_row({"name": n, pc.BOX_FIELD: b}, "machine-a")
+            for n, b in [("me", "machine-a"), ("a", "machine-a"), ("m", "macmini"), ("d", "machine-b")]]
+    same, other = pc.split_by_box(rows, "machine-a", self_name="me")
+    assert [r["name"] for r in same] == ["a"]
+    assert [r["name"] for r in other] == ["m", "d"]
+    same, other = pc.split_by_box(rows, "machine-a")
+    assert [r["name"] for r in same] == ["me", "a"]
+
+
+def test_build_frame_from_box_emits_attribute_and_parses_back():
+    f = pc.build_frame("/s", "me", "hi", msg_id="m1", from_box="machine-a")
+    assert 'from-name="me" from-box="machine-a">' in f["message"]["content"]
+    assert pc.parse_inbound(f) == ("/s", "me", "hi")
+    assert "from-box" not in pc.build_frame("/s", "me", "hi")["message"]["content"]
+
+
+def test_stamp_from_box_adds_provenance_box_only_when_given():
+    f = pc.build_frame("/s", "r", "x", msg_id="m9")
+    assert pc.stamp(f, "p", "codex", "t", 1, from_box="machine-a")["provenance"]["box"] == "machine-a"
+    assert "box" not in pc.stamp(f, "p", "codex", "t", 1)["provenance"]
 
 
 def test_agent_row_face_stamp_gives_vendor():

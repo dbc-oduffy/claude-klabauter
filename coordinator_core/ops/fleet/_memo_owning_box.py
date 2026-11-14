@@ -118,9 +118,12 @@ def resolve_owning_box(repo_path: Path, *, sessions_dir: Optional[str] = None) -
             if _repo_component(entry.get("cwd")) != wanted or not _listed(entry, liveness):
                 continue
             row = contract.agent_row(entry, local)
+            box = row["box"]
+            mine = row.get("this_box", box == local)
+            item = (str(row.get("name") or ""), str(box))
         except Exception:
             continue
-        (here if row["this_box"] else there).append((str(row["name"] or ""), str(row["box"])))
+        (here if mine else there).append(item)
     if here:
         name, box = sorted(here)[0]
         return OwningBox("this_box", box, name)

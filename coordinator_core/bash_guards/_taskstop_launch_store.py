@@ -6,7 +6,9 @@ Every function is fail-soft: a corrupt record is skipped, a refused task_id is a
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import time
 from dataclasses import asdict
@@ -31,6 +33,9 @@ _MTIME_SLACK_S = 2.0
 
 # task_id becomes a filename: no separator, dot or drive colon may pass.
 _TASK_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+# Per-agent index of timed-out records: by-agent/<hash>/<task_id>, empty marker files.
+_MARKER_DIRNAME = "by-agent"
 
 
 def _store_dir() -> Path:
@@ -62,6 +67,8 @@ def _load(path: Path) -> Optional[LaunchRecord]:
             tool_use_id=str(d["tool_use_id"]),
             command=str(d["command"]),
             mark=int(d["mark"]),
+            agent_id=str(d.get("agent_id", "")),
+            timed_out=bool(d.get("timed_out", False)),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -114,21 +121,57 @@ def read_record(task_id: str) -> Optional[LaunchRecord]:
     return _load(_record_path(task_id))
 
 
+def _marker_dir(session_id: str, agent_id: str) -> Path:
+    key = hashlib.sha256(f"{session_id}\0{agent_id}".encode("utf-8")).hexdigest()[:16]
+    return _store_dir() / _MARKER_DIRNAME / key
+
+
+def records_for_agent(session_id: str, agent_id: str) -> List[LaunchRecord]:
+    """Timed-out records launched by (session_id, agent_id), sorted by task_id.
+
+    Opens only the records named in that agent's marker dir, never the whole store."""
+    if not session_id or not agent_id:
+        return []
+    mdir = _marker_dir(session_id, agent_id)
+    try:
+        names = sorted(e.name for e in os.scandir(mdir))
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        if not valid_task_id(name):
+            continue
+        rec = _load(_record_path(name))
+        if rec is None:
+            try:
+                (mdir / name).unlink()
+            except OSError:
+                pass
+            continue
+        if rec.session_id == session_id and rec.agent_id == agent_id and rec.timed_out:
+            out.append(rec)
+    return out
+
+
 def delete_record(task_id: str) -> None:
     if not valid_task_id(task_id):
         return
+    rec = _load(_record_path(task_id))
     try:
         _record_path(task_id).unlink()
     except OSError:
         pass
+    if rec is not None and rec.timed_out and rec.agent_id:
+        try:
+            (_marker_dir(rec.session_id, rec.agent_id) / task_id).unlink()
+        except OSError:
+            pass
 
 
 def _prune(now_s: float) -> None:
     # Trap: this runs on every launch hook. Opening each record to read its mark stalled the warm
     # engine past 10s at ~900 records (2026-11-03 stall dumps); scandir's stat carries the write
     # time with no open, and a record is written once, so mtime is its mark.
-    import os
-
     try:
         entries = list(os.scandir(_store_dir()))
     except OSError:
@@ -141,7 +184,37 @@ def _prune(now_s: float) -> None:
         except OSError:
             continue
         if stale:
-            delete_record(entry.name[: -len(".json")])
+            try:
+                (_store_dir() / entry.name).unlink()
+            except OSError:
+                pass
+    _prune_markers(now_s)
+
+
+def _prune_markers(now_s: float) -> None:
+    try:
+        agent_dirs = [e for e in os.scandir(_store_dir() / _MARKER_DIRNAME) if e.is_dir()]
+    except OSError:
+        return
+    for adir in agent_dirs:
+        try:
+            markers = list(os.scandir(adir.path))
+        except OSError:
+            continue
+        live = 0
+        for m in markers:
+            try:
+                if now_s - m.stat().st_mtime > RECORD_TTL_S:
+                    os.unlink(m.path)
+                else:
+                    live += 1
+            except OSError:
+                live += 1
+        if not live:
+            try:
+                os.rmdir(adir.path)
+            except OSError:
+                pass
 
 
 def write_record(rec: LaunchRecord, *, now_s: Optional[float] = None) -> bool:
@@ -151,6 +224,10 @@ def write_record(rec: LaunchRecord, *, now_s: Optional[float] = None) -> bool:
     try:
         _store_dir().mkdir(parents=True, exist_ok=True)
         atomic_write_bytes(_record_path(rec.task_id), json.dumps(asdict(rec)).encode("utf-8"))
+        if rec.timed_out and rec.agent_id:
+            mdir = _marker_dir(rec.session_id, rec.agent_id)
+            mdir.mkdir(parents=True, exist_ok=True)
+            (mdir / rec.task_id).touch()
         _prune(time.time() if now_s is None else now_s)
     except OSError:
         return False

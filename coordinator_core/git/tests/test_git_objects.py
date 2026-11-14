@@ -21,6 +21,14 @@ from coordinator_core.git.git_objects import (
 from coordinator_core.win_portability import no_console_creationflags
 
 
+@pytest.fixture(autouse=True)
+def _unpaused(monkeypatch):
+    """These tests pin the fold itself; the paused behaviour is pinned in test_pack_deletion_pause."""
+    from coordinator_core.git import pack_deletion_pause
+
+    monkeypatch.setattr(pack_deletion_pause, "PACK_DELETION_PAUSED", False)
+
+
 def _git(*args: str, cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args],
@@ -179,6 +187,56 @@ def test_loose_object_read_parses_no_pack_index_and_packed_still_reads(tmp_path:
     assert parsed == []
     assert _read_object(common_dir, packed_sha)[0] == "commit"
     assert parsed
+
+
+def test_warm_pack_source_is_probed_before_the_loose_object_and_a_loose_only_object_still_reads(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from coordinator_core.git import git_objects
+
+    _init_repo(tmp_path)
+    common_dir = resolve_git_dir(tmp_path)
+    packed_sha = _git("rev-parse", "HEAD", cwd=tmp_path).stdout.strip()
+    _git("repack", "-q", cwd=tmp_path)  # packed, loose copies kept
+    assert _read_loose_object(common_dir, packed_sha) is not None
+    (tmp_path / "f2.txt").write_text("two")
+    _git("add", "f2.txt", cwd=tmp_path)
+    _git("commit", "-q", "-m", "loose", cwd=tmp_path)
+    loose_sha = _git("rev-parse", "HEAD", cwd=tmp_path).stdout.strip()
+
+    git_objects._OBJECT_CACHE.clear()
+    git_objects._LOOKUP_SOURCES.pop(str(common_dir), None)
+    loose_reads: list[str] = []
+    real = git_objects._read_loose_object
+    monkeypatch.setattr(git_objects, "_read_loose_object", lambda c, s: (loose_reads.append(s), real(c, s))[1])
+
+    assert git_objects._read_local_object(common_dir, packed_sha)[0] == "commit"
+    assert loose_reads == [packed_sha]  # no source yet: loose first
+    assert not git_objects._pack_probe_is_cheap(common_dir)
+    assert git_objects.packed_contains(common_dir, packed_sha)  # builds the lookup source
+    loose_reads.clear()
+    assert git_objects._pack_probe_is_cheap(common_dir)
+    assert git_objects._read_local_object(common_dir, packed_sha)[0] == "commit"
+    assert loose_reads == []  # warm source: the pack answered
+    assert git_objects._read_local_object(common_dir, loose_sha)[0] == "commit"
+    assert loose_reads == [loose_sha]  # a pack miss falls through to the loose object
+
+
+def test_pack_probe_is_not_cheap_for_many_uncovered_packs_without_a_merged_table(tmp_path: Path) -> None:
+    from coordinator_core.git import git_objects
+
+    class _Src:
+        uncovered = list(range(git_objects._UNCOVERED_LAZY_MAX + 1))
+        _merged = None
+
+    git_objects._LOOKUP_SOURCES[str(tmp_path)] = _Src()  # type: ignore[assignment]
+    try:
+        assert not git_objects._pack_probe_is_cheap(tmp_path)
+        _Src._merged = {}
+        assert git_objects._pack_probe_is_cheap(tmp_path)
+    finally:
+        git_objects._LOOKUP_SOURCES.pop(str(tmp_path), None)
+    assert not git_objects._pack_probe_is_cheap(tmp_path)
 
 
 def test_cas_ref_moves_ref_and_git_agrees(tmp_path: Path) -> None:

@@ -234,7 +234,6 @@ def _budget_exempt(file_path: str) -> bool:
     return (
         os.path.splitext(file_path)[1].lower() in _DOC_DATA_EXTENSIONS
         or _is_bootstrap_or_out_of_repo(file_path)
-        or _is_scratch_or_tmp(file_path)
     )
 
 
@@ -307,8 +306,6 @@ def shell_write_budget(
     if _is_bootstrap_or_out_of_repo(file_path):
         return None
     if os.path.splitext(file_path)[1].lower() in _DOC_DATA_EXTENSIONS:
-        return None
-    if _is_scratch_or_tmp(file_path):
         return None
     if _take_escape(payload, session_id, file_path, "nudge-em-code-dispatch"):
         return None

@@ -188,6 +188,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.submit_bug_blitz",
     "coordinator_core.hooks.taskstop_launch_recorder",
     "coordinator_core.hooks.taskstop_reaper",
+    "coordinator_core.hooks.agent_stop_reaper",
     "coordinator_core.hooks.sessionend_archive_session",
     "coordinator_core.hooks.watchdog_undischarged_next_move",
     "coordinator_core.hooks.plan_persistence_check",

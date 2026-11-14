@@ -14,6 +14,14 @@ from coordinator_core.git import maintenance_tick as mt
 
 
 @pytest.fixture(autouse=True)
+def _unpaused(monkeypatch):
+    """These tests pin the launch itself; the paused behaviour is pinned in test_pack_deletion_pause."""
+    from coordinator_core.git import pack_deletion_pause
+
+    monkeypatch.setattr(pack_deletion_pause, "PACK_DELETION_PAUSED", False)
+
+
+@pytest.fixture(autouse=True)
 def _fresh_gate():
     mt._next_check.clear()
     yield
@@ -66,6 +74,62 @@ def test_nothing_owed_spawns_nothing(repo, spawned):
     _age(common, "weekly", 60)
     assert mt.on_idle_tick([repo]) is False
     assert spawned == []
+
+
+def test_fresh_stamps_with_threshold_crossed_launch_one_daily_child(repo, spawned, monkeypatch):
+    from coordinator_core.git import store_hygiene
+
+    common = repo / ".git"
+    _age(common, "daily", mt.THRESHOLD_COOLDOWN_S + 60)
+    _age(common, "weekly", 60)
+    monkeypatch.setattr(store_hygiene, "owed_by_threshold", lambda c: True)
+    assert mt.on_idle_tick([repo]) is True
+    assert spawned == [(repo.resolve(), ["daily"])]
+    assert time.time() - mt.stamp_path(common, "daily").stat().st_mtime < 60
+
+
+def test_threshold_crossing_inside_the_cooldown_does_not_relaunch(repo, spawned, monkeypatch):
+    from coordinator_core.git import store_hygiene
+
+    common = repo / ".git"
+    _age(common, "daily", 60)
+    _age(common, "weekly", 60)
+    monkeypatch.setattr(store_hygiene, "owed_by_threshold", lambda c: True)
+    assert mt.on_idle_tick([repo]) is False
+    assert spawned == []
+
+
+def test_fresh_stamps_with_threshold_clear_spawn_nothing(repo, spawned, monkeypatch):
+    from coordinator_core.git import store_hygiene
+
+    common = repo / ".git"
+    _age(common, "daily", 60)
+    _age(common, "weekly", 60)
+    monkeypatch.setattr(store_hygiene, "owed_by_threshold", lambda c: False)
+    assert mt.on_idle_tick([repo]) is False
+    assert spawned == []
+
+
+def test_stale_stamp_and_threshold_launch_daily_once(repo, spawned, monkeypatch):
+    from coordinator_core.git import store_hygiene
+
+    common = repo / ".git"
+    _age(common, "daily", mt.DAILY_INTERVAL_S + 60)
+    _age(common, "weekly", 60)
+    monkeypatch.setattr(store_hygiene, "owed_by_threshold", lambda c: True)
+    assert mt.on_idle_tick([repo]) is True
+    assert spawned[0][1] == ["daily"]
+
+
+def test_threshold_probe_failure_falls_back_to_the_stamp(repo, spawned, monkeypatch):
+    from coordinator_core.git import store_hygiene
+
+    def boom(c):
+        raise OSError("x")
+
+    monkeypatch.setattr(store_hygiene, "owed_by_threshold", boom)
+    assert mt.on_idle_tick([repo]) is True
+    assert spawned[0][1] == ["daily", "weekly"]
 
 
 def test_in_process_gate_skips_restat_within_the_check_interval(repo, spawned):

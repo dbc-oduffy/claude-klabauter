@@ -3611,6 +3611,58 @@ def _cmd_send(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_redeliver(args: argparse.Namespace) -> int:
+    """Handle: cross-repo-memo redeliver <memo-file>
+
+    Forwarder onto `memo.redeliver`: delivers an existing memo file to the owner named by its
+    own `to:` with its bytes (from, sent_by, created, basename) unchanged. Refuses with the
+    op's `rejection_class` when the owner has no reachable clone; no direct-write fallback.
+    """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
+    memo_path = os.path.abspath(args.memo_file)
+    if not os.path.isfile(memo_path):
+        print(f"cross-repo-memo redeliver: no such memo file: {memo_path}", file=sys.stderr)
+        return 2
+    sender_root = _current_repo_root()
+    if sender_root is None:
+        print("cross-repo-memo redeliver: cwd is not a git working tree.", file=sys.stderr)
+        return 2
+
+    def legacy_redeliver() -> None:
+        raise RuntimeError(
+            "claude-klabauter engine seam not found (the engine root unresolvable or "
+            "coordinator_core.invoke not importable) — there is no direct-write fallback (DR-210)."
+        )
+
+    try:
+        result = cc_invoke.route_mutation(
+            "memo.redeliver", {"dry_run": False, "path": memo_path}, sender_root, legacy_redeliver
+        )
+    except RuntimeError as exc:
+        print(f"cross-repo-memo redeliver: {exc}", file=sys.stderr)
+        _print_route_mutation_failure_reasons(exc)
+        result_obj = getattr(exc, "result", None)
+        rejection_class = result_obj.get("rejection_class") if isinstance(result_obj, dict) else None
+        if rejection_class:
+            print(f"REFUSED: {os.path.basename(memo_path)}: {rejection_class}")
+        else:
+            first = str(exc).strip().splitlines()[0] if str(exc).strip() else "redeliver failed"
+            print(f"REFUSED: {os.path.basename(memo_path)}: {first}")
+        return 1
+
+    acted = result.get("acted") if isinstance(result, dict) else None
+    if not (isinstance(result, dict) and result.get("exit_code") == 0 and acted):
+        print("cross-repo-memo redeliver: claude-klabauter reported success but delivered nothing — aborting.", file=sys.stderr)
+        return 1
+    acted_item = acted[0] if isinstance(acted[0], dict) else {}
+    print(f"Receiver-side: {os.path.abspath(acted_item.get('id', ''))}")
+    if acted_item.get("reconciled"):
+        print("cross-repo-memo redeliver: already delivered; no second commit.")
+    return 0
+
+
 def _emit_compose_stage_advisory(abs_path: str, *, fm: dict | None = None) -> None:
     """`compose`-stage premise-check advisory — reads the outbox buffer's
     current frontmatter and fires `_print_premise_check_advisory` at it.
@@ -3824,7 +3876,7 @@ def _cmd_compose(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 # Verbs that trigger subcommand dispatch (not legacy flag-only path).
-_SUBCOMMAND_VERBS: frozenset[str] = frozenset({"draft", "compose", "list", "inbox", "discard", "reconcile", "send"})
+_SUBCOMMAND_VERBS: frozenset[str] = frozenset({"draft", "compose", "list", "inbox", "discard", "reconcile", "send", "redeliver"})
 
 # Verbs that plausibly name "close/action an inbound memo" intent — this tool
 # has no such verb (it only sends OUTBOUND memos), so these get a pointer at
@@ -4074,6 +4126,13 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     )
     send_p.add_argument("topic", metavar="TOPIC", help="Topic slug of the staged draft")
 
+    # redeliver subparser (handler is _cmd_redeliver) — forwarder onto memo.redeliver
+    redeliver_p = subparsers.add_parser(
+        "redeliver",
+        help="Deliver an existing memo file to its `to:` owner with from/sent_by/created/filename unchanged",
+    )
+    redeliver_p.add_argument("memo_file", metavar="MEMO_FILE", help="Path of the existing memo (.md) to deliver")
+
     return parser
 
 
@@ -4244,6 +4303,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_compose(args)
         elif verb == "send":
             return _cmd_send(args)
+        elif verb == "redeliver":
+            return _cmd_redeliver(args)
         else:
             # Should not reach here — argparse would have exited.
             print(f"cross-repo-memo: unknown verb {verb!r}", file=sys.stderr)
@@ -4275,7 +4336,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(
             f"cross-repo-memo: unknown subcommand '{first}'. "
-            f"Valid verbs: draft, compose, list, inbox, discard, reconcile, send. "
+            f"Valid verbs: draft, compose, list, inbox, discard, reconcile, send, redeliver. "
             f"Run 'cross-repo-memo --help' for the legacy flag-only form.",
             file=sys.stderr,
         )

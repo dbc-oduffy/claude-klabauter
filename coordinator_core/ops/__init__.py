@@ -281,6 +281,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.memo_compose", 'registers "memo.compose" (C7 wiring)'),
     ("coordinator_core.ops.fleet.memo_send", 'registers "memo.send" (rebuilt 2026-08-25, C2)'),
     ("coordinator_core.ops.fleet.memo_reconcile_outbox", 'registers "memo.reconcile_outbox"'),
+    ("coordinator_core.ops.fleet.memo_redeliver", 'registers "memo.redeliver"'),
     ("coordinator_core.ops.fleet.memo_blitz_buckets", 'registers "memo.blitz_buckets"'),
     ("coordinator_core.ops.push_outstanding", 'registers "push.outstanding"'),
     ("coordinator_core.ops.deliverable_rollup", 'registers "deliverable.rollup"'),

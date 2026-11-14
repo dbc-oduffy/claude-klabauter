@@ -150,10 +150,14 @@ def test_bare_root_is_product():
 
 @pytest.mark.parametrize(
     "rel",
-    ["state/handoffs/x.md", ".coordinator-local/a/b.md", "scratch/x.py"],
+    ["state/handoffs/x.md", ".coordinator-local/a/b.md"],
 )
 def test_non_product_paths_inside_root(owned, rel):
     assert pf.is_product_path(ROOT + "/" + rel, ROOT, "s1") is False
+
+
+def test_scratch_path_a_live_run_owns_is_product(owned):
+    assert pf.is_product_path(ROOT + "/scratch/x.py", ROOT, "s1") is True
 
 
 def test_path_outside_root_is_not_product(tmp_path):
@@ -247,7 +251,6 @@ def em_repo(tmp_path, monkeypatch):
     from coordinator_core.hooks import _em_write_budget as wb
 
     monkeypatch.setattr(wb, "_is_bootstrap_or_out_of_repo", lambda p: False)
-    monkeypatch.setattr(wb, "_is_scratch_or_tmp", lambda p: False)
     run = tmp_path / "state" / "warp" / "r1"
     run.mkdir(parents=True)
     (run / "run.json").write_text('{"sizing_rel": "state/sizings/s.yaml"}')
@@ -393,7 +396,6 @@ def owned_repo(tmp_path, monkeypatch):
     (repo / "scripts").mkdir()
     for target in (mod, leaf):
         monkeypatch.setattr(target, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
-    monkeypatch.setattr(leaf, "_is_scratch_or_tmp", lambda p: False)
     monkeypatch.setattr(machine_profile, "guard_level", lambda name: "warn")
     _runs(monkeypatch, ["landed-run"])
     return repo

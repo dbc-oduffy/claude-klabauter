@@ -819,6 +819,179 @@ def test_peer_addressed_send_during_the_turn_suppresses_the_harvested_reply(box)
     run(go())
 
 
+def test_peer_send_frame_is_stamped_with_sender_name_and_box(box):
+    async def go():
+        s = FakeSender(str(box / "s.sock"))
+        register_session(box, "em", s.path)
+        r = make_router(box, echo_adapters())
+        await r.start()
+        try:
+            resp = await r._dispatch({"op": "send", "as": "codex-a", "to": "em", "text": "stamp me"})
+            assert resp["ok"] is True
+            await until(lambda: len(s.frames) == 1)
+            here = pr._contract().local_box()
+            assert f'from-name="codex-a" from-box="{here}"' in s.contents()[0]
+            assert s.frames[0]["provenance"]["box"] == here and s.frames[0]["from_name"] == "codex-a"
+        finally:
+            s.close()
+            await r.stop()
+    run(go())
+
+
+def _frames_sent_to(dirs, monkeypatch, row, sender):
+    """The frames a send from `sender` to the session `em` writes, delivery captured (no sockets)."""
+    sent = []
+    (dirs / "sessions" / "em.json").write_text(json.dumps(
+        {"name": "em", "pid": os.getpid(), "messagingSocketPath": str(dirs / "em.sock"), "startedAt": 1, **row}))
+    r = pr.Router([{"name": "codex-a", "vendor": "agy", "target": "conv-1"}], sessions_dir=dirs / "sessions",
+                  state_dir=dirs / "state", endpoint_dir=dirs / "eps", adapters={})
+
+    async def capture(peer, endpoint, frame):
+        sent.append(frame)
+    monkeypatch.setattr(r, "_deliver_as_peer", capture)
+    monkeypatch.setattr(r, "_transport_face", lambda source, destination: asyncio.sleep(0, "transport-x"))
+    resp = run(r._dispatch({"op": "send", "as": sender, "to": "em", "text": "hello"}))
+    assert resp["ok"] is True
+    return r, sent
+
+
+FAR_ROW = {"unimatrixRemote": "user@far-box", "unimatrixFarName": "em"}
+
+
+@portable
+def test_peer_send_to_a_far_session_carries_the_peer_name_as_the_reply_address(dirs, monkeypatch):
+    r, sent = _frames_sent_to(dirs, monkeypatch, FAR_ROW, "codex-a")
+    assert sent[0]["message"]["content"].startswith(f'<cross-session-message from="codex-a.{pr._contract().local_box()}" from-name="codex-a"')
+    assert sent[0]["from"] == f"uds:{r.endpoint_of('codex-a')}"
+
+
+@portable
+def test_reply_to_a_far_sender_carries_the_peer_name_as_the_reply_address_and_targets_that_sender(dirs, monkeypatch):
+    sent = []
+    em_sock = str(dirs / "em.sock")
+    (dirs / "sessions" / "em.json").write_text(json.dumps(
+        {"name": "em", "pid": os.getpid(), "messagingSocketPath": em_sock, "startedAt": 1, **FAR_ROW}))
+    r = pr.Router([{"name": "codex-a", "vendor": "agy", "target": "conv-1"}], sessions_dir=dirs / "sessions",
+                  state_dir=dirs / "state", endpoint_dir=dirs / "eps", adapters={})
+
+    async def capture(peer, endpoint, frame):
+        sent.append((endpoint, frame))
+
+    async def turn(peer, text, addressed=None):
+        return "answer"
+    monkeypatch.setattr(r, "_deliver_as_peer", capture)
+    monkeypatch.setattr(r, "turn", turn)
+    inbound = pr._contract().build_frame(str(dirs / "stale.sock"), "em", "question")
+    run(r.handle_inbound("codex-a", inbound))
+    assert len(sent) == 1
+    endpoint, frame = sent[0]
+    assert endpoint == em_sock
+    assert frame["message"]["content"].startswith(f'<cross-session-message from="codex-a.{pr._contract().local_box()}" from-name="codex-a"')
+
+
+@portable
+def test_peer_send_to_a_local_session_keeps_the_endpoint_as_the_reply_address(dirs, monkeypatch):
+    r, sent = _frames_sent_to(dirs, monkeypatch, {}, "codex-a")
+    assert sent[0]["message"]["content"].startswith(f'<cross-session-message from="uds:{r.endpoint_of("codex-a")}"')
+
+
+@portable
+def test_transport_send_to_a_far_session_carries_the_source_name_as_the_reply_address(dirs, monkeypatch):
+    r, sent = _frames_sent_to(dirs, monkeypatch, FAR_ROW, "cli")
+    assert sent[0]["message"]["content"].startswith(
+        f'<cross-session-message from="cli.{pr._contract().local_box()}" ')
+
+
+def _transport_router(dirs, monkeypatch):
+    """A router with transport `t` bridging source session `em` and destination `other`; deliveries captured."""
+    sent = []
+    em_sock = str(dirs / "em.sock")
+    (dirs / "sessions" / "em.json").write_text(json.dumps(
+        {"name": "em", "pid": os.getpid(), "messagingSocketPath": em_sock, "startedAt": 1}))
+    (dirs / "sessions" / "other.json").write_text(json.dumps(
+        {"name": "other", "pid": os.getpid(), "messagingSocketPath": str(dirs / "other.sock"), "startedAt": 1}))
+    r = pr.Router([], sessions_dir=dirs / "sessions", state_dir=dirs / "state", endpoint_dir=dirs / "eps",
+                  adapters={})
+    r.transport_sources["t"], r.transport_targets["t"] = "em", "other"
+
+    async def capture(peer, endpoint, frame):
+        sent.append((endpoint, frame))
+    monkeypatch.setattr(r, "_deliver_as_peer", capture)
+    return r, sent, em_sock
+
+
+@portable
+def test_transport_return_forwards_a_reply_once_and_drops_a_twice_wrapped_loop(dirs, monkeypatch):
+    r, sent, em_sock = _transport_router(dirs, monkeypatch)
+    other = str(dirs / "other.sock")
+    run(r.handle_transport_inbound("t", pr._contract().build_frame(other, "other", "hello")))
+    assert [e for e, _ in sent] == [em_sock]
+    looped = "[forwarded message from a] [forwarded message from b] hello"
+    run(r.handle_transport_inbound("t", pr._contract().build_frame(other, "other", looped)))
+    assert len(sent) == 1
+
+
+@portable
+def test_transport_return_drops_a_frame_that_would_go_back_to_its_own_sender(dirs, monkeypatch):
+    r, sent, _ = _transport_router(dirs, monkeypatch)
+    run(r.handle_transport_inbound("t", pr._contract().build_frame(str(dirs / "stale.sock"), "em", "echo")))
+    assert sent == []
+
+
+@portable
+def test_transport_return_drops_a_body_already_relayed_by_its_destination(dirs, monkeypatch):
+    r, sent, _ = _transport_router(dirs, monkeypatch)
+    other = str(dirs / "other.sock")
+    run(r.handle_transport_inbound("t", pr._contract().build_frame(other, "other", "[em via Unimatrix transport] hello")))
+    assert sent == []
+    run(r.handle_transport_inbound("t", pr._contract().build_frame(other, "other", "[x via Unimatrix transport] hello")))
+    assert len(sent) == 1
+
+
+@portable
+def test_hop_chain_names_the_leading_relays_outermost_first():
+    assert pr.hop_chain("[forwarded message from a] [b via Unimatrix transport] x") == ["a", "b"]
+    assert pr.hop_chain("x [forwarded message from a]") == []
+
+
+@portable
+def test_hop_count_counts_only_leading_relay_markers():
+    assert pr.hop_count("[forwarded message from a] [b via Unimatrix transport] x") == 2
+    assert pr.hop_count("x [forwarded message from a]") == 0
+
+
+@portable
+def test_send_receipt_names_the_session_reached_and_its_box(dirs, monkeypatch):
+    (dirs / "sessions" / "em.json").write_text(json.dumps(
+        {"name": "em", "pid": os.getpid(), "messagingSocketPath": str(dirs / "em.sock"), "startedAt": 1, **FAR_ROW}))
+    r = pr.Router([{"name": "codex-a", "vendor": "agy", "target": "conv-1"}], sessions_dir=dirs / "sessions",
+                  state_dir=dirs / "state", endpoint_dir=dirs / "eps", adapters={})
+
+    async def capture(peer, endpoint, frame):
+        return None
+    monkeypatch.setattr(r, "_deliver_as_peer", capture)
+    monkeypatch.setattr(r, "_transport_face", lambda source, destination: asyncio.sleep(0, "transport-x"))
+    resp = run(r._dispatch({"op": "send", "as": "cli", "to": "em", "text": "hello"}))
+    assert resp["ok"] is True and resp["reached"] == "em" and resp["reached_box"]
+
+
+@portable
+def test_transport_send_to_an_unknown_name_is_refused_not_routed_elsewhere(dirs, monkeypatch):
+    r, sent, _ = _transport_router(dirs, monkeypatch)
+    resp = run(r._dispatch({"op": "send", "as": "cli", "to": "nobody", "text": "hello"}))
+    assert resp["ok"] is False and "reached" not in resp and sent == []
+
+
+@portable
+def test_routable_from_swaps_only_the_wrapper_address_and_keeps_frame_from():
+    frame = pr._contract().build_frame(r"\\.\pipe\LOCAL\cc-msg-x", "codex-a", 'body from="uds:keep"')
+    out = pr.routable_from(frame, 'na"me')
+    assert out["from"] == frame["from"]
+    assert out["message"]["content"].startswith('<cross-session-message from="na\'me" from-name="codex-a"')
+    assert 'body from="uds:keep"' in out["message"]["content"]
+    assert frame["message"]["content"].startswith('<cross-session-message from="uds:')  # input frame untouched
+
+
 def test_peer_send_to_unknown_session_fails_and_other_senders_turn_still_replies(box):
     async def go():
         r = make_router(box, echo_adapters())
@@ -916,9 +1089,10 @@ def test_list_agents_has_one_row_per_reachable_name_with_box_and_vendor(box):
             rows = {a["name"]: a for a in resp["agents"]}
             assert sorted(rows) == resp["reachable"] == ["codex-a", "em", "far-codex"]
             here = r.roster_rows("cli")[1][0]["box"]
-            assert rows["codex-a"] == {"name": "codex-a", "box": here, "vendor": "codex"}
-            assert rows["em"] == {"name": "em", "box": here, "vendor": "claude"}
-            assert rows["far-codex"] == {"name": "far-codex", "box": "machine-b", "vendor": "codex"}
+            assert rows["codex-a"] == {"name": "codex-a", "box": here, "vendor": "codex", "this_box": True}
+            assert rows["em"] == {"name": "em", "box": here, "vendor": "claude", "this_box": True}
+            assert rows["far-codex"] == {"name": "far-codex", "box": "machine-b", "vendor": "codex",
+                                         "this_box": "machine-b" == here}
             assert resp["peers"] and resp["sessions"] == ["em", "far-codex"] and "ready" in resp
         finally:
             s.close()
@@ -1540,3 +1714,54 @@ def test_losing_the_lease_leaves_the_owners_pid_file(box):
             await r.stop()
         assert not (box / "state" / "router.pid.json").exists()
     run(go())
+
+
+def _live_session(sessions, name, endpoint):
+    (sessions / f"{name}.json").write_text(json.dumps(
+        {"name": name, "pid": os.getpid(), "messagingSocketPath": endpoint, "sessionId": f"sid-{name}"}))
+
+
+def _relay_router(tmp_path, *rows):
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (tmp_path / "state").mkdir()
+    for name, ep in rows:
+        _live_session(sessions, name, ep)
+    return pr.Router([], sessions_dir=sessions, state_dir=tmp_path / "state", endpoint_dir=tmp_path / "eps",
+                     adapters={}), tmp_path / "state" / "unimatrix-peer-router.log"
+
+
+@portable
+def test_relay_target_resolves_the_named_session_not_another_live_one(tmp_path):
+    r, log = _relay_router(tmp_path, ("example-game-workbench-repo-66", "/s/h66.sock"), ("claude-klabauter-a1", "/s/a1.sock"))
+    out = r.resolve_relay_target("example-game-workbench-repo-66")
+    assert out["ok"] and out["endpoint"] == "/s/h66.sock" and out["name"] == "example-game-workbench-repo-66"
+    assert "RELAY-TARGET" in log.read_text()
+
+
+@portable
+def test_relay_target_unknown_name_is_refused_and_recorded_never_a_fallback(tmp_path):
+    r, log = _relay_router(tmp_path, ("claude-klabauter-a1", "/s/a1.sock"))
+    out = r.resolve_relay_target("example-game-workbench-repo-66")
+    assert out["ok"] is False and out["recorded"] is True and "endpoint" not in out
+    assert "RELAY-REFUSED example-game-workbench-repo-66" in log.read_text()
+    assert r.resolve_relay_target("")["ok"] is False
+
+
+@portable
+def test_relay_target_ambiguous_name_is_refused(tmp_path):
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (tmp_path / "state").mkdir()
+    for n, ep in enumerate(("/s/x.sock", "/s/y.sock")):
+        (sessions / f"{n}.json").write_text(json.dumps({"name": "dup", "pid": os.getpid(), "messagingSocketPath": ep}))
+    r = pr.Router([], sessions_dir=sessions, state_dir=tmp_path / "state", endpoint_dir=tmp_path / "eps", adapters={})
+    out = r.resolve_relay_target("dup")
+    assert out["ok"] is False and "ambiguous" in out["error"]
+
+
+@portable
+def test_resolve_op_answers_through_dispatch(tmp_path):
+    r, _ = _relay_router(tmp_path, ("example-game-workbench-repo-66", "/s/h66.sock"))
+    assert run(r._dispatch({"op": "resolve", "name": "example-game-workbench-repo-66"}))["endpoint"] == "/s/h66.sock"
+    assert run(r._dispatch({"op": "resolve", "name": "nope"}))["ok"] is False

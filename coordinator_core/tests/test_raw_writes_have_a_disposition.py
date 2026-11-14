@@ -449,6 +449,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/git/reconcile_manifest.py': ('git-internal', 'conflict manifest tmp-then-replace under <git-dir>/coordinator-reconcile/conflict-manifest.json: write'),
     'coordinator_core/git/hook_dispositions.py': ('git-internal', 'hook backup and in-place hook rewrite under <git-common-dir>/hooks: _write_backup, _replace_file'),
     'coordinator_core/hooks/postuse_subagent_compaction_warning.py': ('outside-repo', 'per-agent band marker under settings_home()/state/compaction-warned, outside every repo'),
+    'coordinator_core/percolate/payload_parity.py': ('ignored-target', 'parity verdict memo index-*.json via tmp + os.replace under machinery_paths.cache_dir (gitignored .coordinator-local/cache/payload-parity-memo): _ParityMemo.save'),
     'coordinator_core/ops/discover_working_repos.py': ('outside-repo', 'tmp-then-replace of <home>/.claude/working-repos.yaml: write_working_repos_yaml'),
     'coordinator_core/ops/dispatch_emit/reverify_delivery.py': ('claims-explicitly', 'exclusive-create delivery-verdict record declared through declare_write: record_delivery_verdict; emit_reverify writes only the operator-named --out script'),
     'coordinator_core/ops/dispatch_emit/requirements_ledger.py': ('in-repo-non-state', 'run.json, the revision inbox and the requirements view under the tracked record dir state/warp/<run_id>/: _write_run, _write_view, revise; PM rows go through requirement_register (tracked, not gitignored scratch)'),

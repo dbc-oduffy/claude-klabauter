@@ -334,6 +334,24 @@ def foreign_claims(
     ]
 
 
+def _untracked_under_declared(repo_root: Path, paths: List[str]) -> List[str]:
+    """Untracked, non-ignored files under declared directory or magic pathspecs. The worktree freeze
+    synthesizes a new-file hunk only for a literal declared file, so a directory declaration would
+    otherwise drop its untracked members. One `git ls-files` spawn, none when every path is a file."""
+    wide = [p for p in paths if is_magic_pathspec(p) or p.endswith("/") or (repo_root / p).is_dir()]
+    if not wide:
+        return []
+    proc = run_git(
+        ["-C", str(repo_root), "--no-optional-locks", "ls-files", "--others", "--exclude-standard", "-z",
+         "--", *map(git_pathspec, wide)],
+        timeout=_GIT_TIMEOUT_SECS,
+    )
+    if proc.returncode != 0:
+        raise ValueError(f"untracked-file listing under declared paths failed (rc {proc.returncode})")
+    have = set(paths)
+    return sorted({p for p in proc.stdout.split("\0") if p and p not in have})
+
+
 def live_runs_from_params(raw: object) -> Optional[dict]:
     """Parse ``{run_id: {plan, superseded_by, successor_landed, withheld, claims}}`` into ``LiveRun``s; None when absent or malformed."""
     if not isinstance(raw, dict) or not raw:
@@ -843,11 +861,17 @@ def _compute(
                         repo_root, base, head, rest, peer_bases or {}, slice_prefix, fallback=fb, worktree_paths=wt
                     )
                 elif peer_bases:
-                    got = _freeze_whole_by_base(repo_root, base, head, paths, peer_bases, slice_prefix)
+                    got = _freeze_whole_by_base(
+                        repo_root, base, head,
+                        paths if head else paths + _untracked_under_declared(repo_root, paths),
+                        peer_bases, slice_prefix,
+                    )
                 elif head:
                     got = _heavy("freeze_diff")(repo_root, rev_range, slice_prefix, paths)
                 else:
-                    got = _heavy("freeze_diff")(repo_root, base, slice_prefix, paths, worktree=True)
+                    got = _heavy("freeze_diff")(
+                        repo_root, base, slice_prefix, paths + _untracked_under_declared(repo_root, paths), worktree=True
+                    )
         except ValueError as exc:
             got = {"error": str(exc)}
         frozen_whole.append(got)

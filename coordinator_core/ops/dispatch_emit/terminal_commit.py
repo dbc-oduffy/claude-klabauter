@@ -353,6 +353,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import (  # noq
     _tests_not_run_refusal,
     _declared_reconcile,
     _review_floor_note,
+    _staged_outside_slices_refusal,
     _error,
     _merge_landing_plan,
     _land_merge_artifacts,
@@ -2138,6 +2139,7 @@ def _terminal_commit_inner(
     manifest_rel: Optional[str] = None
     ask_run_dir: Optional[Path] = None
     manifest_declared: tuple = ()
+    staged_rows: tuple = ()
     request: Optional[CommitRequest] = None
     try:
         manifest_rel = parse_manifest_marker(script_text)
@@ -2169,6 +2171,7 @@ def _terminal_commit_inner(
                 withheld.update({o.id: f"owed: {o.detail}" for o in manifest.owed})
             ask_run_dir = manifest_abs.parent
             manifest_declared = tuple(manifest.review_declared_paths)
+            staged_rows = tuple(manifest.rows)
             from coordinator_core.ops.dispatch_emit.in_run_widen import record_widens
 
             record_widens(ask_run_dir, params.get("widened"))
@@ -3691,6 +3694,15 @@ def _terminal_commit_inner(
             if close_ctx is not None:
                 close_ctx.clear()
             return _with_withheld(_naming_held(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})))
+
+    # Every declared product path this commit stages must sit in a reviewed slice.
+    _own_product = chunk_declared | set(prefix_files)
+    unreviewed = _staged_outside_slices_refusal(inline_review, [p for p in all_paths if p in _own_product])
+    if unreviewed is not None:
+        _remove(worktree_root, receipt_paths)
+        if close_ctx is not None:
+            close_ctx.clear()
+        return unreviewed
 
     # The product commit never carries the session's claimed leftovers: commit_v2 would widen the
     # pathspec past the declared set. They land in the follow-on commit after this one.

@@ -40,6 +40,14 @@ def test_background_launch_writes_record():
     assert abs((r.mark - rec.FILETIME_UNIX_EPOCH) / 1e7 - time.time()) < 60
 
 
+def test_background_launch_stamps_agent_id_not_timed_out():
+    rec._handler({"payload": _payload(agent_id="agA")})
+    r = store.read_record("bg1abc")
+    assert (r.agent_id, r.timed_out) == ("agA", False)
+    rec._handler({"payload": _payload(tool_response={"backgroundTaskId": "bg2abc"})})
+    assert store.read_record("bg2abc").agent_id == ""
+
+
 def test_bare_params_without_payload_wrapper():
     rec._handler(_payload())
     assert store.read_record("bg1abc") is not None
@@ -132,6 +140,20 @@ def seams(monkeypatch):
     monkeypatch.setattr(rec, "_kill", kill)
     monkeypatch.setattr(rec, "_filetime_now", lambda: _MARK + _MS * 10_000)
     return kill, snaps, state
+
+
+def test_timed_out_non_search_stamps_agent_id_and_timed_out_and_indexes_it(seams):
+    rec._handler({"payload": _timed_out_payload("pytest x", agent_id="agB")})
+    r = store.read_record("bgto1")
+    assert (r.agent_id, r.timed_out) == ("agB", True)
+    assert [x.task_id for x in store.records_for_agent("sess1", "agB")] == ["bgto1"]
+    assert store.records_for_agent("sess1", "agC") == []
+
+
+def test_timed_out_record_without_agent_id_is_not_indexed(seams):
+    rec._handler({"payload": _timed_out_payload("pytest x")})
+    r = store.read_record("bgto1")
+    assert (r.agent_id, r.timed_out) == ("", True)
 
 
 def test_timed_out_read_only_search_is_killed_and_leaves_no_record(seams):

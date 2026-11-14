@@ -242,6 +242,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # hooks.taskstop_reaper — MUTATING: kills orphaned launch trees and writes the reaper log
     # under settings_home().
     "hooks.taskstop_reaper": OpClass.MUTATING,
+    # hooks.agent_stop_reaper — MUTATING: kills a stopped agent's timed-out launch trees and
+    # writes the reaper log under settings_home().
+    "hooks.agent_stop_reaper": OpClass.MUTATING,
     # hooks.postuse_advisory_dispatch — MUTATING (reclassified; was COMPUTE_ONLY).
     #
     # B-F1 had re-plumbed this op's throttle/bark-once/dedup guards from /tmp
@@ -2031,6 +2034,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # so the DR-214-send-class D2 seven-bound (memo.send's alone) does not apply.
     # Spec: state/bug-backlog/2026-08-25-the-memo-outbox-does-not-clean-itself-up-after-a-send.yaml
     "memo.reconcile_outbox": OpClass.MUTATING,
+    # memo.redeliver — MUTATING: writes an existing memo file into the owner's inbox as one object-only
+    # delivery commit through memo_send._deliver_upstream.
+    "memo.redeliver": OpClass.MUTATING,
     # DR-208 five-question affirmation (memo.list_outbox, citing
     # ops/fleet/memo_list_outbox.py) — COMPUTE_ONLY, structural sibling to
     # memo.list (distinct data source: CALLING repo's own state/memo-outbox/

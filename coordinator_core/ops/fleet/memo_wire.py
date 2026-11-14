@@ -18,6 +18,7 @@ from typing import NamedTuple, Optional
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.ops.fleet._memo_compose import _TOPIC_SLUG_RE, _memo_filename
+from coordinator_core.ops.fleet._memo_owning_box import resolve_owning_box
 from coordinator_core.ops.fleet._memo_resolver import (
     AmbiguousReceiverError,
     RegistryReadError,
@@ -87,6 +88,13 @@ def resolve_receiver(name: str) -> "ReceiverTarget | WireRefusal":
         checkout_refusal = undeliverable_checkout_refusal(name, receiver_repo_path)
         if checkout_refusal is not None:
             return WireRefusal(checkout_refusal)
+        owner = resolve_owning_box(receiver_repo_path)
+        if owner.state == "other_box":
+            return WireRefusal(
+                f"memo.send: NOT THE OWNING BOX — {name!r}'s EM runs on {owner.box} "
+                f"({owner.session}); a commit in this box's clone never reaches it. "
+                f"Send from {owner.box}, or SendMessage {owner.session}."
+            )
 
     if inbox_dir is None:
         suggestion = suggest_nearest_receiver(name, all_repos)

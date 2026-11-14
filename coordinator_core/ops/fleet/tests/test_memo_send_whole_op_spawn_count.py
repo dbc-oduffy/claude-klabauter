@@ -70,12 +70,12 @@ def test_green_path_spawn_count_matches_budget_and_is_attributed(tmp_path, monke
     assert len(spawns) == budget["green_path"], [s.origin for s in spawns]
 
 
-def test_receiver_index_fallback_spawn_count_matches_budget_and_reaches_git_invoke(
+def test_unspliceable_receiver_index_costs_no_spawn_and_is_left_byte_identical(
     tmp_path, monkeypatch
 ):
     """A v4 receiver index (a NATURAL fixture precondition) is refused by the
-    in-process splice, so the delivery's index entry falls back to one hookless
-    `update-index` through `git_native._git`."""
+    in-process splice; the delivery never writes the receiver's index, so it
+    costs the green-path count and the index bytes do not change."""
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     subprocess.run(
@@ -86,6 +86,7 @@ def test_receiver_index_fallback_spawn_count_matches_budget_and_reaches_git_invo
     claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     _write_draft(sender_repo, "receiver-index-v4-topic")
+    index_before = (receiver_repo / ".git" / "index").read_bytes()
 
     with _count_spawns_attributed(monkeypatch) as spawns:
         result = _memo_send(
@@ -93,43 +94,18 @@ def test_receiver_index_fallback_spawn_count_matches_budget_and_reaches_git_invo
         )
 
     assert result["exit_code"] == 0, result
-    budget = _budget()
-    assert len(spawns) == budget["receiver_index_unspliceable"], [s.origin for s in spawns]
-    origins = [s.origin for s in spawns]
-    assert "unattributed" not in origins, origins
-    assert "_git._invoke" in origins, origins
+    assert len(spawns) == _budget()["green_path"], [s.origin for s in spawns]
+    assert (receiver_repo / ".git" / "index").read_bytes() == index_before
 
 
-def test_unreadable_head_spine_refusal_spawn_count_matches_budget_and_reaches_run_git(
-    tmp_path, monkeypatch
-):
-    """PLANTED precondition: `git_native.read_tree_spine` monkeypatched to
-    return `None`. No natural fixture in this file's `writes:` makes
-    `read_tree_spine` return `None` (it requires a corrupt/unresolvable HEAD
-    tree, not merely an absent path), so this follows
-    `test_unmet_in_process_precondition_fails_loud_instead_of_taking_the_ladder`'s
-    own precedent of monkeypatching the in-process precondition directly.
+def test_unreadable_base_tree_refusal_costs_no_spawn(tmp_path, monkeypatch):
+    """PLANTED precondition: `read_tree_spine` monkeypatched to return `None`
+    in both modules that bind it. No natural fixture makes it return `None`
+    (that needs a corrupt base tree, not merely an absent path).
 
-    `_head_entry_for` (called first, to check the path is absent from HEAD)
-    falls back to `_git_state_head_blobs`, which reaches git through
-    `run_git` -- NOT through `git_native._git` (census row 1/4). The commit
-    then proceeds to `_commit_via_head_spine`, which ALSO consults
-    `read_tree_spine` for its own spine build; with that patched to `None`
-    too, `_commit_via_head_spine` returns `None` ("unreadable HEAD tree
-    spine"), and `commit_authored_new_file` fails loud rather than falling
-    through to a spawning ladder that would run the receiver's hooks (AC4's
-    decline arm).
-
-    Cold-cache dependency: `git_state.head_blobs` memoises its result in a
-    process-wide `_HEAD_BLOBS_CACHE` keyed on `(repo, head_sha, paths)`. This
-    test's spawn count and its `run_git`-among-origins assertion depend on a
-    COLD cache entry for that key -- guaranteed here because each test gets
-    a fresh `tmp_path` repo and this is the first read of it, matching the
-    same dependency `test_commit_authored_new_file.py` documents beside its
-    own identity-pin comment. A future fixture that reuses a repo or reads
-    `head_blobs` before this counter starts would silently turn the spawn
-    into a cache hit and drop `run_git` from the recorded origins.
-    """
+    The delivery reads the upstream base tree in process, so an unreadable one
+    is refused loud (AC4) with no `ls-tree` fallback spawn and no spawning
+    ladder that would run the receiver's hooks."""
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -155,11 +131,7 @@ def test_unreadable_head_spine_refusal_spawn_count_matches_budget_and_reaches_ru
     ]
     assert inbox_files == []
 
-    budget = _budget()
-    assert len(spawns) == budget["head_spine_unreadable_refused"], [s.origin for s in spawns]
-    origins = [s.origin for s in spawns]
-    assert "unattributed" not in origins, origins
-    assert "run_git" in origins, origins
+    assert len(spawns) == _budget()["green_path"], [s.origin for s in spawns]
 
 
 def test_receiver_signing_enabled_spawn_count_matches_budget_and_reaches_write_signed_commit_object(

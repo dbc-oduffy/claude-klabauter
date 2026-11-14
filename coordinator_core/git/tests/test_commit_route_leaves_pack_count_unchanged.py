@@ -5,7 +5,7 @@ import subprocess
 import pytest
 
 from coordinator_core.git import commit as gcommit
-from coordinator_core.git import git_objects
+from coordinator_core.git import git_objects, pack_deletion_pause
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -69,14 +69,16 @@ def test_batch_over_the_threshold_adds_no_pack(tmp_path):
 
     gcommit.commit_paths(repo, paths, "add files")
 
-    # The first over-threshold batch mints the tail pack; every later one folds into it.
+    # The first over-threshold batch mints one pack; while PACK_DELETION_PAUSED holds, a later
+    # batch also mints its own pack (no fold, nothing deleted), otherwise it folds into the tail.
     assert len(_idx(repo) - packs_before) <= 1
     packs_after_first = _idx(repo)
     more = _add_files(repo, 50, sub="more/")
 
     gcommit.commit_paths(repo, more, "add more files")
 
-    assert len(_idx(repo)) == len(packs_after_first)
+    grown = 1 if pack_deletion_pause.paused() else 0
+    assert len(_idx(repo)) == len(packs_after_first) + grown
     _git(repo, "fsck", "--full", "--strict")
     assert set(_git(repo, "ls-tree", "-r", "--name-only", "HEAD").split()) == {
         "seed.txt", *paths, *more,

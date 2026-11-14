@@ -6,7 +6,8 @@ One JSON file per delivery commit that still owes a push, under
 Negative-spec:
     - A record is removed only by `remove_pending` (a landed push, or an
       upstream tree already holding the path); a failed or rejected push goes
-      through `bump_attempt`, which never deletes.
+      through `bump_attempt`, which never deletes; `is_exhausted` records stop
+      being retried but stay on disk.
     - `bump_attempt` never recreates a record that was removed meanwhile.
     - Unreadable or malformed files are skipped by `list_pending`, never raised.
 """
@@ -21,6 +22,10 @@ from typing import Optional
 from coordinator_core.ops.fleet._outbox_enum import outbox_dir
 
 PENDING_LEAF = "push-pending"
+
+#: A record at this many failed attempts is exhausted: the warm sweep stops
+#: pushing it and leaves the file in place for a human or doctor read.
+MAX_ATTEMPTS = 20
 
 #: Keys every record carries; `attempts` and `last_error` default on write.
 REQUIRED_KEYS = (
@@ -97,6 +102,14 @@ def list_pending(worktree: object) -> list[dict]:
         row[RECORD_PATH_KEY] = str(path)
         rows.append(row)
     return rows
+
+
+def is_exhausted(record: dict) -> bool:
+    """True when `record` has used `MAX_ATTEMPTS` failed pushes."""
+    try:
+        return int(record.get("attempts", 0)) >= MAX_ATTEMPTS
+    except (TypeError, ValueError):
+        return False
 
 
 def remove_pending(worktree: object, commit_sha: str) -> bool:

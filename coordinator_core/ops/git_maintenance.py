@@ -14,13 +14,47 @@ THE OP TAKES A TIER, NEVER A SCHEDULE OR A TASK LIST. The mapping, and the
 measured cost of each (spike figures, n=1, lower bounds — see § below):
 
   hourly  -> git maintenance run --task=commit-graph      40.6 ms,  2.0 procs
-  daily   -> git repack -d -q (reachable loose only)      not yet measured
-             then git maintenance run --task=commit-graph ~190  ms (derived,
-             --task=incremental-repack                    see below; excludes
-                                                          the repack leg)
+  daily   -> store_hygiene.sweep_orphan_pack_files        0 spawns
+             then MIDX heal (unlink a MIDX naming a gone  0 spawns
+             pack)
+             then ONE batch leg: consolidate_pack_batch   ~190 ms (40 packs)
+             (while small packs exceed the ceiling) or
+             the bounded loose leg (while the loose       ~360 ms (500 objs)
+             estimate exceeds STALE_LOOSE_SLACK)
+             then commit-graph, only on a call that ran   ~110 ms
+             no batch leg
+             then git multi-pack-index write              ~70  ms
   weekly  -> git prune --expire=2.weeks.ago              175.0 ms,  1.0 proc
              then git maintenance run --task=pack-refs    53.1 ms,  2.0 procs
              then sweep_orphan_packs()                    ~2 s (one window)
+
+ONLY WEEKLY DEFERS ON THE INDEX. Weekly's `git prune` opens `.git/index`, and
+under a held index fails rc 128 (`fatal: .git/index: index file open failed:
+Permission denied`); it defers on a live `index.lock`, an in-progress
+rebase/merge/bisect/cherry-pick/revert, or unmerged entries. Hourly and daily
+run only pack-level legs (`pack-objects`, `multi-pack-index`, `maintenance
+--task=commit-graph`) that never open the index, measured to pass with the lock
+file present and `.git/index` held open, so they run under `object_store_lock`
+alone and never wait on a peer's commit. With ~50 peers committing, an index
+gate on daily meant daily almost never ran.
+
+THE DAILY LEG LIST AND ITS PER-CALL CAP are the C0 spike's pins
+(docs/research/git-maintenance/2026-11-14-index-free-object-store-legs/
+synthesis.md). `git repack -d -q` (it reads the index through
+`--indexed-objects`: rc 128 held, 7.4 s free on 42k loose),
+`git repack --geometric` (1.3 s on 250 packs, no batch knob) and
+`--task=incremental-repack` (adds a pack, dearer than `multi-pack-index write`
+for the same MIDX) are not daily legs. One call does at most one batch leg
+(together they exceed 500 ms); the rest of the owed work waits for the next
+call, and the result reports it as `owed`, never as a deferral.
+THE LOOSE LEG is index-free: `rev-list --objects --unpacked --all --reflog`
+into `pack-objects`, bounded to `_LOOSE_BATCH_OBJECTS` objects and
+`_LOOSE_BATCH_BYTES` of loose file bytes, then the packed loose files are
+unlinked. Only objects reachable from refs and reflogs are packed, so an
+unreachable loose object stays loose for the weekly `git prune`.
+THE MIDX HEAL: a MIDX naming a deleted pack makes every git leg that loads it
+fail (`could not load pack 0`), `multi-pack-index write` included; it is
+unlinked first and the final leg rewrites it over the packs present.
 
 DAILY DROPPED `loose-objects` (R9 / P153-C24, viable, candidate (a):
 docs/research/spike-verdicts/2026-09-22-maintenance-reaper-after-daily-pack.md).
@@ -39,11 +73,9 @@ Removing `loose-objects` leaves daily's own measured 392.6 ms figure minus
 the 203.1 ms `loose-objects` was measured to cost, ~190 ms — the module's
 own decomposition comment, not a fresh spike measurement; the acceptance
 guard's own run is the first real data point for this shape.
-REACHABLE LOOSE OBJECTS ARE PACKED BY DAILY'S FIRST LEG: `git repack -d -q`
-(`_DAILY_LOOSE_LEG`, no `-a`), which packs only loose objects reachable from
-refs, reflogs and the index. `incremental-repack` runs after it and writes the
-MIDX covering the new pack. Unreachable objects are still never packed, so the
-R9 note above holds and the weekly prune still reaps them.
+Unreachable objects are never packed by daily (the loose leg lists only objects
+reachable from refs and reflogs), so the R9 note above holds and the weekly
+prune still reaps them.
 
 THE WEEKLY TIER WAS `--schedule=weekly` AND IT WENT OVER THE BAR. Measured at
 515.6 ms mean / 9 procs (N=8 independent COLD repos, each registered through
@@ -106,19 +138,17 @@ among them) went missing. A repack reading a pack while a fold deletes it, or
 two repacks racing, is the shape that loses objects. So `run_tier` (every
 tier, every leg) and `sweep_orphan_packs` now run under
 `object_store_lock.hold(common_dir, wait_s=0)`, the one kernel-released lock
-every engine pack writer shares (`store_hygiene.consolidate_small_packs`,
+every engine pack writer shares (`store_hygiene.consolidate_pack_batch`,
 `git_objects._write_pack`/`_flush_pack`). It tries ONCE: a held lock means
 another engine writer is mid-mutation, so the tier DEFERS and reports (the
 `index.lock` contract) and the next ceremony retries; it never queues. The
 lock does not gate a user's or third party's own `git gc`.
 
-DEFER AND REPORT — do not run, do not fail — on a live `.git/index.lock`, an
-in-progress rebase/merge/bisect, or unmerged index entries. A ceremony boundary
-is exactly when a peer is most likely to be mid-write. The predicate exists
-because H21's exclusive-handle failure is real here: `git prune` under a held
-index fails rc 128 with `fatal: .git/index: index file open failed: Permission
-denied`. Their spike tested the five maintenance tasks and not the reaper they
-proposed; ours tested the reaper, and it is the leg that breaks.
+THE WEEKLY TIER DEFERS AND REPORTS — does not run, does not fail — on a live
+`.git/index.lock`, an in-progress rebase/merge/bisect/cherry-pick/revert, or
+unmerged index entries (`defer_reason`). H21's exclusive-handle failure is real
+here: `git prune` under a held index fails rc 128. Hourly and daily never open
+the index and do not consult the predicate.
 
 `git prune --expire=`, NEVER `git gc --prune=`. The memo offers them as
 alternatives; they are not. Measured here: `git prune --expire=2.weeks.ago` is
@@ -159,22 +189,28 @@ Negative-spec:
     `maintenance.strategy`. `git_perf_config.apply()` owns all three.
   - Does NOT use `git gc` in any form as the unreachable-object reaper.
   - Does NOT write to `~/.gitconfig` or any global config.
-  - Does NOT run when the index is locked or the worktree is mid-operation —
-    it defers, and says so.
+  - Does NOT run the weekly tier when the index is locked or the worktree is
+    mid-operation — it defers, and says so. Hourly and daily never read the
+    index and run regardless.
+  - Does NOT use `git repack` in any form on the daily tier.
   - Does NOT have a cadence of its own. It runs when a ceremony calls it.
 """
 
 GENERATES = []
 
+import os
+import stat
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence, Tuple
 
+from coordinator_core.git import fleet_maintenance_lock, pack_deletion_pause, store_hygiene
+from coordinator_core.git.fleet_maintenance_lock import FleetLockHomeUnresolved, FleetMaintenanceBusy
 from coordinator_core.git.object_store_lock import ObjectStoreBusy, hold
 from coordinator_core.git.repo_root import absolute_git_dir, git_common_dir
-from coordinator_core.git.run import run_git
+from coordinator_core.git.run import run_git, run_git_stream
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.reap_stale_locks import _env_float, _env_int, _file_size, _mtime_epoch
 
@@ -187,20 +223,29 @@ _ORPHAN_PACK_STABILITY_SEC = 2.0
 
 _TIER_ARGV = {
     "hourly": ("maintenance", "run", "--task=commit-graph"),
-    "daily": ("maintenance", "run", "--task=commit-graph", "--task=incremental-repack"),
+    "daily": ("maintenance", "run", "--task=commit-graph"),
     "weekly": ("maintenance", "run", "--task=pack-refs"),
 }
+
+# Tiers whose legs open `.git/index`; only these consult `defer_reason`.
+_INDEX_READING_TIERS = frozenset({"weekly"})
 
 # Was a second literal declaration of
 # `_TIER_ARGV`'s key set, policed only by a sync test. `_TIER_ARGV` is the
 # actual source of truth; this is derived, not restated.
 TIERS = tuple(_TIER_ARGV)
 
-# Daily's reachable-loose leg, run BEFORE `_TIER_ARGV["daily"]` so the MIDX that
-# `incremental-repack` writes covers the pack this leg mints. No `-a`: it packs
-# only loose objects reachable from refs, reflogs and the index, so an
-# unreachable loose object stays loose for the weekly `git prune`.
-_DAILY_LOOSE_LEG = ("repack", "-d", "-q")
+# Daily's last leg: the MIDX over every pack present. Exits 255 on a store with no packs.
+_MIDX_WRITE_ARGV = ("multi-pack-index", "write")
+
+# One daily call packs at most this many loose objects / loose-file bytes: 500
+# objects measured 359 ms process time, 1000 sits at the 500 ms edge.
+_LOOSE_BATCH_OBJECTS = 500
+_LOOSE_BATCH_BYTES = 8 * 1024 * 1024
+
+
+#: `deferred` text while `pack_deletion_pause` holds: nothing unlinked, no git spawned.
+PAUSED_REASON = "pack deletion is paused (pack_deletion_pause.PACK_DELETION_PAUSED)"
 
 
 @dataclass
@@ -212,6 +257,11 @@ class MaintenanceResult:
     pruned: bool = False
     orphan_packs_reaped: int = 0
     orphan_packs_skipped: int = 0
+    pack_files_reaped: int = 0
+    midx_healed: bool = False
+    packs_merged: int = 0
+    loose_packed: int = 0
+    owed: bool = False
     errors: List[str] = field(default_factory=list)
 
     @property
@@ -342,14 +392,17 @@ def sweep_orphan_packs(
     Raises ValueError when an existing `pack_dir` is not shaped `<common>/objects/pack`
     (the lock key is derived from that shape).
     """
+    if pack_deletion_pause.paused():
+        return OrphanPackSweep(reaped=[], failed=[], skipped=0, deferred=PAUSED_REASON)
     if not pack_dir.is_dir():
         return OrphanPackSweep(reaped=[], failed=[], skipped=0)
     if pack_dir.name != "pack" or pack_dir.parent.name != "objects":
         raise ValueError(f"pack_dir must be <common>/objects/pack, got {pack_dir}")
     try:
-        with hold(pack_dir.parent.parent, wait_s=0, holder_label="git-maintenance:orphan-sweep"):
-            return _sweep_orphan_packs_locked(pack_dir, on_wait=on_wait)
-    except ObjectStoreBusy as exc:
+        with fleet_maintenance_lock.hold(wait_s=0, holder_label="git-maintenance:orphan-sweep"):
+            with hold(pack_dir.parent.parent, wait_s=0, holder_label="git-maintenance:orphan-sweep"):
+                return _sweep_orphan_packs_locked(pack_dir, on_wait=on_wait)
+    except (ObjectStoreBusy, FleetMaintenanceBusy, FleetLockHomeUnresolved) as exc:
         return OrphanPackSweep(reaped=[], failed=[], skipped=0, deferred=str(exc))
 
 
@@ -438,6 +491,10 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
 
     result = MaintenanceResult(tier=tier)
 
+    if pack_deletion_pause.paused():
+        result.deferred = PAUSED_REASON
+        return result
+
     raw_git_dir = absolute_git_dir(str(repo))
     if not raw_git_dir:
         result.errors.append("not a git repository")
@@ -449,8 +506,12 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
         common = (repo / common).resolve()
 
     try:
-        with hold(common, wait_s=0, holder_label=f"git-maintenance:{tier}"):
-            return _run_tier_locked(repo, tier, result, git_dir, common)
+        with fleet_maintenance_lock.hold(wait_s=0, holder_label=f"git-maintenance:{tier}"):
+            with hold(common, wait_s=0, holder_label=f"git-maintenance:{tier}"):
+                return _run_tier_locked(repo, tier, result, git_dir, common)
+    except (FleetMaintenanceBusy, FleetLockHomeUnresolved) as exc:
+        result.deferred = f"fleet maintenance lock is held or unavailable -- another engine is mutating an object store ({exc})"
+        return result
     except ObjectStoreBusy as exc:
         result.deferred = f"object-store lock is held -- another engine pack writer is mid-mutation ({exc})"
         return result
@@ -459,10 +520,11 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
 def _run_tier_locked(
     repo: Path, tier: str, result: MaintenanceResult, git_dir: Path, common: Path
 ) -> MaintenanceResult:
-    reason = defer_reason(repo, git_dir)
-    if reason is not None:
-        result.deferred = reason
-        return result
+    if tier in _INDEX_READING_TIERS:
+        reason = defer_reason(repo, git_dir)
+        if reason is not None:
+            result.deferred = reason
+            return result
 
     # PRUNE RUNS BEFORE THE MAINTENANCE RUN, NOT AFTER. It is no longer
     # load-bearing against daily -- daily's `loose-objects` task is gone
@@ -496,19 +558,23 @@ def _run_tier_locked(
         else:
             result.pruned = True
 
+    legs: List[Tuple[str, ...]] = [_TIER_ARGV[tier]]
     if tier == "daily":
-        loose = run_git(list(_DAILY_LOOSE_LEG), cwd=str(repo))
-        if loose.returncode != 0:
-            result.errors.append(
-                f"{' '.join(_DAILY_LOOSE_LEG)} failed rc={loose.returncode}: {loose.stderr.strip()}"
-            )
+        batch_ran = _daily_prelude(repo, common, result)
+        if result.errors:
             return result
+        legs = [] if batch_ran else legs
+        if store_hygiene.status(common).pack_count:
+            legs.append(_MIDX_WRITE_ARGV)
 
-    proc = run_git(list(_TIER_ARGV[tier]), cwd=str(repo))
-    if proc.returncode != 0:
-        result.errors.append(f"{' '.join(_TIER_ARGV[tier])} failed rc={proc.returncode}: {proc.stderr.strip()}")
-        return result
+    for argv in legs:
+        proc = run_git(list(argv), cwd=str(repo))
+        if proc.returncode != 0:
+            result.errors.append(f"{' '.join(argv)} failed rc={proc.returncode}: {proc.stderr.strip()}")
+            return result
     result.ran = True
+    if tier == "daily":
+        result.owed = store_hygiene.owed_by_threshold(common)
     if not result.errors:
         _stamp(repo)
 
@@ -522,6 +588,95 @@ def _run_tier_locked(
         result.errors.append(f"orphan pack not removed: {failed}")
 
     return result
+
+
+def _daily_prelude(repo: Path, common: Path, result: MaintenanceResult) -> bool:
+    """Daily's legs before the commit-graph and MIDX writes; True when a batch leg ran.
+
+    Reaps orphan pack-dir files, heals a MIDX naming a gone pack, then runs AT MOST ONE
+    batch (small-pack consolidation, else the loose leg while the loose estimate is over
+    STALE_LOOSE_SLACK): two together exceed the 500 ms bar. A failure lands in
+    `result.errors`. The caller holds the object-store lock."""
+    result.pack_files_reaped = store_hygiene.sweep_orphan_pack_files(common)
+    if store_hygiene.midx_names_missing_pack(common):
+        midx = common / "objects" / "pack" / "multi-pack-index"
+        if not store_hygiene._unlink_quiet(midx):
+            result.errors.append(f"stale multi-pack-index not removable: {midx}")
+            return False
+        result.midx_healed = True
+    result.packs_merged = store_hygiene.consolidate_pack_batch(common)
+    if result.packs_merged:
+        return True
+    if store_hygiene.status(common).loose_estimate > store_hygiene.STALE_LOOSE_SLACK:
+        result.loose_packed, error = _pack_loose_batch(repo, common)
+        if error:
+            result.errors.append(error)
+        return result.loose_packed > 0
+    return False
+
+
+def _unlink_loose(path: Path) -> None:
+    """Remove one loose object file; git writes them read-only, which Windows refuses to
+    unlink, so a refusal retries once after clearing the bit. A file already gone or still
+    held open is left for the next call."""
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            path.unlink()
+        except OSError:
+            pass
+
+
+def _pack_loose_batch(repo: Path, common: Path) -> Tuple[int, Optional[str]]:
+    """Pack one bounded batch of reachable loose objects without reading the index.
+
+    `rev-list --objects --unpacked --all --reflog` lists loose objects reachable from refs
+    and reflogs (the index is not a source, unlike `git repack -d`); the first
+    `_LOOSE_BATCH_OBJECTS` that exist in this store and fit `_LOOSE_BATCH_BYTES` go into one
+    `pack-objects` pack, and only after its `.idx` exists are their loose files unlinked.
+    Returns `(objects packed, error)`."""
+    objects = common / "objects"
+    shas: List[str] = []
+    total = 0
+    with run_git_stream(
+        ["rev-list", "--objects", "--unpacked", "--all", "--reflog", "--no-object-names"],
+        cwd=str(repo),
+        text=True,
+    ) as proc:
+        for line in proc.stdout:
+            sha = line.strip()
+            if len(sha) < 40:
+                continue
+            try:
+                size = (objects / sha[:2] / sha[2:]).stat().st_size
+            except OSError:
+                continue
+            if shas and total + size > _LOOSE_BATCH_BYTES:
+                break
+            shas.append(sha)
+            total += size
+            if len(shas) >= _LOOSE_BATCH_OBJECTS:
+                break
+        else:
+            if proc.wait() != 0:
+                return 0, f"rev-list --unpacked failed rc={proc.returncode}"
+    if not shas:
+        return 0, None
+    packed = run_git(
+        ["pack-objects", "-q", str(objects / "pack" / "pack")],
+        cwd=str(repo),
+        input="".join(sha + "\n" for sha in shas).encode("ascii"),
+    )
+    name = packed.stdout.strip()
+    if packed.returncode != 0 or not name or not (objects / "pack" / f"pack-{name}.idx").exists():
+        return 0, f"pack-objects (loose batch) failed rc={packed.returncode}: {packed.stderr.strip()}"
+    for sha in shas:
+        _unlink_loose(objects / sha[:2] / sha[2:])
+    return len(shas), None
 
 
 def _stamp(repo: Path) -> None:
@@ -561,6 +716,12 @@ def _report(result: MaintenanceResult) -> None:
             f"; pruned={result.pruned}; orphan packs reaped={result.orphan_packs_reaped}"
             f"; skipped={result.orphan_packs_skipped}"
         )
+    if result.tier == "daily":
+        line += (
+            f"; pack files reaped={result.pack_files_reaped}; midx healed={result.midx_healed}"
+            f"; packs merged={result.packs_merged}; loose packed={result.loose_packed}"
+            f"; owed={result.owed}"
+        )
     print(line, file=sys.stderr)
 
 
@@ -592,5 +753,10 @@ def _git_maintenance(params: dict, repo_root: Optional[Path] = None) -> dict:
         "deferred": result.deferred,
         "pruned": result.pruned,
         "orphan_packs_reaped": result.orphan_packs_reaped,
+        "pack_files_reaped": result.pack_files_reaped,
+        "midx_healed": result.midx_healed,
+        "packs_merged": result.packs_merged,
+        "loose_packed": result.loose_packed,
+        "owed": result.owed,
         "errors": result.errors,
     }

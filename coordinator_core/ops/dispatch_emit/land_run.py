@@ -5547,25 +5547,33 @@ def _land_merge_artifacts(root: Path, artifacts: dict, message: str, merge_sha: 
 
 def _split_free_targets(
     root: Path, targets: Collection[str], *, barred: Collection, session_id, rid, script_path, plan_rel, run_base,
-    minted_before, own_run_ids: Sequence,
+    minted_before, own_run_ids: Sequence, halted_advisory: Optional[dict] = None,
 ) -> tuple:
     """``(free, holders)``: ``free`` the sorted targets no run withholds, peer holds or declares (safe to widen
     into the landing); ``holders`` maps every other target to what keeps it out (a run id, session ids, or
-    ``barred`` for this run's own withhold)."""
-    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_withheld_index, peer_hunk_gate
+    ``barred`` for this run's own withhold). ``halted_advisory`` (out-param), when given, makes a halted
+    run's withhold advisory: such a target is not kept out and is recorded there as ``{path: halted run id}``."""
+    from coordinator_core.ops.dispatch_emit import (
+        halted_hold_release, halted_withheld_index, peer_hunk_gate, run_hunk_claims,
+    )
 
     own = {str(r) for r in own_run_ids if r}
-    halted = halted_withheld_index.withheld_by_path(root)
-    halted = halted_hold_release.still_held_by_index(
-        root, {p: r for p, r in halted.items() if p in targets and str(r) not in own},
-        next((r for r in reversed(list(own_run_ids)) if r), None), plan_rel,
-    )
+    halted = {p: r for p, r in halted_withheld_index.withheld_by_path(root).items() if p in targets and str(r) not in own}
+    landing_run = next((r for r in reversed(list(own_run_ids)) if r), None)
+    if landing_run and halted:
+        # A halted holder in the landing run's own lineage (resumed_from chain, same sizing) is its earlier attempt, not a peer.
+        own |= run_hunk_claims._own_lineage(root, str(landing_run), {str(r): True for r in halted.values()})
+        halted = {p: r for p, r in halted.items() if str(r) not in own}
+    halted = halted_hold_release.still_held_by_index(root, halted, landing_run, plan_rel)
     holders: dict = {}
     for t in targets:
         if t in barred:
             holders[t] = "barred"
-        elif t in halted and str(halted[t]) not in own:
-            holders[t] = str(halted[t])
+        elif t in halted:
+            if halted_advisory is None:
+                holders[t] = str(halted[t])
+            else:
+                halted_advisory[t] = str(halted[t])
     free = sorted(t for t in targets if t not in holders)
     held = _peer_held(
         root, free, session_id, rid, script_path, plan_rel=plan_rel,

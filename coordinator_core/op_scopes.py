@@ -84,6 +84,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.submit_bug_blitz":                "none",
     "hooks.taskstop_launch_recorder":        "none",
     "hooks.taskstop_reaper":                 "none",
+    "hooks.agent_stop_reaper":               "none",
     "hooks.nudge_unauthorized_handoff":      "none",
     "hooks.idle_compact_advisory":           "none",
     "hooks.nudge_named_agent_report_delivery": "none",
@@ -378,6 +379,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "memo.check_addressee":                   "common_dir",
     "memo.send":                              "common_dir",
     "memo.reconcile_outbox":                  "common_dir",
+    "memo.redeliver":                         "common_dir",
     # memo.check_deliveries — "common_dir", the scope its own handler docstring
     # already declares (`ops/fleet/memo_send.py :: _memo_check_deliveries`). It is a
     # sender-side COMPUTE_ONLY sweep over the CALLING repo's own sent records, whose

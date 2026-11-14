@@ -195,8 +195,7 @@ def test_write_whitespace_only_against_disk_content_suppresses_nudge(tmp_path) -
     assert op(payload) is None
 
 
-def test_write_substantive_change_against_disk_content_fires(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(_mod, "_is_scratch_or_tmp", lambda p: False)
+def test_write_substantive_change_against_disk_content_fires(tmp_path) -> None:
     target = tmp_path / "module.py"
     target.write_text("def f():\n    return 1\n", encoding="utf-8")
     payload = {
@@ -210,8 +209,7 @@ def test_write_substantive_change_against_disk_content_fires(tmp_path, monkeypat
     assert _is_advisory(op(payload))
 
 
-def test_write_brand_new_file_never_bypasses(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(_mod, "_is_scratch_or_tmp", lambda p: False)
+def test_write_brand_new_file_never_bypasses(tmp_path) -> None:
     target = tmp_path / "does-not-exist-yet.py"
     payload = {
         "tool_name": "Write",
@@ -338,11 +336,12 @@ def test_doc_file_allowed(monkeypatch) -> None:
     assert op(p) is None
 
 
-def test_scratch_path_allowed(monkeypatch) -> None:
+def test_scratch_path_draws_the_advisory(monkeypatch) -> None:
     _unsized(monkeypatch)
+    _level(monkeypatch, "warn")
     p = _payload()
     p["tool_input"]["file_path"] = "/repo/scratch/probe.py"
-    assert op(p) is None
+    assert "No sizing" in _advisory(op(p))
 
 
 def test_autonomous_allowed_when_sized(monkeypatch) -> None:

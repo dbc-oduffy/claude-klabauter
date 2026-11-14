@@ -240,6 +240,12 @@ def test_send_delivers_staged_draft() -> None:
         # `_receiver_landing`), which leaves the working tree untouched. A bare `git init`
         # branch follows the host's init.defaultBranch, so pin it.
         receiver_repo = _make_git_repo(tmpdir, "receiver_repo", branch="main")
+        # memo.send builds the delivery on the receiver's fetched upstream tip, so the receiver
+        # needs a push remote whose `main` it has fetched.
+        origin = os.path.join(tmpdir, "receiver_origin.git")
+        subprocess.run(["git", "init", "--bare", "-b", "main", origin], capture_output=True, check=True)
+        subprocess.run(["git", "-C", receiver_repo, "remote", "add", "origin", origin], capture_output=True, check=True)
+        subprocess.run(["git", "-C", receiver_repo, "push", "-u", "origin", "main"], capture_output=True, check=True)
         env, _ = _fixture_envs(tmpdir, sender_repo, receiver_repo)
         env["COORDINATOR_ENGINE_ROOT"] = claude_klabauter_root
 
@@ -282,19 +288,25 @@ def test_send_delivers_staged_draft() -> None:
         if "Receiver-side:" not in send_result.stdout:
             raise AssertionError(f"{name}: send stdout should name the receiver-side path. stdout={send_result.stdout!r}")
 
-        inbox_dir = os.path.join(receiver_repo, "cross-repo", "inbox")
-        if not os.path.isdir(inbox_dir):
-            raise AssertionError(f"{name}: receiver inbox dir not created: {inbox_dir}")
-        delivered = [f for f in os.listdir(inbox_dir) if f.endswith("roundtrip-topic.md")]
-        if not delivered:
-            raise AssertionError(f"{name}: no delivered memo found under {inbox_dir}: {os.listdir(inbox_dir)}")
-
-        log = subprocess.run(
-            ["git", "-C", receiver_repo, "log", "--oneline", "-1", "--", f"cross-repo/inbox/{delivered[0]}"],
+        # The delivery is an object-only commit anchored under refs/coordinator/inbox/<file>/<sha>;
+        # the receiver's HEAD, index and worktree are never written, and the push is owed to the
+        # warm engine's push-pending sweep.
+        anchors = subprocess.run(
+            ["git", "-C", receiver_repo, "for-each-ref", "--format=%(refname)", "refs/coordinator/inbox/"],
             capture_output=True, text=True, check=False,
-        )
-        if not log.stdout.strip():
-            raise AssertionError(f"{name}: delivered memo is not committed in the receiver repo")
+        ).stdout.split()
+        anchors = [a for a in anchors if "roundtrip-topic.md/" in a]
+        if len(anchors) != 1:
+            raise AssertionError(f"{name}: expected one inbox anchor for roundtrip-topic, found: {anchors}")
+        fname, _, delivery_sha = anchors[0][len("refs/coordinator/inbox/"):].partition("/")
+        tree = subprocess.run(
+            ["git", "-C", receiver_repo, "ls-tree", "-r", "--name-only", delivery_sha],
+            capture_output=True, text=True, check=False,
+        ).stdout.split()
+        if f"cross-repo/inbox/{fname}" not in tree:
+            raise AssertionError(f"{name}: delivery commit {delivery_sha} does not carry the memo: {tree}")
+        if os.path.exists(os.path.join(receiver_repo, "cross-repo", "inbox", fname)):
+            raise AssertionError(f"{name}: the receiver's worktree must not be written")
 
         if os.path.exists(outbox_path):
             raise AssertionError(f"{name}: outbox draft should be gone after send (moved to sent/): {outbox_path}")

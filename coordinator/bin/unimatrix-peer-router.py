@@ -436,19 +436,28 @@ NOT_DELIVERED_PREFIXES = ("[unimatrix-peer-agy] not delivered", "[unimatrix-peer
 _MIRROR_MARKERS = ("unimatrixRemote", "macSocketPath", "unimatrixMirror", "farPid")
 
 
-def _far_alias_is_stale(entry, name):
-    """True when `entry` is a Claude mirror claiming far name `name` but registered under another far session's name.
+def _far_alias_is_stale(entry):
+    """True when `entry` is a Claude mirror registered under another far session's name.
 
     A mirror is named `<far name>.<box>`; one whose registered name derives from a different far
-    name holds a stale far-name mapping, and an address resolved through it would land on the
-    wrong session. Codex/agy mirrors keep their readable aliases and are exempt.
+    name holds a stale far-name mapping, so whichever of its two names an address matched, the
+    frame would land on the session the other name denotes. Codex/agy mirrors keep their readable
+    aliases and are exempt.
     """
     far, own = entry.get("unimatrixFarName"), entry.get("name")
-    if (name != far or name == own or entry.get("vendor") in ("codex", "agy")
-            or not any(entry.get(key) for key in _MIRROR_MARKERS)
+    if (entry.get("vendor") in ("codex", "agy") or not any(entry.get(key) for key in _MIRROR_MARKERS)
             or not isinstance(far, str) or not isinstance(own, str)):
         return False
     return own.partition(".")[0] not in (far.partition(".")[0], far.replace(".", "-"))
+
+
+def _ref_contradicts_session(entry, name):
+    """True when `name` ends in a `[ref]` and the row it matched by that name is not the session the ref names.
+
+    A ref is the first six hex digits of the session id; a row with no session id cannot prove it.
+    """
+    m = _memo_re("name_ref", r"^.+ \[([0-9a-f]{6})\]$").match(name)
+    return bool(m) and not str(entry.get("sessionId") or "").lower().startswith(m.group(1))
 
 
 def not_delivered(reply):
@@ -472,6 +481,46 @@ def wrap_inbound(sender, body, reply_to=None):
     return (f"[{sender}] {body}\n\nFrom agent {sender}, not the PM. "
             f"Never answer them in plain text to the human at your keyboard. "
             f"Reply to them with: {send} --to {quote(str(reply_to or sender))} '<your reply>'")
+
+
+def routable_from(frame, name):
+    """`frame` with the wrapper's reply address (`from="uds:<face endpoint>"`) replaced by `name`.
+
+    A face endpoint is this box's own socket or pipe, unroutable from a far box; a session name routes
+    through that box's mirror. `frame["from"]` stays: the local harness checks it against the face."""
+    out = dict(frame)
+    msg = out.get("message")
+    if isinstance(msg, dict) and isinstance(msg.get("content"), str):
+        safe = str(name).replace('"', "'")
+        out["message"] = {**msg, "content": re.sub(r'(<cross-session-message from=")uds:[^"]*"',
+                                                    lambda m: f'{m.group(1)}{safe}"', msg["content"], count=1)}
+    return out
+
+
+def _receipt(reached):
+    """`reached` / `reached_box` receipt fields for the session a send resolved to; {} when none."""
+    return {"reached": reached[0], "reached_box": reached[1]} if reached and reached[0] else {}
+
+
+TRANSPORT_HOP_LIMIT = 2
+
+
+def _hop_marker():
+    return _memo_re("hop_marker", r"\s*\[(?:forwarded message from (?P<fwd>[^\]]*)|(?P<via>[^\]]*) via Unimatrix transport)\]")
+
+
+def hop_chain(body):
+    """The names that already relayed `body`, from its leading relay markers, outermost first."""
+    chain, pos = [], 0
+    while (m := _hop_marker().match(str(body), pos)):
+        chain.append((m.group("fwd") if m.group("fwd") is not None else m.group("via")).strip())
+        pos = m.end()
+    return chain
+
+
+def hop_count(body):
+    """How many transport relay markers lead `body`: each forward wraps the body in another."""
+    return len(hop_chain(body))
 
 
 def is_ack(text):
@@ -703,6 +752,7 @@ class Router:
 
     last_refusal = ""
     last_resolved_far = False
+    last_resolved_row = None  # (name, box) of the one session resolve_sender last matched
 
     def __init__(self, peers, sessions_dir=None, state_dir=None, endpoint_dir=None,
                  adapters=None, ready_seconds=READY_SECONDS, legs_dir=None,
@@ -1137,6 +1187,8 @@ class Router:
             if not_delivered(reply):
                 return {"ok": False, "error": str(reply).strip()}
             return {"ok": True, "reply": _contract().label(peer, reply)}
+        if op == "resolve":
+            return await asyncio.to_thread(self.resolve_relay_target, req.get("name"))
         if op == "shutdown":
             # Reply first; the stop runs after the connection handler has flushed it.
             asyncio.get_running_loop().call_soon(self.stop_requested.set)
@@ -1209,13 +1261,14 @@ class Router:
         names.discard(sender)
         contract = _contract()
         box = contract.local_box()
-        rows = [{"name": n, "box": box, "vendor": self.peers[n]["vendor"],
+        rows = [{"name": n, "box": box, "vendor": self.peers[n]["vendor"], "this_box": True,
                  **({"stale": True} if self.peer_stale(n) else {})} if n in self.peers
                 else contract.agent_row(entries[n], box) for n in sorted(names)]
         for n, marker in sorted(self.stale_mirror_markers().items()):
             if n != sender and n not in names:
                 names.add(n)
-                rows.append({"name": n, "box": marker["box"], "vendor": "claude", "stale": True})
+                rows.append({"name": n, "box": marker["box"], "vendor": "claude", "stale": True,
+                             "this_box": marker["box"] == box})
         return sorted(names), rows
 
     mirror_stale_dir = "/tmp/cc-socks"  # where the relay's `mirror-stale` mode writes its markers
@@ -1276,6 +1329,22 @@ class Router:
         if not self.codex_locks_dir or not thread_id:
             return False
         return lock_held(os.path.join(self.codex_locks_dir, f"{thread_id}.lock"))
+
+    def _session_at(self, endpoint):
+        """True when a roster session file registers `endpoint` as its messaging socket."""
+        try:
+            files = os.listdir(self.sessions_dir)
+        except FileNotFoundError:
+            return False
+        for f in files:
+            try:
+                with open(os.path.join(self.sessions_dir, f), encoding="utf-8") as fh:
+                    e = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if endpoint and isinstance(e, dict) and e.get("messagingSocketPath") == endpoint:
+                return True
+        return False
 
     def session_names(self):
         """Names of the live roster sessions that are not the router's own peers."""
@@ -1345,6 +1414,22 @@ class Router:
                     raise
         return name
 
+    def resolve_relay_target(self, name):
+        """Strict relay target for the live local session called `name`; the answer an inbound relay delivers by.
+
+        {"ok": True, "endpoint", "name", "box"} for exactly one live session. Otherwise a refusal
+        that is logged either way (RELAY-TARGET / RELAY-REFUSED); an unknown or ambiguous name is
+        never mapped to another session or a default inbox.
+        """
+        endpoint = self.resolve_sender(name) if isinstance(name, str) and name else ""
+        if not endpoint:
+            reason = self.last_refusal or "no live session"
+            self.log("RELAY-REFUSED", name, reason)
+            return {"ok": False, "error": f"no unique live session named {name}: {reason}", "recorded": True}
+        row = self.last_resolved_row or (name, "")
+        self.log("RELAY-TARGET", name, "->", row[0], row[1])
+        return {"ok": True, "endpoint": endpoint, "name": row[0], "box": row[1]}
+
     def _refusal_suffix(self):
         return f" ({self.last_refusal})" if self.last_refusal else ""
 
@@ -1375,20 +1460,25 @@ class Router:
     async def _transport_send_to_session(self, source, to, text):
         endpoint = self.resolve_sender(to)
         if not endpoint:
+            self.log("RELAY-REFUSED", to, self.last_refusal or "no live session")
             return {"ok": False, "error": f"no unique live session named {to}" + self._refusal_suffix(), "peers": sorted(self.peers)}
+        far, reached = self.last_resolved_far, self.last_resolved_row
         endpoint, refusal = self.relay_route(endpoint, to)
         if refusal:
             return {"ok": False, "error": refusal}
         try:
             transport = await self._transport_face(source, to)
             content = f"[{source} via Unimatrix transport] {text}"
-            frame = _contract().build_frame(self.endpoint_of(transport), transport, content)
-            frame = _contract().stamp(frame, transport, "transport", source, os.getpid())
+            box = _contract().local_box()
+            frame = _contract().build_frame(self.endpoint_of(transport), transport, content, from_box=box)
+            if far:
+                frame = routable_from(frame, f"{source}.{box}")
+            frame = _contract().stamp(frame, transport, "transport", source, os.getpid(), from_box=box)
             await self._deliver_as_peer(transport, endpoint, frame)
         except Exception as exc:
             return {"ok": False, "error": f"transport delivery to {to} failed: {exc}"}
         self.log("SENT-TRANSPORT", source, "->", to, frame["msg_id"])
-        return {"ok": True, "msg_id": frame["msg_id"], "sender": transport, "written": True}
+        return {"ok": True, "msg_id": frame["msg_id"], "sender": transport, "written": True, **_receipt(reached)}
 
     async def handle_transport_inbound(self, transport, frame):
         """Bridge both reply directions without pretending to be either endpoint's vendor."""
@@ -1399,16 +1489,25 @@ class Router:
         sender_endpoint, sender, body = _contract().parse_inbound(frame)
         if is_ack(body):
             return
+        if hop_count(body) >= TRANSPORT_HOP_LIMIT:
+            self.log("TRANSPORT-LOOP-DROPPED", transport, sender, hop_count(body))
+            return
         source_endpoint = self.resolve_sender(source)
         from_source = bool(source_endpoint and sender_endpoint == source_endpoint) if sender_endpoint else sender == source
         destination = self.transport_targets[transport] if from_source else source
         endpoint = self.resolve_sender(destination)
+        reflected = (endpoint == sender_endpoint if self._session_at(sender_endpoint)
+                     else destination == sender)
+        if reflected or destination in hop_chain(body):
+            self.log("TRANSPORT-LOOP-DROPPED", transport, sender, "self" if reflected else "chain")
+            return
         if not endpoint:
             self.log("NO-TRANSPORT-RETURN", transport)
             return
+        box = _contract().local_box()
         outgoing = _contract().build_frame(self.endpoint_of(transport), transport,
-                                          f"[forwarded message from {sender}] {body}")
-        outgoing = _contract().stamp(outgoing, transport, "transport", source, os.getpid())
+                                          f"[forwarded message from {sender}] {body}", from_box=box)
+        outgoing = _contract().stamp(outgoing, transport, "transport", source, os.getpid(), from_box=box)
         try:
             await self._deliver_as_peer(transport, endpoint, outgoing)
         except Exception as exc:
@@ -1425,13 +1524,18 @@ class Router:
         """A peer's own addressed send to a Claude session `to`; marks the peer's open turn as answered."""
         ep = self.resolve_sender(to)
         if not ep:
+            self.log("RELAY-REFUSED", to, self.last_refusal or "no live session")
             return {"ok": False, "error": f"no session named {to}" + self._refusal_suffix(), "peers": sorted(self.peers)}
+        far, reached = self.last_resolved_far, self.last_resolved_row
         ep, refusal = self.relay_route(ep, to)
         if refusal:
             return {"ok": False, "error": refusal}
         p = self.peers[peer]
-        frame = _contract().build_frame(self.endpoint_of(peer), peer, _contract().label(peer, text))
-        frame = _contract().stamp(frame, peer, p["vendor"], p["target"], os.getpid())
+        box = _contract().local_box()
+        frame = _contract().build_frame(self.endpoint_of(peer), peer, _contract().label(peer, text), from_box=box)
+        if far:
+            frame = routable_from(frame, f"{peer}.{box}")
+        frame = _contract().stamp(frame, peer, p["vendor"], p["target"], os.getpid(), from_box=box)
         try:
             await self._deliver_as_peer(peer, ep, frame)
         except Exception as e:
@@ -1440,7 +1544,7 @@ class Router:
         if peer in self.addressed:
             self.addressed[peer].add(to)
         self.log("SENT", peer, "->", to, frame["msg_id"])
-        return {"ok": True, "msg_id": frame["msg_id"], "written": True}
+        return {"ok": True, "msg_id": frame["msg_id"], "written": True, **_receipt(reached)}
 
     def external_codex_sendable(self, entry):
         """Gate resolved roster identity, never infer native UUID from a face/name/PID.
@@ -1497,9 +1601,10 @@ class Router:
         name as its address. The router's own faces never match a Claude sender.
         """
         exact, aliases, owners, far_eps = set(), set(), set(), set()
+        rows_by_ep = {}
         owned_alias = False
         refused_identity = False
-        self.last_refusal, self.last_resolved_far = "", False
+        self.last_refusal, self.last_resolved_far, self.last_resolved_row = "", False, None
         try:
             names = os.listdir(self.sessions_dir)
         except FileNotFoundError:
@@ -1521,12 +1626,13 @@ class Router:
             if not self.external_codex_sendable(e):
                 refused_identity = True
                 continue
-            if _far_alias_is_stale(e, name):
+            if _far_alias_is_stale(e) or _ref_contradicts_session(e, name):
                 refused_identity = True
                 continue
             owned_alias = owned_alias or name in _contract().projected_addresses(e)
             owners.add((e.get('vendor'), e.get('target') or ep))
             (exact if e.get("name") == name else aliases).add(ep)
+            rows_by_ep[ep] = e
             if e.get("unimatrixFarName") or e.get("unimatrixRemote"):
                 far_eps.add(ep)
         if refused_identity:
@@ -1540,7 +1646,11 @@ class Router:
             self.last_refusal = f"ambiguous: {len(matches)} live sessions carry this name"
             return ""  # An exact name never beats a far alias: both are live carriers of the address.
         self.last_resolved_far = bool(matches) and matches <= far_eps
-        return next(iter(matches)) if matches else fallback
+        if matches:
+            row = rows_by_ep[next(iter(matches))]
+            self.last_resolved_row = (row.get("name"), _contract().agent_row(row, _contract().local_box())["box"])
+            return next(iter(matches))
+        return fallback
 
     async def handle_inbound(self, peer, frame):
         sender_ep, sender_name, body = _contract().parse_inbound(frame)
@@ -1567,13 +1677,18 @@ class Router:
         if not resolved:
             self.log("NO-REPLY-UNRESOLVED", peer, "->", sender_name, self.last_refusal)
             return
-        if resolved != sender_ep and not self.last_resolved_far:
+        far = self.last_resolved_far
+        if resolved != sender_ep and not far:
             self.log("REPLY-KEEPS-FRAME-ENDPOINT", peer, "->", sender_name)  # a local row sharing a far sender's name is not that sender
         else:
             sender_ep = resolved
         p = self.peers[peer]
-        frame = _contract().build_frame(self.endpoint_of(peer), peer, f"[reply] {peer}: {str(reply).strip()}")
-        frame = _contract().stamp(frame, peer, p["vendor"], p["target"], os.getpid())
+        box = _contract().local_box()
+        frame = _contract().build_frame(self.endpoint_of(peer), peer, f"[reply] {peer}: {str(reply).strip()}",
+                                        from_box=box)
+        if far:
+            frame = routable_from(frame, f"{peer}.{box}")
+        frame = _contract().stamp(frame, peer, p["vendor"], p["target"], os.getpid(), from_box=box)
         try:
             await self._deliver_as_peer(peer, sender_ep, frame)
         except Exception as e:

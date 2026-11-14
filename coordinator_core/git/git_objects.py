@@ -40,6 +40,7 @@ import binascii
 import contextvars
 import hashlib
 import itertools
+import logging
 import mmap
 import os
 import re
@@ -50,12 +51,14 @@ import weakref
 import zlib
 from collections import OrderedDict
 from collections.abc import Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
 from coordinator_core.bounded_io import run_bounded
-from coordinator_core.git import call_io_scope, object_store_lock
+from coordinator_core.git import call_io_scope, object_store_lock, pack_deletion_pause
+
+_log = logging.getLogger(__name__)
 
 #: Ceiling on one loose-object placement; past it `write_object` raises TimeoutError.
 _WRITE_OBJECT_DEADLINE_SECS = 2.0
@@ -323,8 +326,8 @@ def _read_tail_entries(pack_dir: Path, name: str) -> Optional[list]:
 
 def _remove_pack_pair(pack_dir: Path, name: str) -> bool:
     """Idx first, so a reader stops listing the pack before its bytes go. `False` when a
-    Windows lock outlasts the retries."""
-    for suffix in (".idx", ".pack"):
+    Windows lock outlasts the retries. A `.rev` sibling goes last, so no pack file is orphaned."""
+    for suffix in (".idx", ".pack", ".rev"):
         path = pack_dir / f"pack-{name}{suffix}"
         for delay in (None, *_REMOVE_RETRY_DELAYS_S):
             if delay is not None:
@@ -351,19 +354,43 @@ def _flush_pack(gitdir: Path, pending: dict) -> None:
     worst case is an extra pack, never a lost object.
 
     The tail read, the place and the tail delete run under the object-store lock; a lock held
-    past `HOT_WAIT_S` sends the batch loose, which no pack delete can lose."""
+    past `HOT_WAIT_S` sends the batch loose, which no pack delete can lose. The fold (tail read,
+    pack delete, marker write) also needs the fleet maintenance lock, taken outside the
+    object-store lock; unpaused, a fleet lock another process holds (or an unresolvable settings
+    home) makes this flush a plain pack of `pending` that deletes nothing."""
     try:
-        with object_store_lock.hold(Path(gitdir), wait_s=object_store_lock.HOT_WAIT_S, holder_label="git_objects._flush_pack"):
-            _flush_pack_locked(gitdir, pending)
+        with _fold_permit() as may_fold:
+            with object_store_lock.hold(Path(gitdir), wait_s=object_store_lock.HOT_WAIT_S, holder_label="git_objects._flush_pack"):
+                _flush_pack_locked(gitdir, pending, may_fold)
     except object_store_lock.ObjectStoreBusy:
         for kind, payload in pending.values():
             write_object(gitdir, kind, payload)
 
 
-def _flush_pack_locked(gitdir: Path, pending: dict) -> None:
+@contextmanager
+def _fold_permit():
+    """Yield True when this flush may fold: unpaused and the fleet maintenance lock is ours.
+    Yields False, holding nothing, when paused, when another process holds the fleet lock, or when
+    its settings home cannot be resolved -- the flush then deletes nothing."""
+    if pack_deletion_pause.paused():
+        yield False
+        return
+    from coordinator_core.git import fleet_maintenance_lock
+
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(fleet_maintenance_lock.hold(wait_s=0, holder_label="git_objects._flush_pack"))
+            permitted = True
+        except (fleet_maintenance_lock.FleetMaintenanceBusy, fleet_maintenance_lock.FleetLockHomeUnresolved):
+            permitted = False
+        yield permitted
+
+
+def _flush_pack_locked(gitdir: Path, pending: dict, may_fold: bool) -> None:
     pack_dir = Path(gitdir, "objects", "pack")
     pack_dir.mkdir(parents=True, exist_ok=True)
-    tail, stale = _read_tail_marker(pack_dir)
+    paused = not may_fold
+    tail, stale = (None, []) if paused else _read_tail_marker(pack_dir)
     entries = [
         (bytes.fromhex(sha), entry, binascii.crc32(entry))
         for sha, (kind, payload) in pending.items()
@@ -386,6 +413,8 @@ def _flush_pack_locked(gitdir: Path, pending: dict) -> None:
         return
     pack, idx, name = _assemble_pack(entries)
     _place_pack(pack_dir, pack, idx, name)
+    if paused:
+        return
     doomed = [n for n in (*stale, folded) if n is not None and n != name]
     leftovers = [n for n in doomed if not _remove_pack_pair(pack_dir, n)]
     if (name, leftovers) != (tail, stale):
@@ -740,13 +769,39 @@ _PACK_INDEX_CACHE_MAX_ENTRIES = 4096
 _PACK_INDEX_CACHE: "OrderedDict[tuple[str, int, int], Optional[_PackIndex]]" = OrderedDict()
 
 
+_PACK_PROBES: "contextvars.ContextVar[Optional[list]]" = contextvars.ContextVar("pack_probes", default=None)
+_PACK_PROBE_REPORT_MAX = 36
+
+
 def _parse_pack_index(idx_path: Path) -> Optional[_PackIndex]:
     """Parses a v2 pack `.idx`, memoized by `(path, st_mtime_ns, st_size)`
     -- see `_PACK_INDEX_CACHE` above for why this is safe against a live
     `git gc`/fetch despite the warm long-running engine this module sits
     in. A `stat()` failure (file vanished under us) skips the cache and
     falls through to the uncached parse, which then degrades to `None` in
-    the usual way."""
+    the usual way. Inside `_under_read_wall` each probe is timed into the wall's probe list."""
+    probes = _PACK_PROBES.get()
+    if probes is None:
+        return _parse_pack_index_memoized(idx_path)
+    entry = [idx_path.name, time.perf_counter(), None]
+    probes.append(entry)
+    try:
+        return _parse_pack_index_memoized(idx_path)
+    finally:
+        entry[2] = time.perf_counter() - entry[1]
+
+
+def _probe_report(probes: list) -> str:
+    """Slowest-first `name=elapsed` list; a probe still in flight is reported with its running time."""
+    now = time.perf_counter()
+    rows = [(name, (now - start) if took is None else took, took is None) for name, start, took in list(probes)]
+    rows.sort(key=lambda r: r[1], reverse=True)
+    shown = ", ".join(f"{n}={e:.3f}s{' (in flight)' if live else ''}" for n, e, live in rows[:_PACK_PROBE_REPORT_MAX])
+    more = f" (+{len(rows) - _PACK_PROBE_REPORT_MAX} more)" if len(rows) > _PACK_PROBE_REPORT_MAX else ""
+    return f"{len(rows)} .idx probed, slowest first: {shown}{more}"
+
+
+def _parse_pack_index_memoized(idx_path: Path) -> Optional[_PackIndex]:
     try:
         st = idx_path.stat()
     except OSError:
@@ -1297,7 +1352,12 @@ def _under_read_wall(kind: str, common_dir: Path, sha: str, fn):
         raise PackReadDeadline(
             f"{PACK_READ_STALLED_ADVISORY}: pack reads under {common_dir} are failing fast after a stall"
         )
-    ctx = contextvars.copy_context()
+    probes: list = []
+    probe_token = _PACK_PROBES.set(probes)
+    try:
+        ctx = contextvars.copy_context()
+    finally:
+        _PACK_PROBES.reset(probe_token)
 
     def _work():
         _PACK_WORKER.inside = True
@@ -1309,12 +1369,23 @@ def _under_read_wall(kind: str, common_dir: Path, sha: str, fn):
     # Keyed per sha: run_bounded serialises callers sharing a key, and pool workers read one
     # repo's packs concurrently. The per-repo cooldown above is what stops a stalled drive
     # costing every distinct sha its own full wait.
-    out = run_bounded(f"{kind}:{ckey}:{sha}", _work, deadline=PACK_READ_DEADLINE_SECS, default=_PACK_STALLED)
+    try:
+        out = run_bounded(f"{kind}:{ckey}:{sha}", _work, deadline=PACK_READ_DEADLINE_SECS, default=_PACK_STALLED)
+    except PackReadDeadline as exc:
+        if not probes:
+            raise
+        report = _probe_report(probes)
+        _log.warning("pack read deadline under %s: %s", common_dir, report)
+        raise PackReadDeadline(f"{exc}; {report}") from exc
     if out is _PACK_STALLED:
         _PACK_STALL_UNTIL[ckey] = _pack_clock() + PACK_STALL_COOLDOWN_SECS
+        detail = f"; {_probe_report(probes)}" if probes else ""
+        _log.warning(
+            "pack read stalled under %s after %ss%s", common_dir, PACK_READ_DEADLINE_SECS, detail
+        )
         raise PackReadDeadline(
             f"{PACK_READ_STALLED_ADVISORY}: pack read under {common_dir} exceeded "
-            f"{PACK_READ_DEADLINE_SECS}s (storage stalled)"
+            f"{PACK_READ_DEADLINE_SECS}s (storage stalled){detail}"
         )
     return out
 

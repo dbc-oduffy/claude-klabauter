@@ -112,7 +112,8 @@ def fallback_roster(router,tmp_path,monkeypatch):
   pid_alive=lambda pid:pid in (700,701),proc_start=lambda pid:'birth-'+str(pid),pid_domain=lambda:'test-domain'))
  monkeypatch.setattr(R,'_contract',lambda:SimpleNamespace(
   projected_addresses=lambda e:e.get('aliases',[]),
-  build_frame=lambda *a:{'msg_id':'fixture-msg'},stamp=lambda f,*a:f))
+  build_frame=lambda *a,**k:{'msg_id':'fixture-msg'},stamp=lambda f,*a,**k:f,
+  local_box=lambda:'fixture-box',agent_row=lambda e,box:{'name':e.get('name'),'box':box}))
  def put(name,**extra):
   row={'name':name,'vendor':'codex','pid':700,'procStart':'birth-700','pidDomain':'test-domain','messagingSocketPath':'fixture-local-endpoint',**extra}
   (tmp_path/(str(len(list(tmp_path.glob('*.json'))))+'.json')).write_text(json.dumps(row))

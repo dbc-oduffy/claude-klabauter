@@ -1,7 +1,8 @@
 """memo.send reconciles a delivery that landed before its sender receipt did.
 
-A send that stalls after the receiver commit leaves the draft in the outbox and the memo in the
-receiver's inbox; the next send writes the receipt instead of refusing on the no-clobber guard.
+A send that stalls after the receiver delivery leaves the draft in the outbox, the delivery commit
+anchored in the receiver and its push owed in the sender's push-pending outbox; the next send writes
+the receipt instead of delivering again or refusing on the no-clobber guard.
 """
 
 from __future__ import annotations
@@ -13,9 +14,12 @@ import pytest
 from coordinator_core.ops.fleet import memo_send as memo_send_module
 from coordinator_core.ops.fleet.memo_send import _memo_send
 from coordinator_core.ops.fleet.tests.test_memo_send import (
+    _delivered_text,
+    _git,
     _make_claude_home,
     _make_receiver_git_repo,
     _make_sender_git_repo,
+    _pending_records,
     _write_draft,
 )
 
@@ -36,9 +40,21 @@ def _stalled_first_send(tmp_path, monkeypatch, topic, **draft_kw):
         first = _memo_send({"dry_run": False, "topic": topic}, repo_root=sender)
     assert first["acted"][0]["delivery_commit_sha"]
     assert draft.exists()
-    inbox = receiver / "cross-repo" / "inbox"
-    assert len([p for p in inbox.glob("*.md")]) == 1
+    assert len(_pending_records(sender)) == 1
     return sender, receiver, draft, first["acted"][0]["delivery_commit_sha"]
+
+
+def _publish_copy_in_receiver(receiver, sha, text=None):
+    """Land the delivered memo in the receiver's own pushed history and checkout, as a
+    pull of the pushed delivery would."""
+    names = _git(receiver, "ls-tree", "--name-only", f"{sha}:cross-repo/inbox").stdout.decode()
+    name = next(n for n in names.split() if n.endswith(".md"))
+    body = text if text is not None else _delivered_text(receiver)
+    (receiver / "cross-repo" / "inbox" / name).write_text(body, encoding="utf-8", newline="\n")
+    _git(receiver, "add", "-A")
+    _git(receiver, "commit", "-q", "-m", "memo pulled in")
+    _git(receiver, "push", "-q", "origin", "main")
+    return receiver / "cross-repo" / "inbox" / name
 
 
 def test_next_send_writes_receipt_from_anchor_without_redelivering(tmp_path, monkeypatch):
@@ -51,13 +67,42 @@ def test_next_send_writes_receipt_from_anchor_without_redelivering(tmp_path, mon
     acted = result["acted"][0]
     assert acted["reconciled"] is True
     assert acted["delivery_commit_sha"] == sha
+    assert "push_pending_record" not in acted
     assert not draft.exists()
     assert (sender / ".coordinator-local" / "memo-outbox" / "sent" / "t-land.md").is_file()
     assert (receiver / ".git" / "refs" / "heads" / "main").read_text() == head_before
 
 
+def test_reconcile_keeps_the_one_owed_push_record(tmp_path, monkeypatch):
+    sender, _receiver, _draft, sha = _stalled_first_send(tmp_path, monkeypatch, "t-push")
+
+    result = _memo_send({"dry_run": False, "topic": "t-push"}, repo_root=sender)
+
+    assert result["acted"][0]["reconciled"] is True
+    assert [r["commit_sha"] for r in _pending_records(sender)] == [sha]
+
+
+def test_a_landed_memo_with_no_owed_push_is_not_reconciled_from_its_anchor(tmp_path, monkeypatch):
+    """An anchor alone is a finished delivery: with no push-pending record naming it, the next send
+    of the same topic delivers again rather than skipping the receiver."""
+    sender, receiver, draft, sha = _stalled_first_send(tmp_path, monkeypatch, "t-done")
+    for row in _pending_records(sender):
+        from coordinator_core.ops.fleet import _memo_push_pending
+
+        _memo_push_pending.remove_pending(sender, row["commit_sha"])
+
+    result = _memo_send({"dry_run": False, "topic": "t-done"}, repo_root=sender)
+
+    assert result["exit_code"] == 0, result
+    acted = result["acted"][0]
+    assert "reconciled" not in acted
+    assert acted["push_pending_record"]
+    assert len(_pending_records(sender)) == 1
+
+
 def test_next_send_reconciles_from_tree_copy_when_no_anchor(tmp_path, monkeypatch):
-    sender, receiver, draft, _sha = _stalled_first_send(tmp_path, monkeypatch, "t-noanchor")
+    sender, receiver, draft, sha = _stalled_first_send(tmp_path, monkeypatch, "t-noanchor")
+    _publish_copy_in_receiver(receiver, sha)
     shutil.rmtree(receiver / ".git" / "refs" / "coordinator", ignore_errors=True)
 
     result = _memo_send({"dry_run": False, "topic": "t-noanchor"}, repo_root=sender)
@@ -69,14 +114,10 @@ def test_next_send_reconciles_from_tree_copy_when_no_anchor(tmp_path, monkeypatc
 
 
 def test_different_memo_under_the_same_filename_still_refuses(tmp_path, monkeypatch):
-    sender, receiver, draft, _sha = _stalled_first_send(tmp_path, monkeypatch, "t-other")
+    sender, receiver, draft, sha = _stalled_first_send(tmp_path, monkeypatch, "t-other")
+    different = _delivered_text(receiver).replace("Body prose.", "A different body.")
+    _publish_copy_in_receiver(receiver, sha, text=different)
     shutil.rmtree(receiver / ".git" / "refs" / "coordinator", ignore_errors=True)
-    landed = next((receiver / "cross-repo" / "inbox").glob("*t-other.md"))
-    landed.write_text(
-        landed.read_text(encoding="utf-8").replace("Body prose.", "A different body."),
-        encoding="utf-8",
-        newline="\n",
-    )
 
     result = _memo_send({"dry_run": False, "topic": "t-other"}, repo_root=sender)
 
@@ -84,18 +125,3 @@ def test_different_memo_under_the_same_filename_still_refuses(tmp_path, monkeypa
     assert result["acted"] == []
     assert "collision" in result["failed"][0]["reason"]
     assert draft.exists()
-
-
-def test_reconcile_registers_the_foreign_delivery_for_push(tmp_path, monkeypatch):
-    sender, receiver, _draft, _sha = _stalled_first_send(tmp_path, monkeypatch, "t-push")
-    seen = []
-    monkeypatch.setattr(
-        memo_send_module.push_cadence, "note_foreign_delivery",
-        lambda root, branch: seen.append((str(root), branch)),
-    )
-
-    result = _memo_send({"dry_run": False, "topic": "t-push"}, repo_root=sender)
-
-    assert result["acted"][0]["reconciled"] is True
-    assert [r for r, _b in seen] == [str(receiver)]
-    assert seen[0][1].startswith("work/")

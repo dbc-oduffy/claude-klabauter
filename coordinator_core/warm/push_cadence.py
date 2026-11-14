@@ -664,6 +664,123 @@ def _sweep_foreign(*, deadline: float, clock: Callable[[], float]) -> None:
             continue
 
 
+def _fetch_one_branch(root: Path, remote: str, branch: str, *, ceiling_secs: float) -> bool:
+    """Fetch only `branch` into its remote-tracking ref; never raises."""
+    from coordinator_core.ops.ceremony import git_native
+
+    result = git_native._git(
+        ["fetch", remote, f"+refs/heads/{branch}:refs/remotes/{remote}/{branch}"],
+        cwd=root, timeout=ceiling_secs,
+    )
+    return bool(result.ok)
+
+
+def _land_tracking_ref(common_dir: Path, remote: str, branch: str, sha: str) -> None:
+    tracking = f"refs/remotes/{remote}/{branch}"
+    seen = _ref_sha(common_dir, tracking)
+    if seen != sha:
+        cas_ref(common_dir, tracking, seen, sha)
+
+
+def _push_pending_record(sender: Path, record: dict, *, ceiling_secs: float) -> None:
+    """Push one push-pending record as `<sha>:refs/heads/<branch>`; never raises.
+
+    The record is removed only by a landed push or an upstream tree that
+    already holds the path. Every other outcome leaves it, with `attempts` + 1.
+    """
+    from coordinator_core.ops.fleet import _memo_push_pending, _upstream_delivery
+
+    root = Path(record["receiver_root"])
+    branch = record["branch"]
+    remote = record["remote"]
+    allowed, _reason = branch_gate(branch)
+    if not allowed:
+        _memo_push_pending.bump_attempt(record, f"branch {branch!r} is not pushable")
+        return
+    if not _acquire_sweep_lock(root):
+        return
+    try:
+        common_dir = resolve_git_common_dir(root)
+        sha = record["commit_sha"]
+        result = push_refspec(
+            root, remote, sha, f"refs/heads/{branch}", timeout=ceiling_secs
+        )
+        if result.ok:
+            _memo_push_pending.remove_pending(sender, sha)
+            _land_tracking_ref(common_dir, remote, branch, sha)
+            return
+        error = (result.stderr or "").strip()[:500]
+        try:
+            log_failure(
+                str(root), branch, "cadence-sweep", "sweep-failed", 1, error, "",
+                unconfirmed=False,
+            )
+        except Exception:  # noqa: BLE001 -- feeding the detector must never raise
+            pass
+        if not _is_definitive_reject(result.stderr) or not _fetch_one_branch(
+            root, remote, branch, ceiling_secs=ceiling_secs
+        ):
+            _memo_push_pending.bump_attempt(record, error)
+            return
+        tip = _ref_sha(common_dir, f"refs/remotes/{remote}/{branch}")
+        if not tip or tip == record["parent_sha"]:
+            _memo_push_pending.bump_attempt(record, error)
+            return
+        rebuilt = _upstream_delivery.rebuild_and_retarget(record, tip, sender_root=sender)
+        if rebuilt.status == _upstream_delivery.STATUS_COLLISION:
+            _memo_push_pending.remove_pending(sender, sha)
+            return
+        if not rebuilt.ok:
+            _memo_push_pending.bump_attempt(record, rebuilt.error or error)
+            return
+        retry = push_refspec(
+            root, remote, rebuilt.commit_sha, f"refs/heads/{branch}",
+            timeout=ceiling_secs,
+        )
+        if retry.ok:
+            _memo_push_pending.remove_pending(sender, rebuilt.commit_sha)
+            _land_tracking_ref(common_dir, remote, branch, rebuilt.commit_sha)
+            return
+        _memo_push_pending.bump_attempt(
+            {**rebuilt.record, _memo_push_pending.RECORD_PATH_KEY: str(rebuilt.record_path)},
+            (retry.stderr or "").strip()[:500],
+        )
+    except Exception as exc:  # noqa: BLE001 -- a sweep push must never raise
+        try:
+            _memo_push_pending.bump_attempt(record, repr(exc)[:500])
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        _release_sweep_lock(root)
+
+
+def _sweep_memo_push_pending(
+    served: Iterable[Union[str, Path]], *, deadline: float, clock: Callable[[], float]
+) -> None:
+    """Push every push-pending record in each served sender's outbox."""
+    if machine_profile() != "author":
+        return
+    from coordinator_core.ops.fleet import _memo_push_pending
+
+    for sender in dict.fromkeys(Path(repo) for repo in served):
+        try:
+            records = _memo_push_pending.list_pending(sender)
+        except Exception:  # noqa: BLE001 -- sweep_repos promises never to raise
+            continue
+        for record in records:
+            if _memo_push_pending.is_exhausted(record):
+                continue
+            try:
+                ceiling = resolve_push_ceiling(
+                    record["receiver_root"], default_secs=CADENCE_PUSH_RETRY_BUDGET_SECS
+                )
+                if clock() + ceiling > deadline:
+                    return
+                _push_pending_record(sender, record, ceiling_secs=ceiling)
+            except Exception:  # noqa: BLE001 -- sweep_repos promises never to raise
+                continue
+
+
 def sweep_repos(
     repos: Iterable[Union[str, Path]],
     *,
@@ -751,6 +868,7 @@ def sweep_repos(
         _note_sweep_result(root, result)
         {"pushed": pushed, "failed": failed}.get(result, skipped).append(root)
     _sweep_foreign(deadline=deadline, clock=clock)
+    _sweep_memo_push_pending(ordered, deadline=deadline, clock=clock)
     with _cadence_lock:
         streaks = {root: _backoff[root][0] for root in backed_off if root in _backoff}
     telemetry.record_sweep(

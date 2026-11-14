@@ -90,6 +90,25 @@ def test_windows_cwd_on_mirror_matches_posix_repo(tmp_path):
     assert got == ("other_box", "machine_a2", "m")
 
 
+def _legacy_agent_row(entry, local_box):
+    return {"name": entry.get("name"), "box": entry.get("unimatrixBox") or local_box, "vendor": "claude"}
+
+
+def test_row_without_this_box_derives_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(mob._contract(), "agent_row", _legacy_agent_row)
+    _write(tmp_path, "em-mini", unimatrixBox="mini")
+    assert mob.resolve_owning_box(REPO, sessions_dir=str(tmp_path)) == ("other_box", "mini", "em-mini")
+    _write(tmp_path, "em-here")
+    assert mob.resolve_owning_box(REPO, sessions_dir=str(tmp_path)) == ("this_box", "machine-a", "em-here")
+
+
+@pytest.mark.parametrize("bad", [None, [], "row", {}, {"name": "x"}])
+def test_malformed_row_resolves_unknown(tmp_path, monkeypatch, bad):
+    monkeypatch.setattr(mob._contract(), "agent_row", lambda entry, local: bad)
+    _write(tmp_path, "em-mini", unimatrixBox="mini")
+    assert mob.resolve_owning_box(REPO, sessions_dir=str(tmp_path)) == ("unknown", None, None)
+
+
 def test_far_seen_age_matches_roster_source():
     src = (mob._BIN / "unimatrix-roster.py").read_text(encoding="utf-8")
     poll = int(re.search(r"^POLL_SECONDS = (\d+)", src, re.M).group(1))

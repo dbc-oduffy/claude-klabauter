@@ -61,10 +61,9 @@ OP_MODULE_MAP: Dict[str, str] = {
     "freshness.commit_delta":                 "coordinator_core.ops.freshness_commit_delta",
     "code_intel.freshness":                   "coordinator_core.ops.code_intel_freshness",
     "code_intel.workstate_index":             "coordinator_core.ops.code_intel_workstate_index",
-    # coordinator_core.hooks registers all 16 hooks.* ops (6 advisory + 8 bookkeeping
-    # + 1 pull/poll arrival-check + 1 subagent-fabrication check) in a single module
+    # coordinator_core.hooks registers every hooks.* op in a single module
     # import. This package-level
-    # granularity (one shared module value for all 15 keys, rather than a per-op
+    # granularity (one shared module value for all keys, rather than a per-op
     # owning submodule) IS the correct mapping here, not a stand-in for a finer
     # split — confirmed C2 (docs/plans/2026-08-06-windows-hot-path-less-work-per-
     # interpreter.md): under the lazy hooks channel (C1), importing the shared
@@ -109,6 +108,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.submit_bug_blitz":                 "coordinator_core.hooks",
     "hooks.taskstop_launch_recorder":         "coordinator_core.hooks",
     "hooks.taskstop_reaper":                  "coordinator_core.hooks",
+    "hooks.agent_stop_reaper":                "coordinator_core.hooks",
     "hooks.sessionend_archive_session":       "coordinator_core.hooks",
     "hooks.watchdog_undischarged_next_move":  "coordinator_core.hooks",
     "hooks.plan_persistence_check":           "coordinator_core.hooks",
@@ -285,6 +285,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "memo.heal_inbox":                        "coordinator_core.ops.fleet.memo_heal",
     "memo.migrate_group_em_inbox":            "coordinator_core.ops.fleet.memo_migrate_group_em_inbox",
     "memo.reconcile_outbox":                  "coordinator_core.ops.fleet.memo_reconcile_outbox",
+    "memo.redeliver":                         "coordinator_core.ops.fleet.memo_redeliver",
     "memo.compose":                           "coordinator_core.ops.fleet.memo_compose",
     "memo.list_outbox":                       "coordinator_core.ops.fleet.memo_list_outbox",
     "memo.blitz_buckets":                     "coordinator_core.ops.fleet.memo_blitz_buckets",

@@ -70,6 +70,22 @@ def test_configures_fresh_repo(tmp_path, monkeypatch):
     assert _git(repo, "config", "--get", "core.checkStat").stdout.strip() == "minimal"
 
 
+def test_default_call_pins_gc_auto_and_maintenance_auto(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    assert cg.main([]) == 0
+    assert _git(repo, "config", "--get", "gc.auto").stdout.strip() == "0"
+    assert _git(repo, "config", "--get", "maintenance.auto").stdout.strip() == "false"
+
+
+def test_default_call_overwrites_a_differing_maintenance_auto(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    _git(repo, "config", "maintenance.auto", "true")
+    monkeypatch.chdir(repo)
+    assert cg.main([]) == 0
+    assert _git(repo, "config", "--get", "maintenance.auto").stdout.strip() == "false"
+
+
 def test_idempotent_rerun_reports_no_change(tmp_path, monkeypatch, capsys):
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)

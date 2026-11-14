@@ -1,7 +1,7 @@
 """coordinator_core.git.object_store_lock -- the one engine-wide lock over a repo's `objects/pack`.
 
 Purpose: every engine writer that mutates the pack directory (`git_maintenance.run_tier`,
-`store_hygiene.consolidate_small_packs`, `git_objects._write_pack` / `_flush_pack`) holds
+`store_hygiene.consolidate_pack_batch`, `git_objects._write_pack` / `_flush_pack`) holds
 `hold(common_dir, ...)` around the mutation, so two engine writers can never overlap. A fold
 deleting a tail pack while a repack reads it, or two repacks racing, is the shape that loses
 objects. Git's own `maintenance.lock` is not consulted (measured not to exclude).

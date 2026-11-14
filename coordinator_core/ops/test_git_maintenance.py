@@ -32,6 +32,14 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
+@pytest.fixture(autouse=True)
+def _unpaused(monkeypatch):
+    """These tests pin the tiers themselves; the paused behaviour is pinned in test_pack_deletion_pause."""
+    from coordinator_core.git import pack_deletion_pause
+
+    monkeypatch.setattr(pack_deletion_pause, "PACK_DELETION_PAUSED", False)
+
+
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(repo), *args],
@@ -88,14 +96,11 @@ def test_daily_and_weekly_are_task_lists_never_a_schedule():
     daily) can regain `--schedule=weekly`/`--schedule=monthly` without
     breaking one of them first, which is why there is no separate loop test
     for that keyword ban here."""
-    assert gm._TIER_ARGV["daily"] == (
-        "maintenance",
-        "run",
-        "--task=commit-graph",
-        "--task=incremental-repack",
-    )
+    assert gm._TIER_ARGV["daily"] == ("maintenance", "run", "--task=commit-graph")
+    assert gm._MIDX_WRITE_ARGV == ("multi-pack-index", "write")
     assert "--schedule=daily" not in gm._TIER_ARGV["daily"]
     assert "loose-objects" not in " ".join(gm._TIER_ARGV["daily"])
+    assert "incremental-repack" not in " ".join(gm._TIER_ARGV["daily"])
     assert gm._TIER_ARGV["weekly"] == ("maintenance", "run", "--task=pack-refs")
 
 
@@ -153,7 +158,7 @@ def test_defers_mid_operation(tmp_path, marker, word):
     repo = _init_repo(tmp_path)
     (repo / ".git" / marker).write_text("", encoding="utf-8")
 
-    result = gm.run_tier(repo, "daily")
+    result = gm.run_tier(repo, "weekly")
 
     assert result.deferred is not None
     assert word in result.deferred
@@ -201,7 +206,7 @@ def test_defer_is_reported_distinctly_from_a_run(tmp_path, capsys):
     repo = _init_repo(tmp_path)
     (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
 
-    gm._report(gm.run_tier(repo, "hourly"))
+    gm._report(gm.run_tier(repo, "weekly"))
 
     err = capsys.readouterr().err
     assert "deferred" in err
@@ -474,8 +479,42 @@ def _daily_fixture(tmp_path: Path) -> tuple[Path, str]:
     return repo, add_small_packs_and_loose(repo, 40, 15)
 
 
-def test_daily_covers_every_pack_packs_reachable_loose_and_leaves_unreachable_loose(tmp_path):
-    """AC3."""
+def _reachable(repo: Path) -> set:
+    return {
+        line.split()[0]
+        for line in _git(repo, "rev-list", "--objects", "--all").stdout.splitlines()
+        if line
+    }
+
+
+def _pack_files(repo: Path) -> list:
+    return sorted(p.name for p in (repo / ".git" / "objects" / "pack").iterdir())
+
+
+def _packed_repo(tmp_path: Path, packs: int) -> Path:
+    from coordinator_core.benchmarks.maintenance_tier_budget import add_small_packs_and_loose
+
+    repo = _init_repo(tmp_path)
+    add_small_packs_and_loose(repo, packs, 0)
+    return repo
+
+
+def _age(path: Path, seconds: int = 7200) -> Path:
+    t = time.time() - seconds
+    os.utime(path, (t, t))
+    return path
+
+
+def _small_store_tuning(monkeypatch, *, max_packs: int, batch_packs: int, loose_dir_entries: int):
+    """Shrink the hygiene thresholds so a small fixture crosses them deterministically."""
+    from coordinator_core.git import store_hygiene
+
+    monkeypatch.setattr(store_hygiene, "CONSOLIDATE_MAX_PACKS", max_packs)
+    monkeypatch.setattr(store_hygiene, "CONSOLIDATE_BATCH_PACKS", batch_packs)
+    monkeypatch.setattr(store_hygiene, "_loose_in_fanout", lambda objects_dir: loose_dir_entries)
+
+
+def test_daily_merges_small_packs_and_covers_every_pack_with_the_midx(tmp_path):
     from coordinator_core.git.store_hygiene import status
 
     repo, unreachable = _daily_fixture(tmp_path)
@@ -485,36 +524,172 @@ def test_daily_covers_every_pack_packs_reachable_loose_and_leaves_unreachable_lo
     result = gm.run_tier(repo, "daily")
 
     assert result.rc == 0, result.errors
+    assert result.packs_merged > 1
     after = status(repo / ".git")
+    assert after.pack_count < before.pack_count
     assert after.midx_pack_count == after.pack_count
-    reachable = {
-        line.split()[0]
-        for line in _git(repo, "rev-list", "--objects", "--all").stdout.splitlines()
-        if line
-    }
-    loose = _loose_shas(repo)
-    assert not (loose & reachable), "reachable loose objects survived daily"
-    assert unreachable in loose, "daily packed an unreachable object"
+    assert unreachable in _loose_shas(repo), "daily packed an unreachable object"
 
 
 def test_daily_process_time_is_under_the_brightline(tmp_path):
-    """AC4: self plus children, both legs, on the loose-plus-many-pack fixture."""
+    """Self plus children, the commit-graph and MIDX legs, on the loose-plus-many-pack fixture."""
     from coordinator_core.benchmarks.process_time import batched_process_time_ms
 
     repo, _ = _daily_fixture(tmp_path)
     total = 0.0
-    for leg in (gm._DAILY_LOOSE_LEG, gm._TIER_ARGV["daily"]):
+    for leg in (gm._TIER_ARGV["daily"], gm._MIDX_WRITE_ARGV):
         sample = batched_process_time_ms(["git", "-C", str(repo), *leg], k=1, cwd=str(repo))
         assert sample["rc"] == 0, leg
         total += sample["process_time_ms"]
     assert total < 500, total
 
 
-def test_daily_loose_leg_runs_before_the_maintenance_run(tmp_path, monkeypatch):
+def test_daily_never_issues_a_repack(tmp_path, monkeypatch):
+    """`git repack` reads the index (rc 128 under a held one); no daily leg may be one."""
     invoked = _recorded_argv(tmp_path, "daily", monkeypatch)
-    verbs = [args[0] for args in invoked]
-    assert verbs.index("repack") < verbs.index("maintenance"), verbs
-    assert "-a" not in gm._DAILY_LOOSE_LEG and "-A" not in gm._DAILY_LOOSE_LEG
+    assert "repack" not in [args[0] for args in invoked], invoked
+
+
+def test_daily_runs_under_a_held_index_lock_through_the_handler(tmp_path):
+    """AC1."""
+    repo, _ = _daily_fixture(tmp_path)
+    (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
+
+    out = gm._git_maintenance({"tier": "daily", "repo": str(repo)})
+
+    assert out["ran"] is True and out["deferred"] is None, out
+    assert out["ok"] is True
+    assert (repo / ".git" / "objects" / "pack" / "multi-pack-index").is_file()
+
+
+@pytest.mark.parametrize("tier", ["hourly", "daily"])
+def test_non_index_tiers_ignore_a_mid_operation_marker(tmp_path, tier):
+    repo = _init_repo(tmp_path)
+    (repo / ".git" / "REBASE_HEAD").write_text("", encoding="utf-8")
+    (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
+
+    result = gm.run_tier(repo, tier)
+
+    assert result.deferred is None and result.ran is True
+
+
+def test_weekly_through_the_handler_still_defers_on_a_held_index_lock(tmp_path):
+    """AC2."""
+    repo = _init_repo(tmp_path)
+    (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
+
+    out = gm._git_maintenance({"tier": "weekly", "repo": str(repo)})
+
+    assert out["ran"] is False and "index.lock" in out["deferred"], out
+
+
+def test_daily_reaps_the_orphan_classes_and_keeps_live_and_unknown_files(tmp_path):
+    """AC3."""
+    repo = _packed_repo(tmp_path, 3)
+    pack_dir = repo / ".git" / "objects" / "pack"
+    live = {n for n in _pack_files(repo) if n.startswith("pack-")}
+    gone = [
+        _age(_write(pack_dir / ("pack-" + "a" * 40 + ".rev"))),
+        _age(_write(pack_dir / ("pack-" + "b" * 40 + ".pack"))),
+        _age(_write(pack_dir / (".tmp-4242-pack-" + "c" * 40 + ".pack"))),
+        _age(_write(pack_dir / "tmp_pack_Zq81Ab")),
+    ]
+    kept = [
+        _age(_write(pack_dir / "claude-klabauter-tail")),
+        _write(pack_dir / ("pack-" + "d" * 40 + ".rev")),
+    ]
+
+    result = gm.run_tier(repo, "daily")
+
+    assert result.rc == 0, result.errors
+    assert result.pack_files_reaped == len(gone)
+    assert not any(p.exists() for p in gone)
+    assert all(p.exists() for p in kept)
+    assert live <= set(_pack_files(repo)), "a live pack triplet was reaped"
+
+
+def test_daily_heals_a_midx_that_names_a_missing_pack(tmp_path):
+    """AC4."""
+    from coordinator_core.git import store_hygiene
+
+    repo = _packed_repo(tmp_path, 3)
+    common = repo / ".git"
+    assert gm.run_tier(repo, "daily").rc == 0
+    midx = common / "objects" / "pack" / "multi-pack-index"
+    assert midx.is_file()
+    victim = sorted((common / "objects" / "pack").glob("pack-*.idx"))[0]
+    for suffix in (".idx", ".pack", ".rev"):
+        store_hygiene._unlink_quiet(victim.with_suffix(suffix))
+    assert store_hygiene.midx_names_missing_pack(common)
+
+    result = gm.run_tier(repo, "daily")
+
+    assert result.rc == 0, result.errors
+    assert result.midx_healed is True
+    assert not store_hygiene.midx_names_missing_pack(common)
+    status = store_hygiene.status(common)
+    assert status.midx_pack_count == status.pack_count
+
+
+def test_one_daily_call_runs_one_batch_and_the_next_call_reduces_packs_further(tmp_path, monkeypatch):
+    """AC5."""
+    from coordinator_core.git.store_hygiene import status
+
+    repo, _ = _daily_fixture(tmp_path)
+    _small_store_tuning(monkeypatch, max_packs=4, batch_packs=10, loose_dir_entries=10)
+    reachable_loose = _loose_shas(repo) & _reachable(repo)
+    assert reachable_loose
+    n0 = status(repo / ".git").pack_count
+
+    first = gm.run_tier(repo, "daily")
+    n1 = status(repo / ".git").pack_count
+
+    assert first.rc == 0, first.errors
+    assert 0 < first.packs_merged <= 10 and first.loose_packed == 0
+    assert n1 < n0
+    assert _loose_shas(repo) & _reachable(repo) == reachable_loose, "a second batch ran in one call"
+
+    second = gm.run_tier(repo, "daily")
+
+    assert second.rc == 0, second.errors
+    assert status(repo / ".git").pack_count < n1
+
+
+def test_daily_loose_leg_packs_a_bounded_reachable_batch_and_leaves_unreachable(tmp_path, monkeypatch):
+    repo, unreachable = _daily_fixture(tmp_path)
+    _small_store_tuning(monkeypatch, max_packs=1000, batch_packs=10, loose_dir_entries=10)
+    monkeypatch.setattr(gm, "_LOOSE_BATCH_OBJECTS", 5)
+    before = _loose_shas(repo) & _reachable(repo)
+    assert len(before) > 5
+
+    result = gm.run_tier(repo, "daily")
+
+    assert result.rc == 0, result.errors
+    assert result.packs_merged == 0 and result.loose_packed == 5
+    assert len(_loose_shas(repo) & _reachable(repo)) == len(before) - 5
+    assert unreachable in _loose_shas(repo)
+    for _ in range(10):
+        if not (_loose_shas(repo) & _reachable(repo)):
+            break
+        assert gm.run_tier(repo, "daily").rc == 0
+    assert not (_loose_shas(repo) & _reachable(repo)), "reachable loose objects survived repeated daily calls"
+    assert unreachable in _loose_shas(repo)
+    assert _git(repo, "fsck", "--no-dangling").returncode == 0
+
+
+def test_loose_leg_respects_the_byte_bound(tmp_path, monkeypatch):
+    repo, _ = _daily_fixture(tmp_path)
+    _small_store_tuning(monkeypatch, max_packs=1000, batch_packs=10, loose_dir_entries=10)
+    monkeypatch.setattr(gm, "_LOOSE_BATCH_BYTES", 1)
+
+    packed, error = gm._pack_loose_batch(repo, repo / ".git")
+
+    assert error is None and packed == 1, "the first object always fits; the byte cap stops the second"
+
+
+def test_a_clean_store_pays_no_loose_walk(tmp_path, monkeypatch):
+    invoked = _recorded_argv(tmp_path, "daily", monkeypatch)
+    assert not any(args[0] in ("rev-list", "pack-objects") for args in invoked), invoked
 
 
 def test_non_weekly_tiers_do_not_prune_or_sweep(tmp_path):

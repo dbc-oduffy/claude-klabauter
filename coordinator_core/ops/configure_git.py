@@ -130,6 +130,10 @@ _SETTINGS: tuple[GitSetting, ...] = (
     # same-day bound, which is why this is documented rather than fixed here —
     # co-locating the two writers is a design change beyond this key's scope.
     GitSetting(key="gc.auto", value="0"),
+    # maintenance.auto=false is pinned in the same default call so the two
+    # auto-pack-rewriting triggers (`gc --auto`, `maintenance run --auto`) are
+    # closed together; git_perf_config pins the same pair for fleet repos.
+    GitSetting(key="maintenance.auto", value="false"),
     GitSetting(key="core.checkStat", value="minimal", scope="global"),
     # Windows-only help-browser triple, C3 of
     # docs/plans/2026-08-07-git-help-browser-settings-shape.md. `git help --web`

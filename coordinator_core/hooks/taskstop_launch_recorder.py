@@ -115,6 +115,8 @@ def _handler(params: dict, repo_root=None) -> dict:
                     tool_use_id=_str(payload.get("tool_use_id")),
                     command=command,
                     mark=mark - tool_response["timedOutAfterMs"] * 10_000,
+                    agent_id=_str(payload.get("agent_id")),
+                    timed_out=True,
                 )
                 if _read_only_search(command):
                     _reap_or_record(rec)
@@ -133,6 +135,7 @@ def _handler(params: dict, repo_root=None) -> dict:
                 tool_use_id=_str(payload.get("tool_use_id")),
                 command=_str(tool_input.get("command")),
                 mark=mark,
+                agent_id=_str(payload.get("agent_id")),
             )
         )
     except Exception:

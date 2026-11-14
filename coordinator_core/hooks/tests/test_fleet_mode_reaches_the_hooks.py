@@ -49,14 +49,11 @@ def _isolate_sentinel_and_fleet(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
-    # The nudge resolves a relative file path against cwd and stays silent under a
-    # `scratch/` ancestor or outside a git work tree; pin it to a fixed repo-shaped dir.
+    # The nudge resolves a relative file path against cwd and stays silent outside a
+    # git work tree; pin it to a fixed repo-shaped dir.
     repo = tmp_path / "repo-root"
     (repo / ".git").mkdir(parents=True)
     monkeypatch.chdir(repo)
-    monkeypatch.setattr(
-        nudge_em_code_dispatch, "_is_scratch_or_tmp", lambda file_path: False
-    )
     # Autonomy exempts a sized session only, so these precedence tests run sized.
     monkeypatch.setattr(
         nudge_em_code_dispatch, "_session_sizing_state", lambda payload, sid: (True, False)

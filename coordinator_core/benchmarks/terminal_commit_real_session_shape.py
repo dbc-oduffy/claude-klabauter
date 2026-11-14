@@ -131,11 +131,17 @@ def build_fixture(
 
     session_core.init(base.SESSION_ID, cwd=str(repo))
     _widen_landing(repo, landing_paths)
+    review = _wave_inline_review(repo)
+    # The terminal commit refuses a staged product path no reviewed slice covers, so the widened
+    # landing's files are declared in the slice list like the review prep would have.
+    review["prep"]["slice_files"] = [
+        *review["prep"].get("slice_files", []), *(f"pkg/f{i:05d}.py" for i in range(landing_paths))
+    ]
     params = {
         "script_path": script,
         "incomplete_chunks": [],
         "session_id": base.SESSION_ID,
-        "inline_review": _wave_inline_review(repo),
+        "inline_review": review,
         "ledger_verdict": {"items": [{"id": "R1", "status": "met"}]},
     }
     return repo, params

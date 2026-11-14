@@ -32,8 +32,8 @@ Suppression conditions (no_advisory):
      until it fires; once a run is live the advisory applies, once it has landed the
      residue window applies.
 
-  6. `op()` ONLY: scratch/tmp paths. Elsewhere `op()` answers the main EM's
-     product-code write with a repeating advisory.
+  6. `op()` answers the main EM's product-code write with a repeating advisory
+     wherever it lands, scratch/ and the temp dir included.
      The sentinel (3) suppresses it only when its content is a non-empty
      reason line. Each honoured sentinel appends a JSON line to the per-session escape log
      (`dispatch-escapes.jsonl` in the session's share dir).
@@ -84,7 +84,6 @@ from coordinator_core.hooks._em_write_budget import (  # noqa: F401 -- re-bound 
     _host,
     sized_advisory,
     _is_bootstrap_or_out_of_repo,
-    _is_scratch_or_tmp,
     _session_sizing_state,
     shell_write_budget,
 )
@@ -420,7 +419,7 @@ def _size_stage_write_deny(payload: dict) -> dict | None:
         return None
     if os.path.splitext(file_path)[1].lower() in _DOC_DATA_EXTENSIONS:
         return None
-    if _is_bootstrap_or_out_of_repo(file_path) or _is_scratch_or_tmp(file_path):
+    if _is_bootstrap_or_out_of_repo(file_path):
         return None
     from coordinator_core import warp_live
     from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
@@ -508,7 +507,7 @@ def op(payload: dict) -> dict | None:
     unreadable) sizing it touched counts, not only the one being delivered.
 
     Exempt: doc/data files, bootstrap/out-of-repo, semantic-bypass
-    diffs, scratch/tmp, autonomous mode, and a sentinel carrying a reason
+    diffs, autonomous mode on a sized session, and a sentinel carrying a reason
     (each honoured sentinel is logged to the session escape log).
     """
     if "agent_id" in payload:
@@ -562,12 +561,9 @@ def op(payload: dict) -> dict | None:
     if _is_scratch_py(file_path):
         from coordinator_core.bash_guards.guard_post_executor_verification import after_executor_deny
 
-        if resolve_mode("autonomous", _resolve_session_id_op(payload)):
-            return None
-        return after_executor_deny(payload, file_path)
-
-    if _is_scratch_or_tmp(file_path):
-        return None
+        verdict = after_executor_deny(payload, file_path)
+        if verdict is not None:
+            return verdict
 
     session_id = _resolve_session_id_op(payload)
 

@@ -29,6 +29,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.ops.fleet._memo_anchor import anchor_names, resolve_anchor
 from coordinator_core.ops.fleet.memo_send import _MODE, _memo_send
 from coordinator_core.ops.fleet.tests.test_memo_send import (
     _git,
@@ -78,10 +80,24 @@ def _write_draft_with_cc(
     return draft_path
 
 
-def _inbox_files(receiver_repo: Path) -> list[Path]:
+class _AnchoredMemo:
+    """A memo delivered to a receiver, read back from its anchor: a delivery
+    never writes the receiver's worktree."""
+
+    def __init__(self, name: str, data: bytes):
+        self.name = name
+        self._data = data
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        return self._data.decode(encoding)
+
+
+def _inbox_files(receiver_repo: Path) -> list[_AnchoredMemo]:
+    common_dir = resolve_git_common_dir(receiver_repo)
     return [
-        p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
-        if p.name != ".gitkeep"
+        _AnchoredMemo(fname, resolve_anchor(common_dir, bsha))
+        for fname, _csha, bsha in anchor_names(common_dir)
+        if fname.endswith(".md")
     ]
 
 
@@ -118,13 +134,17 @@ class TestCcActuallyDelivers:
         # The cc receiver's own copy carries the same delivered content.
         assert cc_content == to_content
 
-        # Committed durably in the cc receiver's own tree, not merely written.
-        show = _git(cc_repo, "show", f"HEAD:cross-repo/inbox/{cc_files[0].name}")
-        assert show.stdout.decode("utf-8") == cc_content
-
         acted = result["acted"][0]
         assert "cc_delivered" in acted
         assert len(acted["cc_delivered"]) == 1
+
+        # Committed durably in the cc receiver's own object store, with its own
+        # owed push; its checkout is untouched.
+        cc_sha = acted["cc_delivered"][0]["delivery_commit_sha"]
+        assert acted["cc_delivered"][0]["push_pending_record"]
+        show = _git(cc_repo, "show", f"{cc_sha}:cross-repo/inbox/{cc_files[0].name}")
+        assert show.stdout.decode("utf-8") == cc_content
+        assert not list((cc_repo / "cross-repo" / "inbox").glob("*.md"))
         assert acted["cc_delivered"][0]["to"] == "example-cockpit-repo-em"
         assert acted["cc_delivered"][0]["committed"] is True
 
@@ -229,6 +249,7 @@ class TestCcDeliveryFailureAfterToLandedIsPartialNotSilent:
         )
         _git(cc_repo, "add", "-A")
         _git(cc_repo, "commit", "-m", "pre-seed collision")
+        _git(cc_repo, "push", "-q", "origin", "main")
 
         result = _memo_send(
             {"dry_run": False, "topic": "cc-collision-topic"}, repo_root=sender_repo

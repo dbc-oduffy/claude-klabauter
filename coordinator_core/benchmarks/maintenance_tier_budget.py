@@ -212,10 +212,17 @@ def check_maintenance_tier_budget(repo: Path):
     def _legs_for(tier, target):
         out = []
         if tier == "daily":
-            out.append(["git", "-C", str(target), *gm._DAILY_LOOSE_LEG])
+            # The loose leg's enumeration; its pack-objects step takes stdin, which
+            # the process-time harness cannot feed.
+            out.append(
+                ["git", "-C", str(target), "rev-list", "--objects", "--unpacked", "--all",
+                 "--reflog", "--no-object-names"]
+            )
         if tier == "weekly":
             out.append(["git", "-C", str(target), "prune", "--expire=%s" % gm._PRUNE_EXPIRE])
         out.append(["git", "-C", str(target), *gm._TIER_ARGV[tier]])
+        if tier == "daily":
+            out.append(["git", "-C", str(target), *gm._MIDX_WRITE_ARGV])
         return out
 
     worst = 0.0

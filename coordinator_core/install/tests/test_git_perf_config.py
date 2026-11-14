@@ -98,6 +98,30 @@ def test_three_maintenance_keys_land_in_the_repo(tmp_path):
     assert _config_get(repo, "maintenance.prefetch.enabled") == "false"
 
 
+def test_gc_auto_pinned_and_in_write_surface(tmp_path):
+    repo = _init_repo(tmp_path)
+
+    gpc.apply(repo)
+
+    assert _config_get(repo, "gc.auto") == "0"
+    declared = {e.key for c in gpc.WRITE_SURFACE.clauses for e in c.entries}
+    assert {"gc.auto", "maintenance.auto"} <= declared
+
+
+def test_maintenance_keys_land_when_untracked_cache_early_returns(tmp_path):
+    # A differing core.untrackedCache makes the untracked-cache step return
+    # early; the pack-rewriting suppression keys must still be written.
+    repo = _init_repo(tmp_path)
+    _git(repo, "config", "core.untrackedCache", "false")
+
+    report = gpc.apply(repo)
+
+    assert _config_get(repo, "core.untrackedCache") == "false"
+    assert _config_get(repo, "gc.auto") == "0"
+    assert _config_get(repo, "maintenance.auto") == "false"
+    assert any(line.startswith("set     maintenance.auto") for line in report), report
+
+
 def test_maintenance_register_is_never_invoked(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     invoked = []
