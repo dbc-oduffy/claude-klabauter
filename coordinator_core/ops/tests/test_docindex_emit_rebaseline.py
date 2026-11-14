@@ -45,3 +45,13 @@ def test_rebaseline_rewrites_the_region_from_source(tmp_path):
     assert "typed by hand" not in text and "alpha" in text
     (again,) = _emit(root)["results"]
     assert not again["hand_edit"]
+
+
+def test_discovery_finds_a_declared_index_and_skips_a_body_only_mention(tmp_path):
+    root = _repo(tmp_path)
+    (root / "notes.md").write_text("---\ntitle: n\n---\nindex_source_dir: entries/ is how an index declares itself\n", encoding="utf-8")
+    (root / "plain.md").write_text("no frontmatter at all\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True, **no_console_creationflags())
+    emitted = _docindex_emit({"target_root": str(root)}, repo_root=None)
+    emitted = asyncio.run(emitted) if asyncio.iscoroutine(emitted) else emitted
+    assert [r["index_path"] for r in emitted["results"]] == ["index.md"]

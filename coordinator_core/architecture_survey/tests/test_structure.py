@@ -1,4 +1,4 @@
-"""structure.fetch: dead-paths from a batched door only, every other branch written covered:false."""
+"""structure.fetch: file-index from git, edges from one graph call, dead-paths from a batched door; unfetched branches covered:false."""
 from __future__ import annotations
 
 import copy
@@ -17,8 +17,16 @@ RUN_ID = "20261112T170000Z-ab12"
 PAGES = ["docs/architecture/a.md", "docs/architecture/b.md"]
 
 
-def _costs(batched: bool = True) -> dict:
+GRAPH = {"data": {"systems": [{"name": "coordinator_core"}, {"name": "docs"}],
+                  "edges": [{"from_system": "docs", "to_system": "coordinator_core", "weight": 3}],
+                  "limits": {"excludes": "dynamic imports"}},
+         "provenance": {"source_name": "claude-klabauter"}}
+
+
+def _costs(batched: bool = True, edges: bool = True) -> dict:
     costs = copy.deepcopy(REAL_COSTS)
+    if not edges:
+        costs["needs"]["edges"]["fetch"] = False
     if batched:
         costs["needs"]["dead-paths"]["batched_door"] = "project_doc_links_batch"
         costs["doors"]["project_doc_links_batch"] = {"cost_class": "within", "timeout_ms": 700}
@@ -33,6 +41,7 @@ class FakePost:
         self.git_root = git_root
         self.source_name = source_name
         self.exc = exc
+        self.graph_envelope = copy.deepcopy(GRAPH)
         self.doc_envelope = doc_envelope if doc_envelope is not None else {
             "data": {"results": [
                 {"file": PAGES[0], "outbound": [
@@ -55,6 +64,8 @@ class FakePost:
                 raise self.exc
             return {"data": {"resolution": {"git_root": self.git_root or str(self.repo_root)}},
                     "provenance": {"source_name": self.source_name}}
+        if door == "project_architecture_graph":
+            return self.graph_envelope
         assert door == "project_doc_links_batch"
         assert payload["params"]["arguments"] == {"paths": PAGES}
         assert timeout_s == pytest.approx(0.7)
@@ -83,12 +94,12 @@ def test_batched_door_yields_dead_paths_from_one_call(tmp_path):
     need = result["needs"]["dead-paths"]
     assert need["covered"] and need["door"] == "project_doc_links_batch" and need["calls"] == 1
     assert [r["target"] for r in need["payload"]["dead"]] == ["gone.py", "x"]
-    assert post.calls == ["project_list_sources", "project_doc_links_batch"]
+    assert post.calls == ["project_list_sources", "project_doc_links_batch", "project_architecture_graph"]
 
 
 def test_costs_without_batched_door_is_pending_and_calls_nothing(tmp_path):
     post = FakePost(tmp_path)
-    result, _ = _run(tmp_path, post, _costs(batched=False))
+    result, _ = _run(tmp_path, post, _costs(batched=False, edges=False))
     need = result["needs"]["dead-paths"]
     assert need["covered"] is False and need["reason"] == "batched-doc-links-door-pending"
     assert post.calls == []
@@ -96,7 +107,7 @@ def test_costs_without_batched_door_is_pending_and_calls_nothing(tmp_path):
 
 
 def test_per_page_door_never_called_even_when_within(tmp_path):
-    costs = _costs(batched=False)
+    costs = _costs(batched=False, edges=False)
     assert costs["doors"]["project_doc_links"]["cost_class"] == "within"
     post = FakePost(tmp_path)
     _run(tmp_path, post, costs)
@@ -106,23 +117,116 @@ def test_per_page_door_never_called_even_when_within(tmp_path):
 def test_batched_door_over_bar_is_pending(tmp_path):
     costs = _costs()
     costs["doors"]["project_doc_links_batch"]["cost_class"] = "over-bar"
+    costs["needs"]["edges"]["fetch"] = False
     post = FakePost(tmp_path)
     result, _ = _run(tmp_path, post, costs)
     assert result["needs"]["dead-paths"]["reason"] == "batched-doc-links-door-pending"
     assert post.calls == []
 
 
-def test_other_needs_written_uncovered_without_a_call(tmp_path):
+def test_edges_and_system_map_come_from_one_graph_call(tmp_path):
     post = FakePost(tmp_path)
     result, _ = _run(tmp_path, post)
+    assert contract.validate_structure(result) == []
+    edges, smap = result["needs"]["edges"], result["needs"]["system-map"]
+    assert edges["covered"] and edges["door"] == "project_architecture_graph" and edges["calls"] == 1
+    assert edges["payload"]["edges"][0]["weight"] == 3
+    assert smap["covered"] and smap["calls"] == 0
+    assert [s["name"] for s in smap["payload"]["systems"]] == ["coordinator_core", "docs"]
+    assert post.calls.count("project_architecture_graph") == 1
+
+
+def test_edges_without_the_fetch_opt_in_stay_door_over_bar_and_uncalled(tmp_path):
+    post = FakePost(tmp_path)
+    result, _ = _run(tmp_path, post, _costs(edges=False))
     for name in ("system-map", "edges"):
         need = result["needs"][name]
         assert need["covered"] is False and need["calls"] == 0 and need["payload"] is None
         assert need["reason"].startswith("door-over-bar")
-    for name in ("file-index", "last-touch"):
-        assert result["needs"][name]["covered"] is False
-        assert result["needs"][name]["reason"] == REAL_COSTS["needs"][name]["reason"]
     assert "project_architecture_graph" not in post.calls
+
+
+def test_edges_opt_in_refused_when_caller_cost_over_the_bar(tmp_path):
+    costs = _costs()
+    costs["doors"]["project_architecture_graph"]["caller_process_ms_median"] = 900
+    post = FakePost(tmp_path)
+    result, _ = _run(tmp_path, post, costs)
+    assert result["needs"]["edges"]["covered"] is False
+    assert "project_architecture_graph" not in post.calls
+
+
+def test_degraded_graph_is_uncovered_not_a_raise(tmp_path):
+    post = FakePost(tmp_path)
+    post.graph_envelope = {"verdict": "warming", "data": {}, "provenance": {"source_name": "claude-klabauter"}}
+    result, _ = _run(tmp_path, post)
+    assert result["needs"]["edges"]["covered"] is False and result["needs"]["edges"]["reason"] == "door-degraded"
+    assert result["needs"]["system-map"]["covered"] is False
+
+
+def test_graph_envelope_naming_another_project_raises(tmp_path):
+    post = FakePost(tmp_path)
+    post.graph_envelope = {"data": {}, "provenance": {"source_name": "other"}}
+    with pytest.raises(StructureUnavailable, match="another project"):
+        _run(tmp_path, post)
+
+
+def test_last_touch_stays_uncovered_with_its_recorded_reason(tmp_path):
+    result, _ = _run(tmp_path, FakePost(tmp_path))
+    need = result["needs"]["last-touch"]
+    assert need["covered"] is False and need["reason"] == REAL_COSTS["needs"]["last-touch"]["reason"]
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_file_index_is_tracked_files_only_one_spawn_under_the_bar(tmp_path, monkeypatch):
+    import time
+
+    from coordinator_core.git import run as git_run
+
+    spawns: list[list[str]] = []
+    real = git_run.run_git
+
+    def counting(argv, *a, **kw):
+        spawns.append(list(argv))
+        return real(argv, *a, **kw)
+
+    monkeypatch.setattr(git_run, "run_git", counting)
+    start = time.process_time()
+    result = fetch(REPO_ROOT, tmp_path / RUN_ID, PAGES, costs=_costs(batched=False, edges=False))
+    elapsed_ms = (time.process_time() - start) * 1000
+    need = result["needs"]["file-index"]
+    assert need["covered"] is True and need["calls"] == 0
+    rows = need["payload"]
+    assert rows and all(set(r) == {"path", "system"} for r in rows)
+    tracked = set(subprocess.run(["git", "-C", str(REPO_ROOT), "ls-files"], capture_output=True, text=True,
+                                 check=True).stdout.splitlines())
+    assert {r["path"] for r in rows} <= tracked
+    assert not [r for r in rows if "__pycache__" in r["path"] or ".mypy_cache" in r["path"]]
+    assert len(spawns) == 1 and spawns[0][-2:] == ["ls-files", "-z"]
+    assert elapsed_ms < 500, elapsed_ms
+
+
+def test_file_index_never_lists_an_untracked_cache_dir(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "docs" / "architecture").mkdir(parents=True)
+    src = (REPO_ROOT / "docs" / "architecture" / "file-index.md").read_text(encoding="utf-8")
+    (repo / "docs" / "architecture" / "file-index.md").write_text(src, encoding="utf-8")
+    (repo / "coordinator" / "bin" / ".mypy_cache").mkdir(parents=True)
+    (repo / "coordinator" / "bin" / ".mypy_cache" / "junk.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "coordinator" / "bin" / "tool.py").write_text("x = 1\n", encoding="utf-8")
+    for argv in (["init", "-q"], ["add", "docs", "coordinator/bin/tool.py"]):
+        subprocess.run(["git", "-C", str(repo), *argv], check=True, capture_output=True)
+    result = fetch(repo, tmp_path / RUN_ID, PAGES, costs=_costs(batched=False, edges=False))
+    paths = {r["path"] for r in result["needs"]["file-index"]["payload"]}
+    assert "coordinator/bin/tool.py" in paths
+    assert not [p for p in paths if ".mypy_cache" in p]
+
+
+def test_file_index_uncovered_when_the_recorded_atlas_is_unreadable(tmp_path):
+    result = fetch(tmp_path, tmp_path / RUN_ID, PAGES, costs=_costs(batched=False, edges=False))
+    need = result["needs"]["file-index"]
+    assert need["covered"] is False and need["payload"] is None and need["reason"]
 
 
 def test_system_set_disagrees_does_not_block_dead_paths(tmp_path):
@@ -220,3 +324,30 @@ def test_import_set_is_stdlib_plus_package():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
                          cwd=Path(__file__).resolve().parents[3])
     assert out.stdout.strip() == "[]"
+
+
+def test_edges_only_fetch_names_its_repo_and_skips_the_cwd_identity_probe(tmp_path):
+    seen: list[dict] = []
+
+    class GraphOnly(FakePost):
+        def __call__(self, url, payload, timeout_s):
+            seen.append(payload["params"]["arguments"])
+            self.calls.append(payload["params"]["name"])
+            env = copy.deepcopy(GRAPH)
+            env["provenance"]["source_name"] = tmp_path.name
+            return env
+
+    post = GraphOnly(tmp_path)
+    result, _ = _run(tmp_path, post, _costs(batched=False))
+    assert post.calls == ["project_architecture_graph"]
+    assert seen == [{"repo": tmp_path.name}]
+    assert result["needs"]["edges"]["covered"] is True
+
+
+def test_edges_only_fetch_refuses_an_envelope_for_another_project(tmp_path):
+    class Foreign(FakePost):
+        def __call__(self, url, payload, timeout_s):
+            return copy.deepcopy(GRAPH)
+
+    with pytest.raises(StructureUnavailable, match="another project"):
+        _run(tmp_path, Foreign(tmp_path), _costs(batched=False))

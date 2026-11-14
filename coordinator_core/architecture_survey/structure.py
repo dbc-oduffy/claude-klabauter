@@ -1,10 +1,11 @@
-"""Model-free structure client: the atlas's dead-paths need from example-retrieval-repo, as structure.json.
+"""Model-free structure client: the atlas's needs as structure.json.
 
-Only a batched `project_doc_links` door the cost record names (`needs.dead-paths.batched_door`)
-and marks `cost_class: within` is ever called, once per run. Without one the need is written
-covered:false and nothing is called, so example-retrieval-repo stays optional (the tree census and
-cartography remain the fallback). Never a per-page call, never a daemon start or wait.
-Imports stdlib and this package only.
+file-index is local (one `git ls-files`). Over rag, at most two calls per run: a batched
+`project_doc_links` door the cost record names (`needs.dead-paths.batched_door`) and marks
+`cost_class: within`, and the one graph door for edges and system-map when the cost record
+opts `needs.edges` in (`fetch: true`). Without a door the need is written covered:false and
+nothing is called, so example-retrieval-repo stays optional. Never a per-page call, never a daemon start or wait.
+Imports stdlib and coordinator_core only (cartography and git helpers load lazily in the file-index need).
 """
 from __future__ import annotations
 
@@ -23,6 +24,8 @@ DEAD_RESOLUTIONS: frozenset[str] = frozenset({"target_missing", "unresolved"})
 PENDING_REASON = "batched-doc-links-door-pending"
 OVER_BAR_REASON = "door-over-bar"
 NOT_FETCHED_REASON = "not-fetched-by-this-client"
+FILE_INDEX_SOURCE = "git-ls-files"
+FETCH_CALLER_BAR_MS = 200.0
 
 Post = Callable[[str, dict[str, Any], float], dict[str, Any]]
 
@@ -99,6 +102,65 @@ def _batched_door(costs: dict[str, Any]) -> str | None:
     if name and costs.get("doors", {}).get(name, {}).get("cost_class") == "within":
         return str(name)
     return None
+
+
+def _edges_door(costs: dict[str, Any]) -> str | None:
+    """The single graph door, only when the cost record opts `needs.edges` into fetch (`fetch: true`).
+
+    The door's recorded daemon cost class stays `over-bar`; the opt-in is the explicit, revertible
+    decision that fetch's own process (caller_process_ms_median) is what the bar governs.
+    """
+    spec = costs.get("needs", {}).get("edges", {})
+    door = spec.get("door")
+    if not (door and spec.get("covered") and spec.get("fetch") is True):
+        return None
+    caller_ms = costs.get("doors", {}).get(door, {}).get("caller_process_ms_median")
+    if not isinstance(caller_ms, (int, float)) or caller_ms > FETCH_CALLER_BAR_MS:
+        return None
+    return str(door)
+
+
+def _graph_needs(
+    post: Post, url: str, door: str, costs: dict[str, Any], source_name: str | None, repo_name: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """One graph call -> (edges need, system-map need); both uncovered when the door fails or degrades.
+
+    The call names its repo (`repo` argument), so it does not depend on the daemon's cwd binding.
+    """
+    timeout_ms = costs["doors"][door].get("timeout_ms", 1000)
+    try:
+        envelope = _call(post, url, door, {"repo": repo_name}, timeout_ms)
+    except (TimeoutError, OSError, ValueError, KeyError) as exc:
+        reason = f"door-failed: {type(exc).__name__}"
+        return _need(False, door, 1, reason, None), _need(False, door, 0, reason, None)
+    named = (envelope.get("provenance") or {}).get("source_name")
+    if source_name and named and named != source_name:
+        raise StructureUnavailable("rag answered for another project")
+    if _degraded(envelope):
+        return _need(False, door, 1, "door-degraded", None), _need(False, door, 0, "door-degraded", None)
+    data = envelope.get("data") or {}
+    systems = [{"name": s["name"]} for s in data.get("systems") or [] if isinstance(s, dict) and "name" in s]
+    edges = _need(True, door, 1, None, data)
+    system_map = _need(True, door, 0, None, {"systems": systems})
+    return edges, system_map
+
+
+def _file_index_need(repo_root: str | Path) -> dict[str, Any]:
+    """Per-file rows from one `git ls-files -z` mapped by the recorded atlas rule; junk dirs never appear."""
+    from coordinator_core.cartography.atlas_record import expand_recorded_mapping, load_recorded_atlas
+    from coordinator_core.git.run import run_git
+
+    atlas = load_recorded_atlas(repo_root)
+    if atlas.error is not None:
+        return _need(False, None, 0, f"{atlas.error}: {atlas.error_detail}", None)
+    proc = run_git(["-C", str(repo_root), "ls-files", "-z"], binary=True)
+    if proc.returncode != 0:
+        return _need(False, None, 0, f"git-ls-files-failed: exit {proc.returncode}", None)
+    tracked = [p.decode("utf-8", "surrogateescape") for p in proc.stdout_bytes.split(b"\0") if p]
+    expansion = expand_recorded_mapping(tracked, atlas)
+    rows = [{"path": path, "system": system}
+            for system in sorted(expansion.by_system) for path in expansion.by_system[system]]
+    return _need(True, FILE_INDEX_SOURCE, 0, None, rows)
 
 
 def _norm(path: str | Path) -> str:
@@ -178,24 +240,34 @@ def fetch(
 ) -> dict[str, Any]:
     """Write `<run_dir>/structure.json` and return it; raise StructureUnavailable when rag cannot answer.
 
-    dead-paths is the only need fetched, and only through a batched door `costs` marks within the
-    bar; every other need, and dead-paths without that door, is written covered:false with its
-    reason and no call. An unreachable daemon or a foreign project raises; a failed or degraded
-    dead-paths call is written covered:false. Never retries.
+    Fetched: file-index (one local `git ls-files`, no rag), edges and system-map (one graph call, only
+    when `costs` opts `needs.edges` in), dead-paths (one batched door `costs` marks within the bar).
+    Every other need, and any fetched one without its door, is written covered:false with its reason
+    and no call. An unreachable daemon or a foreign project raises; a failed or degraded call is
+    written covered:false. Never retries.
     """
     run_dir = Path(run_dir)
     door = _batched_door(costs)
+    edges_door = _edges_door(costs)
     dead = _need(False, None, 0, PENDING_REASON, None)
-    if door is not None:
+    needs = {n: _uncalled_need(n, costs) for n in contract.NEEDS}
+    if door is not None or edges_door is not None:
         post_fn = post or _default_post
         url = _address(costs)
-        try:
-            source_name = _identity(post_fn, url, str(repo_root), costs)
-        except (TimeoutError, OSError, ValueError, KeyError) as exc:
-            raise StructureUnavailable(f"identity probe failed: {type(exc).__name__}") from exc
-        dead = _dead_paths(post_fn, url, door, atlas_pages, costs, source_name)
-    needs = {n: _uncalled_need(n, costs) for n in contract.NEEDS}
+        source_name = None
+        if door is not None:
+            try:
+                source_name = _identity(post_fn, url, str(repo_root), costs)
+            except (TimeoutError, OSError, ValueError, KeyError) as exc:
+                raise StructureUnavailable(f"identity probe failed: {type(exc).__name__}") from exc
+            dead = _dead_paths(post_fn, url, door, atlas_pages, costs, source_name)
+        if edges_door is not None:
+            repo_name = Path(repo_root).resolve().name
+            needs["edges"], needs["system-map"] = _graph_needs(
+                post_fn, url, edges_door, costs, source_name or repo_name, repo_name
+            )
     needs["dead-paths"] = dead
+    needs["file-index"] = _file_index_need(repo_root)
     structure = {
         "run_id": _run_id(run_dir),
         "index": {"commit": "unstated", "commits_behind": 0, "state": "behind", "dropped_paths": 0, "unindexed": []},

@@ -535,6 +535,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.distill_scope", 'registers "distill.scope"'),
     ("coordinator_core.ops.backlog_triage_pass", 'registers "backlog.triage_pass"'),
     ("coordinator_core.ops.distill_workflow_input", 'registers "distill.workflow_input"'),
+    ("coordinator_core.ops.distill_launch_args", 'registers "distill.launch_args"'),
     ("coordinator_core.ops.workflow_validate", 'registers "workflow.validate"'),
     ("coordinator_core.ops.workflow_scaffold", 'registers "workflow.scaffold"'),
     ("coordinator_core.ops.workflow_bind", 'registers "workflow.bind_args"'),
@@ -713,8 +714,9 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.distill_bookkeeping", 'registers "distill.bookkeeping"'),
     ("coordinator_core.ops.crossrepo_closure_status", 'registers "crossrepo.closure_status"'),
     ("coordinator_core.ops.ceremony.update_docs_worklist", 'registers "ceremony.update_docs_worklist"'),
+    ("coordinator_core.ops.ceremony.update_docs_bookkeeping", 'registers "ceremony.update_docs_bookkeeping"'),
     ("coordinator_core.ops.ceremony.plan_wiki_map", 'registers "ceremony.plan_wiki_map"'),
-    ("coordinator_core.ops.ceremony.wiki_update_candidates", 'registers "ceremony.wiki_update_candidates"'),
+    ("coordinator_core.ops.ceremony.wiki_candidates", 'registers "ceremony.wiki_candidates"'),
     ("coordinator_core.ops.post_run_finish", 'registers "post_run.finish"'),
     (
         "coordinator_core.ops.tracker.advance_status",

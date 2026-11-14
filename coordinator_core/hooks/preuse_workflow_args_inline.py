@@ -7,8 +7,8 @@ A `Workflow` call whose `args` is ``{"argsFile": <path>, "argsSha256": <hex>}`` 
 Never denies: a missing file, a sha mismatch or unparseable content returns an advisory and leaves
 the call unchanged. Every other call shape is silent. Reads one file; no git, no subprocess.
 
-Not registered as an op here: wiring (op registration, classification, hook config) is the
-external gate. `handle(params)` is the body a registration wraps.
+Registered as `hooks.preuse_workflow_args_inline`; DoE's PreToolUse(Workflow) fan-in calls it
+through `hook-run` and merges its `updatedInput` (`args` only) with any other leg's rewrite.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Mapping
 
 from coordinator_core._hook_envelope import context_only, no_advisory, payload_of, rewrite_input
+from coordinator_core.ipc import register_op
 
 __all__ = ["handle", "ARGS_FILE_KEY", "ARGS_SHA_KEY"]
 
@@ -42,6 +43,7 @@ def _advisory(reason: str) -> dict:
     return context_only("PreToolUse", f"Workflow args file not inlined: {reason}. Call left unchanged.")
 
 
+@register_op("hooks.preuse_workflow_args_inline")
 def handle(params: dict) -> dict:
     """Rewrite a stub-args Workflow call to its inlined args; silent for any other call."""
     params = payload_of(params)

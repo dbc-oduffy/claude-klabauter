@@ -67,7 +67,8 @@ def dead_path_rows(report: Any) -> list[dict[str, Any]]:
 @functools.cache
 def _historical_dirs() -> tuple[str, ...]:
     """The checker's own historical-page dirs, so the rule has one source."""
-    return load_checker(Path(__file__).resolve().parents[2])._HISTORICAL_PAGE_DIRS
+    module = sys.modules.get("atlas_citation_check") or load_checker(Path(__file__).resolve().parents[2])
+    return module._HISTORICAL_PAGE_DIRS
 
 
 def _historical(page: str) -> bool:

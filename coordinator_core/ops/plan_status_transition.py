@@ -292,6 +292,7 @@ import os
 import re
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -313,6 +314,7 @@ from coordinator_core.frontmatter.primitives import (
     unquote_yaml_scalar,
     write_fm_nested_field,
 )
+from coordinator_core import plan_completion_ledger as _ledger
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.ops.ceremony import git_native
@@ -1020,6 +1022,44 @@ def _plan_tracked_in_head(worktree_root: Path, relpath: str) -> bool:
     return result.ok and bool(result.stdout.strip())
 
 
+def _record_completion(worktree_root: Path, relpath: str, content: str, flip_sha: str) -> None:
+    """Append the plan-completion ledger row for a committed completed-status flip and commit
+    the ledger path. Never raises and never fails the flip: any failure warns on stderr."""
+    try:
+        fm = _ledger.frontmatter(content)
+        status = read_fm_field_unquoted(fm, "status") or ""
+        if status not in _ledger.COMPLETED_STATUSES or not flip_sha:
+            return
+        row = _ledger.make_row(
+            relpath,
+            status,
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            flip_sha,
+            content.encode("utf-8"),
+            _ledger.tshirt(worktree_root, fm),
+            _ledger.spine_writes(content),
+        )
+        ledger_in_head = _plan_tracked_in_head(worktree_root, _ledger.LEDGER)
+        ledger_path = _ledger.append_row(worktree_root, row)
+        result = _commit_plan_flip(
+            worktree_root,
+            _ledger.LEDGER,
+            f"{_PROG}: record completion of {relpath} ({status})\n",
+            ledger_path.read_text(encoding="utf-8"),
+            None,
+            new_file=not ledger_in_head,
+            record_completion=False,
+        )
+        if not result.ok:
+            print(
+                f"{_PROG}: completion ledger row for {relpath} appended but not committed: "
+                f"{result.stderr}",
+                file=sys.stderr,
+            )
+    except Exception as exc:  # recoverable work is never denied: the flip already landed
+        print(f"{_PROG}: completion ledger skipped for {relpath}: {exc}", file=sys.stderr)
+
+
 def _commit_plan_flip(
     worktree_root: Path,
     relpath: str,
@@ -1028,6 +1068,7 @@ def _commit_plan_flip(
     deliverable_id: Optional[str],
     *,
     new_file: bool = False,
+    record_completion: bool = True,
 ) -> git_native.GitResult:
     """Commit the plan's own status flip, scoped to exactly the plan path
     just written -- the writer-side commit-ownership shape this module's
@@ -1084,7 +1125,7 @@ def _commit_plan_flip(
         commit = (
             git_native.commit_authored_new_file if new_file else git_native.commit_authored_content
         )
-        return commit(
+        result = commit(
             relpath, content, msg_path, worktree_root, deliverable_id=deliverable_id,
         )
     finally:
@@ -1092,6 +1133,9 @@ def _commit_plan_flip(
             Path(msg_path).unlink()
         except OSError:
             pass  # best-effort tempfile cleanup; a leaked temp commit-message file is harmless
+    if record_completion and result.ok:
+        _record_completion(worktree_root, relpath, content, result.commit_sha or "")
+    return result
 
 
 def _read_and_validate_resume_content(
@@ -2128,6 +2172,7 @@ def _stamp_implemented(opts: _Opts) -> int:
                     )
                     commit_result = _commit_plan_flip(
                         worktree_root, relpath, message, written_text, _state["deliverable_id"],
+                        record_completion=False,
                     )
                     if not commit_result.ok:
                         print(

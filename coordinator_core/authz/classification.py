@@ -237,6 +237,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # hooks.submit_bug_blitz — MUTATING: mints TF backlog rows, emits the bug grind through
     # dispatch.emit (script, receipt, run token) and writes the run's decisions.json.
     "hooks.submit_bug_blitz": OpClass.MUTATING,
+    # hooks.preuse_workflow_args_inline — COMPUTE_ONLY: reads one sha-pinned args file, writes nothing.
+    "hooks.preuse_workflow_args_inline": OpClass.COMPUTE_ONLY,
     # hooks.taskstop_launch_recorder — MUTATING: appends launch records under settings_home().
     "hooks.taskstop_launch_recorder": OpClass.MUTATING,
     # hooks.taskstop_reaper — MUTATING: kills orphaned launch trees and writes the reaper log
@@ -2389,9 +2391,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md § C3
     "ceremony.commit_v2": OpClass.MUTATING,
-    # ceremony.hand_land — MUTATING: lands named paths on HEAD through git.commit.commit_paths (CAS ref move
-    # plus the post-landing worktree sync); the caller's own worktree.
-    "ceremony.hand_land": OpClass.MUTATING,
     # dispatch.terminal_commit — MUTATING: lands the run's terminal commit via
     # ONE in-process `ceremony.commit_v2` call (ops/dispatch_emit/terminal_commit.py).
     # DR-208 five-question affirmation (citing dispatch.terminal_commit handler):
@@ -4020,13 +4019,14 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      changes no op's result, only how much it re-reads.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "ceremony.update_docs_worklist": OpClass.COMPUTE_ONLY,
-    # ceremony.update_docs_bookkeeping — MUTATING: composes the worklist with docindex.emit, whose
-    # `write`/`rebaseline` params rewrite index regions on disk (report-only by default).
+    # ceremony.update_docs_bookkeeping — MUTATING: composes the worklist with docindex.emit
+    # (ops/ceremony/update_docs_bookkeeping.py), so `write`/`rebaseline`/`ack` reach
+    # docindex.emit's index rewrites and the worklist's baseline advance. Default params write nothing.
     "ceremony.update_docs_bookkeeping": OpClass.MUTATING,
-    # ceremony.wiki_update_candidates — COMPUTE_ONLY: read-only git log/cat-file/grep join
-    # (ops/ceremony/wiki_update_candidates.py); writes no file, no queue, no cache.
+    # ceremony.wiki_candidates — COMPUTE_ONLY: ledger read plus read-only git cat-file/grep join
+    # (ops/ceremony/wiki_candidates.py); writes no file, no queue, no cache.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    "ceremony.wiki_update_candidates": OpClass.COMPUTE_ONLY,
+    "ceremony.wiki_candidates": OpClass.COMPUTE_ONLY,
     "deliverable.cascade_terminal": OpClass.MUTATING,
     "deliverable.cascade_retract": OpClass.MUTATING,
     "deliverable.cascade_backstop_sweep": OpClass.COMPUTE_ONLY,
@@ -4090,6 +4090,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # distill.workflow_input — COMPUTE_ONLY: pure producer/consumer field
     # translation plus self-validation of its own output. No path is opened.
     "distill.workflow_input": OpClass.COMPUTE_ONLY,
+    # distill.launch_args — MUTATING: writes one launch-args.json under the run dir
+    # (state/scratch/artifact-distillation/<run_id>/) via launch_args.build; reads the
+    # curated file under state/scratch/ for its sha256; no git, no subprocess.
+    "distill.launch_args": OpClass.MUTATING,
     # updatedocs.gates — COMPUTE_ONLY: a read-only verdict battery. Its gates read
     # docs, manifests and indexes and spawn only read-only DoE gate CLIs; the two
     # writing sweeps (11i queue prune, 11j sidecar reap) moved to updatedocs.sweeps.

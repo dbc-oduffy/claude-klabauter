@@ -128,6 +128,19 @@ def before_after(before: dict[str, Any], after: dict[str, Any]) -> dict[str, dic
     return {axis: {"before": was[axis], "after": now[axis], "cap": cap[axis]} for axis in was}
 
 
+def _drop_bench_ledger_rows(repo: Path) -> None:
+    """Trap: distill.scope appends a backlog-pass row for every admitting run, the bench's
+    included, and that ledger is committed state, so the bench row is removed after the run."""
+    try:
+        path = Path(backlog_pass_ledger._path(str(repo), "distill"))
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    except (OSError, backlog_pass_ledger.LedgerHomeMissing):
+        return
+    kept = [ln for ln in lines if f'"run_id": "{RUN_ID}"' not in ln]
+    if len(kept) != len(lines):
+        path.write_text("".join(kept), encoding="utf-8")
+
+
 def measure(repo: Path, out_dir: Optional[Path] = None, keep: bool = False) -> dict[str, Any]:
     result = run_scope(repo)
     run_dir = repo / "state" / "scratch" / "artifact-distillation" / RUN_ID
@@ -141,6 +154,7 @@ def measure(repo: Path, out_dir: Optional[Path] = None, keep: bool = False) -> d
     finally:
         if not keep:
             shutil.rmtree(run_dir, ignore_errors=True)
+        _drop_bench_ledger_rows(repo)
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "fates-fixture.json").write_text(json.dumps(fates, indent=2, sort_keys=True), encoding="utf-8")

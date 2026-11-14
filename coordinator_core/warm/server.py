@@ -5098,16 +5098,6 @@ class _ServerContext:
         try:
             import importlib
 
-            autofire = importlib.import_module("coordinator_core.distill.autofire")
-            if autofire.on_idle_tick(self.served_repos()):
-                idle.mark_invocation()
-        except Exception:  # noqa: BLE001 -- no autofire failure may escape the tick
-            import logging
-
-            logging.getLogger(__name__).warning("distill autofire tick failed", exc_info=True)
-        try:
-            import importlib
-
             catchup = importlib.import_module("coordinator_core.cartography.atlas_catchup")
             if catchup.on_idle_tick(self.served_repos()):
                 idle.mark_invocation()

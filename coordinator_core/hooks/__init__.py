@@ -217,6 +217,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.guard_host_subagent_bash_ban",
     "coordinator_core.hooks.guard_host_subagent_bash_spawn_shapes",
     "coordinator_core.hooks.preuse_bash_dispatch",
+    "coordinator_core.hooks.preuse_workflow_args_inline",
     "coordinator_core.hooks.block_workflow_foreign_emission",
     "coordinator_core.hooks.guard_agent_route_admission",
     "coordinator_core.hooks.guard_ue_specialist_advisory",

@@ -1725,8 +1725,8 @@ def retire_prior_scope_dirs(worktree_root: Path, run_id: str) -> list[str]:
     repeat scope call leaves one copy; consumed runs stay. The ``run_id`` dir itself keeps its
     scope files but loses stale downstream artifacts a prior consumed run left in it.
     A dir touched within _RETIRE_MIN_AGE_S is kept: it may be a live run awaiting its B step.
-    Trap: same-run_id clearing is not age-guarded; concurrent fires on one id rely on the
-    autofire single-flight. A failed rmtree is skipped silently."""
+    Trap: same-run_id clearing is not age-guarded; two concurrent fires on one id would clear
+    each other's artifacts. A failed rmtree is skipped silently."""
     import time
 
     base = worktree_root / RUN_DIR_REL

@@ -1033,6 +1033,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/distill_workflow_input.py",
         ("_handler",),
     ),
+    "distill.launch_args": (
+        "coordinator_core/ops/distill_launch_args.py",
+        ("_handler",),
+    ),
     "doctrine.assert_cross_reference_counts": (
         "coordinator_core/ops/assert_doctrine_cross_reference_counts.py",
         ("_handler",),
@@ -1830,6 +1834,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "hooks.submit_bug_blitz": (
         "coordinator_core/hooks/submit_bug_blitz.py",
         ("_handler",),
+    ),
+    "hooks.preuse_workflow_args_inline": (
+        "coordinator_core/hooks/preuse_workflow_args_inline.py",
+        ("handle",),
     ),
     "hooks.taskstop_launch_recorder": (
         "coordinator_core/hooks/taskstop_launch_recorder.py",
@@ -7477,8 +7485,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # plan.mise_prep_probe: one reachable git site (HEAD sha read in `_head_sha`); the census
     # leg's per-entry shell spawns are the counted carve-out, bounded by `_census_deadline`.
     "plan.mise_prep_probe": 1,
-    # ceremony.hand_land: one reachable git site (run_git), the commit_paths landing; constant per call.
-    "ceremony.hand_land": 1,
     # ceremony.plan_wiki_map (56c85f, 2026-11-13): two git sites in weekly_doc_files, the batched
     # fallback taken only when no example-retrieval-repo doc_files view serves (`_git`, `_plan_texts`);
     # constant count per call, never per plan.
@@ -7763,9 +7769,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "cartography.tree": 1,
     "ceremony.chunk_commits": 1,
     "ceremony.update_docs_worklist": 1,
-    # ceremony.wiki_update_candidates: one reachable git site (run_git, shared by the log, cat-file
-    # and rev-parse calls); constant per call, never per plan.
-    "ceremony.wiki_update_candidates": 1,
     "changelog.compute_day_fields": 1,
     "ci.run_pip_audit": 1,
     "commit.exec_bit_change": 1,
@@ -7838,9 +7841,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # adopting a clone without verifying it points where the caller thinks.
     "install.clone_idempotent": 2,
     "install.detect_python3_appx_stub": 1,
-    # 1 -> 3: ff866638d3 (op-dispatch DIY-nag, a different run) added `op_dispatch_nag._measure`
-    # to the served path: two bounded local git reads (diff --numstat, ls-files --others), the
-    # second skipped once the diff passes the XS bound. The advisory needs the measurement.
+    # 1 -> 3: `op_dispatch_nag._measure` (tracked diff + untracked listing, throttled per session, advisory only)
+    # reached through invoke/__main__; plus `detached_spawn.spawn_detached`.
     "invoke.from_argv": 3,
     "memo.fate_backfill": 1,
     "merge.quiet_activity_gate": 1,
@@ -7921,8 +7923,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "dispatch.reap_abandoned_runs": 2,
     "dispatch.commit_halted_rows": 1,
     "docindex.emit": 1,
-    # in-process composition of `update_docs_worklist` + `docindex.emit`; this gate measures 1 static
-    # reachable git site for the composite (each leg is itself pinned 1, so the count is not their sum).
+    # cat-file/grep join reaches only git.run.run_git.
+    "ceremony.wiki_candidates": 1,
+    # worklist's git drift/log and docindex_emit's `git ls-files` all reach the one git.run.run_git site.
     "ceremony.update_docs_bookkeeping": 1,
     # doctor_kept_blobs and kept_blob_replay spawn only through git.run.run_git.
     "doctor.recover_kept_blobs": 1,

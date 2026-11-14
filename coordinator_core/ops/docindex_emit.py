@@ -178,7 +178,7 @@ def _list_tracked_markdown(repo_root: Path) -> list[str]:
 
 
 def _is_pruned(rel_path: str) -> bool:
-    parts = Path(rel_path).parts[:-1]
+    parts = rel_path.split("/")[:-1]
     if any(part in SKIP_DIR_NAMES for part in parts):
         return True
     return bool(parts) and parts[0] in _EXCLUDED_TOP_SEGMENTS
@@ -206,10 +206,29 @@ def _resolves_under_excluded_root(index_source_dir: str, repo_root: Path) -> boo
     return any(part in SKIP_DIR_NAMES for part in parts)
 
 
+_INDEX_KEY = "index_source_dir"
+_INDEX_KEY_BYTES = _INDEX_KEY.encode()
+
+
+def _declares_index_key(abs_path: Path) -> bool:
+    """Cheap necessary-condition prefilter: the leading frontmatter text names
+    `index_source_dir`. A document failing it cannot declare an index, so the YAML
+    parse (the dominant cost over thousands of tracked files) is skipped."""
+    try:
+        with open(abs_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return False
+    if _INDEX_KEY_BYTES not in data:
+        return False
+    split = split_frontmatter(data.decode("utf-8", errors="replace"))
+    return split is not None and _INDEX_KEY in split.fm_text
+
+
 def _discover_index_paths(repo_root: Path) -> list[str]:
     candidates: list[str] = []
     for rel_path in _list_tracked_markdown(repo_root):
-        if _is_pruned(rel_path):
+        if _is_pruned(rel_path) or not _declares_index_key(repo_root / rel_path):
             continue
         fm = _read_leading_frontmatter(repo_root / rel_path)
         if fm is not None and "index_source_dir" in fm:

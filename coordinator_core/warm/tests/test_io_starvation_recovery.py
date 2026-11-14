@@ -268,10 +268,10 @@ def _drain_land_thread(ctx) -> None:
 
 
 def _quiet_unrelated_idle_legs(monkeypatch) -> None:
-    """The tick's other legs (autofire, atlas catch-up) are not under test and walk the served repo."""
+    """The tick's other leg (atlas catch-up) is not under test and walks the served repo."""
     import importlib
 
-    for name in ("coordinator_core.distill.autofire", "coordinator_core.cartography.atlas_catchup"):
+    for name in ("coordinator_core.cartography.atlas_catchup",):
         monkeypatch.setattr(importlib.import_module(name), "on_idle_tick", lambda repos: False)
 
 

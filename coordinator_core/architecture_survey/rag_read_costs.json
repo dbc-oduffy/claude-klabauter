@@ -94,15 +94,16 @@
       "covered": true,
       "door": "project_architecture_graph",
       "calls_per_run": 1,
+      "fetch": true,
       "fields": ["data.edges[].from_system", "data.edges[].to_system", "data.edges[].weight", "data.fan_in", "data.boundary_citations[].source_file", "data.limits"],
-      "reason": "static module-level imports only (data.limits.excludes); same single call as system-map"
+      "reason": "static module-level imports only (data.limits.excludes); same single call as system-map, sent with the `repo` argument so it does not depend on the daemon's cwd binding. fetch:true opts the one graph call into structure.fetch on the caller's own process cost (caller_process_ms_median); the door's daemon cost_class stays over-bar and removing this flag returns edges to door-over-bar"
     },
     "file-index": {
-      "covered": false,
+      "covered": true,
       "door": null,
       "calls_per_run": 0,
       "fields": [],
-      "reason": "no door returns per-file rows with a system: the graph returns counts and a boundary-citation file list, project_code_outline is per file, project_records_query reads declared structured-records sources only"
+      "reason": "no rag door: structure.fetch maps one `git ls-files -z` through the recorded atlas mapping rule (cartography.atlas_record), so untracked caches never appear"
     },
     "dead-paths": {
       "covered": true,
@@ -165,5 +166,5 @@
     "process_ms": 356.25
   },
   "verdict": "viable",
-  "uncovered": ["file-index", "last-touch"]
+  "uncovered": ["last-touch"]
 }

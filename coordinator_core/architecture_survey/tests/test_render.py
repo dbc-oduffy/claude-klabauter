@@ -120,8 +120,58 @@ def test_matrix_name_order_floor_and_fingerprints(tmp_path):
     assert fp == {"index_commit": "abc1234", "systems": {"a": "fa", "b": "fb"}}
 
 
+def test_both_pages_carry_a_generated_by_header(tmp_path):
+    render.render_structure(tmp_path, _structure(), today=TODAY)
+    atlas = tmp_path / "docs" / "architecture"
+    for name in ("connectivity-matrix.md", "file-index.md"):
+        assert render.GENERATED_BY in (atlas / name).read_text(encoding="utf-8")
+
+
+def test_file_index_renders_from_rows_alone_when_system_map_and_systems_are_absent(tmp_path):
+    s = _structure()
+    s["needs"]["system-map"] = _need(covered=False, reason="gap")
+    s["systems"] = []
+    s["index"]["commit"] = "unstated"
+    d = render.render_structure(tmp_path, s, today=TODAY)
+    text = (tmp_path / "docs" / "architecture" / "file-index.md").read_text(encoding="utf-8")
+    assert "| a | 1 |" in text and "| b | 1 |" in text and "a/one.py -> a" in text
+    assert "Lines" not in text and "commits behind" not in text and "tracked-file listing" in text
+    assert "file-index.md" in d.evidence
+
+
+def test_file_index_untouched_when_system_map_and_file_index_both_uncovered(tmp_path):
+    s = _structure(file_index=False)
+    s["needs"]["system-map"] = _need(covered=False, reason="gap")
+    d = render.render_structure(tmp_path, s, today=TODAY)
+    assert not (tmp_path / "docs" / "architecture" / "file-index.md").exists()
+    assert "file-index.md untouched" in d.evidence
+
+
+def test_system_symbols_carry_sym_tag_only_when_resolved(tmp_path):
+    s = _structure()
+    s["systems"][0]["symbols"] = [
+        {"qualified_name": "b.mod.fn", "sym": "scip-python python p 0.1 `b.mod`/fn()."},
+        {"qualified_name": "b.mod.gone"},
+    ]
+    render.render_structure(tmp_path, s, today=TODAY)
+    text = (tmp_path / "docs" / "architecture" / "file-index.md").read_text(encoding="utf-8")
+    assert "- b: `b.mod.fn` [sym: scip-python python p 0.1 `b.mod`/fn().]" in text
+    assert "- b: `b.mod.gone`\n" in text
+
+
 def test_structure_not_mutated(tmp_path):
     s = _structure()
     before = copy.deepcopy(s)
     render.render_structure(tmp_path, s, today=TODAY)
     assert s == before
+
+
+def test_render_emits_system_symbols_from_the_example_retrieval_repo_store(tmp_path):
+    from coordinator_core.symbol_knowledge.tests.test_anchors import _store
+
+    _store(tmp_path, [("z/two.py", "fn", "function", "", "scip fn")])
+    render.render_structure(tmp_path, _structure(), today=TODAY)
+    text = (tmp_path / "docs" / "architecture" / "file-index.md").read_text(encoding="utf-8")
+    assert "- b: `fn` [sym: scip fn]" in text
+    assert "- a:" not in text
+    assert text.count("[sym:") == 1

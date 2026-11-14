@@ -36,6 +36,7 @@ Last refreshed: 2026-08-06 (spot-check only — see coverage note above).
 | `_settings_home.py` | Bootstrap-safe `coordinator-settings-home` precedence resolver (zero external calls) |
 | `engine_version.py` | Engine self-version surface — resolves the running commit for receipt-stamping/drift-probe consumers |
 | `git_scope.py` | Foreign-repo git probing — strips the repo-scoping env `git -C` does not override, confines the resolved git dir, and returns a yes/no/**unknown** tri-state |
+| `plan_completion_ledger.py` | Plan-completion ledger (`state/plan-completions.jsonl`): one row per plan flip to a completed status, written at plan status transition; the record `ceremony.wiki_candidates` reads instead of walking git history. No spawn |
 
 ## Sub-packages
 
@@ -48,6 +49,7 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `_path_guard.py` | — | Shared caller-supplied-path containment helpers (generalized from `handoff_lineage_ancestry.py`) |
 | `_research_local.py` | — | Local-only research root (machine-local `research.local_root`), refused inside any git checkout; shared by the research emit route, `research.close` and claims-emit |
 | `_param_alias.py` | — | One op parameter accepted under more than one spelling; disagreeing spellings refused |
+| `distill_launch_args.py` | `distill.launch_args` | Hands a distill Workflow its whole input inline (batches, wikiSlugs, curated-clusters path and sha256), so no load agent relays shards |
 | `assert_doctrine_cross_reference_counts.py` | `doctrine.assert_cross_reference_counts` | Read-only doctrine cross-reference count assertion over the caller's skills/wiki doctrine tree |
 | `audit_two_repo_rate.py` | `goal.kr2_two_repo_rate` | COMPUTE_ONLY — KR2 engine-tool commit count over a date window (two git spawns; shallow clones refused; pairing leg `unmeasured`) |
 | `cartography_stack.py` | `cartography.stack` | Read-only project-stack fingerprint (languages, test frameworks, config files) via pathlib scan |
@@ -189,6 +191,8 @@ live — imported directly by `ceremony.session_instructions`) survives as
 |---|---|---|
 | `commit_exec_bit.py` | `commit.exec_bit_change` | Windows-safe exec-bit change + commit (DR-151 footgun), skips if already executable |
 | `plan_wiki_map.py` | `ceremony.plan_wiki_map` | Read-only, no-model map from completed plans (touched paths plus sizing) to the `docs/wiki` pages each impactful plan affects, with a 10k-char plan preview; data via `weekly_doc_files` (doc_files views, batched git fallback), constant spawn count |
+| `wiki_candidates.py` | `ceremony.wiki_candidates` | /update-docs Phase 2c: joins the plan-completion ledger window to the wiki pages citing each plan's `writes:` paths, ranked by tshirt, with a 10k-char preview per plan; wiki pages read in-process, two spawns |
+| `update_docs_bookkeeping.py` | `ceremony.update_docs_bookkeeping` | /update-docs doc inventory (`ceremony.update_docs_worklist`) and index regen (`docindex.emit`) in one in-process call; CLI `coordinator/bin/update-docs-bookkeeping.py` |
 | `node_handlers.py` | — | Handler library for D/J/F/B/X node types |
 | `pipeline_context.py` | — | Ceremony resolved-state data model |
 | `receipt_emit.py` | — | Ceremony evidence receipt emitter |
@@ -203,6 +207,18 @@ live — imported directly by `ceremony.session_instructions`) survives as
 | `records_query.py` | — | In-process frontmatter enumerate + equality-AND `where`-filter over handoff/handoff-archived/cross-repo-memo records — read-side foundation for `renderers.py` |
 | `renderers.py` | — | Pure-Python ports of `render-handoff-tracker.js` and `refresh-queries.js`'s roadmap-callout BEGIN/END query-block regen |
 | `wsc_tail.py` | `ceremony.wsc_tail` | Single-pass orchestrator — sequences resolve, pre-commit tail ops, locked stage/commit/push, post-commit consumed-handoff ship-stamp, and receipt, entirely in-process |
+
+### `architecture_survey/` — architecture-atlas survey engine (no model)
+| Module | Purpose |
+|---|---|
+| `__init__.py` | Survey runner: one deterministic workflow launch per survey |
+| `tree_census.py` | One `git ls-files` bucketed by the atlas's census buckets |
+| `structure.py` | Model-free structure client: the atlas's needs as `structure.json` |
+| `render.py` | Renders the generated atlas tables (matrix, file index, fingerprints) from `structure.json` |
+| `mechanical_report.py` | Atlas mechanical-layer report: `pages_changed` only for genuine drift (dead path, added/removed system file, changed matrix cell) |
+| `provenance_gaps.py` | Phase 11a read set (`pages_changed`) and commit dates with no daily summary |
+| `refresh_cost.py` | Estimate of one atlas refresh's agent dispatches and tokens per phase |
+| `census_shape.py`, `contract.py`, `completeness.py`, `attestation.py`, `health_ledger.py`, `receipt.py`, `commit.py` | Run contract and validation, finish-tail completeness, `last_attested` restore, health-ledger stamp, receipt, scoped commit |
 
 ### `ops/introspect/` — read-only, cross-signal "is this shipped?" primitives
 Answers questions about live repo state; never mutates. Distinct from `ops/emit/`

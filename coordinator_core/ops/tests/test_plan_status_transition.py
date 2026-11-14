@@ -2160,3 +2160,87 @@ def test_ledger_met_without_no_commit_is_refused(tmp_path, capsys):
     assert main(["stamp-implemented", "--plan", str(p), "--ledger-met", "ledger-met: R1"]) == 1
     assert "--ledger-met requires" in capsys.readouterr().err
     assert "status: executing" in p.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Plan-completion ledger hook in _commit_plan_flip
+# ---------------------------------------------------------------------------
+
+def _git(tmp_path: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, timeout=15,
+        **no_console_creationflags(),
+    ).stdout.strip()
+
+
+def _ledger_rows(tmp_path: Path) -> list:
+    import json
+
+    path = tmp_path / "state" / "plan-completions.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+_PLAN_WITH_SPINE = (
+    "---\ntitle: T\nstatus: executing\n---\n\nBody.\n\n```yaml plan-tasks\n"
+    "- id: C0\n  writes:\n    - src/a.py\n    - docs/b.md\n```\n"
+)
+
+
+def test_completed_flip_commits_a_ledger_row_with_flip_sha_and_blob(tmp_path):
+    p = _write(tmp_path, "p.md", _PLAN_WITH_SPINE)
+    assert main(["stamp-implemented", "--plan", str(p)]) == 0
+    rows = _ledger_rows(tmp_path)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["plan"] == "p.md" and row["status"] == "implemented"
+    assert row["writes"] == ["src/a.py", "docs/b.md"]
+    log = _git(tmp_path, "log", "--format=%H %s", "-n", "3").splitlines()
+    ledger_commit, flip_commit = log[0], log[1]
+    assert "record completion of p.md" in ledger_commit
+    assert row["completing_sha"] == flip_commit.split()[0]
+    assert row["plan_blob"] == _git(tmp_path, "rev-parse", f"{row['completing_sha']}:p.md")
+    # the ledger row is committed, not left dirty
+    assert _git(tmp_path, "status", "--porcelain", "--", "state/plan-completions.jsonl") == ""
+
+
+def test_second_completion_appends_to_the_committed_ledger(tmp_path):
+    a = _write(tmp_path, "a.md", _PLAN_WITH_SPINE)
+    assert main(["stamp-implemented", "--plan", str(a)]) == 0
+    b = _write(tmp_path, "b.md", _PLAN_WITH_SPINE)
+    assert main(["stamp-implemented", "--plan", str(b)]) == 0
+    assert [r["plan"] for r in _ledger_rows(tmp_path)] == ["a.md", "b.md"]
+    assert _git(tmp_path, "status", "--porcelain", "--", "state/plan-completions.jsonl") == ""
+
+
+def test_non_completed_flip_leaves_no_ledger_row(tmp_path):
+    p = _write(tmp_path, "p.md", "---\nstatus: approved\n---\n\nBody.\n")
+    assert main(["stamp-blocked", "--plan", str(p), "--reason", "waiting"]) == 0
+    assert "status: blocked" in p.read_text(encoding="utf-8")
+    assert _ledger_rows(tmp_path) == []
+
+
+def test_ledger_failure_warns_and_never_fails_the_flip(tmp_path, capsys):
+    p = _write(tmp_path, "p.md", _PLAN_WITH_SPINE)
+    # A directory at the ledger path makes append_row raise.
+    (tmp_path / "state" / "plan-completions.jsonl").mkdir(parents=True)
+    assert main(["stamp-implemented", "--plan", str(p)]) == 0
+    assert "completion ledger skipped" in capsys.readouterr().err
+    assert "status: implemented" in p.read_text(encoding="utf-8")
+
+
+def test_stranded_flip_resume_appends_a_ledger_row(tmp_path):
+    p = _write(tmp_path, "p.md", _PLAN_WITH_SPINE)
+    # A prior run flipped on disk and never committed.
+    p.write_text(_PLAN_WITH_SPINE.replace("status: executing", "status: implemented"), encoding="utf-8")
+    assert main(["stamp-implemented", "--plan", str(p)]) == 0
+    rows = _ledger_rows(tmp_path)
+    assert len(rows) == 1 and rows[0]["status"] == "implemented"
+    assert rows[0]["plan_blob"] == _git(tmp_path, "rev-parse", f"{rows[0]['completing_sha']}:p.md")
+
+
+def test_terminal_noop_leaves_no_ledger_row(tmp_path):
+    p = _write(tmp_path, "p.md", "---\nstatus: implemented\n---\n\nBody.\n")
+    assert main(["stamp-implemented", "--plan", str(p)]) == 0
+    assert _ledger_rows(tmp_path) == []

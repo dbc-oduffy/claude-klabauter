@@ -1,0 +1,80 @@
+"""Pins for the wiki-candidates bench: spawn kinds, baseline loader, verdict, exit codes."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from coordinator_core.benchmarks import wiki_candidates_process_time as bench
+
+_SUFFIX = "wiki_update_candidates"
+_OP = f"ceremony.{_SUFFIX}"
+
+
+def _git(repo: Path, *args: str) -> str:
+    res = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=repo, capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return res.stdout.strip()
+
+
+def _write(repo: Path, rel: str, text: str) -> None:
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.setenv("MACHINE_LOCAL_PATHS_UPDATE_DOCS_WORKLIST_CACHE", str(tmp_path / "cache"))
+    _git(root, "init", "-q", "-b", "main")
+    _write(root, "docs/wiki/alpha.md", "# alpha\n\nSee `src/a.py`.\n")
+    _write(
+        root, "docs/plans/2026-11/p1.md",
+        "---\ntitle: p1\nstatus: landed\n---\n\n# p1\n\nbody\n\n"
+        "```yaml plan-tasks\n- id: C1\n  writes:\n    - src/a.py\n  body: x\n```\n",
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "c")
+    return root
+
+
+@pytest.mark.parametrize("argv,kind", [
+    (("git", "log", "--oneline"), "log"),
+    (("/usr/bin/git", "-c", "core.x=1", "--no-optional-locks", "cat-file", "--batch"), "cat-file"),
+    (("git", "-C", "/r", "grep", "-F"), "grep"),
+    (("git.exe", "rev-list", "HEAD"), "rev-list"),
+    (("python3", "x.py"), "python3"),
+    ((), "?"),
+])
+def test_spawn_kind_names_the_git_subcommand(argv, kind):
+    assert bench.spawn_kind(argv) == kind
+
+
+def test_op_suffix_refuses_a_non_ceremony_op():
+    assert bench.op_suffix("ceremony.wiki_candidates") == "wiki_candidates"
+    for bad in ("wiki_candidates", "plan.status", "ceremony."):
+        with pytest.raises(ValueError):
+            bench.op_suffix(bad)
+
+
+
+def test_unknown_sha_is_refused(repo):
+    with pytest.raises(RuntimeError):
+        bench.load_op_module(repo, _OP, "0" * 40)
+
+
+
+
+def test_exit_codes_over_under_and_unmeasured():
+    assert bench.exit_code({"pass": True, "unmeasured": False}) == 0
+    assert bench.exit_code({"pass": False, "unmeasured": False}) == 1
+    assert bench.exit_code({"pass": False, "unmeasured": True}) == 2
+    assert bench.max_total_ms([{"total_ms": 10.0}, {"total_ms": 30.0}]) == 30.0
+    assert bench.max_total_ms([{"total_ms": 10.0}, {"total_ms": None}]) is None

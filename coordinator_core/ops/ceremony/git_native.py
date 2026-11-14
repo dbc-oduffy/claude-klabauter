@@ -429,6 +429,10 @@ class GitResult:
             every `GitResult` this module builds.
         stall_killed — True iff `push_streamed` killed the child on the silence bound
             (not its `total_timeout`); False on every other constructor.
+        commit_sha — the new commit's sha, set only by a successful
+            `commit_authored_content` / `commit_authored_new_file` (the value
+            `commit-tree` printed; no extra spawn). `None` everywhere else, never
+            an empty string.
     """
 
     returncode: int
@@ -437,6 +441,7 @@ class GitResult:
     worktree_excluded: Tuple[str, ...] = ()
     cas_ref_relpath: Optional[str] = None
     stall_killed: bool = False
+    commit_sha: Optional[str] = None
 
     @property
     def ok(self) -> bool:
@@ -5522,6 +5527,7 @@ def commit_authored_content(
         stdout=new_commit_sha,
         stderr="",
         cas_ref_relpath=fast_path_cas_ref_relpath,
+        commit_sha=new_commit_sha,
     )
 
 
@@ -5977,6 +5983,7 @@ def commit_authored_new_file(
         stdout=new_commit_sha,
         stderr="",
         cas_ref_relpath=landed.cas_ref_relpath,
+        commit_sha=new_commit_sha,
     )
 
 

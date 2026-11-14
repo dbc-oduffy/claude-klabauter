@@ -82,6 +82,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.guard_em_prefire_survey":         "none",
     "hooks.submit_engine_ask":               "none",
     "hooks.submit_bug_blitz":                "none",
+    "hooks.preuse_workflow_args_inline":     "none",
     "hooks.taskstop_launch_recorder":        "none",
     "hooks.taskstop_reaper":                 "none",
     "hooks.agent_stop_reaper":               "none",
@@ -250,6 +251,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "workflow.bind_args":                    "none",
     "distill.curate_clusters":               "none",
     "distill.workflow_input":                "none",
+    "distill.launch_args":                   "none",
     # workflow.scaffold — fleet-generic, COMPUTE_ONLY op: pure generation
     # from caller-supplied name/description/phases/pattern params, no repo
     # state accessed at all (not even a path read) — the handler ignores
@@ -459,9 +461,10 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # main worktree's docs/plans, memo archive and tasks, plus one scoped git diff.
     # Without this entry dispatch resolves repo_root=None and the handler raises.
     "ceremony.update_docs_worklist":           "common_dir",
+    # ceremony.update_docs_bookkeeping — composes the worklist (common_dir) with docindex.emit.
     "ceremony.update_docs_bookkeeping":        "common_dir",
     "ceremony.plan_wiki_map":                  "common_dir",
-    "ceremony.wiki_update_candidates":         "common_dir",
+    "ceremony.wiki_candidates":                "common_dir",
     "deliverable.cascade_terminal":             "common_dir",
     "deliverable.cascade_retract":              "common_dir",
     "deliverable.cascade_backstop_sweep":       "common_dir",
@@ -827,7 +830,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "bug_sweep.verify_fix_files_changed":       "show_top",
     "commit.exec_bit_change":                   "common_dir",
     "ceremony.commit_v2":                       "common_dir",
-    "ceremony.hand_land":                       "common_dir",
     # dispatch.terminal_commit — MUTATING: lands the run's terminal commit via
     # ONE in-process ceremony.commit_v2 call. Keyed identically to commit_v2
     # itself (D3) -- the caller's own worktree, never a params override.

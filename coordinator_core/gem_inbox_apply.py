@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from coordinator_core.git.run import run_git
+from coordinator_core.session.declared_writes import declare_write
 
 LEDGER_DIR = ".coordinator-local/gem-inbox-pending"
 _LIVE_STATUSES = {"open", "in_progress"}
@@ -165,6 +166,7 @@ def apply_manifest(
             created.append(target)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(w["content"], encoding="utf-8")
+        declare_write(target)
 
     batons = [_rel(repo, w["path"]) for w in manifest.get("writes", [])]
     batons = [b for b in batons if "state/handoffs/" in b]
