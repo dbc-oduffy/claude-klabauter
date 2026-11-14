@@ -43,6 +43,8 @@ class OwnArtifacts:
     plan_evidence: frozenset[str] = frozenset()
     # The plan doc the run's sizing was minted from: its `plan:` edge names a `.md` whose stem is the sizing's stem.
     plan_docs: frozenset[str] = frozenset()
+    # Earlier runs bound to the same sizing: their kept blobs are this run's own work (`hunk_provenance`).
+    predecessors: tuple[str, ...] = ()
 
     def _is_note(self, rel: str) -> bool:
         """The run's note at its located path, or at the other of its flat and `<YYYY-MM>` shard homes."""
@@ -233,6 +235,7 @@ def own_artifact_paths(root: Path, run_id: str) -> OwnArtifacts:
         sizings=frozenset(sizings),
         plan_evidence=_plan_evidence(root, run_id, sizings),
         plan_docs=frozenset(plans),
+        predecessors=predecessors,
         corrupt_parents=corrupt,
         record_prefix=f"{_warp_home()}/{run_id}/",
         delivery_note=delivery_note_locate(root, run_id),

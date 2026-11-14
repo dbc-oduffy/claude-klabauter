@@ -107,6 +107,7 @@ def test_non_ue_repo_without_table_is_identity_with_plugin_roots_set(env, monkey
         (lambda t: t["work_classes"][0].update(agent_type=""), "work_classes[0].agent_type"),
         (lambda t: t["work_classes"][0].update(id=""), "work_classes[0].id"),
         (lambda t: t["work_classes"][0].update(required_tools="x"), "work_classes[0].required_tools"),
+        (lambda t: t["work_classes"][0].update(run_only="yes"), "work_classes[0].run_only"),
         (lambda t: t.update(agent_tool_ranges={"a": "x"}), "agent_tool_ranges.a"),
         (lambda t: t.update(brief_lint={"level": "warn"}), "brief_lint.prescribed_method_patterns"),
         (lambda t: t.update(brief_lint={"prescribed_method_patterns": ["("], "level": "warn"}), "brief_lint.prescribed_method_patterns[0]"),
@@ -500,3 +501,55 @@ def test_unknown_stage_agents_key_raises(env):
     _write(env, table)
     with pytest.raises(ar.RouteTableError, match=r"work_classes\[0\]\.stage_agents"):
         ar.load_route_table(env)
+
+
+EXECUTOR = "coordinator:executor"
+
+
+def _run_only_table():
+    cls = {**_table()["work_classes"][0], "run_only": True}
+    return _table(work_classes=[cls])
+
+
+def _code_row(**kw):
+    return _row(
+        writes=("pkg/likeness/extract.py", "pkg/tests/test_extract.py"),
+        body="Blueprint likeness refactor",
+        change_kind="code-edit",
+        **kw,
+    )
+
+
+def test_run_only_class_keeps_derived_code_row_on_executor(env):
+    _write(env, _run_only_table())
+    rows = [_code_row()]
+    out, routes, notes = ar.route_rows(rows, env)
+    assert out[0].agent_type is None and routes == {} and notes == []
+
+
+def test_run_only_class_redirects_explicit_specialist_code_row_with_note(env):
+    _write(env, _run_only_table())
+    out, routes, notes = ar.route_rows([_code_row(agent_type=UE, agent_model="opus")], env)
+    assert out[0].agent_type == EXECUTOR
+    assert routes == {}
+    assert len(notes) == 1 and "C1" in notes[0] and "run-only" in notes[0]
+
+
+def test_run_only_class_leaves_explicit_executor_code_row_untouched(env):
+    _write(env, _run_only_table())
+    row = _code_row(agent_type=EXECUTOR)
+    out, routes, notes = ar.route_rows([row], env)
+    assert out[0] is row and routes == {} and notes == []
+
+
+def test_run_only_class_still_routes_a_non_authoring_row(env):
+    _write(env, _run_only_table())
+    row = _row(writes=("Content/A.uasset",), body="Blueprint", change_kind="doc-edit", agent_type=UE)
+    out, routes, _ = ar.route_rows([row], env)
+    assert out[0].agent_type == UE and routes["C1"].primary[0] == UE
+
+
+def test_unmarked_class_still_stamps_specialist_on_code_row(env):
+    _write(env, _table())
+    out, routes, _ = ar.route_rows([_code_row()], env)
+    assert out[0].agent_type == UE and routes["C1"].work_class == "ue-editor"

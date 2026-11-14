@@ -1153,6 +1153,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/agent_completion_log.py",
         ("_handler",),
     ),
+    "hooks.record_askuserquestion_answer": (
+        "coordinator_core/hooks/record_askuserquestion_answer.py",
+        ("_handler",),
+    ),
     "hooks.nudge_em_code_dispatch": (
         "coordinator_core/hooks/nudge_em_code_dispatch.py",
         ("_handler",),

@@ -2,8 +2,10 @@
 check an agent type's tool range against the class, and route plan rows to the class's agent type.
 
 The table is `<repo root>/.claude/route-table.json` (`ROUTE_TABLE_RELPATH`); its schema is DoE's
-`coordinator/schemas/route-table.schema.json`. This module checks only the fields it reads. Absent
-table: every function here is a no-op and `route_rows` returns its input list unchanged.
+`coordinator/schemas/route-table.schema.json`. This module checks only the fields it
+reads, among them the optional boolean work-class key `run_only` (see
+`resolve_agent_type`). Absent table: every function here is a no-op and `route_rows`
+returns its input list unchanged.
 
 No subprocess and no git spawn anywhere in this module.
 """
@@ -47,6 +49,7 @@ class WorkClass:
     triage_agent_type: Optional[str] = None
     required_tools: tuple[str, ...] = ()
     stage_agents: Optional[dict[str, str]] = None
+    run_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -183,7 +186,11 @@ def _parse_class(raw: Any, path: Path, i: int) -> WorkClass:
     triage = raw.get("triage_agent_type")
     if triage is not None:
         triage = _text(triage, path, f"{field}.triage_agent_type")
+    run_only = raw.get("run_only", False)
+    if not isinstance(run_only, bool):
+        raise RouteTableError(_where(path, f"{field}.run_only must be a boolean"))
     return WorkClass(
+        run_only=run_only,
         id=_text(raw.get("id"), path, f"{field}.id"),
         agent_type=_text(raw.get("agent_type"), path, f"{field}.agent_type"),
         on_mismatch=on_mismatch,
@@ -449,6 +456,17 @@ def _row_writes(row: Any) -> list[str]:
     return writes
 
 
+def _authors_code(row: Any) -> bool:
+    """True for a row that writes files rather than only running tests or tools.
+
+    `change_kind == "code-edit"`, or an unset `change_kind` with declared writes and no
+    `verification_runs`.
+    """
+    if row.change_kind is not None:
+        return row.change_kind == "code-edit"
+    return bool(_row_writes(row)) and not row.verification_runs
+
+
 def resolve_agent_type(
     row: Any, table: RouteTable, *, _defs: Optional[_Definitions] = None
 ) -> Optional[RouteDecision]:
@@ -459,6 +477,11 @@ def resolve_agent_type(
     (triage first when the class sets one), or `default_agent_type` when no class matches. An
     explicit type is admitted when it covers the class's required tools; otherwise `refuse` raises
     `RouteAdmissionError` and `redirect` re-points the row at the class agent type.
+
+    A class marked `run_only` (route-table work-class key `run_only: true`) is a fence for running
+    work, not authoring: a code-authoring row (`_authors_code`) matching it stays on the executor,
+    and an explicit type naming the class's agent (or its triage agent) is redirected to the
+    executor with a note. The class still routes rows that do not author code.
     """
     from coordinator_core.ops.dispatch_emit import emit
 
@@ -476,6 +499,15 @@ def resolve_agent_type(
         if explicit or table.default_agent_type == base:
             return None
         return RouteDecision(table.default_agent_type, None, None, f"{row.id} -> {table.default_agent_type} (default)")
+
+    if cls.run_only and _authors_code(row):
+        executor = emit._EXECUTOR_AGENT_TYPE
+        if base == executor:
+            return None
+        if base in (cls.agent_type, cls.triage_agent_type):
+            return RouteDecision(
+                executor, None, None, f"{row.id} redirected to {executor}: class {cls.id} is run-only"
+            )
 
     if explicit:
         verdict = admit(base, cls, table, _defs=defs)

@@ -228,3 +228,71 @@ def test_review_only_landing_still_refuses_a_rewrite_after_the_review(repo):
     out = _review_only_fixture(repo, edited_after_review=True)
 
     assert out["committed"] is False and out["refused"] == "blob-drift", out
+
+
+from coordinator_core.ops.dispatch_emit import clean_overlay_verify as _cov  # noqa: E402
+from coordinator_core.ops.dispatch_emit import measured_rev as _mr  # noqa: E402
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed as _reviewed_fixture  # noqa: E402
+from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import RUN2 as _RUN2, halted as _halted  # noqa: E402
+from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import repo as _product_repo  # noqa: E402
+from coordinator_core.ops.dispatch_emit.tests.test_land_run_foreign_dirt_in_reach_e2e import (  # noqa: E402
+    FIXTURE as _FIXTURE,
+    LANDING as _LANDING,
+    _VERDICT as _LEDGER_VERDICT,
+    _track_fixture,
+)
+from coordinator_core.ops.dispatch_emit.tests.test_reverify_measures_landing_tree_e2e import _stage  # noqa: E402
+
+_PASS = {"status_after": "pass"}
+
+
+class TestTimedOutOverlay:
+    """A timed-out overlay lands with an advisory only when the run's own reverify passed.
+
+    Class-local ``repo``/``halted`` shadow this module's plain-git ``repo`` with the product-commit one."""
+
+    @pytest.fixture
+    def repo(self, tmp_path, monkeypatch):
+        return _product_repo.__wrapped__(tmp_path, monkeypatch)
+
+    @pytest.fixture
+    def halted(self, repo, monkeypatch):
+        return _halted.__wrapped__(repo, monkeypatch)
+
+    def _land(self, halted, monkeypatch, **review):
+        def boom(*a, **k):
+            raise AssertionError("land_run must not run the overlay verify")
+
+        monkeypatch.setattr(_cov, "verify", boom)
+        _track_fixture(halted)
+        resume, token = _stage(halted)
+        measured = _mr.measured_rev(_RUN2, _LANDING, repo_root=halted)
+        _cov.write_verdict(
+            halted, _RUN2, measured, _cov.OverlayVerdict("inconclusive", "pytest timed out", ("t/x.py",), timed_out=True),
+        )
+        _write(halted, _FIXTURE, '{"a": 9, "dirty": true}\n')
+        return land_run._handler(
+            {
+                "script_path": "run2.mjs", "run_id": _RUN2, "run_token": token, "incomplete_chunks": [],
+                "inline_review": _reviewed_fixture(**review),
+                "session_id": "11111111-2222-3333-4444-555555555555", "ledger_verdict": _LEDGER_VERDICT,
+                "resume_ledger": resume,
+            },
+            repo_root=halted / ".git",
+        )
+
+    def test_lands_with_an_advisory_naming_the_timeout_when_the_reverify_passed(self, halted, monkeypatch):
+        result = self._land(halted, monkeypatch, reverify=_PASS)
+
+        assert result["committed"] is True, result
+        assert "timed out" in result["clean_overlay_verify"]["advisory"], result
+        assert _git(["log", "-1", "--format=%(trailers:key=Overlay,valueonly)"], halted).strip().startswith("inconclusive")
+
+    @pytest.mark.parametrize(
+        "review",
+        [{}, {"reverify": {"status_after": "fail"}}, {"reverify": {"status_after": "pass", "failing": ["t"]}}],
+    )
+    def test_still_refuses_when_the_reverify_did_not_pass(self, halted, monkeypatch, review):
+        result = self._land(halted, monkeypatch, **review)
+
+        assert result["committed"] is False and result["refused"] == "verify-overlay-unverified", result

@@ -40,6 +40,7 @@ MIRROR_DIRNAME = "clean-mirror"
 SETUP_TIMEOUT_S = 60
 TEST_TIMEOUT_S = 120
 IMPORTER_CAP = 25
+_SHARD_MIN_S = 3
 _PYTEST_FAILED = 1
 _PYTEST_INTERRUPTED = 2
 _OUTPUT_TAIL = 2000
@@ -52,12 +53,15 @@ _ADD_BATCH = 200
 class OverlayVerdict:
     """`verdict` is "green" (tests ran and passed), "red" (a test failed or a test file failed to collect),
     "pre_existing" (every failing test also fails at the base sha: lands with an advisory) or "inconclusive"
-    (no mirror or no test ran: land_run refuses it). "missing" (no verdict was produced) is built by
-    `check_verdict`: land_run lands it with an advisory. `detail` is the tail of the runner output or the reason."""
+    (no mirror or no test ran: land_run refuses it unless `timed_out`). "missing" (no verdict was produced) is
+    built by `check_verdict`: land_run lands it with an advisory. `detail` is the tail of the runner output or
+    the reason. `timed_out` is True only on an "inconclusive" whose seeds pytest hit `TEST_TIMEOUT_S`; every
+    other inconclusive keeps it False."""
 
     verdict: str
     detail: str = ""
     seeds: tuple = field(default_factory=tuple)
+    timed_out: bool = False
 
     @property
     def red(self) -> bool:
@@ -550,65 +554,94 @@ def verify(
     root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str], base_sha: Optional[str] = None,
     leg: LegHook = _no_leg, touched: Sequence[str] = (),
 ) -> OverlayVerdict:
-    """Advance `root`'s persistent mirror to `candidate_sha`, run pytest over `seeds` (plus the test files that
-    mention a `touched` module) there with `coordinator_core` resolved from the mirror, and hold the mirror lock
-    across pytest and the base re-run. A red whose every failing node id also fails at `base_sha` (re-run in the
-    same mirror, those ids only) is "pre_existing": the run did not cause it. A test file that fails to collect
-    is red. Never raises: a setup failure, a busy mirror, a timeout or a run that collected nothing is
-    "inconclusive". `leg(name)` is a context-manager factory entered around the "clone" (cold mirror only),
-    "checkout", "pytest" and "base_rerun" legs and may yield a dict to receive `files_written` (see
-    `overlay_verify_measure`); the default is a no-op."""
+    """Advance `root`'s persistent mirror to `candidate_sha`, run pytest over `seeds` there with `coordinator_core`
+    resolved from the mirror, then a second pytest over the test files that mention a `touched` module (the
+    importer shard) in whatever remains of the one `TEST_TIMEOUT_S` deadline, and hold the mirror lock across
+    pytest and the base re-run. An importer shard that times out, is skipped for lack of time or does not
+    complete is a note on the seeds' verdict; a seeds timeout is "inconclusive" with `timed_out`. A red whose
+    every failing node id (both shards) also fails at `base_sha` (re-run in the same mirror, those ids only) is
+    "pre_existing": the run did not cause it. A test file that fails to collect is red. Never raises: a setup
+    failure, a busy mirror, a timeout or a run that collected nothing is "inconclusive". `leg(name)` is a
+    context-manager factory entered around the "clone" (cold mirror only), "checkout", "pytest" and
+    "base_rerun" legs and may yield a dict to receive `files_written` (see `overlay_verify_measure`); the
+    default is a no-op."""
     seeds = tuple(seeds)
     if not seeds:
         return OverlayVerdict("inconclusive", "the landing set has no test seeds", seeds)
     run_dirs: list = []
+    in_seeds = False
     try:
         with _mirror_lock(root, f"clean-overlay {run_id}") as mroot:
             sha = _commit_sha(root, candidate_sha)
             dest = _prepare_guarded(root, mroot, sha, leg)
             picked, scan_note = _with_importers(dest, seeds, touched)
+            extras = picked[len(seeds):]
             run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, run_id)
             run_dirs.append(run_holder)
+            env = _mirror_env(scoped_pytest.tmp_env(os.environ, tmp), dest)
+            shard_note = ""
+            shard: Optional[subprocess.CompletedProcess] = None
             with leg("pytest"):
-                ran = _run(
-                    _pytest_argv(root, dest, basetemp, picked), dest, TEST_TIMEOUT_S,
-                    env=_mirror_env(scoped_pytest.tmp_env(os.environ, tmp), dest),
-                )
-            full = ran.stdout + ran.stderr
+                started = time.monotonic()
+                in_seeds = True
+                ran = _run(_pytest_argv(root, dest, basetemp, seeds), dest, TEST_TIMEOUT_S, env=env)
+                in_seeds = False
+                if extras:
+                    left = TEST_TIMEOUT_S - (time.monotonic() - started)
+                    shard_note = f"importer shard timed out: {len(extras)} file(s) unverified"
+                    if left >= _SHARD_MIN_S:
+                        try:
+                            shard = _run(_pytest_argv(root, dest, basetemp, extras), dest, left, env=env)
+                            shard_note = ""
+                        except subprocess.TimeoutExpired:
+                            pass
+                        except (OSError, subprocess.SubprocessError) as exc:
+                            shard_note = f"importer shard did not complete ({type(exc).__name__}): {len(extras)} file(s) unverified"
+            runs = [ran] if shard is None else [ran, shard]
+            full = "".join(r.stdout + r.stderr for r in runs)
             tail = full.strip()[-_OUTPUT_TAIL:]
-            if scan_note:
-                tail = f"{scan_note}: {tail}"
-            at_base: frozenset = frozenset()
-            ids = failing_ids(full)
-            collected = collection_error(ran.returncode, full)
-            failed = ran.returncode == _PYTEST_FAILED or collected
-            if (
-                failed and ids and isinstance(base_sha, str) and base_sha
-                and base_sha != sha and not teardown_only_error(ran.returncode, full)
+            if shard is not None and shard.returncode not in (0, _PYTEST_FAILED) and not (
+                collection_error(shard.returncode, shard.stdout + shard.stderr)
+                or teardown_only_error(shard.returncode, shard.stdout + shard.stderr)
             ):
+                shard_note = f"importer shard did not complete (pytest exit {shard.returncode}): {len(extras)} file(s) unverified"
+                runs = [ran]
+                full = ran.stdout + ran.stderr
+                tail = full.strip()[-_OUTPUT_TAIL:]
+            notes = "; ".join(n for n in (scan_note, shard_note) if n)
+            if notes:
+                tail = f"{notes}: {tail}"
+            bad = [r for r in runs if r.returncode != 0 and not teardown_only_error(r.returncode, r.stdout + r.stderr)]
+            at_base: frozenset = frozenset()
+            ids = tuple(dict.fromkeys(i for r in runs for i in failing_ids(r.stdout + r.stderr)))
+            collected = any(collection_error(r.returncode, r.stdout + r.stderr) for r in bad)
+            failed = collected or any(r.returncode == _PYTEST_FAILED for r in bad)
+            if failed and ids and isinstance(base_sha, str) and base_sha and base_sha != sha:
                 at_base = _base_failing(dest, mroot, root, run_id, base_sha, ids, leg)
     except ExportError as exc:
         return OverlayVerdict("inconclusive", str(exc), seeds)
     except subprocess.TimeoutExpired as exc:
         return OverlayVerdict(
             "inconclusive", f"overlay verify timed out after {TEST_TIMEOUT_S}s: {type(exc).__name__}: {exc}", seeds,
+            timed_out=in_seeds,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return OverlayVerdict("inconclusive", f"overlay verify did not complete: {type(exc).__name__}: {exc}", seeds)
     finally:
         for run_dir in run_dirs:
             shutil.rmtree(run_dir, ignore_errors=True)
-    if ran.returncode == 0:
+    if not bad:
+        if any(r.returncode for r in runs):
+            codes = ", ".join(str(r.returncode) for r in runs if r.returncode)
+            return OverlayVerdict("green", f"pytest teardown error after every test passed (exit {codes}): {tail}", seeds)
         return OverlayVerdict("green", tail, seeds)
-    if teardown_only_error(ran.returncode, full):
-        return OverlayVerdict("green", f"pytest teardown error after every test passed (exit {ran.returncode}): {tail}", seeds)
     if failed:
         if ids and at_base == frozenset(ids):
             return OverlayVerdict(
                 "pre_existing", f"every failing test also fails at base {str(base_sha)[:12]}: {', '.join(ids)}: {tail}", seeds,
             )
         return OverlayVerdict("red", f"test collection failed: {tail}" if collected else tail, seeds)
-    return OverlayVerdict("inconclusive", f"pytest exit {ran.returncode}: {tail}", seeds)
+    return OverlayVerdict("inconclusive", f"pytest exit {bad[0].returncode}: {tail}", seeds)
 
 
 def overlay_candidate(measured: dict) -> Optional[str]:
@@ -638,7 +671,7 @@ def name_peer_owners(outcome: OverlayVerdict, measured: dict) -> OverlayVerdict:
         if outcome.red:
             verdict = "inconclusive"
             notes.append("the red may belong to that run's hunks, not this run: re-run once the owner lands or releases them")
-    return OverlayVerdict(verdict, f"{'; '.join(notes)}: {outcome.detail}", outcome.seeds)
+    return OverlayVerdict(verdict, f"{'; '.join(notes)}: {outcome.detail}", outcome.seeds, outcome.timed_out)
 
 
 def landing_key(measured: dict) -> str:
@@ -662,7 +695,7 @@ def write_verdict(root: Path, run_id: str, measured: dict, outcome: OverlayVerdi
         json.dumps(
             {
                 "verdict": outcome.verdict, "detail": outcome.detail, "seeds": list(outcome.seeds),
-                "key": landing_key(measured), "base_sha": measured.get("base_sha"), "sha": measured.get("sha"),
+                "timed_out": outcome.timed_out, "key": landing_key(measured), "base_sha": measured.get("base_sha"), "sha": measured.get("sha"),
             },
             indent=2, sort_keys=True,
         ),
@@ -695,7 +728,7 @@ def _touched_left(root: Path, run_id: str, measured: dict) -> list:
 
 def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
     """Read the run's overlay verdict for the `measured` record. One file read, no spawn: "green" or "red"
-    (or "inconclusive", which land_run refuses, / "pre_existing", which it lands with an advisory) when a verdict
+    (or "inconclusive", which land_run refuses unless `timed_out` is True, / "pre_existing", which it lands with an advisory) when a verdict
     keyed to exactly this landing set and base sha exists; otherwise "missing" (no file or an unreadable one,
     which land_run lands with an advisory) or
     "mismatch" (keyed to a different landing set or base sha; `detail` says which side moved). A run-touched
@@ -719,7 +752,7 @@ def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
         return OverlayVerdict("mismatch", f"the overlay verdict was keyed to a different {moved}", seeds)
     verdict = data.get("verdict")
     if verdict == "inconclusive":
-        return OverlayVerdict("inconclusive", str(data.get("detail", "")), seeds)
+        return OverlayVerdict("inconclusive", str(data.get("detail", "")), seeds, data.get("timed_out") is True)
     if verdict not in ("green", "red", "pre_existing"):
         return OverlayVerdict("missing", f"overlay verdict was {verdict!r}: {data.get('detail', '')}", seeds)
     return OverlayVerdict(verdict, str(data.get("detail", "")), seeds)

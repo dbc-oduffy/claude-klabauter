@@ -165,6 +165,40 @@ def test_repo_owned_table_wins_and_still_raises(world):
         ar.route_rows([_row(body="unreal thing", agent_type="coordinator:executor")], repo)
 
 
+def test_run_only_likeness_class_keeps_python_authoring_rows_on_executor(world):
+    repo, _ = world
+    (repo / ".claude").mkdir()
+    likeness = SPECIALIST  # a defined agent: an undefined explicit type is left to the composer
+    table = {
+        "schema_version": 1,
+        "default_agent_type": "coordinator:executor",
+        "work_classes": [
+            {
+                "id": "likeness",
+                "match": {"keywords": ["likeness"]},
+                "agent_type": likeness,
+                "run_only": True,
+                "on_mismatch": "redirect",
+            }
+        ],
+    }
+    (repo / ".claude" / "route-table.json").write_text(json.dumps(table), encoding="utf-8")
+    writes = ("likeness/descriptor/extract.py", "likeness/tests/test_extract.py")
+    derived = _row("C1", writes=writes, title="likeness refactor", change_kind="code-edit")
+    explicit = _row("C2", writes=writes, title="likeness refactor", change_kind="code-edit", agent_type=likeness)
+    out, routes, notes = ar.route_rows([derived, explicit], repo)
+    assert out[0].agent_type is None
+    assert out[1].agent_type == "coordinator:executor"
+    assert routes == {} and len(notes) == 1 and notes[0].startswith("C2 redirected")
+    unmarked = {**table["work_classes"][0]}
+    del unmarked["run_only"]
+    table["work_classes"] = [unmarked]
+    (repo / ".claude" / "route-table.json").write_text(json.dumps(table), encoding="utf-8")
+    _clear()
+    out, _, _ = ar.route_rows([_row("C3", writes=writes, title="likeness refactor", change_kind="code-edit")], repo)
+    assert out[0].agent_type == likeness
+
+
 def test_stage_agents_fall_back_to_sid_in_ue_repo_only(world):
     repo, _ = world
     defaults = {"plan": "p:a", "plan_review": "c:staff-eng", "code_review": "c:code-reviewer"}

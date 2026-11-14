@@ -168,6 +168,55 @@ def test_a_repeat_fire_lands_the_same_set(repo):
         assert _git(repo, "show", f"HEAD:{t}") == SEED + "own_registration = 1\n"
 
 
+PRED = "warp-20260101-a-20261101T100000-ffffff"
+OTHER_SIZING_PRED = "warp-20260202-b-20261101T100000-ffffff"
+
+
+def _predecessor(root: Path, run: str, sizing: str, kept: dict) -> None:
+    """An earlier fire of the same sizing: its run.json binds the sizing, its kept.json holds `kept` blobs."""
+    from coordinator_core.ops.dispatch_emit import kept_work
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    _write(root, f"{RUN_DIR_ROOT}/{run}/run.json", json.dumps({"sizing_rel": sizing}))
+    kept_work.write(record_dir(root, run), {"C1": {"paths": kept}}, None)
+
+
+def _provenance(root: Path):
+    from coordinator_core.ops.dispatch_emit import hunk_provenance as hp
+
+    found = hp.unproduced_hunks(root, RUN, list(TARGETS), own_plan=PLAN)
+    return found, hp.peer_split(root, RUN, list(TARGETS), own_plan=PLAN)
+
+
+def _resumed_stage(root: Path) -> None:
+    """The live tree already holds an earlier fire's finished bytes when this fire stages: the
+    write_baseline blob equals the worktree bytes, HEAD still lacks the hunk."""
+    for t in TARGETS:
+        _write(root, t, BOTH)
+    _declare(root, wb.capture(root, TARGETS))
+
+
+def test_a_same_sizing_predecessors_kept_blob_attributes_a_baseline_held_hunk_to_the_run(repo):
+    _resumed_stage(repo)
+    _predecessor(repo, PRED, SIZING, {t: blob_sha((repo / t).read_bytes()) for t in TARGETS})
+
+    found, split = _provenance(repo)
+
+    assert found == [] and split == ({}, {}), (found, split)
+
+
+def test_a_baseline_held_hunk_no_run_of_the_sizing_kept_stays_unattributed(repo):
+    _resumed_stage(repo)
+    kept = {t: blob_sha((repo / t).read_bytes()) for t in TARGETS[1:]}
+    _predecessor(repo, PRED, SIZING, kept)
+    _predecessor(repo, OTHER_SIZING_PRED, "state/sizings/20260202-b.yaml", {TARGETS[0]: kept[TARGETS[1]]})
+
+    found, (_split, unsettled) = _provenance(repo)
+
+    assert [f.path for f in found] == [TARGETS[0]], found
+    assert set(_split) | set(unsettled) == {TARGETS[0]}
+
+
 def _lost(root: Path) -> dict:
     return {t: blob_sha((root / t).read_bytes()) for t in TARGETS}
 

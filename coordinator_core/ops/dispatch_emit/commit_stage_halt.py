@@ -21,6 +21,8 @@ HALT_COMMIT_STAGE = "commit_stage"
 HALT_UNRECORDED_END = "run-ended-unrecorded"
 #: The run's commit-stage agent labels: the terminal `commit` and the `halt-commit` record commit.
 COMMIT_STAGE_LABELS = frozenset({"commit", "halt-commit"})
+#: `land_run` refusal code for own-hunk staging: the task still ends `completed`, so it alone halts a completed run.
+OWN_HUNK_STAGE_REFUSED = "own-hunk-stage-refused"
 _CLOSED_STATUSES = frozenset({halted_run.STATUS_LANDED, halted_run.STATUS_CLOSED, halted_run.STATUS_SUPERSEDED})
 
 
@@ -120,7 +122,9 @@ def halt_run_on_commit_stage_end(
         if outcome is None:
             return None
         label, state, leg_reason = outcome
-        if state == "committed" or (state == "uncommitted" and terminal_status == "completed"):
+        if state == "committed":
+            return None
+        if state == "uncommitted" and terminal_status == "completed" and OWN_HUNK_STAGE_REFUSED not in (leg_reason or ""):
             return None
         marker = halted_run.read_strict(Path(record_dir))
         if marker is not None and (

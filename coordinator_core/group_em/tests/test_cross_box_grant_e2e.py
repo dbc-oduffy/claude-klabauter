@@ -13,6 +13,7 @@ import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -72,7 +73,12 @@ def signed_membership(tmp_path_factory):
     sig = mem.FakeSigner(keys["signer"][0], environ={}).sign(mem.canonical_bytes(snap))
     home = root / "home"
     mem.write_pin(home, keys["signer"][1])
-    mem.adopt(home, snap, sig, notifier=lambda *_: None)
+    # adopt's ssh verify does `import lib` then `from cc_invoke import ...`: an ambient namespace `lib`
+    # on sys.path would shadow coordinator/bin/lib, so bind the bin package for the adopt only.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(BIN))
+        mp.delitem(sys.modules, "lib", raising=False)
+        mem.adopt(home, snap, sig, notifier=lambda *_: None)
     return mem.membership_dir(home)
 
 
@@ -206,6 +212,11 @@ def test_member_box_absent_from_box_json_is_granted_and_b_checks_granted(world, 
     assert code == 0, out
     assert w["calls"][0].startswith("grant ") and "keypin" in w["calls"][1]
     assert _relayed_file(w).is_file()
+    stored = json.loads(_relayed_file(w).read_text(encoding="utf-8"))["envelope"]
+    assert (stored["issuer_box_id"], stored["issuer_session_id"]) == (w["ids"]["a"], HOLDER)
+    assert (stored["grantee_box_id"], stored["grantee_session_id"]) == (w["ids"]["b"], PEER)
+    assert nomination.box_holder(w["home_b"] / "state" / "group-em") is None, "B has no live Group EM"
+    assert nomination.box_holder(w["dir_a"]) is not None
     assert box_key.pinned_fingerprint(w["ids"]["a"], w["home_b"]) == box_key.own_fingerprint(w["home_a"])
     code, out = _check(w, capsys)
     assert code == 0 and "basis: group-em-grant" in out

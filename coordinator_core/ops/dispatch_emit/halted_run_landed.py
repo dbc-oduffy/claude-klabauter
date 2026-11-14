@@ -15,8 +15,13 @@ worktree; a marker-less run writes nothing and replies the not-applicable close)
 work landed under that other run; the named run's marker must read ``landed`` at a sha matching
 ``sha``/``shas``, else the "never ran" refusal stands; writes nothing and replies the not-applicable close),
 ``foreign`` (list of path strings, optional: owed withheld paths holding only a concurrent run's hunks; voided,
-kept-fingerprinted or not, and echoed as ``foreign``), ``dropped`` (list of path strings, optional: owed withheld
-paths the landing deliberately left out; voided the same way, echoed as ``dropped``).
+kept-fingerprinted or not, only when another live or landed run (not this run or its predecessors) declares
+the path in its manifest; echoed as ``foreign`` with ``foreign_owners``), ``dropped`` (list of path strings,
+optional: owed withheld paths the landing deliberately left out; a path a sha changed is never voided by it;
+echoed as ``dropped``). The records commit carries ``Withheld-Dropped: <path>`` and
+``Withheld-Foreign: <path> <owning run id>`` trailers for them.
+A run with no halt record but a run-open wave checkpoint closes when the sha changed every path that checkpoint
+committed: one empty scoped commit stamps ``Checkpoint-Run-Closed:`` for its base (else the "never ran" refusal stands).
 Each sha is a lowercase hex commit sha, full or abbreviated to at least 4
 characters; an abbreviation must name exactly one commit and the reply and
 recorded marker carry the full 40-hex sha. The run's sibling status must read
@@ -231,10 +236,25 @@ def _closed_trailers(root: Path, run_id: str, record_dir: Path) -> str:
     return "\n\n" + "\n".join(lines) if lines else ""
 
 
-def _commit_records(root: Path, run_id: str, record_dir: Path, sha: str, verified: bool = False) -> dict:
+def _trailer_tail(closed: str, claims: Optional[dict]) -> str:
+    """*closed* plus one ``Withheld-Dropped:`` / ``Withheld-Foreign:`` line per path in the echo *claims*."""
+    owners = (claims or {}).get("foreign_owners") or {}
+    lines = [f"Withheld-Dropped: {p}" for p in (claims or {}).get("dropped") or []]
+    lines += [f"Withheld-Foreign: {p} {owners.get(p, '?')}" for p in (claims or {}).get("foreign") or []]
+    if not lines:
+        return closed
+    return closed + ("\n" if closed else "\n\n") + "\n".join(lines)
+
+
+def _commit_records(
+    root: Path, run_id: str, record_dir: Path, sha: str, verified: bool = False, allow_empty: bool = False,
+    claims: Optional[dict] = None,
+) -> dict:
     """Commit the landed flip's record files (halted.json, run-stage.json) plus every other changed or untracked path in the run's record dir (prompts/, resume.json) in one scoped commit naming *run_id*.
 
     ``verified`` (the sha was checked an ancestor of HEAD) adds ``Checkpoint-Run-Closed:`` trailers for the run's bases.
+    *claims* (a ``_verify`` echo) adds ``Withheld-Dropped:`` / ``Withheld-Foreign:`` trailers for the paths the caller voided.
+    ``allow_empty`` anchors the commit on the run's ``manifest.json`` and lets it carry no diff, so the closure lands for a run with no record file to flip.
 
     Returns ``{"records_commit": sha}``; ``{}`` when nothing changed or the record dir is untracked
     scratch; ``{"records_commit_error": ...}`` on a refusal, which never fails the landed write.
@@ -252,14 +272,17 @@ def _commit_records(root: Path, run_id: str, record_dir: Path, sha: str, verifie
         ]
     except ValueError:
         return {}
-    if not fixed or not fixed[0].startswith("state/"):
+    if allow_empty:
+        fixed.append((record_dir / "manifest.json").relative_to(root).as_posix())
+    elif not fixed or not fixed[0].startswith("state/"):
         return {}
     rels = sorted(set(fixed) | set(record_dir_residue(root, run_id)))
     try:
         outcome = commit_paths(
             root, rels,
             f"dispatch.record_halted_run_landed: {run_id} landed at {sha[:12]}"
-            + (_closed_trailers(root, run_id, record_dir) if verified else ""),
+            + _trailer_tail(_closed_trailers(root, run_id, record_dir) if verified else "", claims),
+            allow_empty=allow_empty,
         )
     except NothingToCommit:
         return {}
@@ -268,7 +291,9 @@ def _commit_records(root: Path, run_id: str, record_dir: Path, sha: str, verifie
     return {"records_commit": outcome.sha}
 
 
-def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str], verified: bool = False) -> dict:
+def _close_landed(
+    root: Path, run_id: str, sha: str, session_id: Optional[str], verified: bool = False, claims: Optional[dict] = None,
+) -> dict:
     """Flip a still-``halted`` or ``resumed`` marker to landed and commit its records, then queue the close unless a job record exists."""
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run, run_close
 
@@ -282,7 +307,7 @@ def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str], 
     if marker is not None and marker.get("status") in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
         if halted_run.mark_landed(record_dir, sha, without_verdict=without_verdict):
             out["recorded"] = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
-            out.update(_commit_records(root, run_id, record_dir, sha, verified))
+            out.update(_commit_records(root, run_id, record_dir, sha, verified, claims=claims))
     if marker is None:
         return {**out, "close": {"status": "not-applicable", "detail": _NEVER_HALTED.format(sha=sha[:12])}, "blocking_rows": []}
     if run_close.resolve_close_job_stem(root, run_id) is not None:
@@ -612,8 +637,75 @@ def _predecessor_record(path: str, run_id: str) -> bool:
     return len(parts) == n + 2 and parts[:n] == root_parts and parts[n] != run_id.casefold()
 
 
+def _declaring_runs(root: Path, run_id: str, named: list) -> dict:
+    """``{path: owning run id}`` for each *named* path declared in the staged manifest of another live or landed run.
+
+    Excluded: *run_id* and its ``resumed_from`` predecessors. A run counts when its halt marker or run stage
+    reads landed, or its token is live and its record not terminal. A declared directory owns the paths under it.
+    JSON reads only, newest run dir first, stopping once every path has an owner.
+
+    Trap: the scan reads one manifest per run dir under both record roots, so cost grows with the run-dir count.
+    """
+    from pathlib import PurePosixPath
+
+    from coordinator_core.ops.dispatch_emit import halted_run, requirements_ledger as rl, run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import (
+        RECORD_DIR_ROOT, RUN_DIR_ROOT, RUN_STAGE_FILE, record_dir,
+    )
+    from coordinator_core.ops.dispatch_emit.live_run_writes import manifest_footprint
+
+    skip = {run_id}
+    cur = run_id
+    while True:
+        try:
+            ledger = rl.read_run(record_dir(root, cur))
+        except ValueError:
+            break
+        prev = ledger.get(rl.RESUMED_FROM_FIELD) if ledger else None
+        if not isinstance(prev, str) or prev in skip:
+            break
+        skip.add(prev)
+        cur = prev
+
+    def _norm(p: str) -> PurePosixPath:
+        return PurePosixPath(_tree_path(p).replace("\\", "/").strip("/").casefold())
+
+    want = {p: _norm(p) for p in named}
+    found: dict = {}
+    for base in (RECORD_DIR_ROOT, RUN_DIR_ROOT):
+        try:
+            cands = sorted((p for p in (root / base).iterdir() if p.is_dir() and p.name not in skip), reverse=True)
+        except OSError:
+            continue
+        for cand in cands:
+            if len(found) == len(want):
+                return found
+            try:
+                manifest = json.loads((cand / "manifest.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(manifest, dict):
+                continue
+            declared = {_norm(w) for w in manifest_footprint(manifest)}
+            hits = [p for p, n in want.items() if p not in found and (n in declared or any(a in declared for a in n.parents))]
+            if not hits:
+                continue
+            try:
+                stage = json.loads((cand / RUN_STAGE_FILE).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                stage = None
+            marker = halted_run._read(cand)
+            landed = (marker or {}).get("status") == halted_run.STATUS_LANDED or (
+                isinstance(stage, dict) and stage.get("stage") == "landed"
+            )
+            if landed or (run_token.is_live(root, cand.name) and not _terminal(cand)):
+                found.update({p: cand.name for p in hits})
+    return found
+
+
 def _carries_withheld(
-    root: Path, run_id: str, shas: list, foreign: frozenset = frozenset(),
+    root: Path, run_id: str, shas: list, foreign: frozenset = frozenset(), dropped: frozenset = frozenset(),
+    claims: Optional[dict] = None,
 ) -> tuple[Optional[str], dict, list]:
     """``(None, covers, voided)`` when *shas* together changed every owed path the run's halt marker withholds, else ``(refusal, {}, [])``.
 
@@ -621,8 +713,10 @@ def _carries_withheld(
     withheld list less the paths a revision voided (``voided``, ``_voided_paths``), and every sha must
     change at least one owed path. ``covers`` maps each sha to the owed paths it changed (empty for a
     run withholding nothing or with no marker, which passes). An unreadable commit or tree refuses.
-    *foreign* (casefolded tree paths the caller declares hold only a peer's hunks, or ``dropped`` ones
-    merged in by ``_verify``) voids those owed paths last, kept-fingerprinted or not.
+    *dropped* and *foreign* (casefolded tree paths) void owed paths last, kept-fingerprinted or not, and
+    only paths no sha changed: *dropped* are left out on purpose; *foreign* need another live or landed run
+    declaring them (``_declaring_runs``), else the landing refuses. When given, *claims* is filled with
+    ``dropped`` (paths) and ``foreign`` (``{path: owning run id}``) for the paths voided here.
     """
     from coordinator_core.git.commit_walk import commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -700,16 +794,33 @@ def _carries_withheld(
         prior = [p for p in unchanged if _predecessor_record(p, run_id)]
         voided_list += prior
         unchanged = [p for p in unchanged if p not in prior]
+    claim_dropped: list = []
+    claim_foreign: dict = {}
+    if unchanged and dropped:
+        claim_dropped = _named_paths(unchanged, dropped)
+        unchanged = [p for p in unchanged if p not in claim_dropped]
     if unchanged and foreign:
-        claimed = _named_paths(unchanged, foreign)
-        voided_list += claimed
-        unchanged = [p for p in unchanged if p not in claimed]
+        named = _named_paths(unchanged, foreign)
+        if named:
+            claim_foreign = _declaring_runs(root, run_id, named)
+            unowned = [p for p in named if p not in claim_foreign]
+            if unowned:
+                more = f" (+{len(unowned) - 1} more)" if len(unowned) > 1 else ""
+                return (
+                    f"foreign {unowned[0]}{more} is in no other live or landed run's declared writes; "
+                    "pass it under dropped=[<path>, ...] if the landing left it out"
+                ), {}, []
+            unchanged = [p for p in unchanged if p not in claim_foreign]
+    voided_list += claim_dropped + list(claim_foreign)
+    if claims is not None:
+        claims.update(dropped=claim_dropped, foreign=claim_foreign)
     if unchanged:
         more = f" (+{len(unchanged) - 1} more)" if len(unchanged) > 1 else ""
         who = shas[0] if len(shas) == 1 else "shas together"
         return (
             f"{who} did not change withheld {unchanged[0]}{more}; "
-            "pass the commit(s) that landed the run's withheld paths"
+            "pass shas=[<commit>, ...] (prior halt commits included), or dropped=[<path>, ...] for paths left out, "
+            "or foreign=[<path>, ...] for a peer's hunks"
         ), {}, []
     return None, covers, voided_list
 
@@ -913,7 +1024,7 @@ def _verify(
 
     ``echo`` is ``{"shas": every verified full sha, "covers": {sha: withheld paths it changed}}``,
     plus ``"met_by": {row: full sha}`` when *met_by* is given, and ``"foreign"`` / ``"dropped"``
-    (the voided paths the caller named). *met_by* shas join the same prefix-resolve and
+    (the voided paths the caller named; ``foreign_owners`` maps each foreign path to its declaring run). *met_by* shas join the same prefix-resolve and
     HEAD-ancestry reads as *shas*.
     """
     from coordinator_core import git_ancestry
@@ -945,17 +1056,19 @@ def _verify(
         problem = _met_by_problem(root, run_id, full_met, reached)
         if problem:
             return None, problem, {}
-    problem, covers, voided = _carries_withheld(root, run_id, full, foreign | dropped)
+    claims: dict = {}
+    problem, covers, voided = _carries_withheld(root, run_id, full, foreign, dropped, claims)
     if problem:
         return None, problem, {}
     problem = _withheld_import_problem(root, run_id, full, covers)
     if problem:
         return None, problem, {}
-    named_foreign = _named_paths(voided, foreign)
-    named_dropped = [p for p in _named_paths(voided, dropped) if p not in named_foreign]
+    owners = claims.get("foreign") or {}
+    named_foreign = sorted(owners)
+    named_dropped = claims.get("dropped") or []
     echo = {
         "shas": full, "covers": covers, **({"voided": voided} if voided else {}),
-        **({"foreign": named_foreign} if named_foreign else {}),
+        **({"foreign": named_foreign, "foreign_owners": owners} if named_foreign else {}),
         **({"dropped": named_dropped} if named_dropped else {}),
         **({MET_BY_FIELD: full_met} if full_met else {}),
     }
@@ -1178,6 +1291,109 @@ def _landed_sha(root: Path, other: str, shas: list) -> Optional[str]:
     return None
 
 
+#: Bounds the checkpoint log of ``_close_checkpointed``: a refusal path, so a deep history is cut, not walked whole.
+_CHECKPOINT_LOG_CAP = 400
+
+
+def _open_run_checkpoints(root: Path, bases: tuple) -> tuple[list, list]:
+    """``(open_bases, live)``: the ``Checkpoint-Base`` of every run-open checkpoint on HEAD whose base is in *bases* and that no ``Checkpoint-Run-Closed`` names, and ``live``, one ``(checkpoint_sha, paths)`` per such checkpoint. One git spawn."""
+    from coordinator_core.git.run import run_git
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import _BASE_LINE, _NOT_LANDED_LINE, run_closed_bases
+
+    done = run_git(
+        ["-c", "core.quotepath=off", "log", f"-n{_CHECKPOINT_LOG_CAP}", "--name-only",
+         "--grep=^Checkpoint-Not-Landed:", "--grep=^Checkpoint-Run-Closed:", "--format=%x1e%H%x1d%B%x1f"],
+        cwd=str(root),
+    )
+    if done.returncode != 0:
+        return [], []
+    closed: set = set()
+    opened: list = []
+    for record in done.stdout.split("\x1e"):
+        head, sep, names = record.partition("\x1f")
+        cp_sha, _, message = head.partition("\x1d")
+        if not sep:
+            continue
+        closed |= run_closed_bases(message)
+        base = _BASE_LINE.search(message)
+        if base and base.group("v") in bases and _NOT_LANDED_LINE.search(message):
+            opened.append((base.group("v"), cp_sha.strip(), [n.strip() for n in names.splitlines() if n.strip()]))
+    live = [(b, sha, paths) for b, sha, paths in opened if b not in closed]
+    return list(dict.fromkeys(b for b, _, _ in live)), [(sha, paths) for _, sha, paths in live]
+
+
+def _staged_run(root: Path, run_id: str) -> bool:
+    """True when the run's ``run-stage.json`` says ``staged``: it finished its rows and parked own hunks awaiting a landing."""
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    try:
+        return (ask_contract.read_run_stage(root, run_id) or {}).get("stage") == "staged"
+    except ValueError:
+        return False
+
+
+def _in_landed_history(root: Path, cp_shas: list, shas: list) -> set:
+    """The *cp_shas* that are ancestors of any of *shas*. One git spawn."""
+    from coordinator_core.git.run import run_git
+
+    if not cp_shas:
+        return set()
+    done = run_git(["rev-list", *cp_shas, "--not", *shas], cwd=str(root))
+    if done.returncode != 0:
+        return set()
+    return set(cp_shas) - {line.strip() for line in done.stdout.splitlines()}
+
+
+def _carried_paths(root: Path, shas: list) -> set:
+    """Casefolded paths any of *shas* changed against a parent. One git spawn."""
+    from coordinator_core.git.run import run_git
+
+    done = run_git(
+        ["-c", "core.quotepath=off", "diff-tree", "--stdin", "--no-commit-id", "--name-only", "-r", "-m", "--root"],
+        cwd=str(root), input=("\n".join(shas) + "\n").encode("utf-8"),
+    )
+    return {n.strip().casefold() for n in done.stdout.splitlines() if n.strip()} if done.returncode == 0 else set()
+
+
+def _close_checkpointed(root: Path, run_id: str, shas: list, session_id: Optional[str]) -> Optional[dict]:
+    """Close a run that has no halt record but stamped wave checkpoints still run-open, given a landing sha carrying every checkpoint path.
+
+    ``None`` when the run has no run-open checkpoint (the "never ran" refusal stands). A refusal when the
+    sha does not carry every checkpoint path. Otherwise one scoped commit stamps ``Checkpoint-Run-Closed:``
+    for each open base, and the reply is ``_close_landed``'s not-applicable close.
+    """
+    from coordinator_core.ops.dispatch_emit.landing_integrity import closing_bases
+
+    bases = closing_bases(root, run_id, {})
+    if not bases:
+        return None
+    open_bases, live = _open_run_checkpoints(root, bases)
+    if not open_bases:
+        return None
+    sha, problem, echo = _verify(root, run_id, shas)
+    if problem:
+        return _refuse(problem)
+    carried = _carried_paths(root, echo["shas"])
+    if _staged_run(root, run_id):
+        behind = _in_landed_history(root, [cp for cp, _ in live], echo["shas"])
+        live = [(cp, ps) for cp, ps in live if cp not in behind]
+    missing = sorted({p for _, ps in live for p in ps if p.casefold() not in carried})
+    if missing:
+        return _refuse(
+            f"{run_id} has no halt record and run-open checkpoint(s); {sha[:12]} does not carry {', '.join(missing)}"
+        )
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    records = _commit_records(root, run_id, ask_contract.record_dir(root, run_id), sha, verified=True, allow_empty=True)
+    if "records_commit" not in records:
+        return _refuse(f"{run_id} checkpoint close commit refused: {records.get('records_commit_error', 'no commit')}")
+    return {
+        "ok": True, "run_id": run_id, "sha": sha, "written": True, **echo, **records,
+        "checkpoint_close_commit": records["records_commit"],
+        **_close_landed(root, run_id, sha, session_id),
+    }
+
+
 def _record_solo(
     root: Path, run_id: str, shas: list, session_id: Optional[str] = None, in_run: bool = False,
     met_by: Optional[dict] = None, landed_under: Optional[str] = None, foreign: frozenset = frozenset(),
@@ -1213,7 +1429,8 @@ def _record_solo(
                 **_close_landed(root, run_id, landed, session_id),
             }
     if marker is None:
-        return _refuse(f"{run_id} has no sibling status or halt record; it never ran")
+        closed = _close_checkpointed(root, run_id, shas, session_id)
+        return closed if closed is not None else _refuse(f"{run_id} has no sibling status or halt record; it never ran")
     status = marker.get("status")
     if status == halted_run.STATUS_LANDED:
         landed = marker.get("sha")
@@ -1242,7 +1459,7 @@ def _record_solo(
     return {
         "ok": True, "run_id": run_id, "sha": sha, "written": True, **echo, "recorded": recorded,
         "landed_without_verdict": without_verdict,
-        **_commit_records(root, run_id, record_dir, sha, True),
+        **_commit_records(root, run_id, record_dir, sha, True, claims=echo),
         **_queue_close(root, run_id, sha, marker, session_id),
     }
 
@@ -1325,5 +1542,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     out: dict = {"ok": True, "run_id": run_id, "sha": sha, "written": True, **echo}
     if reply is not None:
         out["siblings"] = reply
-    out.update(_close_landed(root, run_id, sha, session_id, True))
+    out.update(_close_landed(root, run_id, sha, session_id, True, claims=echo))
     return out

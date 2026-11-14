@@ -38,9 +38,9 @@ def test_cache_scans_each_file_once(tmp_path, monkeypatch):
 
 
 def test_byte_cap_truncates(tmp_path):
-    out = re_.excerpt_block("y" * 5000, [], tmp_path, "h", {})
+    out = re_.excerpt_block("y" * 5000, [], tmp_path, "h", {}, "docs/plans/p.md", "C1")
     assert len(out.encode("utf-8")) <= EXCERPT_MAX_BYTES
-    assert "(truncated)" in out
+    assert "`docs/plans/p.md` row `C1`" in out
 
 
 def test_long_body_keeps_symbol_spans(tmp_path):

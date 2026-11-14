@@ -384,6 +384,14 @@ const _isBaselineRed = (id, err) =>
     const m = _TR_VERDICT_RE.exec(t);
     return m ? (m[1] || m[2]).toLowerCase() : null;
   }
+  const _ABSTAIN_LINE_RE = /^"?\s*[*_`]{0,2}ABSTAIN[*_`]{0,2}:(.*)$/;
+  function _abstainOf(t) {
+    for (const l of t.split(_REASON_SPLIT_RE)) {
+      const m = _ABSTAIN_LINE_RE.exec(l.trim());
+      if (m) return m[1].replace(/[\s*_`"}\]\\]+$/, '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+    }
+    return null;
+  }
   function _owedReleases(owed, id) {
     const m = /^gate-blocker: needs-dependent: *([^ \\"]+)/.exec(owed);
     return !m || m[1].replace(/[.,;]$/, '') === id;
@@ -534,7 +542,12 @@ const _isBaselineRed = (id, err) =>
       }
     } else if (!/(?:^"?|\n|\\n)\s*[*_`]{0,2}(?:DONE(?:_WITH_CONCERNS)?|PARTIAL|BLOCKED)[*_`]{0,2}:|<exit-status>(?:DONE|PARTIAL|BLOCKED)<\/exit-status>/.test(_text)) {
       const _tv = _trVerdictOf(_text);
-      if (!_tv) {
+      const _abstain = _tv ? null : _abstainOf(_text);
+      if (_abstain !== null) {
+        _incompleteChunks.push(id);
+        _chunkReason[id] = 'executor abstained' + (_abstain ? ': ' + _abstain : '');
+        incomplete = true;
+      } else if (!_tv) {
         _incompleteChunks.push(id);
         _unansweredBriefs.push(id);
         _chunkReason[id] = 'no contract status line in the executor reply';

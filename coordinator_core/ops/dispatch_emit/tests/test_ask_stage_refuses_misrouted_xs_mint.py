@@ -30,15 +30,15 @@ def test_s_arm_sizing_without_a_plan_edge_is_refused_by_name(tmp_path):
         stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
 
 
-def test_s_arm_plan_edge_sizing_with_empty_writes_is_refused_by_name(tmp_path):
+def test_s_arm_dangling_plan_edge_with_empty_writes_is_refused_as_dangling(tmp_path):
     _sizing(tmp_path)
-    with pytest.raises(AskStageError, match="^XS-MINT-MISROUTED: "):
+    with pytest.raises(AskStageError, match="^PLAN-EDGE-DANGLING: "):
         stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=[])
 
 
-def test_s_arm_plan_edge_sizing_with_writes_is_still_refused(tmp_path):
+def test_s_arm_dangling_plan_edge_with_writes_is_refused_as_dangling(tmp_path):
     _sizing(tmp_path)
-    with pytest.raises(AskStageError, match="^XS-MINT-MISROUTED: "):
+    with pytest.raises(AskStageError, match="^PLAN-EDGE-DANGLING: "):
         stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
 
 
@@ -52,7 +52,7 @@ def test_handler_replies_error_not_traceback_for_the_multi_ask_shape(tmp_path):
     _sizing(tmp_path)
     (tmp_path / ".git").mkdir()
     reply = _handler({"run_id": "r1", "sizing_path": SIZING_REL, "writes": []}, repo_root=tmp_path)
-    assert reply["error"].startswith("XS-MINT-MISROUTED: ")
+    assert reply["error"].startswith("PLAN-EDGE-DANGLING: ")
 
 
 def test_xs_sizing_with_writes_still_mints(tmp_path):

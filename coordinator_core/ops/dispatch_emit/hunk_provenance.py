@@ -173,6 +173,32 @@ def _kept_blocks(root: Path, common: Path, path: str, head: list, blobs: Sequenc
     return out
 
 
+def _predecessors(root: Path, run_id: str) -> tuple:
+    """Earlier runs bound to this run's sizing; empty when they cannot be read."""
+    try:
+        from coordinator_core.ops.dispatch_emit import run_artifact_ownership
+
+        return tuple(run_artifact_ownership.own_artifact_paths(root, run_id).predecessors)
+    except Exception:  # noqa: BLE001 -- unreadable lineage names no predecessor
+        return ()
+
+
+def _own_kept(root: Path, run_id: str) -> dict:
+    """`kept_fingerprints` of this run and its same-sizing predecessors, unioned per path: the bytes a
+    predecessor fire wrote are this run's work. A predecessor whose kept record cannot be read contributes nothing."""
+    from coordinator_core.ops.dispatch_emit import kept_work
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    out: dict = {k: set(v) for k, v in kept_work.kept_fingerprints(record_dir(root, run_id)).items()}
+    for pred in _predecessors(root, run_id):
+        try:
+            for rel, blobs in kept_work.kept_fingerprints(record_dir(root, pred)).items():
+                out.setdefault(rel, set()).update(blobs)
+        except Exception:  # noqa: BLE001 -- unreadable evidence is none
+            continue
+    return {k: frozenset(v) for k, v in out.items()}
+
+
 def _own_hunk_evidence(
     root: Path, common: Path, run_id: str, path: str, head: list, own_plan: Optional[str],
 ) -> tuple:
@@ -181,19 +207,20 @@ def _own_hunk_evidence(
     from coordinator_core.ops.dispatch_emit import kept_work
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
-    def blocks(run: str) -> set:
+    def blocks(run: Optional[str]) -> set:
         try:
-            blobs = kept_work.kept_fingerprints(record_dir(root, run)).get(path)
+            blobs = (kept_work.kept_fingerprints(record_dir(root, run)) if run else _own_kept(root, run_id)).get(path)
             return _kept_blocks(root, common, path, head, sorted(blobs)) if blobs else set()
         except Exception:  # noqa: BLE001 -- unreadable evidence is none
             return set()
 
-    mine = blocks(run_id)
+    mine = blocks(None)
     if not mine:
         return mine, set()
-    others = [o for o in _owners(root, run_id, path, own_plan) if o != run_id]
+    kin = {run_id, *_predecessors(root, run_id)}
+    others = [o for o in _owners(root, run_id, path, own_plan) if o not in kin]
     holder = _halted_holder(root, run_id, own_plan, path)
-    if holder is not None and holder != run_id:
+    if holder is not None and holder not in kin:
         others.append(holder)
     peers: set = set()
     for other in others:
@@ -414,7 +441,7 @@ def _unproduced(root: Path, run_id: str, path: str, own_plan: Optional[str] = No
         return "", [], head_bytes
 
     committed_sha = kept_work.blob_sha(form)
-    for kept in kept_work.kept_fingerprints(record_dir(root, run_id)).get(path, ()):
+    for kept in _own_kept(root, run_id).get(path, ()):
         if kept_work.matches_committed(root, path, kept, committed_sha):
             return "", [], head_bytes
 

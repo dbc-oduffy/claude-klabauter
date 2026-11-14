@@ -1084,7 +1084,91 @@ def test_the_pytest_set_is_the_touched_tests_plus_the_test_files_that_import_a_t
     out = cov.verify(root, "run1", head, [READER], touched=[_HELPER, READER])
 
     assert out.verdict == "green", out
-    assert seen == [[READER, _IMPORTER]]
+    assert seen == [[READER], [_IMPORTER]]
+
+
+def _timing_out(monkeypatch, *, on):
+    """Raise TimeoutExpired from every pytest `_run` whose targets contain `on`; others run for real."""
+    real = cov._run
+
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" in argv and on in argv[argv.index("--basetemp") + 2:]:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+
+
+def test_an_importer_shard_timeout_with_green_seeds_is_green_with_a_note(tmp_path, monkeypatch):
+    root, head = _importer_repo(tmp_path)
+    _timing_out(monkeypatch, on=_IMPORTER)
+
+    out = cov.verify(root, "run1", head, [READER], touched=[_HELPER, READER])
+
+    assert out.verdict == "green" and not out.timed_out, out
+    assert "importer shard timed out: 1 file(s) unverified" in out.detail, out.detail
+
+
+def test_an_importer_shard_with_no_time_left_is_skipped_with_the_same_note(tmp_path, monkeypatch):
+    root, head = _importer_repo(tmp_path)
+    seen = _pytest_targets(monkeypatch)
+    monkeypatch.setattr(cov, "_SHARD_MIN_S", 10**6)
+
+    out = cov.verify(root, "run1", head, [READER], touched=[_HELPER, READER])
+
+    assert out.verdict == "green" and seen == [[READER]], (out, seen)
+    assert "importer shard timed out: 1 file(s) unverified" in out.detail
+
+
+def test_the_importer_shard_gets_only_the_deadline_the_seeds_left(tmp_path, monkeypatch):
+    root, head = _importer_repo(tmp_path)
+    budgets = []
+    real = cov._run
+
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" in argv:
+            budgets.append(timeout)
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    assert cov.verify(root, "run1", head, [READER], touched=[_HELPER, READER]).verdict == "green"
+
+    assert budgets[0] == cov.TEST_TIMEOUT_S and 0 < budgets[1] < budgets[0], budgets
+
+
+def test_a_red_importer_shard_is_red_and_a_seeds_timeout_is_inconclusive_with_timed_out(tmp_path, monkeypatch):
+    root, head = _importer_repo(tmp_path)
+    _write(root, _IMPORTER, "import helper_mod\n\n\ndef test_helper():\n    assert helper_mod.VALUE == 2\n")
+    _git(root, "add", _IMPORTER)
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "red importer")
+    red_head = _git(root, "rev-parse", "HEAD").strip()
+
+    red = cov.verify(root, "run1", red_head, [READER], touched=[_HELPER, READER])
+    assert red.verdict == "red" and not red.timed_out and "test_helper" in red.detail, red
+
+    _timing_out(monkeypatch, on=READER)
+    slow = cov.verify(root, "run2", red_head, [READER], touched=[_HELPER, READER])
+    assert slow.verdict == "inconclusive" and slow.timed_out, slow
+
+
+def test_a_non_timeout_inconclusive_keeps_timed_out_false(tmp_path):
+    root, head = _repo(tmp_path)
+
+    out = cov.verify(root, "run1", head, [])
+
+    assert out.verdict == "inconclusive" and out.timed_out is False
+
+
+def test_timed_out_round_trips_through_write_verdict_and_check_verdict(tmp_path):
+    root, head = _repo(tmp_path)
+    measured = {"sha": head, "base_sha": head, "blobs": {}}
+    cov.write_verdict(root, "run1", measured, cov.OverlayVerdict("inconclusive", "slow", (READER,), timed_out=True))
+    assert cov.check_verdict(root, "run1", measured).timed_out is True
+
+    cov.write_verdict(root, "run1", measured, cov.OverlayVerdict("inconclusive", "setup", (READER,)))
+    back = cov.check_verdict(root, "run1", measured)
+    assert back.verdict == "inconclusive" and back.timed_out is False
+    assert cov.name_peer_owners(cov.OverlayVerdict("inconclusive", "x", (), True), {"peer_hunks": {"a": {"split": True}}}).timed_out
 
 
 def test_no_touched_module_means_the_seeds_alone_and_a_runaway_importer_set_is_capped(tmp_path, monkeypatch):
@@ -1103,7 +1187,7 @@ def test_no_touched_module_means_the_seeds_alone_and_a_runaway_importer_set_is_c
 
     out = cov.verify(root, "run2", head, [READER], touched=[_HELPER])
 
-    assert len(seen[0]) == 2 and "importer cap 1" in out.detail, (seen, out)
+    assert [len(s) for s in seen] == [1, 1] and "importer cap 1" in out.detail, (seen, out)
 
 
 def test_verify_timeout_detail_names_the_timeout_and_its_budget(tmp_path, monkeypatch):

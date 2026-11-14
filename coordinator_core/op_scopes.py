@@ -85,6 +85,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.taskstop_launch_recorder":        "none",
     "hooks.taskstop_reaper":                 "none",
     "hooks.agent_stop_reaper":               "none",
+    "hooks.record_askuserquestion_answer":   "none",
     "hooks.nudge_unauthorized_handoff":      "none",
     "hooks.idle_compact_advisory":           "none",
     "hooks.nudge_named_agent_report_delivery": "none",

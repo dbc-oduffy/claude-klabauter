@@ -24,6 +24,12 @@ class TestNudgeAutonomousAskuserquestion:
         assert classify("hooks.nudge_autonomous_askuserquestion") is OpClass.COMPUTE_ONLY
 
 
+class TestRecordAskuserquestionAnswer:
+
+    def test_classifies_mutating(self) -> None:
+        assert classify("hooks.record_askuserquestion_answer") is OpClass.MUTATING
+
+
 class TestRepoSetup:
 
     def test_classifies_mutating(self) -> None:

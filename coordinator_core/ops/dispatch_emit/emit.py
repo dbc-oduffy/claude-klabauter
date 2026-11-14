@@ -392,7 +392,11 @@ from coordinator_core.ops.dispatch_emit.executor_economy import (
     SYMBOL_CONTEXT_HEADING,
     checkpoint_path,
 )
-from coordinator_core.ops.dispatch_emit.row_excerpts import excerpt_block
+from coordinator_core.ops.dispatch_emit.row_excerpts import (
+    cut_whole,
+    excerpt_block,
+    full_text_pointer,
+)
 from coordinator_core.ops.dispatch_emit import symbol_context as _symbol_context
 from coordinator_core.ops.dispatch_emit import fanout_cost as _fanout
 from coordinator_core.ops.dispatch_emit.agent_sidecar import (
@@ -1747,6 +1751,8 @@ class PlanContext:
     criterion_typecheck: Optional[CriterionTypecheck] = None
     #: Paths a refire's fix leg owns (the leg's named inherited writes); empty on a first run.
     leg_writes: tuple = ()
+    #: The plan file's repo-relative path; names where an over-cap cut's full text lives.
+    plan_path: Optional[str] = None
 
 
 #: The one absolute path an emitted script carries, and the reason it does.
@@ -2040,9 +2046,6 @@ _NEXT_HEADING_RE = re.compile(r"^#{1,6}\s", re.MULTILINE)
 # still refusing an unbounded prose blob.
 _PLAN_CONTEXT_PREAMBLE_CHAR_CAP = 1050
 
-_TRUNCATION_SUFFIX = "…"
-
-
 def _plan_section_body(plan_text: str, heading: str) -> Optional[str]:
     """The raw body text under a top-level ``## <heading>`` in ``plan_text``,
     up to (not including) the next markdown heading of any level, or ``None``
@@ -2109,7 +2112,8 @@ def _plan_title(plan_text: str, fallback: str) -> str:
 
 
 def derive_plan_context(
-    plan_text: str, *, fallback_title: str, repo_root: Optional[str] = None
+    plan_text: str, *, fallback_title: str, repo_root: Optional[str] = None,
+    plan_path: Optional[str] = None,
 ) -> PlanContext:
     """Resolve ``PlanContext`` from ``plan_text`` (the plan file's already-
     read full text -- this function never opens a file itself).
@@ -2156,8 +2160,9 @@ def derive_plan_context(
         ),
         repo_root=repo_root,
         claude_off_path=_claude_is_off_default_path(),
-        execution_notes=_capped_execution_notes(stripped_text),
+        execution_notes=_capped_execution_notes(stripped_text, plan_path),
         row_build_gates=parse_row_build_gates(plan_text),
+        plan_path=plan_path,
     )
 
 
@@ -2165,16 +2170,17 @@ _EXECUTION_NOTES_HEADING = "Execution notes"
 _EXECUTION_NOTES_CHAR_CAP = 4000
 
 
-def _capped_execution_notes(plan_text: str) -> Optional[str]:
-    """The ``## Execution notes`` section verbatim, cut to
-    ``_EXECUTION_NOTES_CHAR_CAP`` characters; ``None`` when absent or empty."""
+def _capped_execution_notes(plan_text: str, plan_path: Optional[str] = None) -> Optional[str]:
+    """The ``## Execution notes`` section verbatim; over ``_EXECUTION_NOTES_CHAR_CAP`` characters it ends
+    at a whole sentence or line and names the plan section; ``None`` when absent or empty."""
     body = _plan_section_body(plan_text, _EXECUTION_NOTES_HEADING)
     if body is None or not body.strip():
         return None
-    body = body.strip()
-    if len(body) > _EXECUTION_NOTES_CHAR_CAP:
-        body = body[: _EXECUTION_NOTES_CHAR_CAP - len(_TRUNCATION_SUFFIX)] + _TRUNCATION_SUFFIX
-    return body
+    return cut_whole(
+        body.strip(),
+        _EXECUTION_NOTES_CHAR_CAP,
+        full_text_pointer(plan_path, section=_EXECUTION_NOTES_HEADING),
+    )
 
 
 def _row_build_gate_commands(row: WaveRow, gates: tuple) -> list:
@@ -2632,11 +2638,11 @@ def _plan_context_preamble(context: PlanContext) -> str:
         lines.append(f"Exit criterion: {context.exit_criterion}")
     if context.problem_excerpt:
         lines.append(f"Problem: {context.problem_excerpt}")
-    preamble = "\n".join(lines)
-    if len(preamble) > _PLAN_CONTEXT_PREAMBLE_CHAR_CAP:
-        cut = _PLAN_CONTEXT_PREAMBLE_CHAR_CAP - len(_TRUNCATION_SUFFIX)
-        preamble = preamble[:cut] + _TRUNCATION_SUFFIX
-    return preamble
+    return cut_whole(
+        "\n".join(lines),
+        _PLAN_CONTEXT_PREAMBLE_CHAR_CAP,
+        full_text_pointer(context.plan_path, section="Goal` and `## Problem"),
+    )
 
 
 #: Positive allowlist for a `row_id` accepted into `_dispatch_report_path`
@@ -3129,7 +3135,7 @@ def _symbol_context_block(ctx) -> str:
     return "\n".join([SYMBOL_CONTEXT_HEADING, *lines])
 
 
-def _row_excerpts_for(repo_root, head: Optional[str], cache: dict, rows=None):
+def _row_excerpts_for(repo_root, head: Optional[str], cache: dict, rows=None, plan_path: Optional[str] = None):
     """A ``WaveRow -> excerpt block + symbol-context block`` provider sharing one span cache.
 
     Scans each distinct written or read ``.py`` file once; ``symbol_context.lookup`` runs once per
@@ -3148,7 +3154,9 @@ def _row_excerpts_for(repo_root, head: Optional[str], cache: dict, rows=None):
         for p in [*(() if row.writes is UNDECLARED else row.writes), *row.reads]:
             if isinstance(p, str) and p and p not in paths:
                 paths.append(p)
-        block = excerpt_block(row.body, paths, repo_root, (head or "unrecorded")[:12], cache)
+        block = excerpt_block(
+            row.body, paths, repo_root, (head or "unrecorded")[:12], cache, plan_path, row.id
+        )
         return block + "\n\n" + _symbol_context_block(looked.get(row.id))
 
     return provide
@@ -5110,6 +5118,14 @@ def _run_row_helper_js(
         "    const m = _TR_VERDICT_RE.exec(t);\n"
         "    return m ? (m[1] || m[2]).toLowerCase() : null;\n"
         "  }\n"
+        f"  const _ABSTAIN_LINE_RE = {_ABSTAIN_LINE_JS_RE};\n"
+        "  function _abstainOf(t) {\n"
+        "    for (const l of t.split(_REASON_SPLIT_RE)) {\n"
+        "      const m = _ABSTAIN_LINE_RE.exec(l.trim());\n"
+        "      if (m) return m[1].replace(/[\\s*_`\"}\\]\\\\]+$/, '').replace(/\\s+/g, ' ').trim().slice(0, 1000);\n"
+        "    }\n"
+        "    return null;\n"
+        "  }\n"
         "  function _owedReleases(owed, id) {\n"
         "    const m = /^gate-blocker: needs-dependent: *([^ \\\\\"]+)/.exec(owed);\n"
         "    return !m || m[1].replace(/[.,;]$/, '') === id;\n"
@@ -5276,7 +5292,12 @@ def _run_row_helper_js(
         "      }\n"
         "    } else if (!" + f"{_ANY_STATUS_JS_RE}.test(_text)) {{\n"
         "      const _tv = _trVerdictOf(_text);\n"
-        "      if (!_tv) {\n"
+        "      const _abstain = _tv ? null : _abstainOf(_text);\n"
+        "      if (_abstain !== null) {\n"
+        "        _incompleteChunks.push(id);\n"
+        f"        {CHUNK_REASON_VAR}[id] = 'executor abstained' + (_abstain ? ': ' + _abstain : '');\n"
+        "        incomplete = true;\n"
+        "      } else if (!_tv) {\n"
         "        _incompleteChunks.push(id);\n"
         "        _unansweredBriefs.push(id);\n"
         f"        {CHUNK_REASON_VAR}[id] = 'no contract status line in the executor reply';\n"
@@ -6399,7 +6420,7 @@ def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, 
     shared = SharedBlocks()
     repo_root = compose_context.get("repo_root")
     out: dict[str, int] = {}
-    excerpts_for = _row_excerpts_for(repo_root, None, {}, list(rows))
+    excerpts_for = _row_excerpts_for(repo_root, None, {}, list(rows), compose_context.get("plan_path"))
     for row in rows:
         call_expr = _row_agent_call_expr(
             row,
@@ -7070,7 +7091,7 @@ def compose_script(
                     f"  _seamGates[{n}] = new Promise((res) => {{ _seamRelease[{n}] = res; }});"
                 )
         row_exprs: dict[str, str] = {}
-        excerpts_for = _row_excerpts_for(repo_root, run_base_sha, {}, flat_rows)
+        excerpts_for = _row_excerpts_for(repo_root, run_base_sha, {}, flat_rows, plan_path)
         if roster is None:
             row_exprs, row_group = _plan_row_groups(
                 dag,
@@ -7838,6 +7859,10 @@ _REASON_STATUS_LINE_JS_RE = (
     rf'|^"?{_STATUS_FIELD_JS}(?:PARTIAL|BLOCKED)\b'
     r'|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/'
 )
+
+#: An ``ABSTAIN: <reason>`` line of an executor reply (one already split from the reply);
+#: group 1 is the stated reason. An abstention is an answer, not a missing status line.
+_ABSTAIN_LINE_JS_RE = r'/^"?\s*[*_`]{0,2}ABSTAIN[*_`]{0,2}:(.*)$/'
 
 #: Line break in a raw reply (real, CRLF) or a JSON-stringified one (escaped).
 _REASON_SPLIT_JS_RE = r'/\r?\n|\\r\\n|\\n|\r/'
@@ -8866,6 +8891,7 @@ def emit_script(
             plan_text if plan_text is not None else "",
             fallback_title=plan_path.stem,
             repo_root=Path(repo_root).as_posix() if repo_root is not None else None,
+            plan_path=spec_path,
         ),
         slot_row_ids=frozenset(slot_rows),
         leg_writes=tuple(leg_writes) or _recorded_leg_writes(script_path, repo_root),

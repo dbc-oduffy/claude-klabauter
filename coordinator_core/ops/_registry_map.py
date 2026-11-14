@@ -183,6 +183,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.guard_manufactured_blocker":       "coordinator_core.hooks",
     "hooks.guard_turn_intent":                 "coordinator_core.hooks",
     "hooks.guard_terminal_review":            "coordinator_core.hooks",
+    "hooks.record_askuserquestion_answer":    "coordinator_core.hooks",
     "goal.append":                            "coordinator_core.ops.goal_append",
     "goal.close_day":                         "coordinator_core.ops.goal_close_day",
     "goal.close_day_apply":                   "coordinator_core.ops.goal_close_day",

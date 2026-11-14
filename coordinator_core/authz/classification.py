@@ -245,6 +245,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # hooks.agent_stop_reaper — MUTATING: kills a stopped agent's timed-out launch trees and
     # writes the reaper log under settings_home().
     "hooks.agent_stop_reaper": OpClass.MUTATING,
+    # hooks.record_askuserquestion_answer — MUTATING: appends the PM's answer as a pm_turns.jsonl turn.
+    "hooks.record_askuserquestion_answer": OpClass.MUTATING,
     # hooks.postuse_advisory_dispatch — MUTATING (reclassified; was COMPUTE_ONLY).
     #
     # B-F1 had re-plumbed this op's throttle/bark-once/dedup guards from /tmp

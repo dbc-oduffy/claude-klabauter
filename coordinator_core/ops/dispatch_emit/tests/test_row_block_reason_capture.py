@@ -88,6 +88,25 @@ def test_no_contract_status_line_is_recorded():
     assert _solo("just chatting") == "no contract status line in the executor reply"
 
 
+def test_abstain_line_names_the_abstention_not_a_missing_status():
+    reason = _solo("Read the row.\nABSTAIN: row is out of role for this agent")
+    assert reason == "executor abstained: row is out of role for this agent"
+
+
+def test_abstain_in_object_reply_and_dependents_held():
+    reasons = _go(
+        {"A": {"summary": "x\nABSTAIN: fence is run-only"}, "B": "DONE: b"},
+        "_rows.A = _runRow('A', [], null, run('A'));"
+        "_rows.B = _runRow('B', [_rows.A], null, run('B'));",
+    )
+    assert reasons["A"] == "executor abstained: fence is run-only"
+    assert reasons["B"] == "held: dependency A did not finish DONE"
+
+
+def test_abstain_word_in_prose_keeps_the_missing_status_reason():
+    assert _solo("I will not ABSTAIN from this") == "no contract status line in the executor reply"
+
+
 def test_done_reply_records_nothing():
     assert _solo("DONE: report.md") is None
 

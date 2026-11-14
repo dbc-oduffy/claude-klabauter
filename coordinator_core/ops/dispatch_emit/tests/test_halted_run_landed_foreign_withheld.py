@@ -1,7 +1,8 @@
 """A halted run records landed when some of its withheld paths hold only a concurrent run's hunks.
 
 Halt side: a path the run's own checkpoint landed, whose remaining dirt its kept record does not
-fingerprint, is not withheld. Record side: ``foreign`` voids owed paths, refused for a kept one.
+fingerprint, is not withheld. Record side: ``dropped`` and ``foreign`` void unchanged owed paths and are
+echoed and trailered; ``foreign`` also needs another live or landed run declaring the path.
 """
 
 from __future__ import annotations
@@ -100,6 +101,15 @@ def _marker(root: Path, base: str, withheld: list) -> str:
     return rid
 
 
+def _peer_run(root: Path, paths: list, status: str = "landed", name: str = "warp-2026-11-09-peer-20261109T000000-123456") -> str:
+    """A run dir whose staged manifest declares *paths*; its halt marker reads *status*."""
+    d = root / "state" / "warp" / name
+    d.mkdir(parents=True)
+    (d / "manifest.json").write_text(json.dumps({"review_declared_paths": paths}), encoding="utf-8")
+    (d / "halted.json").write_text(json.dumps({"status": status, "sha": "a" * 40}), encoding="utf-8")
+    return name
+
+
 def _ten_withheld(tmp_path: Path):
     """Ten withheld paths: five the landing sha changes, five that hold only a peer's dirt."""
     def git(*a):
@@ -131,28 +141,168 @@ def test_owed_peer_paths_refuse_by_default(tmp_path):
     assert out["ok"] is False and "did not change withheld peer0.py (+4 more)" in out["error"]
 
 
+def test_default_refusal_names_the_dropped_foreign_and_shas_params(tmp_path):
+    rid, landed, _own, peer = _ten_withheld(tmp_path)
+
+    out = hrl._handler({"run_id": rid, "sha": landed}, tmp_path)
+
+    err = out["error"]
+    assert out["ok"] is False and "dropped=[<path>" in err and "foreign=[<path>" in err
+    assert "shas=[<commit>" in err
+
+
+def test_dropped_param_named_from_the_refusal_records_landed(tmp_path):
+    rid, landed, own, peer = _ten_withheld(tmp_path)
+
+    out = hrl._handler({"run_id": rid, "sha": landed, "dropped": peer}, tmp_path)
+
+    assert out["ok"] is True and out["written"] is True, out
+    assert out["dropped"] == peer and out["covers"] == {landed: own}
+
+
 def test_foreign_param_voids_the_peer_paths_and_records_landed(tmp_path):
     rid, landed, own, peer = _ten_withheld(tmp_path)
+    owner = _peer_run(tmp_path, peer)
 
     out = hrl._handler({"run_id": rid, "sha": landed, "foreign": peer}, tmp_path)
 
     assert out["ok"] is True and out["written"] is True, out
     assert sorted(out["voided"]) == peer
     assert out["covers"] == {landed: own}
+    assert out["foreign_owners"] == {p: owner for p in peer}
 
 
-def test_foreign_param_is_refused_for_a_path_the_kept_record_fingerprints(tmp_path):
+def test_foreign_param_refuses_a_path_no_other_run_declares(tmp_path):
     rid, landed, _own, peer = _ten_withheld(tmp_path)
+
+    out = hrl._handler({"run_id": rid, "sha": landed, "foreign": peer}, tmp_path)
+
+    assert out["ok"] is False and "peer0.py" in out["error"] and "no other live or landed run" in out["error"]
+
+
+def test_foreign_param_refuses_a_path_only_a_halted_not_live_run_declares(tmp_path):
+    rid, landed, _own, peer = _ten_withheld(tmp_path)
+    _peer_run(tmp_path, peer, status="halted")
+
+    out = hrl._handler({"run_id": rid, "sha": landed, "foreign": peer}, tmp_path)
+
+    assert out["ok"] is False and "no other live or landed run" in out["error"]
+
+
+def test_foreign_param_refuses_a_path_only_the_run_itself_declares(tmp_path):
+    rid, landed, _own, peer = _ten_withheld(tmp_path)
+    (tmp_path / "state" / "warp" / rid / "manifest.json").write_text(
+        json.dumps({"review_declared_paths": peer}), encoding="utf-8")
+
+    out = hrl._handler({"run_id": rid, "sha": landed, "foreign": peer}, tmp_path)
+
+    assert out["ok"] is False and "no other live or landed run" in out["error"]
+
+
+def test_foreign_param_refuses_a_kept_fingerprinted_path_no_other_run_declares(tmp_path):
+    rid, landed, _own, peer = _ten_withheld(tmp_path)
+    _peer_run(tmp_path, [p for p in peer if p != "peer2.py"])
+    kept_work.write(tmp_path / "state" / "warp" / rid, {"C1": {"paths": {"peer2.py": "0" * 40}}}, None)
+
+    out = hrl._handler({"run_id": rid, "sha": landed, "foreign": peer}, tmp_path)
+
+    assert out["ok"] is False and "foreign peer2.py" in out["error"]
+
+
+def test_foreign_param_records_a_path_the_kept_record_fingerprints(tmp_path):
+    rid, landed, own, peer = _ten_withheld(tmp_path)
+    _peer_run(tmp_path, peer)
     record_dir = tmp_path / "state" / "warp" / rid
     kept_work.write(record_dir, {"C1": {"paths": {"peer2.py": "0" * 40}}}, None)
 
     out = hrl._handler({"run_id": rid, "sha": landed, "foreign": peer}, tmp_path)
 
-    assert out["ok"] is False and "peer2.py" in out["error"] and "kept record" in out["error"]
+    assert out["ok"] is True and out["written"] is True, out
+    assert sorted(out["foreign"]) == peer and "peer2.py" in out["voided"]
+    assert out["covers"] == {landed: own}
+
+
+def test_dropped_param_records_a_kept_fingerprinted_path_as_dropped(tmp_path):
+    rid, landed, own, peer = _ten_withheld(tmp_path)
+    record_dir = tmp_path / "state" / "warp" / rid
+    kept_work.write(record_dir, {"C1": {"paths": {"peer2.py": "0" * 40}}}, None)
+    _peer_run(tmp_path, peer)
+
+    out = hrl._handler({"run_id": rid, "sha": landed, "foreign": [p for p in peer if p != "peer2.py"],
+                        "dropped": ["peer2.py"]}, tmp_path)
+
+    assert out["ok"] is True and out["written"] is True, out
+    assert out["dropped"] == ["peer2.py"] and "peer2.py" not in out["foreign"]
+    assert sorted(out["voided"]) == peer
+
+
+def test_dropped_param_naming_a_changed_path_does_not_void_it(tmp_path):
+    rid, landed, own, peer = _ten_withheld(tmp_path)
+
+    out = hrl._handler({"run_id": rid, "sha": landed, "dropped": [*own, *peer]}, tmp_path)
+
+    assert out["ok"] is True, out
+    assert out["dropped"] == peer and out["covers"] == {landed: own}
+    assert not set(own) & set(out.get("voided", []))
+
+
+def test_dropped_param_naming_only_changed_paths_leaves_the_rest_owed(tmp_path):
+    rid, landed, own, _peer = _ten_withheld(tmp_path)
+
+    out = hrl._handler({"run_id": rid, "sha": landed, "dropped": own}, tmp_path)
+
+    assert out["ok"] is False and "peer0.py" in out["error"]
+
+
+def test_records_commit_carries_dropped_and_foreign_trailers(tmp_path):
+    rid, landed, _own, peer = _ten_withheld(tmp_path)
+    owner = _peer_run(tmp_path, peer[:2])
+
+    out = hrl._handler({"run_id": rid, "sha": landed, "foreign": peer[:2], "dropped": peer[2:]}, tmp_path)
+
+    assert out["ok"] is True and "records_commit" in out, out
+    msg = subprocess.run(["git", "log", "-1", "--format=%B", out["records_commit"]], cwd=str(tmp_path), check=True,
+                         capture_output=True, text=True, **no_console_creationflags()).stdout
+    for p in peer[2:]:
+        assert f"Withheld-Dropped: {p}" in msg
+    for p in peer[:2]:
+        assert f"Withheld-Foreign: {p} {owner}" in msg
+
+
+def test_dropped_param_does_not_excuse_a_path_it_does_not_name(tmp_path):
+    rid, landed, _own, peer = _ten_withheld(tmp_path)
+
+    out = hrl._handler({"run_id": rid, "sha": landed, "dropped": peer[:4]}, tmp_path)
+
+    assert out["ok"] is False and "peer4.py" in out["error"]
+
+
+def test_dropped_param_must_be_a_list_of_paths(tmp_path):
+    rid, landed, _own, _peer = _ten_withheld(tmp_path)
+
+    out = hrl._handler({"run_id": rid, "sha": landed, "dropped": "peer0.py"}, tmp_path)
+
+    assert out["ok"] is False and "dropped" in out["error"]
+
+
+def test_naming_the_runs_own_kept_path_does_not_excuse_a_sha_lacking_its_blobs(tmp_path):
+    rid, _landed, own, peer = _ten_withheld(tmp_path)
+    (tmp_path / "unrelated.txt").write_text("x\n", encoding="utf-8")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    for args in (["add", "unrelated.txt"], ["commit", "-q", "-m", "unrelated"]):
+        subprocess.run([*git, *args], cwd=str(tmp_path), check=True, capture_output=True, **no_console_creationflags())
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True,
+                          text=True, **no_console_creationflags()).stdout.strip()
+    kept_work.write(tmp_path / "state" / "warp" / rid, {"C1": {"paths": {"peer0.py": "0" * 40}}}, None)
+
+    out = hrl._handler({"run_id": rid, "sha": base, "foreign": peer, "dropped": peer}, tmp_path)
+
+    assert out["ok"] is False and own[0] in out["error"]
 
 
 def test_foreign_param_does_not_excuse_a_path_it_does_not_name(tmp_path):
     rid, landed, _own, peer = _ten_withheld(tmp_path)
+    _peer_run(tmp_path, peer)
 
     out = hrl._handler({"run_id": rid, "sha": landed, "foreign": peer[:4]}, tmp_path)
 
