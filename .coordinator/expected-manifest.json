@@ -2500,8 +2500,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "e8fafd9bb6ef8d39e2acd811e05d4f58b367cf07",
-    "coordinator_core/_engine_stamp": "9a3c3c66194f19e2d606e5e7eaa263e943684e39",
+    "coordinator_core/_engine_published_at": "eca24c17f2d86d3da6c6aac00cdbc6723c77346c",
+    "coordinator_core/_engine_stamp": "9a4f976190df2e91f5929fea6777c513ee7e3b2e",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4819,7 +4819,7 @@
     "coordinator_core/hooks/preuse_search_dispatch.py": "6c45acbea44ccb2946c0c36512bc4dc37760a54a",
     "coordinator_core/hooks/preuse_sendmessage_dispatch.py": "53cc323dd94d29e6cf9ca66afe61333e02db9ad8",
     "coordinator_core/hooks/preuse_skill_dispatch.py": "56bf999d9dc6532ad018ab3ee5b918bc96977229",
-    "coordinator_core/hooks/preuse_workflow_args_inline.py": "285503fee64292b489184b8b9c624025f73bec0b",
+    "coordinator_core/hooks/preuse_workflow_args_inline.py": "4b2ae3e225bf68d0f4f9f5fc3647bc84bb902ead",
     "coordinator_core/hooks/preuse_write_dispatch.py": "46a425aa4a6369c3d3452b5d53046f25f0058182",
     "coordinator_core/hooks/project_orientation.py": "91bc9e338d2cedbfbe5f036eb2c37e7747cb54b9",
     "coordinator_core/hooks/receiver_state_sensor.py": "6a695da1668b4f25eba4bb8300edabb11bcf07c2",
@@ -5029,7 +5029,7 @@
     "coordinator_core/hooks/tests/test_preuse_phases.py": "fb0d72eec781b0b0cc2a4437d2ed3cd7e849f95f",
     "coordinator_core/hooks/tests/test_preuse_search_dispatch.py": "a4d297ce3275ff34d94dc81b9ad9f04597e60762",
     "coordinator_core/hooks/tests/test_preuse_sendmessage_dispatch.py": "d84a47165403a1df5d695d0df77b6475cb127213",
-    "coordinator_core/hooks/tests/test_preuse_workflow_args_inline.py": "7d37328d324e279f1d57fec40af46f4af525c013",
+    "coordinator_core/hooks/tests/test_preuse_workflow_args_inline.py": "6e2822c9773d4bad7a29f655b24b557366c490f2",
     "coordinator_core/hooks/tests/test_preuse_write_dispatch_phases.py": "0a429bef865997276c73cc3cd73953247747756f",
     "coordinator_core/hooks/tests/test_project_orientation_banner_collapse.py": "cfce7879b59e8779e51bd44393bd89005c7edadf",
     "coordinator_core/hooks/tests/test_project_orientation_engine_banner.py": "45fc56fd2c68e4dd85e9a6db1fb51902e7366cad",
@@ -12413,5 +12413,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "e12e2857e894be17e36f87254562b2b321512395"
+  "source_head": "1e3998cf5c9c93cc33a769e355a14af2aebcc8eb"
 }

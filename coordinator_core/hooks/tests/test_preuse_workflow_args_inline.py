@@ -89,3 +89,14 @@ def test_hook_spawns_no_process(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", boom)
     monkeypatch.setattr(subprocess, "run", boom)
     assert "updatedInput" in _call(la.stub(built["path"], built["sha256"]))["hookSpecificOutput"]
+
+
+def test_dispatch_passes_repo_root_and_the_handler_accepts_it(tmp_path):
+    # Trap: the op dispatcher calls every hook handler with repo_root=; a handler without the
+    # kwarg raised TypeError on every live Workflow call while the direct-call tests stayed green.
+    built = _built(tmp_path)
+    params = {"tool_name": "Workflow", "tool_input": {"scriptPath": "s.js", "args": la.stub(built["path"], built["sha256"])}}
+
+    out = handle(params, repo_root=tmp_path)
+
+    assert out["hookSpecificOutput"]["updatedInput"]["args"] == built["args"]

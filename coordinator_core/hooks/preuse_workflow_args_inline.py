@@ -44,7 +44,7 @@ def _advisory(reason: str) -> dict:
 
 
 @register_op("hooks.preuse_workflow_args_inline")
-def handle(params: dict) -> dict:
+def handle(params: dict, repo_root=None) -> dict:
     """Rewrite a stub-args Workflow call to its inlined args; silent for any other call."""
     params = payload_of(params)
     if params.get("tool_name") != "Workflow":
