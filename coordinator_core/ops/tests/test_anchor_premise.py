@@ -128,6 +128,9 @@ def test_citation_naming_anchor_is_its_verdict():
     row = {"citation": "anchor AP1 -- evidence at x.py:3", "verdict": "RESOLVES"}
     assert anchor_findings(A, [row], [], "p") == []
     assert anchor_findings(A, [{**row, "citation": "anchor: AP1"}], [], "p") == []
+    # The premise checker's class-5 shape (example-game-repo hair-02 readiness params).
+    premise_row = {**row, "citation": "anchor premise AP1: contract.py ... clean at HEAD"}
+    assert anchor_findings(A, [premise_row], [], "p") == []
     (f,) = anchor_findings(A, [{**row, "verdict": "CONTRADICTED"}], [], "p")
     assert f.startswith("anchor-premise-CONTRADICTED: AP1")
 

@@ -503,6 +503,8 @@ def _receipt(reached):
 
 
 TRANSPORT_HOP_LIMIT = 2
+SLOT_RECEIVERS = frozenset({"slot", "slot-admission"})  # receivers that name the slot-admission role
+SLOT_ROLE = "group-em"
 
 
 def _hop_marker():
@@ -1480,6 +1482,19 @@ class Router:
         self.log("SENT-TRANSPORT", source, "->", to, frame["msg_id"])
         return {"ok": True, "msg_id": frame["msg_id"], "sender": transport, "written": True, **_receipt(reached)}
 
+    def _is_face_target(self, transport, sender, sender_endpoint):
+        """True when the frame comes from the session the face was opened to reach."""
+        target = self.transport_targets.get(transport)
+        target_endpoint = self.resolve_sender(target) if target else ""
+        return bool(target_endpoint and sender_endpoint == target_endpoint) if sender_endpoint else sender == target
+
+    def _holds_receiver(self, session_name, receiver):
+        """True when the session called `session_name` is `receiver` by name or role.
+
+        A slot-admission receiver resolves by role to the roster's group-em session on any box."""
+        wanted = SLOT_ROLE if receiver in SLOT_RECEIVERS else receiver
+        return _contract().holds_receiver(session_name, wanted)
+
     async def handle_transport_inbound(self, transport, frame):
         """Bridge both reply directions without pretending to be either endpoint's vendor."""
         source = self.transport_sources.get(transport)
@@ -1496,6 +1511,7 @@ class Router:
         from_source = bool(source_endpoint and sender_endpoint == source_endpoint) if sender_endpoint else sender == source
         destination = self.transport_targets[transport] if from_source else source
         endpoint = self.resolve_sender(destination)
+        resolved_row = self.last_resolved_row
         reflected = (endpoint == sender_endpoint if self._session_at(sender_endpoint)
                      else destination == sender)
         if reflected or destination in hop_chain(body):
@@ -1504,9 +1520,19 @@ class Router:
         if not endpoint:
             self.log("NO-TRANSPORT-RETURN", transport)
             return
+        receiver = _contract().intended_receiver(frame)
+        if not from_source and not receiver and not self._is_face_target(transport, sender, sender_endpoint):
+            self.log("TRANSPORT-RECEIVER-REFUSED", transport, sender, "->", destination, "names no intended receiver")
+            return
+        receiver = receiver or destination
+        held = resolved_row[0] if resolved_row else destination
+        if not self._holds_receiver(held, receiver):
+            self.log("TRANSPORT-RECEIVER-REFUSED", transport, sender, "->", held, "intended", receiver)
+            return
         box = _contract().local_box()
         outgoing = _contract().build_frame(self.endpoint_of(transport), transport,
-                                          f"[forwarded message from {sender}] {body}", from_box=box)
+                                          f"[forwarded message from {sender}] {body}", from_box=box,
+                                          to_name=receiver)
         outgoing = _contract().stamp(outgoing, transport, "transport", source, os.getpid(), from_box=box)
         try:
             await self._deliver_as_peer(transport, endpoint, outgoing)

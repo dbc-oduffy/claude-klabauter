@@ -401,6 +401,60 @@ def test_op_end_to_end_runs_requested_subset(tmp_path):
     assert all(g["verdict"] == "clean" for g in reply["gates"])
 
 
+def test_op_crashing_gate_is_unavailable_and_siblings_keep_their_verdicts(tmp_path, monkeypatch):
+    (tmp_path / "CLAUDE.md").write_text("x")
+    (tmp_path / "DIRECTORY.md").write_text("x")
+    _empty_log(tmp_path)
+
+    def _boom(*_a):
+        raise RuntimeError("probe blew up")
+
+    monkeypatch.setitem(udg._GATES, "fresh-scaffold-probe", _boom)
+    reply = _run(
+        udg._updatedocs_gates(
+            {"repo_root": str(tmp_path), "gates": ["fresh-scaffold-probe", "distill-threshold"]},
+            repo_root=None,
+        )
+    )
+    by_id = {g["gate_id"]: g for g in reply["gates"]}
+    assert by_id["fresh-scaffold-probe"]["verdict"] == "unavailable"
+    assert "RuntimeError" in by_id["fresh-scaffold-probe"]["summary"]
+    assert by_id["distill-threshold"]["verdict"] == "clean"
+    assert reply["rollup"]["gate_count"] == 2
+
+
+def test_default_invocation_envelope_carries_result_through_a_pipe(tmp_path, monkeypatch):
+    """Default (no `gates` param) dispatch, serialised and read back as a piped
+    consumer would: the envelope has `result` even when a gate crashes."""
+    import json
+
+    from coordinator_core import ipc
+
+    (tmp_path / "CLAUDE.md").write_text("x")
+    _empty_log(tmp_path)
+
+    def _boom(*_a):
+        raise RuntimeError("probe blew up")
+
+    monkeypatch.setattr(ipc, "is_unstamped_dispatch_allowed", lambda: True)
+    monkeypatch.setitem(udg._GATES, "fresh-scaffold-probe", _boom)
+    for gate_id in list(udg._GATES):
+        if gate_id not in ("fresh-scaffold-probe", "distill-threshold"):
+            monkeypatch.setitem(
+                udg._GATES, gate_id, lambda *_a, _g=gate_id: udg.GateResult(_g, udg.GateVerdict.CLEAN, "stub")
+            )
+    envelope = _run(
+        ipc.dispatch_message(
+            {"jsonrpc": "2.0", "id": 1, "method": "updatedocs.gates",
+             "_origin_worktree": str(Path(__file__).resolve().parents[3]), "params": {"repo_root": str(tmp_path)}}
+        )
+    )
+    parsed = json.loads(json.dumps(envelope))
+    assert "result" in parsed and "error" not in parsed
+    by_id = {g["gate_id"]: g["verdict"] for g in parsed["result"]["gates"]}
+    assert by_id["fresh-scaffold-probe"] == "unavailable"
+
+
 def test_op_unknown_gate_raises_value_error(tmp_path):
     with pytest.raises(ValueError):
         _run(udg._updatedocs_gates({"repo_root": str(tmp_path), "gates": ["not-a-real-gate"]}, repo_root=None))

@@ -59,6 +59,8 @@ def test_em_context_and_prose_context_share_one_marker(repo):
 
 
 def test_pm_entry_context_leaves_verbatim_and_intent_alone(repo):
+    for text in ("fix a", "fix b"):
+        assert PT.append_turn(text, session_id=SID)["ok"]
     out = _go(repo, [
         {"ask": "fix a", "source": "pm", "context": ["a bug in x"], "writes": ["a.py"]},
         {"ask": "fix b", "source": "pm", "writes": ["b.py"]},
@@ -66,7 +68,7 @@ def test_pm_entry_context_leaves_verbatim_and_intent_alone(repo):
     assert out["exit_code"] == 0, out
     doc = _sizing(repo, out["ready"][0]["sizing"])
     assert doc["intent"] == "fix a"
-    assert [v["text"] for v in doc["pm_verbatims"]] == [VERBATIM]
+    assert [v["text"] for v in doc["pm_verbatims"]] == ["fix a"]
     assert "a bug in x" in doc["em_analysis"]["em_brief"]
 
 

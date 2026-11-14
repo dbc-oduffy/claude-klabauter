@@ -49,7 +49,8 @@ def repo(tmp_path, monkeypatch):
     hub = tmp_path / "hub" / SID
     hub.mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
-    assert PT.append_turn(VERBATIM, session_id=SID)["ok"]
+    for text in (VERBATIM, "pm job", *(f"job {i}" for i in range(4))):
+        assert PT.append_turn(text, session_id=SID)["ok"]
     monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: _BLITZ)
@@ -162,9 +163,9 @@ def test_a_disjoint_pair_replies_parent_and_runs_and_starts_both_under_one_launc
     for run in parent.runs:
         assert _status(repo, run.run_id) == "running"
 
-    for run in parent.runs:
+    for i, run in enumerate(parent.runs):
         doc = _sizing(repo, run.slice_sizing)
-        assert doc["pm_verbatims"][0]["text"] == VERBATIM
+        assert doc["pm_verbatims"][0]["text"] == f"job {i}"
         assert c.parse_ask_parent(doc["em_analysis"]["ask_parent"]) == (reply["parent_id"], run.run_id)
 
 

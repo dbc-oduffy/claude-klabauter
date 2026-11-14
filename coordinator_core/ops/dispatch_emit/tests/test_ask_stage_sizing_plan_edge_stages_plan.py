@@ -52,10 +52,42 @@ def test_handler_replies_a_manifest_handle_for_a_planned_sizing(tmp_path):
     assert "error" not in reply and reply["manifest_handle"]
 
 
-def test_plan_edge_to_a_missing_plan_is_still_refused(tmp_path):
+def test_plan_edge_to_a_missing_plan_is_refused_as_dangling_naming_the_file(tmp_path):
     _sizing(tmp_path)
-    with pytest.raises(AskStageError, match="^XS-MINT-MISROUTED: "):
+    with pytest.raises(AskStageError, match="^PLAN-EDGE-DANGLING: .*docs/plans/2026-10-01-gate.md"):
         stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
+
+
+def _move_plan(repo, dest):
+    src = repo / PLAN_REL
+    (repo / dest).parent.mkdir(parents=True, exist_ok=True)
+    src.rename(repo / dest)
+
+
+def test_sharded_edge_with_a_flat_plan_stages_the_plan(tmp_path):
+    _sizing(tmp_path, plan="docs/plans/2026-10/2026-10-01-gate.md")
+    _plan(tmp_path)
+    write_run_scripts(tmp_path, "r1")
+    m = stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
+    assert [r.id for r in m.rows] == ["A1"]
+
+
+def test_flat_edge_with_a_sharded_plan_stages_the_plan(tmp_path):
+    _sizing(tmp_path)
+    _plan(tmp_path)
+    _move_plan(tmp_path, "docs/plans/2026-10/2026-10-01-gate.md")
+    write_run_scripts(tmp_path, "r1")
+    m = stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
+    assert [r.id for r in m.rows] == ["A1"]
+
+
+def test_sharded_edge_with_a_sharded_plan_stages_the_plan(tmp_path):
+    _sizing(tmp_path, plan="docs/plans/2026-10/2026-10-01-gate.md")
+    _plan(tmp_path)
+    _move_plan(tmp_path, "docs/plans/2026-10/2026-10-01-gate.md")
+    write_run_scripts(tmp_path, "r1")
+    m = stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
+    assert [r.id for r in m.rows] == ["A1"]
 
 
 def test_plan_edge_escaping_the_repo_is_still_refused(tmp_path):

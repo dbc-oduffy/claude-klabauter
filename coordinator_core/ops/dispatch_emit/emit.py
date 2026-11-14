@@ -5907,6 +5907,8 @@ def _checkpoint_commit_js(
     pre_commit_gate_js: Optional[str] = None,
     commit_retry: Optional[Mapping[int, str]] = None,
     reds_var: Optional[str] = None,
+    carry_paths_js: Optional[str] = None,
+    carry_landed_js: Optional[str] = None,
 ) -> str:
     """The script-scope checkpoint machinery: ``_runRow`` records each DONE
     row's declared paths in ``_landed``; ``_waveCommit`` waits for a wave's
@@ -5931,7 +5933,13 @@ def _checkpoint_commit_js(
     whose scoped tests were red. A wave with an entry commits anyway: its committer runs
     ``dispatch.checkpoint_reds`` first, adds the fix-row paths to the pathspec, appends the reply's
     commit block to the message and returns ``fix_ids``, which accumulate in ``_checkpointFixIds``.
-    None emits the machinery byte-identically."""
+    None emits the machinery byte-identically.
+
+    ``carry_paths_js`` is a JS expression yielding extra paths (a run artifact no row declares)
+    appended to a wave's committed ``paths`` only; rows, ``_carried`` and the message stay
+    row-only. ``carry_landed_js`` is a JS statement run after a committed reply that did not
+    withhold any carry path, so a withheld or refused wave leaves the carry owed to the next
+    wave. None for both emits the machinery byte-identically."""
     root_clause = (
         "Your repo is `\0`: `cd` there before any command and resolve every "
         "relative path against it. "
@@ -6049,7 +6057,14 @@ def _checkpoint_commit_js(
         "  async function _commitWave(n, ids) {",
         "    const done = ids.filter((i) => _landed[i]);",
         *([] if seam is not None else ["    if (!done.length) return;"]),
-        "    const paths = [...new Set([..._carried, ...done].flatMap((i) => _landed[i].paths))];",
+        *(
+            [
+                f"    const _carryPaths = {carry_paths_js};",
+                "    const paths = [...new Set([..._carried, ...done].flatMap((i) => _landed[i].paths).concat(_carryPaths))];",
+            ]
+            if carry_paths_js
+            else ["    const paths = [...new Set([..._carried, ...done].flatMap((i) => _landed[i].paths))];"]
+        ),
         (
             "    if (!done.length || !paths.length) {\n"
             "      if ((_seamHeldPlans[n] || []).length) {\n"
@@ -6117,6 +6132,11 @@ def _checkpoint_commit_js(
         "    const _withheld = new Set(Array.isArray(r.withheld_paths) ? r.withheld_paths : []);",
         "    const _heldBack = _pending.filter((i) => [..._landed[i].paths, ..._landed[i].declared].some((p) => _withheld.has(p)));",
         "    _heldBack.forEach((i) => _carried.push(i));",
+        *(
+            [f"    if (_carryPaths.length && !_carryPaths.some((p) => _withheld.has(p))) {{ {carry_landed_js} }}"]
+            if carry_paths_js and carry_landed_js
+            else []
+        ),
         "    if (typeof r.sha === 'string' && r.sha) _checkpointShas.push(r.sha);",
         *(
             [

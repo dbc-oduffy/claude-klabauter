@@ -333,7 +333,7 @@ def _write_dateless_log(root: Path) -> None:
 
 def test_distill_threshold_under_threshold_no_fire(tmp_path, capsys):
     _write_dateless_log(tmp_path)
-    _touch_md_files(tmp_path / "docs" / "plans", 3)
+    _touch_md_files(tmp_path / "archive" / "daily-summaries", 3)
     args = _ns(repo_root=str(tmp_path), log_path=None)
     rc = _mod._cmd_distill_threshold(args)
     assert rc == 0
@@ -342,7 +342,7 @@ def test_distill_threshold_under_threshold_no_fire(tmp_path, capsys):
 
 def test_distill_threshold_count_fires(tmp_path, capsys):
     _write_dateless_log(tmp_path)
-    _touch_md_files(tmp_path / "docs" / "plans", 50)
+    _touch_md_files(tmp_path / "archive" / "daily-summaries", 50)
     args = _ns(repo_root=str(tmp_path), log_path=None)
     rc = _mod._cmd_distill_threshold(args)
     assert rc == 1
@@ -351,13 +351,13 @@ def test_distill_threshold_count_fires(tmp_path, capsys):
 
 def test_distill_threshold_dateless_log_count_20_fires(tmp_path):
     _write_dateless_log(tmp_path)
-    _touch_md_files(tmp_path / "docs" / "plans", 20)
+    _touch_md_files(tmp_path / "archive" / "daily-summaries", 20)
     args = _ns(repo_root=str(tmp_path), log_path=None)
     assert _mod._cmd_distill_threshold(args) == 1
 
 
 def test_distill_threshold_missing_log_reports_unavailable_and_does_not_fire(tmp_path, capsys):
-    _touch_md_files(tmp_path / "docs" / "plans", 60)
+    _touch_md_files(tmp_path / "archive" / "daily-summaries", 60)
     args = _ns(repo_root=str(tmp_path), log_path=None)
     assert _mod._cmd_distill_threshold(args) == 0
     out = capsys.readouterr().out
@@ -369,17 +369,19 @@ def test_distill_threshold_total_matches_distill_scope_scannable(tmp_path, capsy
     from coordinator_core.ops.distill_scope import PM_RULING_2026_08_06_COHORT_SPECS, compute_scope
 
     _write_dateless_log(tmp_path)
-    _touch_md_files(tmp_path / "docs" / "plans", 21)
+    _touch_md_files(tmp_path / "archive" / "daily-summaries", 21)
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / "docs" / "plans" / "2026-11-02-draft.md").write_text("---\nstatus: draft\n---\nbody\n", encoding="utf-8")
     args = _ns(repo_root=str(tmp_path), log_path=None)
     assert _mod._cmd_distill_threshold(args) == 1
-    scannable = compute_scope(tmp_path, run_id="t", cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS)).counts["scannable"]
+    counts = compute_scope(tmp_path, run_id="t", cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS), admit=True).counts
+    scannable = counts["scannable"] + counts["deferred"]
     assert f"total count {scannable} >= 20" in capsys.readouterr().out
     assert scannable == 21
 
 
 def test_distill_threshold_stale_log_fires(tmp_path):
-    _touch_md_files(tmp_path / "docs" / "plans", 1)
+    _touch_md_files(tmp_path / "archive" / "daily-summaries", 1)
     log = tmp_path / "state" / "distillation-log.md"
     log.parent.mkdir(parents=True)
     log.write_text("# Columns: run | path | disposition | fate\n\n## Run 2020-01-01-00h00\n- archive/specs/x.md -> DISTILLED, promoted (run: 2020-01-01-00h00)\n", encoding="utf-8")
@@ -390,7 +392,7 @@ def test_distill_threshold_stale_log_fires(tmp_path):
 def test_distill_threshold_recent_log_no_fire(tmp_path):
     from datetime import datetime, timezone
 
-    _touch_md_files(tmp_path / "docs" / "plans", 1)
+    _touch_md_files(tmp_path / "archive" / "daily-summaries", 1)
     log = tmp_path / "state" / "distillation-log.md"
     log.parent.mkdir(parents=True)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -405,7 +407,7 @@ def test_distill_threshold_legacy_pipe_table_log_is_not_never(tmp_path, capsys):
     found" — 2026-08-06 example-market-data-repo-em Defect 3: a real, dated,
     47-row legacy log reported "never" because the reader only recognized the
     canonical header shape. Regression for `_LEGACY_ROW_DATE_RE`."""
-    _touch_md_files(tmp_path / "docs" / "plans", 1)
+    _touch_md_files(tmp_path / "archive" / "daily-summaries", 1)
     log = tmp_path / "state" / "distillation-log.md"
     log.parent.mkdir(parents=True)
     log.write_text(
@@ -486,3 +488,36 @@ def test_retired_snippet_sync_sweep_spawns_no_shell():
     for needle in ('"bash"', "'bash'", 'which("sh")', "which('sh')", '"sh"'):
         offenders = [line for line in code_lines if needle in line]
         assert not offenders, f"shell spawn reintroduced ({needle}): {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# updatedocs.gates default invocation read through a pipe
+# ---------------------------------------------------------------------------
+
+_PIPE_CHILD = """
+import asyncio, json, sys
+from coordinator_core import ipc
+ipc.allow_unstamped_dispatch()
+msg = {"jsonrpc": "2.0", "id": 1, "method": "updatedocs.gates",
+       "_origin_worktree": sys.argv[2], "params": {"repo_root": sys.argv[1]}}
+sys.stdout.write(json.dumps(asyncio.run(ipc.dispatch_message(msg))))
+"""
+
+
+def test_gates_default_invocation_piped_to_a_reader_carries_result(tmp_path):
+    (tmp_path / "CLAUDE.md").write_text("x", encoding="utf-8")
+    repo = Path(__file__).resolve().parents[3]
+    proc = subprocess.run(
+        [sys.executable, "-c", _PIPE_CHILD, str(tmp_path), str(repo)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=repo,
+        check=False,
+    )  # popup-intentional-last-resort — test-only subprocess, no headless-parent focus-steal concern
+    import json
+
+    envelope = json.loads(proc.stdout)
+    assert "error" not in envelope, envelope
+    assert "result" in envelope
+    assert envelope["result"]["gates"]

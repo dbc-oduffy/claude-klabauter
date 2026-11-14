@@ -44,6 +44,9 @@ BACKOFF_REL = Path(".coordinator-local") / "distill-autofire" / "backoff.json"
 SPECS_REL = Path("archive") / "specs"
 LOG_REL = Path("state") / "distillation-log.md"
 
+REASON_NO_NEW_INPUT = "no-new-input"
+REASON_CLAIM_STAMPLESS = "claim-stampless-released"
+
 _LIVE_STATES = ("running", "pending")
 # Decisions the stat gate may replay while the inputs are unchanged.
 _STAT_GATED_REASONS = ("below-threshold", "log-absent")
@@ -122,26 +125,32 @@ def _clear_backoff(repo: Path) -> None:
 
 
 def _backoff_reason(state: dict) -> str:
+    if state.get("hold"):
+        return REASON_NO_NEW_INPUT
     return f"{REASON_BACKOFF_PREFIX}{state.get('outcome')}:failures={state.get('failures')}"
 
 
 def _backoff_blocks(repo: Path, stamp: tuple) -> Optional[str]:
-    """The `backoff:<outcome>:failures=<n>` reason while a recorded back-off stands and the
-    inputs are unchanged; an input change clears it, an expired one stops blocking."""
+    """The block reason while a recorded back-off stands and the inputs are unchanged: a hold
+    (a completed run left the inputs as they were) blocks until the stamp changes; a failure
+    back-off blocks until its `next_at`. An input change clears either."""
     state = _read_backoff(repo)
     if state is None:
         return None
     if state.get("stamp") != _normalised_stamp(stamp):
         _clear_backoff(repo)
         return None
-    if time.time() < state.get("next_at", 0):
+    if state.get("hold") or time.time() < state.get("next_at", 0):
         return _backoff_reason(state)
     return None
 
 
-def _record_failure(repo: Path, fire_id: object, outcome: str, stamp: tuple) -> str:
-    """Record that the last autofired run ended without a recorded success; return its
-    `backoff:` reason. next_at = now + INTERVAL * 2**failures, capped at BACKOFF_MAX_SECS."""
+def _record_failure(
+    repo: Path, fire_id: object, outcome: str, stamp: tuple, *, hold: bool = False
+) -> str:
+    """Record that the last autofired run ended without changing the inputs; return its block
+    reason. A failure sets next_at = now + INTERVAL * 2**failures, capped at BACKOFF_MAX_SECS;
+    a `hold` (`no-new-input`) has no expiry and lifts only when the input stamp changes."""
     prior = _read_backoff(repo) or {}
     failures = int(prior.get("failures", 0)) + 1
     delay = min(AUTOFIRE_INTERVAL_SECS * 2 ** min(failures, 20), BACKOFF_MAX_SECS)
@@ -151,6 +160,7 @@ def _record_failure(repo: Path, fire_id: object, outcome: str, stamp: tuple) -> 
         "outcome": outcome,
         "next_at": time.time() + delay,
         "stamp": _normalised_stamp(stamp),
+        "hold": hold,
     }
     path = repo / BACKOFF_REL
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -185,9 +195,12 @@ def _claim_blocks(repo: Path, claim: Path, stamp: tuple) -> Optional[str]:
 
     A live claimed run blocks as `run-live`. A claim whose record is terminal or missing is
     released: `clean` with a changed input stamp since launch clears the back-off (a refire is
-    due if debt remains); anything else records a failure and blocks with its `backoff:`
-    reason, so a dead child is never refired on the same tick. A claim naming no fire_id older
-    than AUTOFIRE_INTERVAL_SECS (crash between claim and launch) is released with no back-off."""
+    due if debt remains); `clean` with an unchanged stamp holds as `no-new-input` until the
+    stamp changes; any other outcome records a failure and blocks with its `backoff:` reason,
+    so a dead child is never refired on the same tick. A claim with no `stamp` field is released
+    as `claim-stampless-released` (a run it named is held like an unchanged-input run). A claim
+    naming no fire_id older than AUTOFIRE_INTERVAL_SECS (crash between claim and launch) is
+    released with no back-off."""
     from coordinator_core.ops.workflow_fire import fire
 
     try:
@@ -209,12 +222,22 @@ def _claim_blocks(repo: Path, claim: Path, stamp: tuple) -> Optional[str]:
         if refreshed is not None and refreshed.get("state") in _LIVE_STATES:
             return "run-live"
         outcome = (refreshed or {}).get("outcome") or "missing"
-        if outcome == "clean" and data.get("stamp") != _normalised_stamp(stamp):
-            _clear_backoff(repo)
+        if "stamp" not in data:
+            # No launch stamp to compare: a completed run holds until the inputs next change;
+            # a dead child keeps the expiring failure back-off.
+            _record_failure(repo, fire_id, outcome, stamp, hold=outcome == "clean")
+            reason = REASON_CLAIM_STAMPLESS
+        elif outcome == "clean":
+            if data["stamp"] != _normalised_stamp(stamp):
+                _clear_backoff(repo)
+            else:
+                reason = _record_failure(repo, fire_id, outcome, stamp, hold=True)
         else:
             reason = _record_failure(repo, fire_id, outcome, stamp)
     elif age <= AUTOFIRE_INTERVAL_SECS:
         return "run-live"
+    elif "stamp" not in data:
+        reason = REASON_CLAIM_STAMPLESS
     try:
         claim.unlink()
     except FileNotFoundError:

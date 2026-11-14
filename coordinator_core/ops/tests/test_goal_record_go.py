@@ -36,8 +36,9 @@ def _goal(root: Path, text: str = GOAL) -> Path:
     return p
 
 
-def _seed(root: Path, hid: str, goal: str = "goal-x", state: str = "awaiting_gate", kind: str = "roadmap-seed"):
-    p = root / "state" / "handoffs" / f"2026-10-07-{hid}.md"
+def _seed(root: Path, hid: str, goal: str = "goal-x", state: str = "awaiting_gate", kind: str = "roadmap-seed",
+          subdir: str = ""):
+    p = root / "state" / "handoffs" / subdir / f"2026-10-07-{hid}.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
         f"---\nkind: {kind}\ntitle: t\nhandoff_id: {hid}\ndeployment_state: {state}\n"
@@ -99,3 +100,11 @@ def test_refuses_inactive_goal_and_empty_seed_set(tmp_path):
     _goal(tmp_path)
     (tmp_path / "state" / "handoffs" / "2026-10-07-hnd-a-111111.md").unlink()
     assert "no live roadmap-seeds" in op._handler(_params(), tmp_path)["error"]
+
+
+def test_finds_seeds_in_monthly_subdirs_but_not_archive(tmp_path):
+    _goal(tmp_path)
+    _seed(tmp_path, "hnd-m-555555", subdir="2026-11")
+    _seed(tmp_path, "hnd-z-666666", subdir="archive")
+    r = op._handler(_params(at="2026-10-08T00:00:00Z"), tmp_path)
+    assert r["exit_code"] == 0 and r["seeds"] == ["hnd-m-555555"], r

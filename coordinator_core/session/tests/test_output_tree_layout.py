@@ -53,6 +53,23 @@ def test_locate_missing_flat_goes_to_shard(tmp_path):
     assert otl.locate(str(tmp_path), "docs/plans/undated.md") == "docs/plans/undated.md"
 
 
+def test_locate_sharded_cite_resolves_to_existing_flat_file(tmp_path):
+    _touch(tmp_path, "docs/plans/2026-11-03-foo.md")
+    assert otl.locate(str(tmp_path), "docs/plans/2026-11/2026-11-03-foo.md") == "docs/plans/2026-11-03-foo.md"
+    absent = "docs/plans/2026-11/2026-11-04-bar.md"
+    assert otl.locate(str(tmp_path), absent) == absent
+
+
+def test_layout_edge_follows_the_layout_the_repo_uses(tmp_path):
+    sharded = "docs/plans/2026-11/2026-11-03-foo.md"
+    assert otl.layout_edge(str(tmp_path), sharded) == sharded
+    _touch(tmp_path, "docs/plans/2026-10-01-old.md")
+    assert otl.layout_edge(str(tmp_path), sharded) == "docs/plans/2026-11-03-foo.md"
+    _touch(tmp_path, "docs/plans/2026-10/2026-10-02-x.md")
+    assert otl.layout_edge(str(tmp_path), sharded) == sharded
+    assert otl.layout_edge(str(tmp_path), "src/a.py") == "src/a.py"
+
+
 def test_locate_redirects_row_beats_shard_rule(tmp_path):
     _touch(tmp_path, "docs/plans/REDIRECTS.md",
            "| old | new |\n|---|---|\n| `docs/plans/2026-11-03-foo.md` | `docs/plans/archive/foo.md` |\n")

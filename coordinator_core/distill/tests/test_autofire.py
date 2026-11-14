@@ -40,6 +40,11 @@ def _repo(tmp_path, specs: int, log: str | None = LOG):
     if log is not None:
         (repo / "state").mkdir(exist_ok=True)
         (repo / "state" / "distillation-log.md").write_text(log)
+    # Pin directory mtimes: Windows lags directory timestamp updates, which would read as an
+    # input change between two stamps taken moments apart.
+    pinned = time.time() - 3600
+    for directory in (month, month.parent):
+        os.utime(directory, (pinned, pinned))
     return repo
 
 
@@ -136,7 +141,10 @@ def test_orphan_claim_past_interval_is_reclaimed(tmp_path):
     old = time.time() - AUTOFIRE_INTERVAL_SECS - 60
     os.utime(claim, (old, old))
     fake = Fake()
-    assert _tick(repo, fake) is True
+    assert _tick(repo, fake) is False
+    assert autofire.last_decisions[repo.resolve()].reason == "claim-stampless-released"
+    assert not claim.exists()
+    assert _tick(repo, fake, t=AUTOFIRE_INTERVAL_SECS + 1) is True
     assert len(fake.calls) == 1
 
 
@@ -175,12 +183,71 @@ def test_claim_with_missing_record_backs_off(tmp_path, _isolate):
     assert autofire.last_decisions[repo].reason == "backoff:missing:failures=1"
 
 
-def test_clean_outcome_with_unchanged_inputs_backs_off(tmp_path, _isolate):
-    """Exit 0 that recorded nothing is a failure: the stamp is what proves a log entry landed."""
+def test_clean_outcome_with_unchanged_inputs_holds_no_new_input(tmp_path, _isolate):
+    """Exit 0 that recorded nothing: the stamp is what proves a log entry landed."""
     repo = _terminal_claim(tmp_path, _isolate, "clean")
     fake = Fake()
     assert _tick(repo, fake) is False
-    assert autofire.last_decisions[repo].reason == "backoff:clean:failures=1"
+    assert autofire.last_decisions[repo].reason == "no-new-input"
+
+
+def test_two_ticks_after_completed_run_never_relaunch(tmp_path, _isolate):
+    """An empty tick spawns no session: the run completed, debt and inputs unchanged."""
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3).resolve()
+    fake = Fake()
+    assert _tick(repo, fake, t=0) is True
+    assert len(fake.calls) == 1
+    _seed_record(_isolate, repo, "fid1", "exited", None)
+    path = _isolate / "fid1.json"
+    record = json.loads(path.read_text())
+    record["outcome"] = "clean"
+    record["_annotation_version"] = fire._ANNOTATION_VERSION
+    path.write_text(json.dumps(record))
+    for n in (1, 2, 3):
+        assert _tick(repo, fake, t=n * (AUTOFIRE_INTERVAL_SECS + 1)) is False
+        assert autofire.last_decisions[repo].reason == "no-new-input"
+    # Even long past any exponential back-off window the hold stands.
+    state = _backoff_state(repo)
+    state["next_at"] = time.time() - 10_000
+    (repo / autofire.BACKOFF_REL).write_text(json.dumps(state))
+    assert _tick(repo, fake, t=10 * AUTOFIRE_INTERVAL_SECS) is False
+    assert len(fake.calls) == 1
+
+
+def test_stamp_change_lifts_no_new_input_hold(tmp_path, _isolate):
+    repo = _terminal_claim(tmp_path, _isolate, "clean")
+    fake = Fake()
+    assert _tick(repo, fake) is False
+    month = repo / "archive" / "specs" / "2026-07"
+    later = time.time() + 5
+    os.utime(month, (later, later))
+    assert _tick(repo, fake, t=AUTOFIRE_INTERVAL_SECS + 1) is True
+    assert len(fake.calls) == 1
+    assert not (repo / autofire.BACKOFF_REL).exists()
+
+
+def test_stampless_claim_with_terminal_run_is_named_and_held(tmp_path, _isolate):
+    repo = _terminal_claim(tmp_path, _isolate, "clean", claim_stamp="current")
+    claim = repo / autofire.CLAIM_REL
+    claim.write_text(json.dumps({"fire_id": "gone1"}))
+    fake = Fake()
+    assert _tick(repo, fake) is False
+    assert autofire.last_decisions[repo].reason == "claim-stampless-released"
+    assert not claim.exists()
+    assert _tick(repo, fake, t=AUTOFIRE_INTERVAL_SECS + 1) is False
+    assert autofire.last_decisions[repo].reason == "no-new-input"
+    assert fake.calls == []
+
+
+def test_stampless_claim_with_live_run_still_blocks(tmp_path, _isolate):
+    repo = _repo(tmp_path, AUTOFIRE_THRESHOLD + 3).resolve()
+    claim = repo / autofire.CLAIM_REL
+    claim.parent.mkdir(parents=True)
+    claim.write_text(json.dumps({"fire_id": "live1"}))
+    _seed_record(_isolate, repo, "live1", "running", os.getpid())
+    fake = Fake()
+    assert _tick(repo, fake) is False
+    assert autofire.last_decisions[repo].reason == "run-live"
 
 
 def test_clean_outcome_with_changed_inputs_refires(tmp_path, _isolate):

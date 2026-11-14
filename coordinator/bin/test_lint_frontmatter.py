@@ -425,3 +425,25 @@ Body text.
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
     assert payload["violations"] == []
+
+
+def test_cli_clean_tree_stderr_has_no_setpgid_and_only_the_engine_split_advisory(tmp_path):
+    import subprocess
+    import sys
+
+    cli = Path(__file__).resolve().parent / "lint-frontmatter.py"
+    proc = subprocess.run(
+        [sys.executable, str(cli), "--root", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "setpgid" not in proc.stderr
+    stray = [
+        line
+        for line in proc.stderr.splitlines()
+        if line.strip() and not line.startswith("engine split: ")
+    ]
+    assert stray == [], stray

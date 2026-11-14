@@ -37,6 +37,10 @@ def _from_name_re():
     return _memo_re("from_name", r'from-name="([^"]*)"')
 
 
+def _to_name_re():
+    return _memo_re("to_name", r'^<cross-session-message[^>]*?\sto-name="([^"]*)"')
+
+
 class PeerConfigError(ValueError):
     """peers.json is malformed, names an unknown vendor, or repeats a peer name."""
 
@@ -166,17 +170,42 @@ def parse_inbound(frame):
     return sender, (name.group(1) if name else sender), body
 
 
+def intended_receiver(frame):
+    """The receiver (a session name or role) a frame names in its wrapper's `to-name`, else ""."""
+    m = _to_name_re().match(str(frame.get("message", {}).get("content", "")))
+    return m.group(1) if m else ""
+
+
+def role_of(name):
+    """The role a session name carries: its name without box label and trailing id segment.
+
+    group-em-c1.machine-b -> group-em; example-stats-repo-0d -> example-stats-repo; a name with no hyphen is its own role."""
+    base = str(name).partition(".")[0]
+    head, sep, _ = base.rpartition("-")
+    return head if sep and head else base
+
+
+def holds_receiver(session_name, receiver):
+    """True when the session called `session_name` is `receiver`, by name (box label ignored) or by role."""
+    base = str(session_name).partition(".")[0]
+    want = str(receiver).partition(".")[0]
+    return bool(want) and want in (base, role_of(base))
+
+
 def label(peer, text):
     """Prefix a reply with the peer that produced it."""
     return f"[{peer}] {text}"
 
 
-def build_frame(from_endpoint, from_name, text, msg_id=None, from_box=None):
+def build_frame(from_endpoint, from_name, text, msg_id=None, from_box=None, to_name=None):
     """Cross-session user frame carrying `text` from `from_endpoint` (a socket path or pipe).
 
-    A non-empty `from_box` adds a `from-box` attribute to the wrapper; None leaves the frame unchanged."""
+    A non-empty `from_box` adds a `from-box` attribute to the wrapper and a non-empty `to_name` a
+    `to-name` attribute naming the intended receiver; None leaves the frame unchanged."""
     from_name = from_name.replace('"', "'")
     box_attr = f' from-box="{str(from_box).replace(chr(34), chr(39))}"' if from_box else ""
+    if to_name:
+        box_attr += f' to-name="{str(to_name).replace(chr(34), chr(39))}"'
     content = (f'<cross-session-message from="uds:{from_endpoint}" from-name="{from_name}"{box_attr}>\n'
                f"{text}\n</cross-session-message>")
     return {"msgV": 1, "msg_id": msg_id or str(uuid.uuid4()), "type": "user",

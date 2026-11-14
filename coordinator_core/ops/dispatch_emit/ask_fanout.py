@@ -297,25 +297,40 @@ def _parent_rows(sizing: Mapping) -> list[dict]:
     return [r for r in rows or [] if isinstance(r, Mapping) and r.get(rr.ROW_ID)]
 
 
-def _verbatim_turns(parent: Optional[Mapping], sid: Optional[str], cwd: str) -> list[dict]:
-    """The PM verbatim a pm-marked slice carries: the parent sizing's own, else the newest recorded
-    turn. Empty when the session has recorded no PM turn. Read only for the slices arm or a pm item."""
+def _verbatim_turns(parent: Optional[Mapping], sid: Optional[str], cwd: str) -> tuple[list[dict], list[dict]]:
+    """(parent_turns, recorded): the parent sizing's own PM verbatims, else every recorded session
+    turn, newest first. Read only for the slices arm or a pm item."""
     if parent:
         kept = [v for v in parent.get("pm_verbatims") or [] if isinstance(v, Mapping) and isinstance(v.get("text"), str)]
         if kept:
-            return [dict(v) for v in kept]
+            return [dict(v) for v in kept], []
     if not sid:
-        return []
-    newest = baton_pm_turns.recent_window(session_id=sid, cwd=cwd, after_turn=-1)[:1]
-    if not newest:
-        return []
-    return [dict(newest[0])]
+        return [], []
+    return [], [dict(t) for t in baton_pm_turns.recent_window(session_id=sid, cwd=cwd, after_turn=-1)]
 
 
-def _slice_turns(sl: contract.AskSlice, shared: list[dict]) -> list[dict]:
-    """The turns one asks item carries: only an explicit `pm` item carries the shared turns; an
-    unmarked or relayed item carries none and is stamped relayed. Never consults the turn log."""
-    return shared if sl.source == ASK_SOURCE_PM else []
+def _norm(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _matching_turn(ask: str, recorded: list[dict]) -> Optional[dict]:
+    """The newest recorded turn whose whitespace-normalised text equals `ask` (a head-cut turn
+    matches a longer ask it prefixes)."""
+    want = _norm(ask)
+    for turn in recorded:
+        have = _norm(turn["text"])
+        if have == want or (turn.get("truncated") and want.startswith(have)):
+            return turn
+    return None
+
+
+def _slice_turns(sl: contract.AskSlice, recorded: list[dict]) -> list[dict]:
+    """The turns one asks item carries: only an explicit `pm` item binds, to the recorded turn its text
+    equals; an unmarked or relayed item, or a pm item matching no turn, carries none and is stamped relayed."""
+    if sl.source != ASK_SOURCE_PM:
+        return []
+    hit = _matching_turn(sl.ask, recorded)
+    return [hit] if hit else []
 
 
 def _slice_record(
@@ -798,12 +813,13 @@ def _fanout(
     sid = params.get("session_id") or resolve_current_session_id(Path(cwd))
     log_cwd = params.get("session_root") or cwd
     pm_items = [i for i, sl in enumerate(slices) if sl.source == ASK_SOURCE_PM]
-    turns = _verbatim_turns(parent_doc, sid, log_cwd) if parent_rel is not None or pm_items else []
-    if pm_items and not turns:
-        raise _Refused(
-            f"asks[{pm_items[0]}]: source pm, but this session records no PM turn to carry. "
-            "Mark it relayed, or submit from the session the PM spoke in."
-        )
+    parent_turns, recorded = _verbatim_turns(parent_doc, sid, log_cwd) if parent_rel is not None or pm_items else ([], [])
+    for i in pm_items:
+        if not parent_turns and not _slice_turns(slices[i], recorded):
+            raise _Refused(
+                f"asks[{i}]: source pm, but its text equals no PM turn this session recorded. "
+                "Mark it relayed, or submit from the session the PM spoke in."
+            )
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     parent_hex = uuid.uuid4().hex[:6]
     parent_id = f"ask-parent-{stamp}-{parent_hex}"
@@ -854,7 +870,7 @@ def _fanout(
         )
         record = _slice_record(
             sl, name=f"{sl.label}"[:60],
-            turns=turns if parent_rel is not None else _slice_turns(sl, turns),
+            turns=parent_turns or _slice_turns(sl, recorded),
             marker=contract.ask_parent_marker(parent_id, run_ids[i]),
             today=today, parent_rows=parent_rows, sources=sources,
             sender=relay[i][0], relayed_text=relay[i][1], route_pref=route_prefs[i],
@@ -945,8 +961,10 @@ def _fanout(
         stage_dir.parent.rmdir()
     except OSError:
         pass
-    turn_no = turns[-1].get("turn") if turns else None
-    if sid and isinstance(turn_no, int) and not isinstance(turn_no, bool):
+    carried = parent_turns or [t for sl in slices for t in _slice_turns(sl, recorded)]
+    nums = [t["turn"] for t in carried if isinstance(t.get("turn"), int) and not isinstance(t.get("turn"), bool)]
+    turn_no = max(nums) if nums else None
+    if sid and turn_no is not None:
         baton_pm_turns.mark_sized_through(turn_no, session_id=sid, cwd=cwd)
 
     ready = [r for r in runs if r.status == contract.STATUS_READY]

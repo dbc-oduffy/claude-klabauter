@@ -151,7 +151,8 @@ def unjudged(reason: str) -> str:
 
 
 _ID = r"[A-Za-z0-9_][A-Za-z0-9_.-]*"
-_CITED = re.compile(rf"^\s*anchors?[:\s]+({_ID}(?:,\s*{_ID})*)", re.IGNORECASE)
+# The premise checker writes "anchor premise <id>: ..."; the filler word is never an id.
+_CITED = re.compile(rf"^\s*anchors?[:\s]+(?:premises?[:\s]+)?({_ID}(?:,\s*{_ID})*)", re.IGNORECASE)
 _RANGE = re.compile(r"^(\D.*?)(\d+)(?:-|\.\.)(\1)(\d+)$")
 _RANGE_CAP = 50
 

@@ -157,11 +157,13 @@ def test_disjoint_pair_is_two_ready_runs_with_the_frozen_reply(repo):
 
 
 def test_slice_sizing_carries_verbatim_intent_and_parent_marker(repo):
+    for text in ("fix a", "fix b"):
+        assert PT.append_turn(text, session_id=SID)["ok"]
     out = _go(repo, {"asks": [{"ask": "fix a", "source": "pm", "writes": ["a"]}, {"ask": "fix b", "source": "pm", "writes": ["b"]}]})
-    for run, ready in zip(out["runs"], out["ready"]):
+    for text, run, ready in zip(("fix a", "fix b"), out["runs"], out["ready"]):
         doc = _sizing(repo, ready["sizing"])
         assert doc["intent"].startswith("fix ") and doc["intent_source"] == "em-elaborated"
-        assert [v["text"] for v in doc["pm_verbatims"]] == [VERBATIM]
+        assert [v["text"] for v in doc["pm_verbatims"]] == [text]
         assert c.parse_ask_parent(doc["em_analysis"]["ask_parent"]) == (out["parent_id"], run["run_id"])
         assert "parent_id" not in doc
 
@@ -175,6 +177,7 @@ def test_context_path_under_the_repo_root_is_written_repo_relative(repo):
 
 
 def test_mixed_sources_stamp_only_the_relayed_slice(repo):
+    assert PT.append_turn("fix b", session_id=SID)["ok"]
     out = _go(repo, {"asks": [
         {"ask": "fix a", "source": "relayed", "writes": ["a"]},
         {"ask": "fix b", "source": "pm", "writes": ["b"]},
@@ -331,6 +334,7 @@ def test_no_recorded_pm_turn_proceeds_stamped_relayed(tmp_path, monkeypatch):
 
 
 def test_relayed_source_with_a_pm_turn_carries_text_and_sender_not_the_pm_turn(repo):
+    assert PT.append_turn("fix b", session_id=SID)["ok"]
     out = _go(repo, {"sender": "peer-b", "asks": [
         {"ask": "fix a", "source": "relayed", "relayed_text": "peer said: fix a", "writes": ["a"]},
         {"ask": "fix b", "source": "pm", "writes": ["b"]},
@@ -340,7 +344,7 @@ def test_relayed_source_with_a_pm_turn_carries_text_and_sender_not_the_pm_turn(r
     assert "pm_verbatims" not in relayed
     assert relayed["em_analysis"][mod.RELAYED_TEXT_KEY] == "peer said: fix a"
     assert relayed["em_analysis"][mod.RELAYED_FROM_KEY] == "peer-b"
-    assert [v["text"] for v in pm["pm_verbatims"]] == [VERBATIM]
+    assert [v["text"] for v in pm["pm_verbatims"]] == ["fix b"]
     assert c.slice_ask_source(pm) is None
 
 
@@ -380,11 +384,13 @@ def test_invalid_route_preference_refuses_before_any_write(repo, item, named):
 
 
 def test_sized_through_turn_moves_once_after_the_last_slice(repo):
+    for text in ("x", "y"):
+        assert PT.append_turn(text, session_id=SID)["ok"]
     out = _go(repo, {"asks": [
         {"ask": "x", "source": "pm", "writes": ["a"]}, {"ask": "y", "source": "pm", "writes": ["b"]},
     ]})
     assert out["exit_code"] == 0
-    assert store.read_baton(SID, str(repo)).get("sized_through_turn") == 0
+    assert store.read_baton(SID, str(repo)).get("sized_through_turn") == 2
 
 
 def test_all_relayed_submission_does_not_move_the_sized_through_mark(repo):

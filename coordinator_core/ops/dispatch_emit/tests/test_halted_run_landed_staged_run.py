@@ -64,6 +64,8 @@ def _no_launch(monkeypatch):
 
 
 def test_staged_run_with_no_halt_record_is_recorded_and_its_checkpoint_closed(tmp_path):
+    # percolate is not in klabauter's restricted publish tree; the import-closure gate refuses a top-level import.
+    _open_checkpoints = pytest.importorskip("coordinator_core.percolate.source_preflight")._open_checkpoints
     base, land = _repo(tmp_path, "staged")
     assert [plan for _, plan in _open_checkpoints(tmp_path, base)] == [PLAN]
     out = op._handler({"run_id": RUN, "sha": land}, tmp_path)

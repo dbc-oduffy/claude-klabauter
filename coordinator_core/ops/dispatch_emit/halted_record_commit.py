@@ -393,6 +393,24 @@ def _reland_late_writes(
     return fresh, still, relanded
 
 
+def _sizing_on_disk(worktree_root: Path, sizing_rel: str) -> bool:
+    """True when the run's sizing is a file at ``sizing_rel`` (the only case it is declared); an
+    archive-only sizing is false here and true in ``_sizing_recoverable``."""
+    return (worktree_root / sizing_rel).is_file()
+
+
+def _sizing_recoverable(worktree_root: Path, sizing_rel: str) -> bool:
+    """False when neither the worktree nor the sizings archive holds the sizing (a duplicate archive
+    copy counts as missing, the resolver raising ``LedgerRefused``)."""
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused, _sizing_path
+
+    try:
+        _sizing_path(worktree_root, sizing_rel)
+    except LedgerRefused:
+        return False
+    return True
+
+
 def _land(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict
 ) -> dict:
@@ -445,6 +463,7 @@ def _land(
         land_only = {p for p in recorded if recorded_reasons.get(p) == kept_work.HALT_RECORD_ONLY}
         declared += [p for p in recorded if p not in declared and not p.startswith(record_dir_rel + "/")]
     sizing_rel = record_sizing_rel(worktree_root, run_id)
+    sizing_missing: Optional[str] = None
     if (
         sizing_rel
         and not Path(sizing_rel).is_absolute()
@@ -452,7 +471,10 @@ def _land(
         and sizing_rel not in owner
         and not sizing_rel.startswith(record_dir_rel + "/")
     ):
-        declared.append(sizing_rel)
+        if _sizing_on_disk(worktree_root, sizing_rel):
+            declared.append(sizing_rel)
+        elif not _sizing_recoverable(worktree_root, sizing_rel):
+            sizing_missing = sizing_rel
     scratch_declared = [p for p in declared if halt_product_gates.is_scratch(p)]
     declared = [p for p in declared if not halt_product_gates.is_scratch(p)]
 
@@ -609,7 +631,7 @@ def _land(
     )
     if sibling:
         own_declared = set(owner) | set(paths) | set(deleted) | own_record
-        if sizing_rel:
+        if sizing_rel and sizing_rel != sizing_missing:
             own_declared.add(sizing_rel)
         product, w1 = sibling_claims.filter_own(product, sibling, own_declared)
         gone, w2 = sibling_claims.filter_own(gone, sibling, own_declared)
@@ -808,6 +830,8 @@ def _land(
     if outcome_path and outcome_path not in paths:
         paths.append(outcome_path)
     message = halted_record_message(run_id, halted)
+    if sizing_missing:
+        message += f"\nWarning: run sizing {sizing_missing} is absent on disk and not landed; re-size the ask"
     from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_halted_trailer_lines
 
     for line in run_halted_trailer_lines(landing_integrity.closing_bases(worktree_root, run_id, params)):
@@ -917,6 +941,8 @@ def _land(
     extra["run_artifacts"] = {"landed": sorted(paths + deleted), "withheld": withheld}
     if ignored_excluded:
         extra["run_artifacts"]["ignored_excluded"] = sorted(set(ignored_excluded))
+    if sizing_missing:
+        extra["sizing_missing"] = sizing_missing
     if withheld:
         extra["withheld"] = withheld
     if dropped:

@@ -4326,9 +4326,12 @@ def compose_ask_script(
     b.append("  let _deliveryNotes = '';")
     # Top level, declared before `_waveTestsGreen`: that function reads it, and a block-scoped `const` is out of its reach.
     b.append("  let _terminalTestsWanted = false;")
+    b.append("  let _sizingCarried = false;")
     b.append(_emit._checkpoint_commit_js(
         agent_type_host, repo_root=repo_root, session_id=session_id, seam=None,
         runtime_plan_js=_RUNTIME_PLAN_PATH_JS, pre_commit_gate_js=_WAVE_TESTS_GATE_FN, reds_var=WAVE_REDS_VAR,
+        carry_paths_js="(_sizingRel && !_sizingCarried ? [_sizingRel] : [])",
+        carry_landed_js="_sizingCarried = true;",
     ))
     b.append(_wave_tests_green_js(
         agent_type_host, repo_root=repo_root, run_id=run_id, em_brief=bool(em_brief), objective=objective_cfg is not None,
@@ -7797,6 +7800,12 @@ def _invariant_retest_call(*, head: str, anchor: str, repo_root: str, run_id: st
     )
 
 
+_PARAMS_FILE_ONLY_CLAUSE = (
+    " Never put params on a command line: if the command reports the params file missing or unreadable, "
+    "return that error verbatim and run nothing else."
+)
+
+
 def _bound_params_path(repo_root: object, run_id: str) -> Path:
     """The run's params path for a commit brief; refuses when the id is invalid or no pre-spawn writer would write it."""
     path = params_path(repo_root, run_id)
@@ -7832,7 +7841,8 @@ def _commit_stage_call(
         f"\n\n{LAND_RUN_OP} enumerates every file this run authored and lands it; you run the "
         "one command and return its reply.\n\nReturn from its JSON reply committed, sha, already_landed, error, refused, "
         f"remedy_step, sizing_shipped, close, fanout, siblings, run_artifacts, run_artifact_residue and {_RESIDUE_REPLY_KEY}, verbatim (null "
-        f"where absent). A non-empty {_RESIDUE_REPLY_KEY} is returned with \"{_RESIDUE_DIRECTIVE}\". Run nothing else.",
+        f"where absent). A non-empty {_RESIDUE_REPLY_KEY} is returned with \"{_RESIDUE_DIRECTIVE}\". Run nothing else."
+        + _PARAMS_FILE_ONLY_CLAUSE,
     )
     # Stays its own agent: a commit is denied to every agent but git-commit-agent
     # (`block_subagent_commit` run-token leg), so it cannot fold into the docs agent's last act.
@@ -7872,7 +7882,8 @@ def _halt_record_commit_fn(
         f"\n\n{LAND_RUN_OP} enumerates every file this run authored and lands it; you run the "
         "one command and return its reply.\n\nReturn from its JSON reply committed, sha, already_landed, error, refused, "
         f"run_artifacts, run_artifact_residue and {_RESIDUE_REPLY_KEY}, verbatim (null where absent). "
-        f"A non-empty {_RESIDUE_REPLY_KEY} is returned with \"{_RESIDUE_DIRECTIVE}\". Run nothing else.",
+        f"A non-empty {_RESIDUE_REPLY_KEY} is returned with \"{_RESIDUE_DIRECTIVE}\". Run nothing else."
+        + _PARAMS_FILE_ONLY_CLAUSE,
     )
     call = _agent(
         prompt, label="halt-commit", phase="commit", agent_type=_COMMIT_AGENT_TYPE,
