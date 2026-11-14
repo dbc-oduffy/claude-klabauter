@@ -147,3 +147,85 @@ def test_preflight_runs_last_on_shaped_env(tmp_path, monkeypatch):
     env = {"PATH": apps}
     shape_codex_child(env, writable_root=tmp_path, environ=environ, windows=True)
     assert seen == [(ps7, str(tmp_path / "scratch" / "codex-tmp"))]
+
+
+def _real_home(tmp_path):
+    real = tmp_path / "real-codex"
+    real.mkdir()
+    hooks = real / "hooks.json"
+    hooks.write_text('{"hooks": {}}')
+    other = str(tmp_path / "project" / ".codex" / "hooks.json")
+    (real / "config.toml").write_text(
+        f"[hooks.state.'{hooks}:pre_tool_use:0:0']\ntrusted_hash = \"sha256:aa\"\n\n"
+        f"[hooks.state.'{hooks}:session_start:0:1']\ntrusted_hash = \"sha256:bb\"\n\n"
+        f"[hooks.state.'{other}:session_start:0:0']\ntrusted_hash = \"sha256:cc\"\n"
+    )
+    (real / "auth.json").write_text("{}")
+    return real, hooks, other
+
+
+def _isolated(tmp_path, real):
+    root = tmp_path / "repo"
+    root.mkdir(exist_ok=True)
+    env = {"CODEX_HOME": str(real)}
+    shape_codex_child(
+        env,
+        writable_root=root,
+        environ={"CODEX_SANDBOX": "seatbelt"},
+        windows=False,
+    )
+    return root / "scratch" / "codex-home", env
+
+
+def test_isolated_home_carries_hooks_and_rekeys_trust(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: False)
+    real, hooks, other = _real_home(tmp_path)
+    home, env = _isolated(tmp_path, real)
+    assert env["CODEX_HOME"] == str(home)
+    assert (home / "hooks.json").read_text() == hooks.read_text()
+    cfg = (home / "config.toml").read_text()
+    mine = home / "hooks.json"
+    assert f"[hooks.state.'{mine}:pre_tool_use:0:0']" in cfg
+    assert f"[hooks.state.'{mine}:session_start:0:1']" in cfg
+    assert str(hooks) not in cfg
+    assert f"[hooks.state.'{other}:session_start:0:0']" in cfg
+    assert 'trusted_hash = "sha256:aa"' in cfg
+
+
+def test_untouched_real_home_gets_no_hooks_seed(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: False)
+    real, _, _ = _real_home(tmp_path)
+    root = tmp_path / "repo"
+    root.mkdir()
+    env = {"CODEX_HOME": str(real)}
+    shape_codex_child(env, writable_root=root, environ={}, windows=False)
+    assert env["CODEX_HOME"] == str(real)
+    assert not (root / "scratch" / "codex-home").exists()
+
+
+def test_refreshed_config_is_rekeyed_again(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: False)
+    real, hooks, _ = _real_home(tmp_path)
+    home, _ = _isolated(tmp_path, real)
+    cfg = real / "config.toml"
+    cfg.write_text(cfg.read_text() + f"\n[hooks.state.'{hooks}:stop:0:0']\ntrusted_hash = \"sha256:dd\"\n")
+    st = (home / "config.toml").stat().st_mtime + 10
+    os.utime(cfg, (st, st))
+    _isolated(tmp_path, real)
+    assert f"[hooks.state.'{home / 'hooks.json'}:stop:0:0']" in (home / "config.toml").read_text()
+
+
+def test_stale_pre_rekey_home_is_rekeyed_in_place(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: False)
+    real, hooks, _ = _real_home(tmp_path)
+    home = tmp_path / "repo" / "scratch" / "codex-home"
+    home.mkdir(parents=True)
+    stale = home / "config.toml"
+    stale.write_text((real / "config.toml").read_text())
+    st = (real / "config.toml").stat().st_mtime + 10
+    os.utime(stale, (st, st))
+    _isolated(tmp_path, real)
+    cfg = stale.read_text()
+    assert f"[hooks.state.'{home / 'hooks.json'}:pre_tool_use:0:0']" in cfg
+    assert str(hooks) not in cfg
+    assert (home / "hooks.json").is_file()

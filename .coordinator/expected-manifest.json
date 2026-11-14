@@ -2497,8 +2497,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "212e66b97666238875092e66e82811531f9a29a6",
-    "coordinator_core/_engine_stamp": "c4dc56518138814a3433e1083985b3a67dc13fc1",
+    "coordinator_core/_engine_published_at": "bf7f6ed6c88f9cd111e97265b11e832b947f2edb",
+    "coordinator_core/_engine_stamp": "66a24e003e527e772818aa66f2f484c87b1bfdfe",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -3787,7 +3787,7 @@
     "coordinator_core/codex_runner/__init__.py": "d2333a213e34b6ecda8c63bfe92e22869c766538",
     "coordinator_core/codex_runner/__main__.py": "543bba008839bf123646ee1950e33a1690c1f4bd",
     "coordinator_core/codex_runner/agy.py": "bdb417c3a585741016c6bb89d389574cba915d2d",
-    "coordinator_core/codex_runner/codex_spawn_env.py": "83679f7ff981ea3308cb5f122a050ee55c6032fa",
+    "coordinator_core/codex_runner/codex_spawn_env.py": "801d843c000c101d365afb947a36f513e5433ac2",
     "coordinator_core/codex_runner/contract.py": "223580182411ea874461998957bb9062628cecfb",
     "coordinator_core/codex_runner/execute.py": "21709a9594382b8137a51e9b4637480517a60e95",
     "coordinator_core/codex_runner/grok.py": "1b60f67afe347c7efa21fece22db011e299bc48a",
@@ -3814,7 +3814,7 @@
     "coordinator_core/codex_runner/tests/fixtures/review_run.jsonl": "00637d9c3f359f5c5474b40881b76867edd7bb79",
     "coordinator_core/codex_runner/tests/test_agy.py": "e43f31a544c393a1ddb0c4575c083c0a8e072947",
     "coordinator_core/codex_runner/tests/test_codex_home_isolation.py": "c6610a64e95531ee36f3d5d28c8da4a769ec4c6a",
-    "coordinator_core/codex_runner/tests/test_codex_spawn_env.py": "e0611f33388ca9a7666f0d31ad7da2f21e64e296",
+    "coordinator_core/codex_runner/tests/test_codex_spawn_env.py": "74f6a9bd82e043bbc2bb0744826741f099610008",
     "coordinator_core/codex_runner/tests/test_contract.py": "5af7b46167b62f128b25db36f743924068ec6b6b",
     "coordinator_core/codex_runner/tests/test_every_codex_spawn_site_shaped.py": "26f54b352157d9b95c83e5d5194dfe804a572c14",
     "coordinator_core/codex_runner/tests/test_execute.py": "220f9a0978aba734d303a70b148b95a98e32ed43",
@@ -12392,5 +12392,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "7f0690a8e8969023ac5b99ba69201dd34e719e66"
+  "source_head": "89beb949227b26f624ac1f19c3145de2b2e89dd6"
 }

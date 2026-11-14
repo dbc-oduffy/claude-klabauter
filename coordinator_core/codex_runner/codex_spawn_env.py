@@ -7,6 +7,7 @@ preflight judges the env that is actually spawned.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
@@ -110,12 +111,31 @@ def _home_writable(home: Path) -> bool:
     return True
 
 
+_HOOK_STATE_HEADER = re.compile(r"^(\[hooks\.state\.')(.*?)(:[a-z_]+:\d+:\d+'\])", re.MULTILINE)
+
+
+def rekey_hook_trust(config_text: str, old_hooks: Path, new_hooks: Path) -> str:
+    """Re-key `[hooks.state.'<hooks.json>:<event>:i:j']` headers from `old_hooks` to `new_hooks`.
+
+    Codex keys hook trust by the hooks.json absolute path (the trusted_hash covers the hook body), so a
+    copied hooks.json is untrusted until its entries carry the copy's path. Other paths are untouched.
+    """
+    old = os.path.normcase(os.path.normpath(str(old_hooks)))
+
+    def swap(m: re.Match[str]) -> str:
+        if os.path.normcase(os.path.normpath(m.group(2))) != old:
+            return m.group(0)
+        return f"{m.group(1)}{new_hooks}{m.group(3)}"
+
+    return _HOOK_STATE_HEADER.sub(swap, config_text)
+
+
 def _isolate_codex_home(env: dict[str, str], writable_root: Path, environ: Mapping[str, str]) -> None:
-    """Point the child's CODEX_HOME at `<writable_root>/scratch/codex-home`, seeded with auth and config.
+    """Point the child's CODEX_HOME at `<writable_root>/scratch/codex-home`, seeded with auth, config, hooks.
 
     Only when the parent is codex-sandboxed (CODEX_SANDBOX / CODEX_SANDBOX_NETWORK_DISABLED set) or the
-    real home rejects a write; otherwise the env is untouched. Copies only auth.json and config.toml,
-    never sessions, logs or tmp. Child env only.
+    real home rejects a write; otherwise the env is untouched. Copies only auth.json, hooks.json and
+    config.toml (hook trust re-keyed to the isolated hooks.json), never sessions, logs or tmp. Child env only.
     """
     real = _real_codex_home(env, environ)
     sandboxed = any(_key(environ, n) for n in ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED"))
@@ -123,13 +143,33 @@ def _isolate_codex_home(env: dict[str, str], writable_root: Path, environ: Mappi
         return
     home = writable_root / "scratch" / "codex-home"
     home.mkdir(parents=True, exist_ok=True)
-    for name in ("auth.json", "config.toml"):
+    # Trap: hooks.json carries codex's only guard (PreToolUse host-guard). Without it, or with its trust
+    # entries still keyed to the real path, the isolated child runs every tool unguarded and silently.
+    for name in ("auth.json", "config.toml", "hooks.json"):
         src, dst = real / name, home / name
         try:
             if src.is_file() and (not dst.is_file() or src.stat().st_mtime > dst.stat().st_mtime):
                 part = home / f"{name}.{os.getpid()}.part"
-                shutil.copy2(src, part)
+                if name == "config.toml":
+                    part.write_text(
+                        rekey_hook_trust(src.read_text(encoding="utf-8"), real / "hooks.json", home / "hooks.json"),
+                        encoding="utf-8",
+                        newline="",
+                    )
+                    shutil.copystat(src, part)
+                else:
+                    shutil.copy2(src, part)
                 os.replace(part, dst)
-        except OSError:
+        except (OSError, UnicodeError):
             continue
+    # Trap: a home seeded before re-keying existed keeps a config copy no older than the real one, so the
+    # copy step skips it and its trust stays on the real path; re-key the existing copy in place too.
+    cfg = home / "config.toml"
+    try:
+        text = cfg.read_text(encoding="utf-8")
+        rekeyed = rekey_hook_trust(text, real / "hooks.json", home / "hooks.json")
+        if rekeyed != text:
+            cfg.write_text(rekeyed, encoding="utf-8", newline="")
+    except (OSError, UnicodeError):
+        pass
     env[_key(env, "CODEX_HOME") or "CODEX_HOME"] = str(home)
