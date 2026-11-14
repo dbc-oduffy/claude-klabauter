@@ -422,9 +422,9 @@ _LIVE_SOCK_DIRS = ("/tmp/cc-socks", "/private/tmp/cc-socks")
 
 
 @pytest.fixture(autouse=True)
-def _never_unlink_live_peer_sockets(monkeypatch):
+def _never_unlink_live_peer_sockets(monkeypatch, tmp_path_factory):
     """A test never unlinks a real peer socket: one unredirected roster reap on a live box cut
-    every LAN peer (Machine-b 2026-11-14 16:18Z). Redirect LOOPBACK_SOCKS to tmp_path instead."""
+    every LAN peer (2026-11-14 16:18Z). Redirect LOOPBACK_SOCKS to tmp_path instead."""
     real_unlink, real_remove = os.unlink, os.remove
 
     def _refuse(path):
@@ -444,3 +444,7 @@ def _never_unlink_live_peer_sockets(monkeypatch):
 
     monkeypatch.setattr(os, "unlink", unlink)
     monkeypatch.setattr(os, "remove", remove)
+    # Spawned roster/relay/router children inherit this, so they never reap the live dir either.
+    # Outside tmp_path: some tests assert their tmp_path holds only what they wrote.
+    socks = tmp_path_factory.mktemp("loopback-socks")
+    monkeypatch.setenv("UNIMATRIX_LOOPBACK_SOCKS", str(socks))

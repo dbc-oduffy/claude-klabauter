@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-LOOPBACK_SOCKS = "/tmp/cc-socks"
+LOOPBACK_SOCKS = os.environ.get("UNIMATRIX_LOOPBACK_SOCKS") or "/tmp/cc-socks"  # override: tests only, never a live dir
 # Registry field the mirror entries carry for the far session's real socket.
 FAR_SOCKET_FIELD = "macSocketPath"
 STILL_ACTIVE = 259

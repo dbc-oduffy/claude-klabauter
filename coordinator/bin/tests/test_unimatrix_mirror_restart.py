@@ -253,7 +253,8 @@ def test_an_alive_unchanged_client_is_never_respawned_and_a_new_session_pid_is(t
     assert len(procs) == 2 and clients["a"][0] == 2
 
 
-@pytest.mark.parametrize("host", ["Machine-b.local", "machine-b", "MACHINE-B.Local"])
+# A neutral name sorting below "farbox" (so this side owns the mirror); a real box name is rewritten on publish.
+@pytest.mark.parametrize("host", ["Alpha-box.local", "alpha-box", "ALPHA-BOX.Local"])
 def test_mirror_stale_label_is_one_box_id_across_hostname_spellings(tmp_path, monkeypatch, host):
     mod, procs, clock, cfg = _mirror_all_rig(tmp_path, monkeypatch)
     monkeypatch.setattr(mod.socket, "gethostname", lambda: host)
@@ -263,4 +264,4 @@ def test_mirror_stale_label_is_one_box_id_across_hostname_spellings(tmp_path, mo
     procs[0].rc = 255
     mod.sync(clients, live, cfg, lambda m: None)
     mod.sync(clients, live, cfg, lambda m: None)
-    assert mod.sent[0].split()[-1] == "machine-b"
+    assert mod.sent[0].split()[-1] == "alpha-box"

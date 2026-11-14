@@ -83,7 +83,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SESS = "~/.claude/sessions"
-SOCKS = "/tmp/cc-socks"
+SOCKS = os.environ.get("UNIMATRIX_LOOPBACK_SOCKS") or "/tmp/cc-socks"  # override: tests only, never a live dir
 INBOX_NAME_RE = re.compile(r"[A-Za-z0-9_-](?:[A-Za-z0-9_.-]{0,62}[A-Za-z0-9_-])?")
 
 

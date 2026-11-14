@@ -69,7 +69,7 @@ def test_endpoint_is_harness_shaped_on_every_platform():
     hexname = hashlib.md5(f"unimatrix-{FAR_SOCK}".encode()).hexdigest()
     assert roster.local_endpoint(FAR_SOCK, platform="win32") == "\\\\.\\pipe\\LOCAL\\cc-msg-" + hexname
     posix = roster.local_endpoint(FAR_SOCK, platform="linux")
-    assert re.fullmatch(r"/tmp/cc-socks/cc-msg-[0-9a-f]{32}\.sock", posix)
+    assert re.fullmatch(re.escape(roster.LOOPBACK_SOCKS) + r"/cc-msg-[0-9a-f]{32}\.sock", posix)
     assert roster.local_endpoint(FAR_SOCK, platform="darwin") == posix
 
 

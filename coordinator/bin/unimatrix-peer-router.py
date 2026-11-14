@@ -1301,7 +1301,7 @@ class Router:
                              "this_box": marker["box"] == box})
         return sorted(names), rows
 
-    mirror_stale_dir = "/tmp/cc-socks"  # where the relay's `mirror-stale` mode writes its markers
+    mirror_stale_dir = os.environ.get("UNIMATRIX_LOOPBACK_SOCKS") or "/tmp/cc-socks"  # where the relay's `mirror-stale` mode writes its markers
 
     def stale_mirror_markers(self):
         """name -> marker for each unexpired mark a sending box left for its down mirror."""
