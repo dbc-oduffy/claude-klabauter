@@ -32,7 +32,7 @@ def _commit(repo: Path, msg: str = "c") -> str:
     return _git(repo, "rev-parse", "HEAD")
 
 
-def _plan(repo: Path, name: str, *, status="complete", writes=("src/a.py",), tshirt=None, body="body") -> str:
+def _plan(repo: Path, name: str, *, status="landed", writes=("src/a.py",), tshirt=None, body="body") -> str:
     rel = f"docs/plans/2026-11/{name}.md"
     sizing = ""
     if tshirt:
@@ -101,11 +101,49 @@ def test_non_complete_plan_and_uncited_plan_are_refused(repo):
     assert _run(repo)["pages"] == []
 
 
+@pytest.mark.parametrize("status", ["landed", "implemented", "closed_partial", "closed"])
+def test_each_completed_status_yields_a_page_and_open_statuses_do_not(repo, status):
+    _wiki(repo, "alpha", "src/a.py")
+    _plan(repo, "done", status=status)
+    _plan(repo, "open1", status="draft", writes=("src/a.py",))
+    _plan(repo, "open2", status="executing", writes=("src/a.py",))
+    _commit(repo)
+    plans = _run(repo)["pages"][0]["plans"]
+    assert [pl["path"] for pl in plans] == ["docs/plans/2026-11/done.md"]
+
+
+def test_completed_statuses_are_members_of_the_plan_schema_status_enum():
+    schema_path = Path(wuc.__file__).parents[2] / "frontmatter" / "schemas" / "plan.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert wuc.COMPLETED_STATUSES <= set(schema["properties"]["status"]["enum"])
+    assert "complete" not in wuc.COMPLETED_STATUSES
+
+
+def test_hub_path_cited_by_many_pages_is_dropped_and_a_narrow_path_still_matches(repo):
+    for i in range(wuc.HUB_CITING_PAGES + 1):
+        _wiki(repo, f"hub{i}", "src/hub.py")
+    _wiki(repo, "narrow", "src/narrow.py")
+    _plan(repo, "ph", writes=("src/hub.py",), tshirt="XL")
+    _plan(repo, "pn", writes=("src/narrow.py",), tshirt="S")
+    _commit(repo)
+    pages = _run(repo)["pages"]
+    assert [pg["page"] for pg in pages] == ["docs/wiki/narrow.md"]
+    assert [pl["path"] for pl in pages[0]["plans"]] == ["docs/plans/2026-11/pn.md"]
+
+
+def test_path_cited_by_exactly_the_threshold_still_matches(repo):
+    for i in range(wuc.HUB_CITING_PAGES):
+        _wiki(repo, f"pg{i}", "src/a.py")
+    _plan(repo, "p1")
+    _commit(repo)
+    assert len(_run(repo)["pages"]) == wuc.HUB_CITING_PAGES
+
+
 def test_plan_completed_by_a_later_commit_is_attributed_to_that_commit(repo):
     _wiki(repo, "alpha", "src/a.py")
     _plan(repo, "p1", status="executing")
     _commit(repo)
-    _plan(repo, "p1", status="complete")
+    _plan(repo, "p1", status="implemented")
     done = _commit(repo)
     out = _run(repo)
     assert out["pages"][0]["plans"][0]["commit_sha"] == done

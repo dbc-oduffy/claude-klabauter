@@ -2493,8 +2493,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "d6853c7baa33e7493a729b8acb6c7bfb4f0d7600",
-    "coordinator_core/_engine_stamp": "a133b611c3f5db46d0354a46e2d579c7e2fae789",
+    "coordinator_core/_engine_published_at": "78422139ddc0c25dda58465a71922c18d5d5b024",
+    "coordinator_core/_engine_stamp": "05f65faf1fdd33202b4190db4ce0a98a19ce546a",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -5797,11 +5797,11 @@
     "coordinator_core/ops/ceremony/tests/test_sole_publisher_suppression.py": "7969d9cf3ec919cc9392f1a0a49558cc258704ee",
     "coordinator_core/ops/ceremony/tests/test_tail_ops.py": "550d1664ca9dac99de7d6ab24d9361f7db620856",
     "coordinator_core/ops/ceremony/tests/test_update_docs_worklist.py": "de7b4e64f8f1561609a1e8cd8e12b3be346daff4",
-    "coordinator_core/ops/ceremony/tests/test_wiki_update_candidates.py": "507ee82b19a45dae897330681b954b48bffe9488",
+    "coordinator_core/ops/ceremony/tests/test_wiki_update_candidates.py": "5f97d9d5781392fa5c445328bf2c17e33076a494",
     "coordinator_core/ops/ceremony/tests/test_wire_id_separator_ceremony.py": "09fb7c7574a8b5575948431a6cc98713b722267d",
     "coordinator_core/ops/ceremony/tests/test_wsc_disposition.py": "084adeb37a03d0528d790985dd4669f1d4df284e",
     "coordinator_core/ops/ceremony/update_docs_worklist.py": "c3f48d858d1868f31b3699be6f90bb19bd18c87b",
-    "coordinator_core/ops/ceremony/wiki_update_candidates.py": "80ee1a7eb9c1a3cda115a6ecaf88669a3f2665d4",
+    "coordinator_core/ops/ceremony/wiki_update_candidates.py": "3a4deac2ba7d57d266ed9eb95a93a2b5bec683db",
     "coordinator_core/ops/ceremony/wsc_disposition.py": "e42f4ba510f90aaaf09763346a6f8bcc8ff54b2e",
     "coordinator_core/ops/changelog_ops.py": "3aedb23372811c47f03e43f6772d08c0d5d67f31",
     "coordinator_core/ops/check_arch_audit_staleness.py": "3010d1b7bed5bfd5b67b57b83792075928d27b25",
@@ -12377,5 +12377,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "548c8d9553a0f9037fa36901e22cc86823c91b17"
+  "source_head": "a9d001fcb5037c42574e49789cd56c5e26aefd75"
 }

@@ -36,6 +36,13 @@ PREVIEW_CHARS = 10000
 PAGES_CAP = 10
 PLANS_CAP = 20
 DEFAULT_WINDOW_DAYS = 7
+# Plan `status` values meaning the plan's work is on the branch; each must be a member of
+# plan.schema.json's status enum (pinned by test).
+COMPLETED_STATUSES = frozenset({"landed", "implemented", "closed_partial", "closed"})
+# A touched path cited by more wiki pages than this is a hub (doctrine, hooks.json, shared
+# skills): it matches nearly every plan and would spend the caps on noise. Narrow citations on
+# the real corpus sit at 1-3 pages; hubs sit at 20+, so 3 separates the two.
+HUB_CITING_PAGES = 3
 
 PLAN_DIR = "docs/plans"
 WIKI_PATHSPECS = ("coordinator/docs/wiki/*.md", "docs/wiki/*.md")
@@ -215,7 +222,7 @@ def wiki_update_candidates(root: Path, since: Optional[str] = None) -> Dict[str,
     for (plan, sha), text in zip(commits, _read_blobs(root, commits)):
         fm = _frontmatter(text)
         m = _FM_STATUS_RE.search(fm)
-        if not m or _unquote(m.group(1)) != "complete":
+        if not m or _unquote(m.group(1)) not in COMPLETED_STATUSES:
             continue
         writes = _spine_writes(text)
         if writes:
@@ -225,6 +232,15 @@ def wiki_update_candidates(root: Path, since: Optional[str] = None) -> Dict[str,
             })
 
     cited = _citing_pages(root, sorted({p for pl in plans for p in pl["writes"]}))
+    fan_in: Dict[str, int] = {}
+    for hit in cited.values():
+        for p in hit:
+            fan_in[p] = fan_in.get(p, 0) + 1
+    cited = {
+        page: kept_paths
+        for page, hit in cited.items()
+        if (kept_paths := [p for p in hit if fan_in[p] <= HUB_CITING_PAGES])
+    }
     pages: List[Dict[str, Any]] = []
     for page, paths in cited.items():
         mine = sorted(
