@@ -4973,6 +4973,24 @@ def _held_halt_record_js() -> str:
     )
 
 
+def _family_status_js() -> str:
+    """JS helpers mapping a family-stage-result onto a contract status line for the row loop.
+    `_famFailed` reads `stage_family.FALLBACK_VERDICTS`, the same set `ask_compose._family_run_js` tests."""
+    from coordinator_core.ops.dispatch_emit import stage_family as _sf
+
+    failed = " || ".join(f"f.verdict === {_js_string_literal(v)}" for v in _sf.FALLBACK_VERDICTS)
+    return (
+        f"  function _famFailed(f) {{ return {failed}; }}\n"
+        "  function _isFamilyResult(x) {\n"
+        "    return !!x && typeof x === 'object' && typeof x.verdict === 'string' && typeof x.family === 'string';\n"
+        "  }\n"
+        "  function _familyStatusLine(id, f) {\n"
+        "    return (_famFailed(f) ? 'BLOCKED: ' : 'DONE: ') + id + ' via ' + f.family + ' ' + f.verdict"
+        " + (f.blocked_reason ? ' (' + f.blocked_reason + ')' : '') + ' ' + JSON.stringify(f);\n"
+        "  }\n"
+    )
+
+
 def _run_row_helper_js(
     agent_type_host: Optional[str] = None,
     default_plan: Optional[str] = None,
@@ -5126,7 +5144,8 @@ def _run_row_helper_js(
         "    }\n"
         "    return null;\n"
         "  }\n"
-        "  function _owedReleases(owed, id) {\n"
+        + _family_status_js()
+        + "  function _owedReleases(owed, id) {\n"
         "    const m = /^gate-blocker: needs-dependent: *([^ \\\\\"]+)/.exec(owed);\n"
         "    return !m || m[1].replace(/[.,;]$/, '') === id;\n"
         "  }\n"
@@ -5278,6 +5297,10 @@ def _run_row_helper_js(
         "      _rowFailReason = 'executor ' + (_rowError ? 'error' : 'returned no result') + ' on row ' + id + "
         "(_rowError ? ': ' + _rowError.replace(/\\s+/g, ' ').slice(0, 400) : '');\n"
         "      result = 'BLOCKED: ' + _rowFailReason;\n"
+        "      _text = JSON.stringify(result);\n"
+        "    }\n"
+        "    if (_isFamilyResult(result)) {\n"
+        "      result = _familyStatusLine(id, result);\n"
         "      _text = JSON.stringify(result);\n"
         "    }\n"
         "    let incomplete = false;\n"

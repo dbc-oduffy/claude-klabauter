@@ -33,6 +33,25 @@ def test_no_closes_citing_premise_even_when_not_opted_in():
         assert out.cite == {"chunk": "C1", "verdict": "no", "ref": "docs/x.md"}
 
 
+def test_widened_halts_for_em_and_never_closes():
+    verdicts = {"C1": {"verdict": "widened", "ref": "docs/x.md", "added_scope": "third leg"}}
+    for opted in (True, False):
+        out = pg.evaluate_premise_gate(DEP, _rows(), verdicts, opted)
+        assert out.action == "halt_em"
+        assert out.cite == {"chunk": "C1", "verdict": "widened", "ref": "docs/x.md", "added_scope": "third leg"}
+
+
+def test_widened_yields_to_no_and_to_an_open_premise():
+    two = {"depends_on": [
+        {"chunk": "C1", "gate_kind": "epistemic-premise"}, {"chunk": "C3", "gate_kind": "epistemic-premise"},
+    ]}
+    rows = {**_rows(), "C3": {"id": "C3", "disposition": "coded"}}
+    wide = {"verdict": "widened", "ref": "r", "added_scope": "s"}
+    assert pg.evaluate_premise_gate(two, rows, {"C1": wide, "C3": {"verdict": "no", "ref": "r"}}, True).action == "close_wont_do"
+    rows["C3"]["disposition"] = "open"
+    assert pg.evaluate_premise_gate(two, rows, {"C1": wide}, True).action == "wait"
+
+
 def test_absent_dispatches_when_opted_in():
     """Run 6467a3: C0 coded without recording its verdict, and every dependent closed wont_do."""
     out = pg.evaluate_premise_gate(DEP, _rows(), {}, True)
@@ -89,4 +108,5 @@ def test_opt_in_by_created_date(tmp_path):
 
 def test_brief_line_names_verb():
     assert "premise-record" in pg.PREMISE_RECORD_BRIEF_LINE
+    assert "widened" in pg.PREMISE_RECORD_BRIEF_LINE
     assert "\n" not in pg.PREMISE_RECORD_BRIEF_LINE

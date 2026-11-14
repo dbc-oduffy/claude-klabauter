@@ -63,7 +63,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -207,6 +207,27 @@ class RowSchemaGate:
     closure_fields: frozenset
     status_field: str = ""
     closed_values: frozenset = frozenset()
+    # Row filename -> repo-relative archived copy. An open row whose name is already archived is a
+    # resurrected duplicate (a residue commit re-adding it): close refuses on the existing
+    # destination, so admitting it buys a full triage/verify spend that can never land.
+    archived: Mapping[str, str] = field(default_factory=dict)
+
+
+def _archived_rows(repo_root: Path, archive_path: str) -> dict:
+    """`{filename: repo-relative path}` over `<archive_path>/<YYYY-MM>/`; one scandir per month."""
+    root = repo_root / archive_path.rstrip("/")
+    out: dict = {}
+    try:
+        months = [m for m in os.scandir(root) if m.is_dir()]
+    except OSError:
+        return out
+    for month in months:
+        try:
+            for entry in os.scandir(month.path):
+                out.setdefault(entry.name, f"{archive_path.rstrip('/')}/{month.name}/{entry.name}")
+        except OSError:
+            continue
+    return out
 
 
 def load_row_schema_gate(profile_obj: Any, repo_root: Path) -> Optional[RowSchemaGate]:
@@ -223,6 +244,7 @@ def load_row_schema_gate(profile_obj: Any, repo_root: Path) -> Optional[RowSchem
         closure_fields=frozenset({closure.status_field, *closure.stamp_fields}),
         status_field=closure.status_field,
         closed_values=frozenset(str(v) for v in closure.closed_values.values()),
+        archived=_archived_rows(Path(repo_root), getattr(profile_obj, "archive_path", "") or ""),
     )
 
 
@@ -942,8 +964,15 @@ def select_rows(
                 continue
         if row_schema_gate is not None:
             # The raw row: sentinel normalisation must not make a present field look missing.
-            malformed = _closed_status_decline_reason(raw_row, row_schema_gate) or _row_schema_decline_reason(
-                raw_row, row_schema_gate, owning_repo_default(resolved_root, rel_path)
+            archived_copy = row_schema_gate.archived.get(row_path.name)
+            malformed = (
+                _closed_status_decline_reason(raw_row, row_schema_gate)
+                or (
+                    f"admission: row is already archived at {archived_copy}; the open copy is a resurrected duplicate"
+                    if archived_copy is not None
+                    else None
+                )
+                or _row_schema_decline_reason(raw_row, row_schema_gate, owning_repo_default(resolved_root, rel_path))
             )
             if malformed is not None:
                 declined.append(DeclinedEntry(row_id=row_id, path=rel_path, reason=malformed))

@@ -126,6 +126,44 @@ def _cold_verdict(event: HostEvent, engine_event: Mapping[str, Any]) -> Optional
     return None if shell or not verdict.get("additionalContext") else verdict
 
 
+def _nag_text(host: str, event: HostEvent, engine_event: Mapping[str, Any]) -> str:
+    """The DIY nag for this fire, or "". Only a PreToolUse fire from the EM (no `agent_id`) with a cwd gets one.
+
+    The served host stands in as the caller family when the env names none; the nag's own role check
+    still silences a worker or reviewer. Any failure is a miss.
+    """
+    try:
+        if event.event != "PreToolUse" or engine_event.get("agent_id") or not event.cwd or not event.session_id:
+            return ""
+        env = dict(os.environ)
+        if not (env.get("COORDINATOR_AGENT_PROVIDER") or env.get("COORDINATOR_AGENT_VENDOR")):
+            env["COORDINATOR_AGENT_PROVIDER"] = host
+        from coordinator_core.session import op_dispatch_nag
+
+        return op_dispatch_nag.advisory_for_dispatch(event.cwd, event.session_id, env) or ""
+    except Exception:  # noqa: BLE001 -- advisory only
+        return ""
+
+
+def _with_nag(host: str, event: HostEvent, engine_event: Mapping[str, Any], verdict: Dict[str, Any]) -> Dict[str, Any]:
+    """`verdict` with the DIY nag merged into its `additionalContext`; a deny comes back untouched."""
+    if verdict.get("permissionDecision") == "deny" or verdict.get("decision") == "deny":
+        return verdict
+    nested = verdict.get("hookSpecificOutput")
+    if isinstance(nested, Mapping) and nested.get("permissionDecision") == "deny":
+        return verdict
+    nag = _nag_text(host, event, engine_event)
+    if not nag:
+        return verdict
+    merged = dict(verdict)
+    if isinstance(nested, Mapping) and nested.get("additionalContext"):
+        merged["hookSpecificOutput"] = {**nested, "additionalContext": "%s\n%s" % (nested["additionalContext"], nag)}
+        return merged
+    existing = verdict.get("additionalContext")
+    merged["additionalContext"] = "%s\n%s" % (existing, nag) if isinstance(existing, str) and existing else nag
+    return merged
+
+
 def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
     """The host-shaped answer for one payload. May raise; `run` owns the fail-open."""
     if host not in HOSTS:
@@ -147,7 +185,7 @@ def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
             os.environ[_SESSION_ENV] = previous
     verdict = _verdict(response)
     if verdict is not None:
-        return adapter.render(event, verdict)
+        return adapter.render(event, _with_nag(host, event, engine_event, verdict))
     from coordinator_core.host_hooks import backstop
 
     denied = backstop.match(event)
@@ -155,12 +193,13 @@ def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
         return adapter.render(event, denied)
     cold = _cold_verdict(event, engine_event)
     if cold:
-        return adapter.render(event, cold)
+        return adapter.render(event, _with_nag(host, event, engine_event, cold))
     if timed_out:
         _degrade("KIND_HOOK_TIMEOUT", "host_hooks.shim %s: engine dial exceeded %.0fms" % (host, DIAL_BUDGET_SECS * 1000))
     else:
         _degrade("KIND_COLD_RUN", "host_hooks.shim %s: no engine verdict" % host)
-    return neutral_fallback(host)
+    nag = _nag_text(host, event, engine_event)
+    return adapter.render(event, {"additionalContext": nag}) if nag else neutral_fallback(host)
 
 
 def run(host: str, stdin_text: str) -> Dict[str, Any]:

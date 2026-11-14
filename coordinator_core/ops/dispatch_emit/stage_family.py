@@ -36,6 +36,21 @@ def runner_agent(family: Optional[str]) -> Optional[str]:
     return None if resolve(family) == "claude" else RUNNER_AGENT
 
 
+RUN_ID_TOKEN = "<run-id>"
+FRESH_INVOKE_LINE = (
+    "fresh: invoke the vendor CLI in this run; a receipt this run's invocation did not "
+    "produce is reported BLOCKED, never reused"
+)
+
+
+def family_scratch_dir(row_id: str, run_id: Optional[str] = None) -> str:
+    """Return the run-scoped output dir for a family row: `scratch/family-stage/<run>/<row>`.
+
+    `run_id` None yields `RUN_ID_TOKEN`, which the ask composer replaces once the run id exists.
+    """
+    return f"scratch/family-stage/{run_id or RUN_ID_TOKEN}/{row_id}"
+
+
 def runner_brief(
     family: str,
     stage: str,
@@ -64,6 +79,7 @@ def runner_brief(
         f"stage: {stage}",
         f"prompt: {prompt_path}",
         f"scratch: {scratch}",
+        FRESH_INVOKE_LINE,
     ]
     if stage == "write":
         lines.append("writes:")

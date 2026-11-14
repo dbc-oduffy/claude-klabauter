@@ -37,6 +37,7 @@ from coordinator_core.win_portability import no_console_creationflags
 VERDICT_FILE = "overlay-verdict.json"
 
 MIRROR_DIRNAME = "clean-mirror"
+MIRROR_SLOTS = 4
 SETUP_TIMEOUT_S = 60
 TEST_TIMEOUT_S = 120
 IMPORTER_CAP = 25
@@ -184,14 +185,15 @@ def _write_sparse(dest: Path) -> None:
         pass
 
 
-def mirror_root(root: Path) -> Path:
-    """The persistent mirror's holder for `root`: `<coordinator_temp_root>/clean-mirror/<8-hex of the resolved
-    repo path>`, outside the repo. The worktree is `<holder>/<repo dir name>` (tests derive the repo identity
-    from that basename); `state.json` beside it records the commit or tree the worktree reflects. The name
-    matches no `temp_layout` managed-dir shape, so the dead-owner reap never touches it."""
+def mirror_root(root: Path, slot: int = 0) -> Path:
+    """The persistent mirror's holder for `root` and pool `slot`: `<coordinator_temp_root>/clean-mirror/<8-hex
+    of the resolved repo path>` (slot 0) or `<that>-<slot>`, outside the repo. The worktree is `<holder>/<repo
+    dir name>` (tests derive the repo identity from that basename); `state.json` beside it records the commit
+    or tree the worktree reflects. The name matches no `temp_layout` managed-dir shape, so the dead-owner reap
+    never touches it."""
     resolved = root.resolve()
     key = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
-    return temp_layout.coordinator_temp_root(resolved) / MIRROR_DIRNAME / key
+    return temp_layout.coordinator_temp_root(resolved) / MIRROR_DIRNAME / (key if slot == 0 else f"{key}-{slot}")
 
 
 def _state_read(mroot: Path) -> Optional[str]:
@@ -221,27 +223,41 @@ def _drop(mroot: Path) -> None:
 
 @contextmanager
 def _mirror_lock(root: Path, label: str = "clean-overlay") -> Iterator[Path]:
-    """Hold the repo's mirror lock for the scope and yield the mirror holder. Every reader of the mirror holds
-    it from advance through its last read. A lock not won within `TEST_TIMEOUT_S` is an `ExportError`."""
+    """Hold one free slot's lock of the repo's mirror pool for the scope and yield that slot's mirror holder.
+    Slots are tried in order, each without waiting, so a landing takes a free warm slot and never queues behind
+    another's run; every reader of a mirror holds its slot from advance through its last read. A pool with
+    every slot held is an `ExportError` at once."""
     try:
-        mroot = mirror_root(root)
+        holders = [mirror_root(root, slot) for slot in range(MIRROR_SLOTS)]
     except ValueError as exc:
         raise ExportError(f"clean mirror has no home for this repo: {exc}") from exc
-    entered = False
-    try:
-        with held_lock(mroot, timeout=TEST_TIMEOUT_S, holder_label=label):
-            entered = True
-            yield mroot
-    except LockTimeout as exc:
-        if entered:
-            raise
-        raise ExportError(f"clean mirror busy: its lock was not free within {TEST_TIMEOUT_S}s: {exc}") from exc
+    last: Optional[LockTimeout] = None
+    for mroot in holders:
+        entered = False
+        try:
+            with held_lock(mroot, timeout=0, holder_label=label):
+                entered = True
+                yield mroot
+            return
+        except LockTimeout as exc:
+            if entered:
+                raise
+            last = exc
+    raise ExportError(f"clean mirror busy: all {MIRROR_SLOTS} mirror slots are held: {last}") from last
 
 
 def reset_mirror(root: Path) -> None:
-    """Delete the repo's mirror under its lock, so the next verify is a cold build (the measurement harness)."""
-    with _mirror_lock(root, "clean-overlay-reset") as mroot:
-        _drop(mroot)
+    """Delete every slot of the repo's mirror pool, each under its own lock, so the next verify is a cold build
+    (the measurement harness). A slot held past `TEST_TIMEOUT_S` is an `ExportError`."""
+    for slot in range(MIRROR_SLOTS):
+        mroot = mirror_root(root, slot)
+        if not mroot.exists():
+            continue
+        try:
+            with held_lock(mroot, timeout=TEST_TIMEOUT_S, holder_label="clean-overlay-reset"):
+                _drop(mroot)
+        except LockTimeout as exc:
+            raise ExportError(f"clean mirror busy: slot {slot} was not free within {TEST_TIMEOUT_S}s: {exc}") from exc
 
 
 def _commit_sha(root: Path, rev: str) -> str:
@@ -761,6 +777,12 @@ def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
 REVERIFY_WAIT_S = SETUP_TIMEOUT_S + TEST_TIMEOUT_S
 _REVERIFY_POLL_S = 1.0
 
+#: Step name and cap of the wait on the detached re-verify; past either the op budget or the cap
+#: `reverify_on_mismatch` raises `land_deadline.LandDeadlineExceeded(REVERIFY_STEP, step=True)` and
+#: the landing parks. The child still writes its verdict, which the re-sent landing reads.
+REVERIFY_STEP = "clean_overlay_verify.reverify_on_mismatch"
+REVERIFY_STEP_SECS = 8.0
+
 
 def reverify_on_mismatch(
     root: Path, run_id: str, measured: dict, stale: OverlayVerdict, *,
@@ -770,23 +792,31 @@ def reverify_on_mismatch(
     module's CLI is launched detached (the overlay's git and pytest children never run inside the engine
     op) and its verdict file is polled for at most `wait_s`. Returns the fresh verdict when it is green or
     red; any other `stale`, no recorded seeds, no candidate, a failed launch, a timeout or an inconclusive
-    re-verify returns `stale` unchanged (the child still writes its verdict for the refire)."""
+    re-verify returns `stale` unchanged (the child still writes its verdict for the refire). The wait
+    runs under the `REVERIFY_STEP` step, so a poll that outlives the step cap or the land budget
+    raises `land_deadline.LandDeadlineExceeded` rather than returning."""
     if stale.verdict != "mismatch" or not stale.seeds or overlay_candidate(measured) is None:
         return stale
     if spawn is None:
         from coordinator_core.ops.ceremony.detached_spawn import spawn_detached as spawn
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
     engine = Path(__file__).resolve().parents[3]
     argv = ["--run-id", run_id, "--repo-root", str(root)]
-    if not spawn(str(engine), str(Path(__file__).resolve()), argv):
-        return stale
-    deadline = clock() + wait_s
-    while True:
-        sleep(_REVERIFY_POLL_S)
-        fresh = check_verdict(root, run_id, measured)
-        if fresh.verdict not in ("mismatch", "missing"):
-            return fresh if fresh.verdict in ("green", "red", "pre_existing") else stale
-        if clock() >= deadline:
+    with land_deadline.step(REVERIFY_STEP, min(wait_s, REVERIFY_STEP_SECS)):
+        if not spawn(str(engine), str(Path(__file__).resolve()), argv):
             return stale
+        deadline = clock() + wait_s
+        while True:
+            left = land_deadline.step_remaining()
+            sleep(_REVERIFY_POLL_S if left is None else min(_REVERIFY_POLL_S, left))
+            land_deadline.step_check()
+            fresh = check_verdict(root, run_id, measured)
+            if fresh.verdict not in ("mismatch", "missing"):
+                return fresh if fresh.verdict in ("green", "red", "pre_existing") else stale
+            land_deadline.step_check()
+            if clock() >= deadline:
+                return stale
 
 
 def remedy_call(run_id: Optional[str], root: Optional[Path] = None) -> str:

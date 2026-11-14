@@ -730,6 +730,30 @@ def test_admission_declines_a_closed_status_row_with_the_status_in_the_reason(tm
     assert declined.row_id == "done" and declined.reason == "admission: row status applied is closed"
 
 
+def test_admission_declines_an_open_row_whose_name_is_already_archived(tmp_path):
+    from types import SimpleNamespace
+
+    from coordinator_core.ops.dispatch_emit.queue_select import load_row_schema_gate
+
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    good = dict(created="2026-09-21", title="t", body="b", scope="project", from_repo="x")
+    _write_row(queue_dir / "fresh.yaml", status="open", **good)
+    _write_row(queue_dir / "revived.yaml", status="open", **good)
+    month = tmp_path / "archive" / "lessons" / "2026-11"
+    month.mkdir(parents=True)
+    _write_row(month / "revived.yaml", status="discarded", **good)
+    profile = SimpleNamespace(
+        schema="lesson-entry.schema.json", archive_path="archive/lessons/",
+        closure=SimpleNamespace(status_field="status", stamp_fields=("closed_at", "closed_by"), closed_values={}),
+    )
+    gate = load_row_schema_gate(profile, tmp_path)
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path, row_schema_gate=gate)
+    assert [e.row_id for e in manifest.entries] == ["fresh"]
+    (declined,) = manifest.declined
+    assert declined.row_id == "revived" and "archive/lessons/2026-11/revived.yaml" in declined.reason
+
+
 def test_admission_keeps_absent_or_unrecognised_status_rows(tmp_path):
     queue_dir = tmp_path / "state" / "lessons"
     queue_dir.mkdir(parents=True)

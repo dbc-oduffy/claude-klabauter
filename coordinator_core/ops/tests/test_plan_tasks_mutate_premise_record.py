@@ -77,6 +77,16 @@ def test_yes_and_replace(tmp_path):
     assert (got["verdict"], got["ref"]) == ("yes", "abc123")
 
 
+def test_widened_records_added_scope_and_requires_it(tmp_path):
+    repo, plan = _plan(tmp_path)
+    refused = _call(repo, plan, verdict="widened")
+    assert refused["exit_code"] == 1 and "added_scope" in refused["error"]
+    assert not evidence_sidecar_path(plan).exists()
+    assert _call(repo, plan, verdict="Widened", added_scope=" third leg ")["exit_code"] == 0
+    got = read_premise_verdicts(plan)["C1"]
+    assert (got["verdict"], got["added_scope"]) == ("widened", "third leg")
+
+
 @pytest.mark.parametrize("bad", ["maybe", "", None, True])
 def test_bad_verdict_refused_without_write(tmp_path, bad):
     repo, plan = _plan(tmp_path)

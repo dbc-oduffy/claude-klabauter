@@ -44,12 +44,22 @@ def params_digest(params: Mapping) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def write(record_dir: Path, digest: str, handle: Mapping, spine_sha: Optional[str] = None) -> None:
+def write(
+    record_dir: Path,
+    digest: str,
+    handle: Mapping,
+    spine_sha: Optional[str] = None,
+    family_report: Optional[Mapping] = None,
+) -> None:
     """Atomically write the receipt (ASCII JSON, trailing newline). Call it after manifest.json landed.
-    `spine_sha` fingerprints the plan spine the manifest was staged from."""
+    `spine_sha` fingerprints the plan spine the manifest was staged from; `family_report`'s
+    `family_routes` / `warnings`, when non-empty, record the family each row was routed to."""
     body = {"digest": digest, "manifest_handle": dict(handle)}
     if spine_sha is not None:
         body["spine_sha"] = spine_sha
+    for key in ("family_routes", "warnings"):
+        if (family_report or {}).get(key):
+            body[key] = family_report[key]
     text = json.dumps(body, sort_keys=True, ensure_ascii=True) + "\n"
     atomic_write_bytes(Path(record_dir) / RECEIPT_NAME, text.encode("ascii"), preserve_mode=False)
 
@@ -93,6 +103,12 @@ def landed(record_dir: Path, digest: str, spine_sha: Optional[str] = None) -> Op
         return None
     handle = data["manifest_handle"]
     return dict(handle) if _manifest_matches(record_dir, handle) else None
+
+
+def recorded_family_report(record_dir: Path) -> dict:
+    """The `family_routes` / `warnings` the receipt recorded, so an already-staged reply repeats them."""
+    data = _read_receipt(record_dir) or {}
+    return {k: data[k] for k in ("family_routes", "warnings") if data.get(k)}
 
 
 def _read_claim(record_dir: Path) -> Optional[dict]:

@@ -645,3 +645,56 @@ def test_agy_launcher_interpreter_is_the_one_the_os_resolves(monkeypatch, os_nam
     monkeypatch.setattr(gen.os, "name", os_name)
     cmd = gen._agy_hook_command(f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a", tmp_path)
     assert cmd.startswith(exe + " ")
+
+
+_LOADER = "import runpy, sys; sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')"
+_JSON_PAYLOAD = '{"a": true, "b": false, "c": null}'
+
+
+def _run_generated(command, payload):
+    """Run one generated hook command the way agy does (no shell), interpreter swapped for this one."""
+    exe = gen._agy_python()
+    assert command.startswith(exe + " ")
+    if gen.os.name == "nt":
+        return subprocess.run(gen._win_cmdline([sys.executable]) + command[len(exe):], input=payload,
+                              capture_output=True, text=True, timeout=60)
+    import shlex
+    return subprocess.run([sys.executable, *shlex.split(command)[1:]], input=payload,
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_args_form_hook_entries_run_their_script_not_the_stdin_payload(plugin, tmp_path):
+    (plugin / "hooks" / "scripts" / "pre.py").write_text(
+        "import json, sys\nd = json.load(sys.stdin)\nprint('RAN', sys.argv[1:], d['a'], d['b'], d['c'])\n",
+        encoding="utf-8")
+    entry = {"type": "command", "command": "python3",
+             "args": ["-c", _LOADER, "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/pre.py", "boot arg"]}
+    groups = [{"matcher": "Bash", "hooks": [entry]}]
+    (plugin / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"PreToolUse": groups}}), encoding="utf-8")
+    out = tmp_path / "out"
+    gen.generate(plugin, out, "agy")
+    data = json.loads((out / "hooks.json").read_text(encoding="utf-8"))
+    handlers = [h for g in data["pre-tool-use"]["PreToolUse"] for h in g["hooks"]]
+    assert len(handlers) == 1 and all("args" not in h for h in handlers)
+    for h in handlers:
+        r = _run_generated(h["command"], _JSON_PAYLOAD)
+        assert "NameError" not in r.stderr and r.returncode == 0, r.stderr
+        assert "RAN ['boot arg'] True False None" in r.stdout
+
+
+def test_a_command_with_args_that_is_not_a_bare_interpreter_is_left_alone():
+    assert gen._fold_args("python3 -u", ["x.py"]) is None
+    assert gen._fold_args("python3", None) is None
+    assert gen._fold_args("python3", []) is None
+
+
+@pytest.mark.parametrize("argv", [["-c", 'print("a b")', "C:\\dir\\", 'q"x', ""]])
+def test_windows_cmdline_quoting_round_trips_through_the_runtime_parser(argv):
+    cmd = gen._win_cmdline(["python", *argv])
+    if gen.os.name != "nt":
+        pytest.skip("CommandLineToArgvW is Windows-only")
+    import ctypes
+    n = ctypes.c_int()
+    ctypes.windll.shell32.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    ptr = ctypes.windll.shell32.CommandLineToArgvW(cmd, ctypes.byref(n))
+    assert [ptr[i] for i in range(n.value)] == ["python", *argv]

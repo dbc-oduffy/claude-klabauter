@@ -558,6 +558,19 @@ def test_reverify_gives_up_at_the_wait_bound_and_returns_the_stale_verdict(tmp_p
     assert out is stale and now[0] >= 3.0
 
 
+def test_reverify_poll_past_its_step_cap_parks_the_landing_instead_of_returning(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    measured = {"sha": "a" * 40, "base_sha": "b" * 40, "blobs": {"x": "1" * 40}}
+    stale = cov.OverlayVerdict("mismatch", "keyed to a different landing set blobs", ("t/x.py",))
+    monkeypatch.setattr(cov, "REVERIFY_STEP_SECS", 0.05)
+
+    with pytest.raises(land_deadline.LandDeadlineExceeded) as raised:
+        cov.reverify_on_mismatch(tmp_path, "run1", measured, stale, spawn=lambda *a: True, wait_s=100.0)
+
+    assert raised.value.step is True and raised.value.leg == cov.REVERIFY_STEP
+
+
 def test_no_foreign_dirt_needs_no_verdict_and_runs_no_overlay(halted, monkeypatch):  # noqa: F811
     _no_spawn(monkeypatch)
     _track_fixture(halted)
@@ -893,16 +906,92 @@ def test_an_interrupted_advance_leaves_the_mirror_marked_and_the_next_verify_reb
 
 def test_a_busy_mirror_fails_the_verify_naming_the_lock_and_never_runs_unlocked(tmp_path, monkeypatch):
     root, head = _repo(tmp_path)
-    monkeypatch.setattr(cov, "TEST_TIMEOUT_S", 1)
+    monkeypatch.setattr(cov, "MIRROR_SLOTS", 1)
     ran = []
     real = cov._run
     monkeypatch.setattr(cov, "_run", lambda *a, **k: ran.append(a) or real(*a, **k))
 
     with cov._mirror_lock(root, "peer"):
+        started = time.monotonic()
         out = cov.verify(root, "run1", head, [READER])
 
-    assert out.verdict == "inconclusive" and "busy" in out.detail and "1s" in out.detail, out
+    assert out.verdict == "inconclusive" and "busy" in out.detail and "slot" in out.detail, out
+    assert time.monotonic() - started < 5
     assert not ran
+
+
+def test_two_concurrent_verifies_of_one_repo_each_take_a_slot_and_neither_halts_busy(tmp_path, monkeypatch):
+    import threading
+
+    root, head = _repo(tmp_path)
+    first_in_pytest, release_first = threading.Event(), threading.Event()
+    real = cov._run
+    cwds: dict = {}
+
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" in argv:
+            cwds[threading.current_thread().name] = Path(cwd)
+            if threading.current_thread().name == "first":
+                first_in_pytest.set()
+                assert release_first.wait(60)
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    results: dict = {}
+    first = threading.Thread(
+        target=lambda: results.__setitem__("first", cov.verify(root, "run-a", head, [READER])), name="first",
+    )
+    first.start()
+    try:
+        assert first_in_pytest.wait(60)
+        started = time.monotonic()
+        results["second"] = cov.verify(root, "run-b", head, [READER])
+        second_s = time.monotonic() - started
+    finally:
+        release_first.set()
+        first.join(120)
+
+    assert results["first"].verdict == "green", results["first"]
+    assert results["second"].verdict == "green", results["second"]
+    assert "busy" not in results["second"].detail
+    assert cwds["first"] != cwds["MainThread"] and second_s < cov.TEST_TIMEOUT_S
+
+
+def test_slot_zero_is_the_original_mirror_path_and_other_slots_are_siblings(tmp_path):
+    root, _head = _repo(tmp_path)
+
+    assert cov.mirror_root(root) == cov.mirror_root(root, 0)
+    others = {cov.mirror_root(root, n) for n in range(1, cov.MIRROR_SLOTS)}
+    assert len(others) == cov.MIRROR_SLOTS - 1 and cov.mirror_root(root) not in others
+    assert all(p.parent == cov.mirror_root(root).parent for p in others)
+
+
+def test_taking_a_slot_never_waits_on_a_held_one_and_a_full_pool_is_a_typed_busy_error(tmp_path, monkeypatch):
+    root, _head = _repo(tmp_path)
+
+    with cov._mirror_lock(root, "peer-0") as slot_zero:
+        started = time.monotonic()
+        with cov._mirror_lock(root, "peer-1") as slot_one:
+            assert slot_one != slot_zero
+            assert time.monotonic() - started < 5
+            monkeypatch.setattr(cov, "MIRROR_SLOTS", 2)
+            started = time.monotonic()
+            with pytest.raises(cov.ExportError, match="busy"):
+                with cov._mirror_lock(root, "peer-2"):
+                    pass
+            assert time.monotonic() - started < 5
+
+
+def test_reset_mirror_drops_every_slot(tmp_path):
+    root, head = _repo(tmp_path)
+    for n in range(2):
+        mroot = cov.mirror_root(root, n)
+        mroot.mkdir(parents=True)
+        (mroot / "state.json").write_text("{}", encoding="utf-8")
+
+    cov.reset_mirror(root)
+
+    assert not any(cov.mirror_root(root, n).exists() for n in range(cov.MIRROR_SLOTS))
 
 
 def test_verify_holds_the_mirror_lock_across_pytest_and_the_base_rerun(tmp_path, monkeypatch):
@@ -948,11 +1037,12 @@ def test_export_run_runs_the_command_in_the_mirror_under_its_lock_and_passes_its
 
     def spy(argv, cwd, timeout, **kw):
         if "pytest" in argv:
+            slots = cov.MIRROR_SLOTS
             with pytest.raises(cov.ExportError, match="busy"):
-                monkeypatch.setattr(cov, "TEST_TIMEOUT_S", 1)
+                monkeypatch.setattr(cov, "MIRROR_SLOTS", 1)
                 with cov._mirror_lock(root):
                     pass
-            monkeypatch.setattr(cov, "TEST_TIMEOUT_S", 120)
+            monkeypatch.setattr(cov, "MIRROR_SLOTS", slots)
             held.append(Path(cwd))
         return real(argv, cwd, timeout, **kw)
 

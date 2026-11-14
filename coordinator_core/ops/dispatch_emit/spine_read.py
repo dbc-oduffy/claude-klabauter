@@ -227,7 +227,9 @@ KNOWN_ROW_KEYS = frozenset({
 def _premise_close_for(raw: dict, rows_by_id: dict, verdicts: dict, opted_in: bool) -> Optional[dict]:
     """The ``{chunk, verdict, ref}`` citation when ``raw``'s epistemic-premise gate closes it, else None.
 
-    A legacy-absent outcome (plan not opted in, no verdict) dispatches and logs its reason."""
+    A ``widened`` premise (``halt_em``) also returns its citation (``verdict: "widened"``,
+    ``added_scope``): the row is held for the EM, never closed. A legacy-absent outcome (plan not
+    opted in, no verdict) dispatches and logs its reason."""
     from coordinator_core.ops.dispatch_emit.premise_gate import evaluate_premise_gate
 
     outcome = evaluate_premise_gate(raw, rows_by_id, verdicts, opted_in)
@@ -236,7 +238,7 @@ def _premise_close_for(raw: dict, rows_by_id: dict, verdicts: dict, opted_in: bo
             "read_spine: row %r dispatches: premise %r has no recorded verdict (%s)",
             raw.get("id"), outcome.cite.get("chunk"), outcome.cite.get("reason"),
         )
-    return outcome.cite if outcome.action == "close_wont_do" else None
+    return outcome.cite if outcome.action in ("close_wont_do", "halt_em") else None
 
 
 #: Plan-row key spellings read as another key: ``model`` is ``agent_model``.
@@ -933,11 +935,12 @@ def _row_family_dispatch(raw: dict, row_id: str, writes, plan_path) -> tuple:
             "the family names the runner, so keep one"
         )
     paths = [w for w in writes if isinstance(w, str)] if isinstance(writes, list) else []
+    # The scratch dir carries `RUN_ID_TOKEN`; `ask_stage.stage` substitutes it, nothing on this path does.
     brief = stage_family.runner_brief(
         family,
         "write" if paths else "other",
         Path(plan_path).as_posix(),
-        f"scratch/family-stage/{row_id}",
+        stage_family.family_scratch_dir(row_id),
         paths,
     )
     return stage_family.RUNNER_AGENT, brief + "\n"
@@ -1782,6 +1785,17 @@ def read_spine(
                 )
             elif em_discharged is not None:
                 _reason = ("em-discharged", "EM discharge recorded %s" % em_discharged)
+            elif premise_close is not None and premise_close.get("verdict") == "widened":
+                _reason = (
+                    "premise-widened",
+                    "premise %s confirmed this row but widened the scope (ref %s): %s. Not closed, not "
+                    "dispatched: the EM amends the plan to cover it, then re-records the premise `yes`"
+                    % (
+                        premise_close["chunk"],
+                        premise_close.get("ref") or "none",
+                        premise_close.get("added_scope") or "added scope unrecorded",
+                    ),
+                )
             elif premise_close is not None:
                 _reason = (
                     "premise-false",

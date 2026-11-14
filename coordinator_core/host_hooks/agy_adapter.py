@@ -27,8 +27,12 @@ _EDIT_TOOLS = {
     "multi_replace_file_content": "MultiEdit",
     "notebook_edit": "NotebookEdit",
 }
-#: Arg keys an agy edit tool may carry its target path under; the first non-empty one becomes `file_path`.
-_PATH_KEYS = ("TargetFile", "AbsolutePath", "FilePath", "file_path", "path")
+#: Lowercase arg keys an agy edit tool may carry its target path under (matched case-insensitively, so `Path`
+#: from 1.5.9 write_file/edit_file counts); the first non-empty one becomes `file_path`.
+_PATH_KEYS = ("targetfile", "absolutepath", "filepath", "file_path", "path")
+#: Payload keys naming the calling subagent (protojson `agentId`, or snake_case); the engine event carries it
+#: as `agent_id`, which the shim's cold chain and the guards read as "subagent". An EM payload carries neither.
+_AGENT_ID_KEYS = ("agentId", "agent_id")
 
 
 class AgyAdapter:
@@ -50,7 +54,8 @@ class AgyAdapter:
         elif name in _EDIT_TOOLS:
             tool_name = _EDIT_TOOLS[name]
             tool_input = dict(args)
-            tool_input["file_path"] = next((str(args[k]) for k in _PATH_KEYS if args.get(k)), "")
+            lowered = {str(k).lower(): v for k, v in args.items()}
+            tool_input["file_path"] = next((str(lowered[k]) for k in _PATH_KEYS if lowered.get(k)), "")
         else:
             tool_name = name
             tool_input = dict(args)
@@ -61,6 +66,7 @@ class AgyAdapter:
         cwd = str(workspaces[0]) if isinstance(workspaces, (list, tuple)) and workspaces else ""
         if not cwd and isinstance(payload.get("cwd"), str):
             cwd = payload["cwd"]
+        agent_id = next((payload[k] for k in _AGENT_ID_KEYS if isinstance(payload.get(k), str) and payload[k]), "")
         return HostEvent(
             host=HOST_AGY,
             event=str(resolved or ""),
@@ -68,6 +74,7 @@ class AgyAdapter:
             tool_name=tool_name,
             tool_input=tool_input,
             cwd=cwd,
+            metadata={"agent_id": agent_id} if agent_id else {},
         )
 
     def engine_event(self, host_event: HostEvent) -> Optional[Dict[str, Any]]:
@@ -75,6 +82,7 @@ class AgyAdapter:
         if host_event.event not in SERVED_EVENTS:
             return None
         return {
+            **dict(host_event.metadata),
             "hook_event_name": host_event.event,
             "session_id": host_event.session_id or None,
             "cwd": host_event.cwd or None,

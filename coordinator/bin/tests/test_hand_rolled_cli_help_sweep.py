@@ -131,6 +131,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
     "unimatrix-rekey.py",
     "unimatrix-relay.py",
     "bug-backlog-reap.py",
+    "gem-inbox-apply.py",
 )
 
 

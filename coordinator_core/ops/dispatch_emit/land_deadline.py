@@ -4,7 +4,9 @@ A landing is many small reads with no shared budget, so a storage stall let whic
 consume the whole op timeout. `scope()` binds one monotonic deadline for the op; each leg calls
 `check(leg)` before it starts, and a leg past the deadline ends the landing as a named halt
 (`refused="land-deadline"`, the leg in the reason). A read already blocked in the kernel cannot be
-interrupted (no threads, no signals); the deadline stops the NEXT leg from starting.
+interrupted (no threads, no signals); the deadline stops the NEXT leg from starting. A blocking step
+runs under `step(name, cap_secs)`, which hands its primitive a wall-clock timeout and ends the
+landing as a parked not-started reply naming the step.
 
 Invariants: `LandDeadlineExceeded` is a `BaseException`, so a `except Exception` fail-open in a leg
 cannot swallow it and read an unverified check as passed. `check` is called only on legs BEFORE the
@@ -108,13 +110,17 @@ def set_queue_wait(secs: float, window_secs: Optional[float] = None) -> None:
 
 
 class LandDeadlineExceeded(BaseException):
-    """The land_run deadline passed before leg `leg` started."""
+    """The land_run deadline passed before leg `leg` started; `step` is True when a blocking step
+    named `leg` ran out of its own deadline (see `step`)."""
 
-    def __init__(self, leg: str, legs: Optional[list] = None, bound_by: str = BOUND_BUDGET) -> None:
+    def __init__(
+        self, leg: str, legs: Optional[list] = None, bound_by: str = BOUND_BUDGET, step: bool = False
+    ) -> None:
         super().__init__(leg)
         self.leg = leg
         self.legs = legs or []
         self.bound_by = bound_by
+        self.step = step
 
 
 @contextmanager
@@ -228,6 +234,76 @@ def check(leg: str) -> None:
     if bound is not None:
         raise LandDeadlineExceeded(leg, _legs_elapsed(now), bound)
     _record(leg, now)
+
+
+#: `bound_by` of a step that ran out of its own cap before the op budget did.
+BOUND_STEP = "step"
+
+#: `(name, wall_deadline, bound_by)` of the innermost `step`; None outside one.
+_STEP: ContextVar[Optional[tuple]] = ContextVar("land_run_step", default=None)
+
+
+@contextmanager
+def step(name: str, cap_secs: Optional[float] = None) -> Iterator[Optional[float]]:
+    """A blocking step with its own wall-clock deadline: yields its seconds (the smaller of
+    `cap_secs` and what the op budget has left; None when neither bounds it) for the blocking
+    primitive to consume as its timeout, and records `name` in the leg ledger. The deadline is
+    monotonic wall time, so the reserved-leg CPU charging never governs it. A blocked primitive
+    cannot be interrupted: it polls `step_remaining` / `step_check` or takes the yielded seconds as
+    its own timeout, and a breach raises `LandDeadlineExceeded(name, step=True)`. Entered with no
+    time left it raises at once. Nested steps are bounded by the enclosing one."""
+    now = _now()
+    reserved = _is_reserved(name) or _reserved_leg_open()
+    limit = (_HARD if reserved else _DEADLINE).get()
+    by = _BOUND_BY.get() or (BOUND_BUDGET, BOUND_BUDGET)
+    bound = by[1] if reserved else by[0]
+    candidates = []
+    if limit is not None and limit != float("inf"):
+        candidates.append((limit, bound))
+    if cap_secs is not None:
+        candidates.append((now + max(0.0, cap_secs), BOUND_STEP))
+    outer = _STEP.get()
+    if outer is not None:
+        candidates.append((outer[1], outer[2]))
+    deadline, bound_by = min(candidates, default=(None, BOUND_STEP), key=lambda c: c[0])
+    if deadline is not None and deadline <= now:
+        raise LandDeadlineExceeded(name, _legs_elapsed(now), bound_by, step=True)
+    _record(name, now)
+    token = _STEP.set(None if deadline is None else (name, deadline, bound_by))
+    try:
+        yield None if deadline is None else deadline - now
+    finally:
+        _STEP.reset(token)
+
+
+def step_remaining() -> Optional[float]:
+    """Seconds left in the innermost `step` (never negative); None outside a step or when it is unbounded."""
+    held = _STEP.get()
+    return None if held is None else max(0.0, held[1] - _now())
+
+
+def step_check() -> None:
+    """Raise `LandDeadlineExceeded(step name, step=True)` once the innermost step's deadline has
+    passed; a no-op outside a step. Called between a blocking primitive's bounded waits."""
+    held = _STEP.get()
+    if held is not None:
+        now = _now()
+        if now >= held[1]:
+            raise LandDeadlineExceeded(held[0], _legs_elapsed(now), held[2], step=True)
+
+
+def parked_fields(exc: LandDeadlineExceeded) -> dict:
+    """The reply fields of a step breach before any ref moved: a determinate not-started answer
+    naming the step, never an indeterminate timeout. The run token stays live; a re-send proceeds."""
+    return {
+        "status": "not-started",
+        "parked": True,
+        "step": exc.leg,
+        "error": (
+            f"land-deadline: step {exc.leg} did not finish inside its deadline; parked, not started: "
+            "nothing committed, nothing verified past that step. Re-send the landing."
+        ),
+    }
 
 
 def _reserved_refusal(now: float) -> Optional[str]:

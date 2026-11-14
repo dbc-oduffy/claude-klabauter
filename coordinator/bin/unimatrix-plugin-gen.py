@@ -14,6 +14,7 @@ session, which nothing here covers.
 import json
 import os
 import re
+import shlex
 import shutil
 from pathlib import Path
 
@@ -416,6 +417,30 @@ def _agy_hook_command(command, out_dir):
     return f"{_agy_python()} {shim}{flags}{m['rest']}"
 
 
+def _fold_args(command, args):
+    """One command line for a single-token `command` with an `args` list, else None.
+
+    agy runs only `command`; a bare `python3` would read the stdin payload as its program.
+    """
+    if not (isinstance(args, list) and args and all(isinstance(a, str) for a in args)):
+        return None
+    if not command or re.search(r"\s", command):
+        return None
+    exe = _agy_python() if command in ("python", "python3") else command
+    return _win_cmdline([exe, *args]) if os.name == "nt" else shlex.join([exe, *args])
+
+
+def _win_cmdline(argv):
+    """argv joined by the MS C runtime quoting rules (the inverse of CommandLineToArgvW)."""
+    def quote(a):
+        if a and not re.search(r'[\s"]', a):
+            return a
+        a = re.sub(r'(\\*)"', lambda m: m[1] * 2 + '\\"', a)
+        a = re.sub(r"(\\+)$", lambda m: m[1] * 2, a)
+        return f'"{a}"'
+    return " ".join(quote(a) for a in argv)
+
+
 def _hooks(plan, plugin_root):
     src = plugin_root / "hooks" / "hooks.json"
     if not src.is_file():
@@ -434,6 +459,11 @@ def _hooks(plan, plugin_root):
             out = {k: clean(v) for k, v in o.items() if k not in drop}
             command = out.get("command")
             if isinstance(command, str):
+                folded = _fold_args(command, out.get("args"))
+                if folded:
+                    out["command"] = folded
+                    out.pop("args")
+                    return out
                 neutral = _agy_hook_command(command, plan.out_dir)
                 if neutral:
                     out["command"] = neutral

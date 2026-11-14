@@ -2,16 +2,19 @@
 
 Interface:
 
-* Sidecar key ``premises: {<row_id>: {verdict: yes|no, ref: <repo-relative path or sha>,
-  recorded_at}}`` in the plan's evidence sidecar (``plan_tasks_mutate.evidence_sidecar_path``),
-  beside ``rows`` and ``em_discharged``. Only this structured key counts; premise-row prose is
+* Sidecar key ``premises: {<row_id>: {verdict: yes|no|widened, ref: <repo-relative path or sha>,
+  recorded_at, added_scope (widened only)}}`` in the plan's evidence sidecar
+  (``plan_tasks_mutate.evidence_sidecar_path``), beside ``rows`` and ``em_discharged``. Only this structured key counts; premise-row prose is
   never parsed.
 * ``read_premise_verdicts(plan_file) -> dict``: the ``premises`` mapping; never raises; a missing
   or unparsable sidecar, or a non-dict value, reads as ``{}`` (mirrors ``read_em_discharges``).
 * ``plan_opted_in(plan_file) -> bool``: True when the sidecar carries a ``premises:`` key, or the
   plan frontmatter ``created`` is on or after ``PREMISE_GATE_CUTOVER``. Never raises.
 * ``evaluate_premise_gate(raw_row, rows_by_id, verdicts, opted_in) -> GateOutcome`` where
-  ``GateOutcome(action: dispatch|close_wont_do|wait, cite: Optional[dict])``.
+  ``GateOutcome(action: dispatch|close_wont_do|wait|halt_em, cite: Optional[dict])``.
+  ``halt_em`` (a recorded ``widened`` verdict, no ``no`` edge, no open premise) cites
+  ``{chunk, verdict: "widened", ref, added_scope}``: the dependents are confirmed, not closed, and
+  the EM amends the plan then re-records ``yes``.
   ``cite`` is ``{chunk, verdict, ref}`` (``verdict`` is ``"no"`` or ``"absent"``) for
   ``close_wont_do``; ``{chunk}`` for ``wait``; ``{chunk, reason: "legacy-absent"}`` for a
   ``dispatch`` reached with the verdict absent (``verdict-absent`` when opted in); ``None`` for any other ``dispatch``.
@@ -51,13 +54,17 @@ LEGACY_ABSENT = "legacy-absent"
 VERDICT_ABSENT = "verdict-absent"
 PREMISE_GATE_CUTOVER = datetime.date(2026, 10, 27)
 
+#: Confirmed, but the evidence names scope the plan lacks: the dependents neither run nor close.
+WIDENED = "widened"
+
 PREMISE_RECORD_BRIEF_LINE = (
     "This row is the premise of an epistemic-premise gate: before you report done, run "
-    "plan_tasks_mutate `premise-record {id, verdict: yes|no, ref}` with your verdict "
-    "and its evidence ref."
+    "plan_tasks_mutate `premise-record {id, verdict: yes|no|widened, ref, added_scope}` with your verdict "
+    "and its evidence ref; record `widened` (with `added_scope`, the scope the plan lacks) when the "
+    "dependents are confirmed but the evidence adds scope, never `no`."
 )
 
-Action = Literal["dispatch", "close_wont_do", "wait"]
+Action = Literal["dispatch", "close_wont_do", "wait", "halt_em"]
 
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(?:\n|\Z)", re.DOTALL)
 
@@ -114,7 +121,7 @@ def _normalise(verdict) -> Optional[str]:
         return "no"
     if isinstance(verdict, str):
         v = verdict.strip().lower()
-        if v in ("yes", "no"):
+        if v in ("yes", "no", WIDENED):
             return v
     return None
 
@@ -126,6 +133,7 @@ def evaluate_premise_gate(
     edges = raw_row.get("depends_on") if isinstance(raw_row, dict) else None
     waiting: Optional[dict] = None
     legacy: Optional[dict] = None
+    widened: Optional[dict] = None
     for edge in edges if isinstance(edges, list) else []:
         if not isinstance(edge, dict) or edge.get("gate_kind") != EPISTEMIC_PREMISE:
             continue
@@ -142,6 +150,14 @@ def evaluate_premise_gate(
         verdict = _normalise(entry.get("verdict"))
         if verdict == "yes":
             continue
+        if verdict == WIDENED:
+            widened = widened or {
+                "chunk": chunk,
+                "verdict": WIDENED,
+                "ref": entry.get("ref"),
+                "added_scope": entry.get("added_scope"),
+            }
+            continue
         if verdict is None:
             # A skipped bookkeeping step is not a "no": closing on it wont_do'd a whole plan (6467a3).
             legacy = legacy or {"chunk": chunk, "reason": VERDICT_ABSENT if opted_in else LEGACY_ABSENT}
@@ -153,4 +169,6 @@ def evaluate_premise_gate(
         )
     if waiting is not None:
         return GateOutcome("wait", waiting)
+    if widened is not None:
+        return GateOutcome("halt_em", widened)
     return GateOutcome("dispatch", legacy)

@@ -41,17 +41,20 @@ from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 _FIXTURE_PROFILE_DIR = Path(__file__).parent / "fixtures" / "queue-profiles"
 _STANDARD_CEILING = 40  # the fixture profile's standard appetite max_agent_calls
+_FIXTURE_BATCH_SIZE = 4  # the fixture profile's batch_size default
 
 
 def _admitted_at(n_rows: int, max_agent_calls: int) -> int:
     """Rows grind_admission's live estimate admits for ``n_rows`` under ``max_agent_calls``."""
     ids = [f"row{i}" for i in range(n_rows)]
-    return len(grind_admission.admit(ids, max_agent_calls=max_agent_calls, budget_tokens=None).admitted)
+    return len(grind_admission.admit(
+        ids, max_agent_calls=max_agent_calls, budget_tokens=None, batch_size=_FIXTURE_BATCH_SIZE
+    ).admitted)
 
 
 def _covering_ceiling(n_rows: int) -> int:
     """Smallest max_agent_calls whose live estimate admits every one of ``n_rows``."""
-    ceiling = grind_admission.RUN_FIXED_AGENT_CALLS + -(-n_rows * grind_admission.ROW_AGENT_CALLS_CENTI // 100)
+    ceiling = grind_admission.run_agent_calls(n_rows, _FIXTURE_BATCH_SIZE)
     assert _admitted_at(n_rows, ceiling) == n_rows
     return ceiling
 

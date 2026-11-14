@@ -1472,11 +1472,13 @@ def _em_discharge(
 
 
 def _premise_record(
-    plan_path: str, row_id: str, verdict: object, ref: object, worktree: Path, repo_root: Path
+    plan_path: str, row_id: str, verdict: object, ref: object, worktree: Path, repo_root: Path,
+    added_scope: object = None,
 ) -> dict:
     """Apply the premise-record verb: write ``premises.<row_id> = {verdict, ref, recorded_at}``
     to the evidence sidecar, read back by ``premise_gate.read_premise_verdicts``.
 
+    ``widened`` (confirmed, but the evidence adds scope) additionally requires ``added_scope``.
     Writes only the sidecar. A later record for the same row replaces the earlier one.
     """
     try:
@@ -1486,10 +1488,12 @@ def _premise_record(
     if not row_id:
         return _err("premise-record: 'id' is required")
     norm = verdict.strip().lower() if isinstance(verdict, str) else None
-    if norm not in ("yes", "no"):
-        return _err(f"premise-record: 'verdict' must be yes or no, got {verdict!r}")
+    if norm not in ("yes", "no", "widened"):
+        return _err(f"premise-record: 'verdict' must be yes, no or widened, got {verdict!r}")
     if not isinstance(ref, str) or not ref.strip():
         return _err("premise-record: 'ref' must be a non-empty string")
+    if norm == "widened" and (not isinstance(added_scope, str) or not added_scope.strip()):
+        return _err("premise-record: verdict widened needs a non-empty 'added_scope' naming the scope the plan lacks")
     try:
         plan_text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -1515,6 +1519,8 @@ def _premise_record(
         "ref": relativize_text(ref.strip(), [(str(worktree), "")]),
         "recorded_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if norm == "widened":
+        entry["added_scope"] = added_scope.strip()
 
     def mutate(old_text: str) -> str:
         try:
@@ -2959,10 +2965,11 @@ async def _handler_core(params: dict, repo_root: Optional[Path] = None) -> dict:
                    the entry carries both. Refuses unknown, uncited executor,
                    memo-send, operator and non-open rows; a repeat is a no-op
                    (applied false).
-        premise-record : id (str), verdict ('yes'|'no'), ref (str, non-empty) —
-                   writes `premises.<id>` {verdict, ref, recorded_at} to the
-                   evidence sidecar; a repeat replaces. Refuses unknown id and
-                   any other verdict.
+        premise-record : id (str), verdict ('yes'|'no'|'widened'), ref (str,
+                   non-empty), added_scope (str, required for 'widened') —
+                   writes `premises.<id>` {verdict, ref, recorded_at[, added_scope]}
+                   to the evidence sidecar; a repeat replaces. Refuses unknown id
+                   and any other verdict.
         note     : id (str), text (str, non-empty) — sets the row's `note`
                    through the spine dumper (": " in text stays parseable).
         evidence-append : id (str), text (str, non-empty) — appends a
@@ -3133,6 +3140,7 @@ async def _handler_core(params: dict, repo_root: Optional[Path] = None) -> dict:
             params.get("ref"),
             worktree,
             repo_root,
+            params.get("added_scope"),
         )
 
     if verb == "clear-gate":

@@ -406,6 +406,20 @@ def test_unrelated_sizing_peer_still_refuses_a_chained_run(repo):
     assert "281faa" not in str(err.value)
 
 
+def test_record_under_own_id_plus_suffix_is_kin_not_a_peer(repo):
+    _live_peer(repo, "mine-DUMMY", ["pkg/b.py"], tokenless=True)
+    run_token.mint(repo, "mine", SCRIPT, session_id=None)
+    assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
+    assert _live(repo, "mine")
+
+
+def test_id_sharing_only_a_stem_without_the_dash_boundary_still_refuses(repo):
+    _live_peer(repo, "mineral", ["pkg/b.py"], tokenless=True)
+    run_token.mint(repo, "mine", SCRIPT, session_id=None)
+    with pytest.raises(AskStageError, match=r"live-run-write-overlap.*mineral: pkg/b\.py"):
+        stage(repo, run_id="mine", plan_rel=PLAN_REL)
+
+
 def test_marking_a_token_spent_drops_the_runs_index_entry_and_claims(repo):
     from coordinator_core.ops.dispatch_emit import ask_gate, live_run_index
 

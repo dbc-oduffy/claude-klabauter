@@ -224,6 +224,7 @@ def emit_queue_script(
         run_order,
         max_agent_calls=resolved_knobs.get("max_agent_calls"),
         budget_tokens=resolved_knobs.get("budget_tokens"),
+        batch_size=int(_resolved_batch_sizes(resolved_knobs).get("default", 4)),
     )
     manifest = restrict_manifest(manifest, admission.admitted)
 

@@ -832,14 +832,34 @@ def _memo_draft_steps(
     return out_owed, steps
 
 
-def _route_source(row_id: str, routes: Mapping, raw_by_id: Mapping[str, Mapping]) -> str:
+def _route_source(
+    row_id: str, routes: Mapping, raw_by_id: Mapping[str, Mapping], family_taken: bool = False
+) -> str:
     """`route-table` for a class-routed row, `overlay` when the raw plan row names an agent_type, else `default`.
 
     Reads the raw row: `route_rows` rewrites the parsed row's agent_type, so it cannot show explicitness.
+    A row a sizing family took is `default`: its default-executor pin was not an overlay.
     """
     if row_id in routes:
         return "route-table"
+    if family_taken:
+        return "default"
     return "overlay" if (raw_by_id.get(row_id) or {}).get("agent_type") else "default"
+
+
+def _family_routing_report(sizing_family: str, row_families: Mapping[str, str]) -> dict:
+    """`family_routes` (row id -> non-claude family) and, when the sizing names a non-claude family
+    that no row took, a `warnings` entry. Empty when nothing is routed and no family is named."""
+    out: dict = {}
+    routed = {rid: fam for rid, fam in row_families.items() if fam != "claude"}
+    if routed:
+        out["family_routes"] = routed
+    if sizing_family != "claude" and sizing_family not in routed.values():
+        out["warnings"] = [
+            f"sizing family {sizing_family!r} reached no row: no executor row was free to take it "
+            "(none, pinned to another agent_type, or already routed); all rows run on claude"
+        ]
+    return out
 
 
 def _staged_dependencies(raw: Mapping, staged: Sequence[ManifestRow]) -> tuple[tuple[str, ...], int]:
@@ -1005,7 +1025,8 @@ def _recorded_run_ids(root: Path, hits: Mapping[str, list[str]]) -> dict[str, li
 
 
 def _chain_kin(root: Path, run_id: str, candidates: Iterable[str]) -> set[str]:
-    """The `candidates` that are `run_id`'s own chain: runs bound to the same sizing (a chained
+    """The `candidates` that are `run_id`'s own chain: a record under `run_id` plus a `-` suffix (a
+    stage call with a suffixed id), runs bound to the same sizing (a chained
     run's `chained_from` ancestor and descendants carry the sizing it hands on) and any run on its
     `resumed_from` chain. Their claims are the same work, never a peer's overlap.
     Trap: a run with no bound sizing has no kin by sizing."""
@@ -1037,7 +1058,11 @@ def _chain_kin(root: Path, run_id: str, candidates: Iterable[str]) -> set[str]:
             break
         chain.add(prev)
         cur = prev
-    return {rid for rid in candidates if rid in chain or (mine is not None and sizing_of(rid) == mine)}
+    own_prefix = run_id + "-"
+    return {
+        rid for rid in candidates
+        if rid in chain or rid.startswith(own_prefix) or (mine is not None and sizing_of(rid) == mine)
+    }
 
 
 STAGE_WAIT_PARKED = "stage-wait"
@@ -1319,8 +1344,11 @@ def stage(
     claim_register_rows: bool = False,
     classify_receiver: Optional[Callable[[str, bool], object]] = None,
     plan_parse: Optional["_PlanParse"] = None,
+    family_report: Optional[dict] = None,
 ) -> StageManifest:
     """Stage the run for `plan_rel`, or for the XS sizing `sizing_rel` (minted to X1 over `writes`).
+
+    `family_report`, when given, is filled with `_family_routing_report`'s `family_routes` / `warnings`.
 
     `only_rows` (a resume: the halted plan's incomplete row ids) stages just those rows; the rest
     are landed, so an edge onto one is satisfied. A resume row the re-plan retired is reported in the
@@ -1426,6 +1454,13 @@ def stage(
         if reminted:
             rows = [r for r in rows if r.id not in reminted]
             retired_resume = (*retired_resume, *reminted)
+    widened = [e for e in exclusions if e.get("reason") == "premise-widened"]
+    if widened:
+        raise AskStageError(
+            f"PREMISE-WIDENED: {plan_posix}: "
+            + "; ".join(f"{e['id']}: {e.get('detail') or ''}" for e in widened),
+            plan_path=plan_posix,
+        )
     check_unschedulable_rows(rows, raw_by_id)
     _split = split_frontmatter(plan_text)
     _drift = plan_pin_drift(_split.fm_text, root) if _split is not None else []
@@ -1562,6 +1597,7 @@ def stage(
     chunks: list[ChunkCommit] = []
     declared: list[str] = []
     brief_sizes: dict[str, int] = {}
+    row_families: dict[str, str] = {}
     kept_ids: set[str] = set()
     served_widen_rows: set[str] = set()
     try:
@@ -1586,12 +1622,15 @@ def stage(
                 agent_type = _row_agent_type(row)
                 row_family = "claude"
                 role_family = ""
-                if sizing_family != "claude" and not row.agent_type and agent_type == _EXECUTOR_AGENT_TYPE:
+                default_pin = (
+                    not row.agent_type or (row.agent_type == _EXECUTOR_AGENT_TYPE and row.id not in routes)
+                )
+                if sizing_family != "claude" and default_pin and agent_type == _EXECUTOR_AGENT_TYPE:
                     agent_type, row_family = stage_family.RUNNER_AGENT, sizing_family
                 elif (
                     binding is not None
                     and row.stage_role
-                    and not row.agent_type
+                    and default_pin
                     and agent_type == _EXECUTOR_AGENT_TYPE
                 ):
                     bound = binding.roles.get(row.stage_role)
@@ -1614,8 +1653,8 @@ def stage(
                 )
                 if kept_from:
                     kept_ids.add(row.id)
-                    if role_family:
-                        agent_type, role_family = _EXECUTOR_AGENT_TYPE, ""
+                    if role_family or row_family != "claude":
+                        agent_type, role_family, row_family = _EXECUTOR_AGENT_TYPE, "", "claude"
                         model = resolve_agent_model(agent_type, None)
                 prior = None if kept_from else _set_aside_prior_report(root, report_rel)
                 if kept_from:
@@ -1624,12 +1663,6 @@ def stage(
                     text = _reviewer_brief(root, run_dir, row.id, raw_by_id.get(row.id) or {})
                 else:
                     text = _row_prompt(row, plan_posix, context)
-                    if row_family != "claude":
-                        paths = [w for w in row.writes if isinstance(w, str)] if isinstance(row.writes, list) else []
-                        text = stage_family.runner_brief(
-                            row_family, "write" if paths else "other", _rel(root, brief),
-                            f"scratch/family-stage/{row.id}", paths,
-                        ) + "\n" + text
                     served_regs = (raw_by_id.get(row.id) or {}).get("register_rows") or ()
                     if ledger_resume and served_regs and run_sizing_rel:
                         served = served_rows_block(root, run_id, served_regs)
@@ -1655,17 +1688,26 @@ def stage(
                             if line:
                                 text = text.rstrip() + "\n\n" + line
                 fallback_rel = fallback_agent = ""
-                if role_family and not kept_from:
+                manifest_stage_role = row.stage_role
+                routed_family = row_family if row_family != "claude" else role_family
+                if routed_family and not kept_from:
                     fallback_file = run_dir / "briefs" / f"{row.id}.fallback.md"
                     _write(fallback_file, text)
                     fallback_rel, fallback_agent = _rel(root, fallback_file), _EXECUTOR_AGENT_TYPE
-                    text = (
-                        stage_family.runner_brief(
-                            role_family, row.stage_role, _rel(root, brief), f"scratch/family-stage/{row.id}"
+                    if row_family != "claude":
+                        fam_paths = [w for w in row.writes if isinstance(w, str)] if isinstance(row.writes, list) else []
+                        manifest_stage_role = "write" if fam_paths else "other"
+                        runner = stage_family.runner_brief(
+                            row_family, manifest_stage_role, _rel(root, brief),
+                            stage_family.family_scratch_dir(row.id, run_id), fam_paths,
                         )
-                        + "\n"
-                        + text
-                    )
+                    else:
+                        runner = stage_family.runner_brief(
+                            role_family, row.stage_role, _rel(root, brief),
+                            stage_family.family_scratch_dir(row.id, run_id),
+                        )
+                    text = runner + "\n" + text
+                text = text.replace(stage_family.RUN_ID_TOKEN, run_id)
                 _write(brief, text)
                 brief_sizes[row.id] = len(text.encode("utf-8"))
                 paths = _widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root)
@@ -1673,6 +1715,7 @@ def stage(
                 if ledger_resume and agent_type != REVIEWER_AGENT_TYPE and (raw_by_id.get(row.id) or {}).get("register_rows"):
                     in_run_widen.record_widens(run_dir, [{"row": row.id, "path": p} for p in paths])
                     served_widen_rows.add(row.id)
+                row_families[row.id] = row_family if row_family != "claude" else (role_family or "claude")
                 manifest_rows.append(
                     ManifestRow(
                         id=row.id,
@@ -1684,12 +1727,14 @@ def stage(
                         wave=wave_no,
                         deps=after.get(row.id, ()),
                         route=routes[row.id].to_json() if row.id in routes else None,
-                        route_source=_route_source(row.id, routes, raw_by_id),
+                        route_source=_route_source(
+                            row.id, routes, raw_by_id, row_family != "claude" or bool(role_family)
+                        ),
                         register_rows=tuple(str(r) for r in (raw_by_id.get(row.id) or {}).get("register_rows") or ()),
                         kept_from=kept_from,
                         adopts_stranded=_adopts_stranded(raw_by_id.get(row.id)),
-                        family=role_family if fallback_rel else "",
-                        stage_role=row.stage_role if fallback_rel else "",
+                        family=routed_family if fallback_rel else "",
+                        stage_role=manifest_stage_role if fallback_rel else "",
                         fallback_brief_path=fallback_rel,
                         fallback_agent_type=fallback_agent,
                     )
@@ -1704,6 +1749,8 @@ def stage(
                     )
                 )
 
+    if family_report is not None:
+        family_report.update(_family_routing_report(sizing_family, row_families))
     manifest_rows, row_groups = _group_rows(manifest_rows, brief_sizes, raw_by_id)
     owed, draft_rows = _memo_draft_steps(root, run_dir, owed, raw_by_id, intent, manifest_rows, classify_receiver)
     manifest_rows.extend(draft_rows)
@@ -2648,9 +2695,11 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
             # A racing claim of other params has no matching digest, so `in_flight` is None; the key still answers.
             return {ask_stage_receipt.STAGE_IN_FLIGHT_KEY: ask_stage_receipt.in_flight(prior_dir, digest) or {}}
     stamp = None
+    family_report: dict = {}
     try:
         stage(
             root,
+            family_report=family_report,
             run_id=run_id,
             plan_rel=params.get("plan_path") or None,
             sizing_rel=params.get("sizing_path") or None,
@@ -2699,7 +2748,7 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
         if prior_dir is not None:
             with leg("release"):
                 ask_stage_receipt.release(prior_dir)
-    reply = {"manifest_handle": handle}
+    reply = {"manifest_handle": handle, **family_report}
     if twin_rel is not None:
         reply["twin_path"] = twin_rel
     if stamp is not None and stamp["outcome"] != "unchanged":
