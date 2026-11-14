@@ -14,7 +14,9 @@ from typing import Mapping, Optional
 from coordinator_core.session import xs_lane_budget
 
 THROTTLE_SECONDS = 30
+CHECK_SECONDS = 5  # bounds the git spawns a PreToolUse burst can cost; the nag window is separate
 _STAMP_FILENAME = "op-dispatch-nag.stamp"
+_CHECK_STAMP_FILENAME = "op-dispatch-nag.checked"
 _SUBAGENT_ROLES = ("worker", "reviewer")
 _FAMILIES = ("codex", "grok", "agy")
 
@@ -87,16 +89,16 @@ def _untracked_lines(path: Path) -> int:
     return data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0)
 
 
-def _throttled(stamp: Path, now: float) -> bool:
-    """True inside the window; otherwise records `now` and returns False."""
+def _within(stamp: Path, now: float, window: float) -> bool:
     try:
-        if now - float(stamp.read_text(encoding="ascii").strip()) < THROTTLE_SECONDS:
-            return True
+        return now - float(stamp.read_text(encoding="ascii").strip()) < window
     except (OSError, ValueError):
-        pass
+        return False
+
+
+def _mark(stamp: Path, now: float) -> None:
     stamp.parent.mkdir(parents=True, exist_ok=True)
     stamp.write_text(repr(now), encoding="ascii")
-    return False
 
 
 def advisory_for_dispatch(repo_root, session_id: Optional[str], env: Mapping[str, str]) -> Optional[str]:
@@ -112,14 +114,20 @@ def advisory_for_dispatch(repo_root, session_id: Optional[str], env: Mapping[str
         family = caller_family(env)
         if family is None:
             return None
-        stamp = xs_lane_budget.lane_path(repo_root, session_id).parent / _STAMP_FILENAME
-        if _throttled(stamp, time.time()):
+        hub = xs_lane_budget.lane_path(repo_root, session_id).parent
+        stamp, checked = hub / _STAMP_FILENAME, hub / _CHECK_STAMP_FILENAME
+        now = time.time()
+        # Trap: the nag window is stamped only on emit. Stamping it per check let an under-bound check
+        # swallow the nag for the edit that crossed the bound moments later (grok C3, 2026-11-14).
+        if _within(stamp, now, THROTTLE_SECONDS) or _within(checked, now, CHECK_SECONDS):
             return None
+        _mark(checked, now)
         files, lines = _measure(str(repo_root))
         if files <= xs_lane_budget.BUDGET_FILES and lines <= xs_lane_budget.BUDGET_LINES:
             return None
         from coordinator_core import warp_fire
 
+        _mark(stamp, now)
         return warp_fire.nag_text(session_id, host=family, edit_size=(files, lines))
     except Exception:
         return None

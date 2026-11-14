@@ -82,6 +82,30 @@ def test_stale_dirs_never_open_metas_and_live_dir_with_older_journal_is_found(tm
     assert [p for p in opened if "wf_stale" in str(p)] == []
 
 
+def test_dirs_older_than_the_run_stamp_are_never_read(tmp_path, monkeypatch):
+    import os
+    import time
+    session = tmp_path / "s"
+    run = time.strftime("ask-%Y%m%dT%H%M%S-abc123", time.gmtime())
+    old = time.time() - 10 * 86400
+    for i in range(50):
+        d = _wf(session, f"wf_old{i}", {f"o{i}": ("commit", run)})
+        os.utime(d / "journal.jsonl", (old, old))
+    live = _wf(session, "wf_live", {"L": ("commit", run)})
+    read = []
+    real = Path.read_text
+
+    def spy(self, *a, **k):
+        read.append(self)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", spy)
+    assert rl.locate_run_dir(session, run) == live
+    assert [p for p in read if "wf_old" in str(p)] == []
+    # No stamp in the id: no floor, every journal is a candidate.
+    assert rl.locate_run_dir(session, "run-1") is None
+
+
 def test_path_shaped_ids_are_refused(tmp_path):
     assert rl.locate_run_dir(tmp_path, "../x") is None
     assert rl.session_dir_for("../x", tmp_path) is None

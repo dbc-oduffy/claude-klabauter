@@ -92,12 +92,16 @@ def shape_codex_child(
     return env
 
 
-def _real_codex_home(env: Mapping[str, str], environ: Mapping[str, str]) -> Path:
+def _real_codex_home(env: Mapping[str, str], environ: Mapping[str, str]) -> Path | None:
     for source in (env, environ):
         k = _key(source, "CODEX_HOME")
         if k and source[k]:
             return Path(source[k])
-    return Path.home() / ".codex"
+    # Trap: Path.home() raises with no HOME/USERPROFILE; that must not pre-empt the pwsh preflight refusal.
+    try:
+        return Path.home() / ".codex"
+    except RuntimeError:
+        return None
 
 
 def _home_writable(home: Path) -> bool:
@@ -138,6 +142,8 @@ def _isolate_codex_home(env: dict[str, str], writable_root: Path, environ: Mappi
     config.toml (hook trust re-keyed to the isolated hooks.json), never sessions, logs or tmp. Child env only.
     """
     real = _real_codex_home(env, environ)
+    if real is None:
+        return
     sandboxed = any(_key(environ, n) for n in ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED"))
     if not sandboxed and _home_writable(real):
         return

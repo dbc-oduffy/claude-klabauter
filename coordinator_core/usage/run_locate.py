@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 DEFAULT_AGENT_DESCRIPTIONS = ("commit", "halt-commit")
 _PARAMS_TAIL = "terminal-commit-params.json"
 _HEAD_BYTES = 8192
+_RUN_STAMP = re.compile(r"\d{8}T\d{6}")
+_FLOOR_MARGIN_S = 86400
 
 
 def projects_root(env: Optional[dict] = None) -> Path:
@@ -71,6 +75,26 @@ def _head(path: Path, nbytes: int) -> str:
         return ""
 
 
+def _run_floor(run_id: str) -> Optional[float]:
+    """Epoch seconds before which no wf_ dir can belong to the run: the `YYYYMMDDTHHMMSS` stamp in
+    the run id less a day (any timezone). None when the id carries no stamp."""
+    m = _RUN_STAMP.search(run_id)
+    if m is None:
+        return None
+    try:
+        stamp = datetime.strptime(m.group(0), "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return stamp.timestamp() - _FLOOR_MARGIN_S
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return float("-inf")
+
+
 def locate_run_dir(
     session_dir: Path,
     run_id: str,
@@ -81,7 +105,8 @@ def locate_run_dir(
     `description` in agent_descriptions and a transcript head naming
     `scratch/warp/<run_id>/terminal-commit-params.json`. None when absent or ambiguous.
     The journal gates the reads: metas and transcripts are opened only for unsettled agents,
-    so a dir whose agents all settled costs one journal read."""
+    so a dir whose agents all settled costs one journal read. A run id carrying a timestamp also
+    skips, on a stat alone, every dir whose journal predates the run."""
     if not run_id or Path(run_id).name != run_id:
         return None
     needle = f"scratch/warp/{run_id}/{_PARAMS_TAIL}"
@@ -91,7 +116,10 @@ def locate_run_dir(
         wf_dirs = [Path(e.path) for e in os.scandir(wf_root) if e.name.startswith("wf_") and e.is_dir()]
     except OSError:
         return None
+    floor = _run_floor(run_id)
     for wf in wf_dirs:
+        if floor is not None and _mtime(wf / "journal.jsonl") < floor:
+            continue
         unsettled = _unsettled_agent_ids(wf / "journal.jsonl")
         for agent_id in sorted(unsettled):
             if not isinstance(agent_id, str) or Path(agent_id).name != agent_id:

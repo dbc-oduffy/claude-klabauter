@@ -200,3 +200,20 @@ def test_git_failure_fails_open(repo, monkeypatch):
         raise subprocess.CalledProcessError(1, "git")
     monkeypatch.setattr(nag.subprocess, "run", fail)
     assert nag.advisory_for_dispatch(repo, "sid1", _env("codex")) is None
+
+
+def test_under_bound_check_does_not_swallow_later_nag(repo, monkeypatch):
+    """Replay of grok C3: an early under-bound check must not hold the nag window for the edit that
+    crosses the bound once the short check window has passed."""
+    clock = [1000.0]
+    monkeypatch.setattr(nag.time, "time", lambda: clock[0])
+    assert nag.advisory_for_dispatch(repo, "sid-late", _env("grok")) is None
+    _edit(repo, 3, 7)
+    clock[0] += nag.CHECK_SECONDS - 1
+    assert nag.advisory_for_dispatch(repo, "sid-late", _env("grok")) is None
+    clock[0] += 2
+    assert nag.advisory_for_dispatch(repo, "sid-late", _env("grok")) == "NAG[grok]"
+    clock[0] += nag.CHECK_SECONDS + 1
+    assert nag.advisory_for_dispatch(repo, "sid-late", _env("grok")) is None
+    clock[0] += nag.THROTTLE_SECONDS
+    assert nag.advisory_for_dispatch(repo, "sid-late", _env("grok")) == "NAG[grok]"

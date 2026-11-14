@@ -130,6 +130,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+from datetime import datetime, timezone
 
 from coordinator_core.backlog_grind_assemble.grind_undo import cmd_undo
 from coordinator_core.backlog_grind_assemble.legacy_row_normalize import (
@@ -1067,7 +1068,9 @@ def _run_usage(repo_root: Path, run_id: str) -> "dict[str, Any] | None":
             session_dir, run_id, agent_descriptions=GRIND_CLOSE_AGENT_DESCRIPTIONS
         )
         if run_dir is None:
-            return {"reason": "no unique unsettled close-leg agent names this run id; run dir not located"}
+            return _run_scoped_usage(session_dir, run_id) or {
+                "reason": "no agent transcript names this run id; run dir not located"
+            }
         usage = scan_run(str(run_dir))
         unsettled = run_locate._unsettled_agent_ids(run_dir / "journal.jsonl")
         usage["as_of"] = "run-record"
@@ -1076,6 +1079,106 @@ def _run_usage(repo_root: Path, run_id: str) -> "dict[str, Any] | None":
         return usage
     except Exception as exc:  # noqa: BLE001 -- the record write must still happen
         return {"reason": f"usage scan failed: {type(exc).__name__}: {exc}"}
+
+
+_RUN_NEEDLE_HEAD_BYTES = 8192
+
+
+def _names_run(wf: Path, needle: str) -> bool:
+    """True when any agent transcript in the wf dir has `needle` in its first
+    `_RUN_NEEDLE_HEAD_BYTES` bytes; a needle first appearing later is not seen."""
+    try:
+        entries = [e.path for e in os.scandir(wf) if e.name.startswith("agent-") and e.name.endswith(".jsonl")]
+    except OSError:
+        return False
+    for path in entries:
+        try:
+            with open(path, "rb") as handle:
+                head = handle.read(_RUN_NEEDLE_HEAD_BYTES).decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        if needle in head.replace("\\\\", "/").replace("\\/", "/"):
+            return True
+    return False
+
+
+def _sum_into(into: dict, src: dict) -> None:
+    for key, val in src.items():
+        if isinstance(val, bool):
+            continue
+        if isinstance(val, (int, float)):
+            into[key] = into.get(key, 0) + val
+        elif isinstance(val, dict):
+            _sum_into(into.setdefault(key, {}), val)
+
+
+_RUN_STAMP = re.compile(r"\d{8}T\d{6}")
+_RUN_FLOOR_MARGIN_S = 86400
+
+
+def _run_floor(run_id: str) -> "float | None":
+    """Epoch seconds before which no wf_ dir can belong to the run: the `YYYYMMDDTHHMMSS` stamp in
+    the run id less a day (any timezone). None when the id carries no stamp."""
+    m = _RUN_STAMP.search(run_id)
+    if m is None:
+        return None
+    try:
+        stamp = datetime.strptime(m.group(0), "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return stamp.timestamp() - _RUN_FLOOR_MARGIN_S
+
+
+def _journal_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return float("-inf")
+
+
+def _run_scoped_usage(session_dir: Path, run_id: str) -> "dict[str, Any] | None":
+    """The run's own usage with no close-leg agent to locate: scan every Workflow run dir under
+    the session in which any agent transcript names `scratch/warp/<run_id>/`, and sum their
+    `scan_run` blocks (agents concatenated; by_model, by_role, run_total summed field-wise;
+    rag_uptake recomputed from the agents). None when no dir names the run."""
+    from coordinator_core.usage import run_locate
+    from coordinator_core.usage.agent_usage import scan_run
+
+    if not run_id or Path(run_id).name != run_id:
+        return None
+    needle = f"scratch/warp/{run_id}/"
+    wf_root = Path(session_dir) / "subagents" / "workflows"
+    try:
+        wf_dirs = sorted(Path(e.path) for e in os.scandir(wf_root) if e.name.startswith("wf_") and e.is_dir())
+    except OSError:
+        return None
+    floor = _run_floor(run_id)
+    scans, unsettled = [], set()
+    for wf in wf_dirs:
+        if floor is not None and _journal_mtime(wf / "journal.jsonl") < floor:
+            continue
+        if not _names_run(wf, needle):
+            continue
+        scans.append(scan_run(str(wf)))
+        unsettled |= run_locate._unsettled_agent_ids(wf / "journal.jsonl")
+    if not scans:
+        return None
+    agents = [a for s in scans for a in s["agents"]]
+    merged: dict[str, Any] = {"agents": agents, "by_model": {}, "by_role": {}, "run_total": {}}
+    for scan in scans:
+        for key in ("by_model", "by_role", "run_total"):
+            _sum_into(merged[key], scan[key])
+    searching = sum(1 for a in agents if a["search_calls"] or a["rag_calls"])
+    rag_agents = sum(1 for a in agents if a["rag_calls"])
+    merged["run_total"]["rag_uptake"] = {
+        "searching_agents": searching, "rag_agents": rag_agents,
+        "fallback_agents": sum(1 for a in agents if a["rag_fallback"]),
+        "ratio": rag_agents / searching if searching else None,
+    }
+    merged["as_of"] = "run-record"
+    merged["unsettled"] = sorted(unsettled)
+    merged["located_by"] = "run-id-scan"
+    return merged
 
 
 def _first_user_text(path: Path) -> Optional[str]:

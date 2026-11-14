@@ -91,6 +91,63 @@ def test_absent_run_dir_records_null_with_reason(tmp_path, monkeypatch):
     assert out["spend"] == {"output_tokens": 1}
 
 
+def _transcript(path: Path, run_id: str, usage: dict) -> None:
+    lines = [
+        {"type": "user", "message": {"role": "user", "content": f"see scratch/warp/{run_id}/briefs/C1.md"}},
+        {"type": "assistant", "requestId": "rq1",
+         "message": {"id": "m1", "model": "claude-sonnet-5-5", "role": "assistant", "usage": usage}},
+    ]
+    path.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+
+
+def _settled_wf(session_dir: Path, name: str, agent_id: str, run_id: str, usage: dict) -> Path:
+    wf = session_dir / "subagents" / "workflows" / name
+    wf.mkdir(parents=True)
+    (wf / "journal.jsonl").write_text(
+        json.dumps({"type": "started", "agentId": agent_id, "label": "work:C1"}) + "\n"
+        + json.dumps({"type": "result", "agentId": agent_id}) + "\n", encoding="utf-8")
+    _transcript(wf / f"agent-{agent_id}.jsonl", run_id, usage)
+    return wf
+
+
+def test_no_close_leg_agent_still_records_the_runs_own_four_totals(tmp_path, monkeypatch):
+    """Real locate_run_dir (no close-leg agent, all settled) returns None; the run-scoped scan
+    still yields non-null usage. A wf dir that does not name the run contributes nothing."""
+    _patch_session(monkeypatch, SID)
+    monkeypatch.setattr(run_locate, "session_dir_for", lambda sid, root=None: tmp_path)
+    _settled_wf(tmp_path, "wf_1", "a1", RUN_ID, {
+        "input_tokens": 10, "output_tokens": 20,
+        "cache_read_input_tokens": 30, "cache_creation_input_tokens": 40})
+    _settled_wf(tmp_path, "wf_2", "a2", RUN_ID, {
+        "input_tokens": 1, "output_tokens": 2,
+        "cache_read_input_tokens": 3, "cache_creation_input_tokens": 4})
+    _settled_wf(tmp_path, "wf_other", "a3", "20260101T000000Z", {
+        "input_tokens": 999, "output_tokens": 999,
+        "cache_read_input_tokens": 999, "cache_creation_input_tokens": 999})
+    assert run_locate.locate_run_dir(
+        tmp_path, RUN_ID, agent_descriptions=grind_rows.GRIND_CLOSE_AGENT_DESCRIPTIONS) is None
+    out = _run(tmp_path, monkeypatch, _record())
+    total = out["usage"]["run_total"]
+    assert (total["input_tokens"], total["output_tokens"],
+            total["cache_read_input_tokens"], total["cache_creation_input_tokens"]) == (11, 22, 33, 44)
+    assert sorted(a["agent_id"] for a in out["usage"]["agents"]) == ["a1", "a2"]
+    assert out["usage"]["as_of"] == "run-record" and out["usage"]["unsettled"] == []
+    assert "usage_reason" not in out
+    assert out["spend"] == {"output_tokens": 1}
+
+
+def test_run_needle_is_matched_only_within_the_transcript_head(tmp_path):
+    needle = f"scratch/warp/{RUN_ID}/"
+    inside, beyond = tmp_path / "wf_in", tmp_path / "wf_beyond"
+    for wf in (inside, beyond):
+        wf.mkdir()
+    pad = "x" * grind_rows._RUN_NEEDLE_HEAD_BYTES
+    (inside / "agent-a.jsonl").write_text(needle + pad, encoding="utf-8")
+    (beyond / "agent-a.jsonl").write_text(pad + needle, encoding="utf-8")
+    assert grind_rows._names_run(inside, needle) is True
+    assert grind_rows._names_run(beyond, needle) is False
+
+
 def test_scan_failure_never_fails_the_record(tmp_path, monkeypatch):
     _patch_session(monkeypatch, SID)
     monkeypatch.setattr(run_locate, "session_dir_for", lambda sid, root=None: tmp_path)
