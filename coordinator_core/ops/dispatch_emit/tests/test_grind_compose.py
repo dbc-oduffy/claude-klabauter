@@ -383,7 +383,7 @@ def test_each_stage_composed_once_per_row_no_pipeline_over_batches():
     script = _compose()
     assert "pipeline(" not in script
     assert "async function _fixCall(row) {" in script
-    assert "async function _verifyCall(row) {" in script
+    assert "async function _verifyCall(row, rows) {" in script
     assert "async function _terminalCommitCall(params) {" in script
     assert "async function _commitCall" not in script
     assert script.count("async function _rejectUndoCall(row) {") == 1

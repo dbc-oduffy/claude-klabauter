@@ -6,6 +6,7 @@ never runs a test itself."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -526,49 +527,99 @@ def test_a_mismatch_with_no_recorded_seeds_is_not_reverified(tmp_path, monkeypat
     assert out is stale and calls == []
 
 
-@pytest.mark.parametrize("fresh,expect", [("green", "green"), ("red", "red"), ("inconclusive", "mismatch")])
-def test_reverify_spawns_detached_and_polls_the_verdict_file(tmp_path, fresh, expect):
-    measured = {"sha": "a" * 40, "base_sha": "b" * 40, "blobs": {"x": "1" * 40}}
-    stale = cov.OverlayVerdict("mismatch", "keyed to a different landing set blobs", ("t/x.py",))
+_REVERIFY_MEASURED = {"sha": "a" * 40, "base_sha": "b" * 40, "blobs": {"x": "1" * 40}}
+_REVERIFY_STALE = cov.OverlayVerdict("mismatch", "keyed to a different landing set blobs", ("t/x.py",))
+
+
+@pytest.mark.parametrize("fresh,expect", [("green", "green"), ("red", "red"), ("pre_existing", "pre_existing")])
+def test_reverify_returns_a_fresh_verdict_already_on_disk_without_spawning(tmp_path, monkeypatch, fresh, expect):
+    cov.write_verdict(tmp_path, "run1", _REVERIFY_MEASURED, cov.OverlayVerdict(fresh, "d", ("t/x.py",)))
+    spawned = []
+    monkeypatch.setattr(time, "sleep", lambda s: spawned.append("slept"))
+
+    out = cov.reverify_on_mismatch(
+        tmp_path, "run1", _REVERIFY_MEASURED, _REVERIFY_STALE, spawn=lambda *a: spawned.append(a) or True,
+    )
+
+    assert out.verdict == expect and spawned == []
+
+
+def test_reverify_with_no_fresh_verdict_spawns_once_and_parks_without_sleeping(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    slept = []
+    monkeypatch.setattr(time, "sleep", lambda s: slept.append(s))
     spawned = []
 
     def spawn(engine, script, argv):
         spawned.append(argv)
-        cov.write_verdict(tmp_path, "run1", measured, cov.OverlayVerdict(fresh, "d", ("t/x.py",)))
         return True
 
-    out = cov.reverify_on_mismatch(tmp_path, "run1", measured, stale, spawn=spawn, sleep=lambda s: None)
+    with pytest.raises(land_deadline.LandDeadlineExceeded) as raised:
+        cov.reverify_on_mismatch(tmp_path, "run1", _REVERIFY_MEASURED, _REVERIFY_STALE, spawn=spawn)
 
-    assert out.verdict == expect
+    assert raised.value.step is True and raised.value.leg == cov.REVERIFY_STEP
+    assert slept == []
     assert len(spawned) == 1 and spawned[0][:2] == ["--run-id", "run1"]
 
 
-def test_reverify_gives_up_at_the_wait_bound_and_returns_the_stale_verdict(tmp_path):
-    measured = {"sha": "a" * 40, "base_sha": "b" * 40, "blobs": {"x": "1" * 40}}
-    stale = cov.OverlayVerdict("mismatch", "keyed to a different landing set blobs", ("t/x.py",))
-    now = [0.0]
-
-    def sleep(s):
-        now[0] += s
-
-    out = cov.reverify_on_mismatch(
-        tmp_path, "run1", measured, stale, spawn=lambda *a: True, wait_s=3.0, sleep=sleep, clock=lambda: now[0],
-    )
-
-    assert out is stale and now[0] >= 3.0
-
-
-def test_reverify_poll_past_its_step_cap_parks_the_landing_instead_of_returning(tmp_path, monkeypatch):
+def test_a_resent_landing_parks_without_a_second_spawn_while_an_overlay_is_in_flight(tmp_path):
     from coordinator_core.ops.dispatch_emit import land_deadline
 
-    measured = {"sha": "a" * 40, "base_sha": "b" * 40, "blobs": {"x": "1" * 40}}
-    stale = cov.OverlayVerdict("mismatch", "keyed to a different landing set blobs", ("t/x.py",))
-    monkeypatch.setattr(cov, "REVERIFY_STEP_SECS", 0.05)
+    spawned = []
 
-    with pytest.raises(land_deadline.LandDeadlineExceeded) as raised:
-        cov.reverify_on_mismatch(tmp_path, "run1", measured, stale, spawn=lambda *a: True, wait_s=100.0)
+    def spawn(engine, script, argv):
+        spawned.append(argv)
+        return True
 
-    assert raised.value.step is True and raised.value.leg == cov.REVERIFY_STEP
+    for _ in range(3):
+        with pytest.raises(land_deadline.LandDeadlineExceeded):
+            cov.reverify_on_mismatch(tmp_path, "run1", _REVERIFY_MEASURED, _REVERIFY_STALE, spawn=spawn)
+
+    assert len(spawned) == 1
+
+
+def test_a_stale_inflight_marker_is_replaced_and_spawns_again(tmp_path):
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    marker = cov._inflight_path(tmp_path, "run1")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("")
+    old = time.time() - cov.INFLIGHT_TTL_S - 5
+    os.utime(marker, (old, old))
+    spawned = []
+
+    with pytest.raises(land_deadline.LandDeadlineExceeded):
+        cov.reverify_on_mismatch(
+            tmp_path, "run1", _REVERIFY_MEASURED, _REVERIFY_STALE, spawn=lambda *a: spawned.append(a) or True,
+        )
+
+    assert len(spawned) == 1
+
+
+def test_a_failed_spawn_releases_the_inflight_marker(tmp_path):
+    out = cov.reverify_on_mismatch(tmp_path, "run1", _REVERIFY_MEASURED, _REVERIFY_STALE, spawn=lambda *a: False)
+
+    assert out is _REVERIFY_STALE and not cov._inflight_path(tmp_path, "run1").exists()
+
+
+def test_reverify_with_an_inconclusive_verdict_on_disk_returns_stale_without_spawning(tmp_path):
+    cov.write_verdict(tmp_path, "run1", _REVERIFY_MEASURED, cov.OverlayVerdict("inconclusive", "d", ("t/x.py",)))
+    spawned = []
+
+    out = cov.reverify_on_mismatch(
+        tmp_path, "run1", _REVERIFY_MEASURED, _REVERIFY_STALE, spawn=lambda *a: spawned.append(a) or True,
+    )
+
+    assert out is _REVERIFY_STALE and spawned == []
+
+
+def test_reverify_whose_spawn_fails_returns_the_stale_verdict_instead_of_parking(tmp_path):
+    out = cov.reverify_on_mismatch(
+        tmp_path, "run1", _REVERIFY_MEASURED, _REVERIFY_STALE, spawn=lambda *a: False,
+    )
+
+    assert out is _REVERIFY_STALE
 
 
 def test_no_foreign_dirt_needs_no_verdict_and_runs_no_overlay(halted, monkeypatch):  # noqa: F811

@@ -387,8 +387,10 @@ def test_agy_door_hook_commands_are_shell_neutral_and_keep_semantics(plugin, tmp
     got = [h["command"] for g in data["pre-tool-use"]["PreToolUse"] for h in g["hooks"]]
     path = (out.resolve() / "hooks" / "agy-hook-run.py").as_posix()
     shim = f'{gen._agy_python()} ' + (f'"{path}"' if " " in path else path)
+    guard = (out.resolve().parent / "unimatrix-host-guard.py").as_posix()
+    guard = f'"{guard}"' if " " in guard else guard
     assert got == [
-        f"{shim} hooks.preuse_bash_dispatch",
+        f"{shim} --host-guard {guard} --host agy hooks.preuse_bash_dispatch",
         f"{shim} --quiet --pass-2 --advisory hooks.x_check",
         f"{shim} --quiet --pass-2 hooks.guard_turn_intent",
     ]
@@ -566,12 +568,12 @@ def _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, door_py, argv=("hooks.a"
     seen = tmp_path / "door_stdin.json"
     stub.write_text("import sys\nopen(%r, 'w').write(sys.stdin.read())\n%s" % (str(seen), door_py), encoding="utf-8")
     real_run = _REAL_RUN
-    monkeypatch.setattr(ns["subprocess"], "run",
-                        lambda cmd, **kw: real_run([sys.executable, str(stub), *cmd[1:]], timeout=30, **kw))
+    monkeypatch.setattr(ns["subprocess"], "run", lambda cmd, **kw: real_run(
+        cmd if Path(cmd[1]).name == "unimatrix-host-guard.py" else [sys.executable, str(stub), *cmd[1:]], timeout=30, **kw))
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(event).encode("utf-8"))))
     rc = main(list(argv))
     cap = capfd.readouterr()
-    return rc, cap.out, cap.err, json.loads(seen.read_text(encoding="utf-8"))
+    return rc, cap.out, cap.err, json.loads(seen.read_text(encoding="utf-8")) if seen.exists() else None
 
 
 def test_shim_translates_real_agy_coordinator_invoke_payload_and_prints_explicit_allow(plugin, tmp_path, monkeypatch, capfd):
@@ -638,6 +640,55 @@ def test_shim_keeps_a_claude_shaped_payload_and_its_empty_verdict_unchanged(plug
     ev = {"tool_name": "Bash", "tool_input": {"command": "coordinator-invoke x"}, "cwd": "work\\repo"}
     rc, out, _, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stdout.write('{}')\n", event=ev)
     assert rc == 0 and out == "{}" and door_in == ev
+
+
+def test_default_agy_pretooluse_routes_through_host_guard_and_keeps_bash_dispatch(plugin, tmp_path):
+    _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.preuse_bash_dispatch",
+                         f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.guard_turn_intent 2>/dev/null{_PASS2}"])
+    out = tmp_path / "out"
+    gen.generate(plugin, out, "agy")
+    first, other = [h["command"] for g in json.loads((out / "hooks.json").read_text(encoding="utf-8"))
+                    ["pre-tool-use"]["PreToolUse"] for h in g["hooks"]]
+    assert "unimatrix-host-guard.py" in first and "--host agy" in first
+    assert first.endswith(" hooks.preuse_bash_dispatch")
+    assert "host-guard" not in other
+
+
+def _guard_stub(tmp_path, answer):
+    stub = tmp_path / "unimatrix-host-guard.py"
+    stub.write_text("import sys\nsys.stdin.read()\nsys.stdout.write(%r)\n" % json.dumps(answer), encoding="utf-8")
+    return stub
+
+
+def _guarded(plugin, tmp_path, monkeypatch, capfd, answer, engine=True):
+    """Run the generated shim in --host-guard mode against a stub guard; door stub answers an explicit allow."""
+    root = tmp_path / "engine"
+    (root / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    if engine:
+        monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(root))
+    else:
+        monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+        monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "no-registry"))
+    stub = _guard_stub(tmp_path, answer)
+    return _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stdout.write('{}')\n",
+                         argv=("--host-guard", str(stub), "--host", "agy", "hooks.a"))
+
+
+def test_host_guard_deny_and_reasoned_ask_are_the_answer_and_skip_the_door(plugin, tmp_path, monkeypatch, capfd):
+    for answer in ({"decision": "deny", "reason": "no"}, {"decision": "ask", "reason": "nag"}):
+        rc, out, _, door_in = _guarded(plugin, tmp_path, monkeypatch, capfd, answer)
+        assert rc == 0 and json.loads(out) == answer and door_in is None
+
+
+@pytest.mark.parametrize("answer", [{"decision": "ask"}, {"decision": "allow"}])
+def test_host_guard_neutral_answer_falls_through_to_the_door(plugin, tmp_path, monkeypatch, capfd, answer):
+    rc, out, _, door_in = _guarded(plugin, tmp_path, monkeypatch, capfd, answer)
+    assert rc == 0 and json.loads(out) == {"decision": "allow"} and door_in["tool_name"] == "Bash"
+
+
+def test_host_guard_without_an_engine_root_falls_through_to_the_door(plugin, tmp_path, monkeypatch, capfd):
+    rc, out, _, door_in = _guarded(plugin, tmp_path, monkeypatch, capfd, {"decision": "deny", "reason": "no"}, engine=False)
+    assert rc == 0 and json.loads(out) == {"decision": "allow"} and door_in["tool_name"] == "Bash"
 
 
 @pytest.mark.parametrize("os_name,exe", [("nt", "python"), ("posix", "python3")])

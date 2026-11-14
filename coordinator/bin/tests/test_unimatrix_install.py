@@ -897,9 +897,11 @@ def test_hosts_grok_ships_the_adapter_and_registers_only_the_grok_pretooluse_hoo
     assert not (home / ".gemini" / "config" / "hooks.json").exists()
     assert not (home / ".gemini").exists()
     assert tomllib.loads((home / ".grok" / "config.toml").read_text())["ui"]["status_line"]["type"] == "command"
-    ((matcher, command),) = _grok_guard_commands(home / ".grok" / "hooks.json")
+    assert not (home / ".grok" / "hooks.json").exists()
+    ((matcher, command),) = _grok_guard_commands(home / ".grok" / "hooks" / "coordinator.json")
     assert "unimatrix-host-guard.py" in command and "--host grok" in command
-    for tool in ("Bash", "run_command", "Edit", "Write", "MultiEdit", "NotebookEdit", "edit_file", "write_file"):
+    for tool in ("Bash", "run_command", "Edit", "Write", "MultiEdit", "NotebookEdit", "edit_file", "write_file",
+                 "read_file", "spawn_subagent"):
         assert tool in matcher.split("|")
     assert "grok hook created" in buf.getvalue()
     buf = io.StringIO()
@@ -3396,11 +3398,20 @@ def test_grok_hook_skipped_cleanly_when_grok_absent_and_seeded_once_grok_home_ex
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok"], dest_dir=tmp_path / "d", out=buf) == 0
     assert "grok hook skipped" in buf.getvalue() and "grok hook created" not in buf.getvalue()
-    assert not (home / ".grok" / "hooks.json").exists()
+    assert not (home / ".grok" / "hooks").exists()
     (home / ".grok").mkdir(exist_ok=True)
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok"], dest_dir=tmp_path / "d", out=buf) == 0
-    assert "grok hook created" in buf.getvalue() and (home / ".grok" / "hooks.json").is_file()
+    assert "grok hook created" in buf.getvalue() and (home / ".grok" / "hooks" / "coordinator.json").is_file()
+    assert not (home / ".grok" / "hooks.json").exists()
+
+
+def test_grok_hooks_path_is_the_grok_loaded_hooks_directory(monkeypatch, tmp_path):
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "gh"))
+    assert ui.grok_hooks_path() == tmp_path / "gh" / "hooks" / "coordinator.json"
+    monkeypatch.delenv("GROK_HOME")
+    _home(monkeypatch, tmp_path)
+    assert ui.grok_hooks_path() == Path.home() / ".grok" / "hooks" / "coordinator.json"
 
 
 def test_grok_hook_seeded_when_grok_binary_on_path(monkeypatch, tmp_path):

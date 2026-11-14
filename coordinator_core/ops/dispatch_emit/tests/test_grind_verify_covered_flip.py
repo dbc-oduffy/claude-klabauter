@@ -165,6 +165,98 @@ def test_routing_verify_pins_a_judging_agent_type_not_the_test_runner():
     assert "covered_by" in call and "--verdict dedupe" in call
 
 
+_BATCH_HARNESS_JS = r"""
+import fs from 'node:fs';
+const [,, scriptPath] = process.argv;
+const src = fs.readFileSync(scriptPath, 'utf8').replace(/\r\n/g, '\n').replace(/export const meta = \{[\s\S]*?\n\};\n/, '');
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const ids = (prompt) => [...new Set([...prompt.matchAll(/"row_id":"(row\d+)"/g)].map((m) => m[1]))];
+const routingCalls = [];
+const retried = new Set();
+const verdictFor = (row, first) => {
+  if (row === 'row1') return { row_id: row, outcome: 'fail', reason: 'wrong target', right_home: 'docs/elsewhere.md' };
+  if (row === 'row2' && !retried.has(row)) { retried.add(row); return { row_id: row, outcome: 'fail', reason: 'unclear' }; }
+  return { row_id: row, outcome: 'pass', reason: '' };
+};
+const reply = (opts, prompt) => {
+  const label = opts.label || '';
+  const rows = ids(prompt);
+  if (label === 'triage') {
+    return { rows: rows.map((r) => ({ row: r, verdict: 'confirmed-bug', tshirt_size: 'S', has_tradeoff: false, evidence: 'e', fix_plan: 'p' })), stale: [] };
+  }
+  if (label === 'verify-routing') {
+    routingCalls.push(rows);
+    const answered = rows.filter((r) => r !== 'row5' && !(r === 'row4' && routingCalls.length === 1));
+    return { verdicts: answered.map((r) => verdictFor(r)) };
+  }
+  if (label === 'fix') return { outcome: 'done', touched_files: ['f' + rows[0] + '.py'] };
+  if (label.startsWith('verify')) return { outcome: 'pass', exit_code: 0, output: {} };
+  if (label === 'commit') {
+    return { committed: true, sha: 'abc123', rows: rows.map((r) => ({ row_id: r, outcome: 'settled', sha: 'abc123' })), unlanded: [] };
+  }
+  return {};
+};
+let ledgerPrompt = '';
+const agent = (prompt, opts = {}) => {
+  if ((opts.label || '').startsWith('ledger-sweep')) ledgerPrompt = prompt;
+  return new Promise((res) => setTimeout(() => res(reply(opts, prompt)), 1));
+};
+const budget = { spent: () => 0, remaining: () => null, total: null };
+const fn = new AsyncFunction('args', 'agent', 'phase', 'log', 'budget', 'parallel', src);
+const out = await fn(
+  { run_stamp: '20261114T000000Z', script_path: 'x.mjs', profile_dir: 'pd', repo_root: '/r', run_token: 'tok' },
+  agent, () => {}, () => {}, budget, async (xs) => Promise.all(xs),
+);
+const record = decodeURIComponent(/RUNREC-OPEN-\S+\n\d+ [0-9a-f]{64}\n(\S+)\nRUNREC-CLOSE-/.exec(ledgerPrompt)[1]);
+console.log(JSON.stringify({ routingCalls, record }));
+"""
+
+
+def test_a_six_row_batch_issues_at_most_three_routing_verify_calls_and_applies_each_verdict(tmp_path):
+    import shutil
+    import subprocess
+
+    from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEntry
+
+    from .conftest import REVIEW_KW
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node absent")
+    profile = _routing_profile(tmp_path)
+    entries = tuple(
+        ManifestEntry(row_id=f"row{i}", path=f"state/bug-backlog/row{i}.yaml", digest=f"{i:064x}", batch_key="P1")
+        for i in range(6)
+    )
+    manifest = Manifest(entries=entries, batch_sizes={"P1": 6}, source=None, digest="deadbeef")
+    knobs = {**gp.resolve_appetite(profile, "standard"), "batch_size": 6}
+    script = gc.compose_grind_script(
+        manifest, profile, knobs,
+        run_dir="state/queue-grind/fixture/run-1", appetite="standard", agent_type_host=None,
+        queue_dirs=["state/bug-backlog"], **REVIEW_KW,
+    )
+    (tmp_path / "grind.mjs").write_bytes(script.encode("utf-8"))
+    (tmp_path / "harness.mjs").write_text(_BATCH_HARNESS_JS, encoding="utf-8")
+    out = subprocess.run(
+        [node, str(tmp_path / "harness.mjs"), str(tmp_path / "grind.mjs")],
+        capture_output=True, text=True, check=False, timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    seen = json.loads(out.stdout)
+    calls = seen["routingCalls"]
+    assert len(calls) <= 3
+    assert calls[0] == [f"row{i}" for i in range(6)]
+    assert calls[1] == ["row4", "row5"]
+    assert calls[2] == ["row2"]
+    record = json.loads(seen["record"])
+    handed = {h["row"]: h for h in record["handed_back"]}
+    assert handed["row5"]["type"] == "stage-dead"
+    assert handed["row5"]["reason"] == "verify-routing returned no verdict for this row"
+    assert not [h for r, h in handed.items() if r != "row5" and h["type"] in {"stage-dead", "rejected-after-retry"}
+                and "verify-routing" in h["reason"]], handed
+
+
 def test_post_fix_verify_stays_on_the_test_runner(tmp_path):
     script = _script(_routing_profile(tmp_path))
     stage = script[script.index("async function _verifyCall"):script.index("async function _verifyStage")]

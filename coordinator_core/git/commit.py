@@ -77,6 +77,7 @@ import threading
 import time
 from contextvars import ContextVar, Token
 from pathlib import Path
+from stat import S_ISREG
 from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
 
 from coordinator_core import dispatch_abandon
@@ -606,7 +607,8 @@ def checkin_blob_sha(root: Path, rel: str) -> Optional[str]:
     Hash-only: sha1(b"blob <len>\\0" + `_checkin_bytes` output). Writes no object and
     spawns nothing. None for every shape `_checkin_bytes` refuses with `FilterUnsupported`
     (clean filter, CR bytes under a text pin, an `[attr]` macro, CR bytes under a
-    not-true autocrlf) and for an unreadable file. Adds the bytes it read to the bound
+    not-true autocrlf) and for an unreadable file, a non-regular file (a read of a named pipe
+    blocks) or one whose bytes do not match its stat size. Adds the bytes it read to the bound
     byte counter, if any.
 
     `git_state.py` forbids re-opening the RAW-bytes question (hashing worktree bytes
@@ -616,8 +618,14 @@ def checkin_blob_sha(root: Path, rel: str) -> Optional[str]:
     """
     base = Path(root)
     try:
-        data = (base / rel).read_bytes()
+        path = base / rel
+        st = os.stat(path)
+        if not S_ISREG(st.st_mode):
+            return None
+        data = path.read_bytes()
     except OSError:
+        return None
+    if len(data) != st.st_size:
         return None
     box = _BYTES_READ.get()
     if box is not None:

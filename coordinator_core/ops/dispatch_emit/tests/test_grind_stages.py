@@ -1466,3 +1466,53 @@ def test_triage_schema_admits_optional_items_and_does_not_require_them():
     assert "items" not in grind_stages.TRIAGE_RECORD_FIELDS
     assert "Fill `items`" in call
     assert "share one root cause stay one row: leave `items` out" in call
+
+
+def _batch_call(**kw):
+    return grind_stages.compose_verify_routing_batch_call(
+        label="vb", phase_title="Grind", rows_js="rows", profile="lessons", run_id_js="RUN_ID", **kw,
+    )
+
+
+def _batch_schema(call: str) -> dict:
+    return json.loads(re.search(r"schema: (\{.*\}) \}\)", call, re.DOTALL).group(1))
+
+
+def test_routing_batch_schema_requires_verdicts_with_row_id_outcome_reason():
+    schema = _batch_schema(_batch_call())
+    assert schema["required"] == ["verdicts"]
+    item = schema["properties"]["verdicts"]["items"]
+    assert item["required"] == ["row_id", "outcome", "reason"]
+    assert item["properties"]["outcome"]["enum"] == ["pass", "fail"]
+    assert "covered_by" in item["properties"] and "right_home" in item["properties"]
+
+
+def test_routing_batch_lists_every_row_field_and_dispatches_the_routing_verifier():
+    call = _batch_call()
+    for field in ("rowId", "path", "evidence", "fixPlan", "digest"):
+        assert f"r.{field}" in call
+    assert "agentType: 'coordinator:premise-checker'" in call
+    assert "label: 'vb'" in call
+
+
+def test_routing_batch_hand_back_keeps_the_haiku_pin_and_routing_keeps_the_agent_pin():
+    assert f"model: '{grind_stages.ROUTING_VERIFY_HAND_BACK_MODEL}'" in _batch_call(hand_back=True)
+    pinned = grind_stages.resolve_agent_model(grind_stages.ROUTING_VERIFY_AGENT_TYPE, None)
+    assert f"model: '{pinned}'" in _batch_call()
+
+
+def test_routing_batch_retire_never_asks_for_right_home_or_a_covered_fail():
+    retire = _batch_call(retire=True)
+    item = _batch_schema(retire)["properties"]["verdicts"]["items"]
+    assert "right_home" not in item["properties"]
+    assert "Judge the retire verdict only" in retire
+    assert "Judge the routing only" not in retire
+    assert "Judge the routing only" in _batch_call()
+
+
+def test_routing_batch_retire_rerun_is_committed_head_and_returns_runner_fields_per_row():
+    call = _batch_call(retire=True, targeted_runner=True)
+    assert "--committed-head" in call
+    item = _batch_schema(call)["properties"]["verdicts"]["items"]
+    assert {"tests_record", "tests_outcome"} <= set(item["required"])
+    assert "Run no tests" in _batch_call(targeted_runner=True), "a routing batch never reruns tests"

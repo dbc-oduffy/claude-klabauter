@@ -2636,36 +2636,31 @@ def compose_grind_script(
         final_js="row.verifyRetried", undo_paths_js="_undoPaths(row)",
         digest_js="row.digest",
     )
-    verify_routing_raw = stages.compose_verify_agent_call(
-        models=stage_models,
-        label="verify-routing", phase_title="Grind",
-        row_id_js="row.rowId", row_path_js="row.path", touched_files_js="row.touchedFiles",
-        evidence_js="row.evidence", fix_plan_js="row.fixPlan",
+    batch_kw: dict[str, Any] = dict(
+        models=stage_models, phase_title="Grind", rows_js="rows",
         agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
         targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
-        routing=True, digest_js="row.digest",
     )
-    verify_routing_hand_back_raw = stages.compose_verify_agent_call(
-        models=stage_models,
-        label="verify-routing-hand-back", phase_title="Grind",
-        row_id_js="row.rowId", row_path_js="row.path", touched_files_js="row.touchedFiles",
-        evidence_js="row.evidence", fix_plan_js="row.fixPlan",
-        agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
-        targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
-        routing=True, digest_js="row.digest", hand_back=True,
+    verify_routing_raw = stages.compose_verify_routing_batch_call(label="verify-routing", **batch_kw)
+    verify_routing_hand_back_raw = stages.compose_verify_routing_batch_call(
+        label="verify-routing-hand-back", hand_back=True, **batch_kw,
     )
-    verify_routing_retire_raw = stages.compose_verify_agent_call(
-        models=stage_models,
-        label="verify-routing-retire", phase_title="Grind",
-        row_id_js="row.rowId", row_path_js="row.path", touched_files_js="row.touchedFiles",
-        evidence_js="row.evidence", fix_plan_js="row.fixPlan",
-        agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
-        targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
-        routing=True, digest_js="row.digest", retire=True,
+    verify_routing_retire_raw = stages.compose_verify_routing_batch_call(
+        label="verify-routing-retire", retire=True, **batch_kw,
     )
+    batch_verdicts = "{ verdicts: _result.verdicts || [] }"
     _runner_fail = json.dumps([
         o for o in stages.RUNNER_FAIL_OUTCOMES if profile.name == "bug" or o != "no-runner"
     ])
+    verify_retire_batch_tail = (
+        "  const _verdicts = (_result.verdicts || []).map((v) => {\n"
+        "    const _forced = " + _runner_fail + ".includes(v.tests_outcome);\n"
+        "    const _ids = (v.tests_failing_ids || []).join(', ');\n"
+        "    return _forced ? { row_id: v.row_id, outcome: 'fail', reason: 'targeted tests ' + v.tests_outcome"
+        " + (_ids ? ': ' + _ids : '') } : v;\n"
+        "  });\n"
+        "  return { verdicts: _verdicts };"
+    )
     verify_agent_tail = (
         "  const _forced = " + _runner_fail + ".includes(_result.tests_outcome);\n"
         "  if (_forced) {\n"
@@ -2684,7 +2679,7 @@ def compose_grind_script(
         digest_js="row.digest", profile=profile.name, run_id_js="RUN_ID",
     )
     lines.append(
-        "async function _verifyCall(row) {\n"
+        "async function _verifyCall(row, rows) {\n"
         "  const spec = ((VERIFY_SPEC[row.node] || {})[row.batchKey]) || { mode: 'agent', op: null };\n"
         "  if (spec.mode === 'op') {\n"
         + _indent_block(
@@ -2707,8 +2702,8 @@ def compose_grind_script(
                 "    if (VERIFY_RETIRE.includes(row.node)) {\n"
                 + _indent_block(
                     _capture(
-                        verify_routing_retire_raw, "verify",
-                        tail=verify_agent_tail if targeted_runner else None,
+                        verify_routing_retire_raw, "verify", return_expr=batch_verdicts,
+                        tail=verify_retire_batch_tail if targeted_runner else None,
                     ),
                     "    ",
                 )
@@ -2719,10 +2714,7 @@ def compose_grind_script(
             + (
                 "    if (VERIFY_HAND_BACK.includes(row.node)) {\n"
                 + _indent_block(
-                    _capture(
-                        verify_routing_hand_back_raw, "verify",
-                        tail=verify_agent_tail if targeted_runner else None,
-                    ),
+                    _capture(verify_routing_hand_back_raw, "verify", return_expr=batch_verdicts),
                     "    ",
                 )
                 + "\n    }\n"
@@ -2730,7 +2722,7 @@ def compose_grind_script(
                 else ""
             )
             + _indent_block(
-                _capture(verify_routing_raw, "verify", tail=verify_agent_tail if targeted_runner else None),
+                _capture(verify_routing_raw, "verify", return_expr=batch_verdicts),
                 "    ",
             )
             + "\n  }\n"
@@ -2990,6 +2982,9 @@ def compose_grind_script(
         "  const row = _rows[rowId];\n"
         "  const lockKeys = _lockKeysFor(row, rowId);\n"
         "  const result = await _issue(row.batchId, rowId, () => withLock(lockKeys, async () => _verifyCall(row)));\n"
+        "  await _applyVerifyResult(row, rowId, result);\n"
+        "}\n"
+        "async function _applyVerifyResult(row, rowId, result) {\n"
         "  if (result.outcome === 'fail') {\n"
         "    if (result.covered_by && _isCoveredRetire(row.node)) { await _applyRouteRow(row, rowId, followEdge(row.node, 'pass', row), 'covered artifact confirms the retire verdict'); return; }\n"
         "    if (result.covered_by && VERIFY_PRE_FIX.includes(row.node) && !row.dedupeFlipped && row.origin !== 'triage:dedupe') {\n"
@@ -3033,6 +3028,60 @@ def compose_grind_script(
         "}"
     )
 
+    verify_dispatch = "  else if (kind === 'verify') { await _verifyStage(rowId); }\n"
+    if pre_fix_nodes:
+        round_kind = "'routing'"
+        if hand_back_nodes:
+            round_kind = f"(VERIFY_HAND_BACK.includes(_node) ? 'hand-back' : {round_kind})"
+        if retire_nodes:
+            round_kind = f"(VERIFY_RETIRE.includes(_node) ? 'retire' : {round_kind})"
+        lines.append(
+            "function _preFixAgentRow(rowId) {\n"
+            "  const w = _rows[rowId];\n"
+            "  if (w.done || !w.node || !VERIFY_PRE_FIX.includes(w.node)) return false;\n"
+            "  return (((VERIFY_SPEC[w.node] || {})[w.batchKey]) || { mode: 'agent' }).mode !== 'op';\n"
+            "}\n"
+            "async function _verifyRoutingRound(batchState) {\n"
+            "  const batch = BATCHES.find((b) => b.id === batchState.id);\n"
+            "  const _groups = {};\n"
+            "  for (const r of batch.rows.filter(_preFixAgentRow)) {\n"
+            "    const _node = _rows[r].node;\n"
+            f"    const _kind = {round_kind};\n"
+            "    (_groups[_kind] = _groups[_kind] || []).push(r);\n"
+            "  }\n"
+            "  for (const _kind of Object.keys(_groups)) {\n"
+            "    const _group = _groups[_kind];\n"
+            "    const _got = new Map();\n"
+            "    let _todo = _group;\n"
+            "    for (let _pass = 0; _pass < 2 && _todo.length > 0; _pass += 1) {\n"
+            "      const _scope = _todo;\n"
+            "      const _meta = _scope.map((r) => ({ row_id: r, path: _rows[r].path }));\n"
+            "      const _keys = Array.from(new Set(_scope.flatMap((r) => _lockKeysFor(_rows[r], r))));\n"
+            "      const _out = await _issue(batchState.id, '', () => withLock(_keys, async () => "
+            "_verifyCall(_rows[_scope[0]], _scope.map((r) => _rows[r]))));\n"
+            "      for (const v of (_out.verdicts || [])) {\n"
+            "        const _id = _normalizeRowRef(_meta, v.row_id);\n"
+            "        if (_scope.includes(_id) && !_got.has(_id)) { _got.set(_id, v); }\n"
+            "      }\n"
+            "      _todo = _group.filter((r) => !_got.has(r));\n"
+            "    }\n"
+            "    for (const r of _group) {\n"
+            "      const row = _rows[r];\n"
+            "      if (row.done) continue;\n"
+            "      const v = _got.get(r);\n"
+            "      if (!v) { row.done = true; _handBack(r, 'stage-dead', 'verify-routing returned no verdict for this row'); continue; }\n"
+            "      await _applyVerifyResult(row, r, v);\n"
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+        verify_dispatch = (
+            "  else if (kind === 'verify') {\n"
+            "    if (_preFixAgentRow(rowId)) { await _verifyRoutingRound(batchState); }\n"
+            "    else { await _verifyStage(rowId); }\n"
+            "  }\n"
+        )
+
     lines.append(
         "async function _commitStage(rowId) {\n"
         "  _rows[rowId].done = true;\n"
@@ -3045,8 +3094,8 @@ def compose_grind_script(
         "  const row = _rows[rowId];\n"
         "  const kind = ROUTING[row.node].kind;\n"
         "  if (kind === 'fix') { await _fixStage(rowId); }\n"
-        "  else if (kind === 'verify') { await _verifyStage(rowId); }\n"
-        "  else if (kind === 'commit') { await _commitStage(rowId); }\n"
+        + verify_dispatch
+        + "  else if (kind === 'commit') { await _commitStage(rowId); }\n"
         "  else if (kind === 'refute-close') {\n"
         "    if (!batchState.closedRows.has(rowId)) { await _closeBatch(batchState); }\n"
         "    else { row.done = true; _handBack(rowId, 'stage-dead', 'refute-close already called for this batch'); }\n"

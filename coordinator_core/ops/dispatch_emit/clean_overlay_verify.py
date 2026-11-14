@@ -774,27 +774,62 @@ def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
     return OverlayVerdict(verdict, str(data.get("detail", "")), seeds)
 
 
-REVERIFY_WAIT_S = SETUP_TIMEOUT_S + TEST_TIMEOUT_S
-_REVERIFY_POLL_S = 1.0
-
-#: Step name and cap of the wait on the detached re-verify; past either the op budget or the cap
-#: `reverify_on_mismatch` raises `land_deadline.LandDeadlineExceeded(REVERIFY_STEP, step=True)` and
-#: the landing parks. The child still writes its verdict, which the re-sent landing reads.
+#: Step name and cap of the one verdict read plus detached spawn; `reverify_on_mismatch` ends in
+#: `land_deadline.LandDeadlineExceeded(REVERIFY_STEP, step=True)` and the landing parks. The child
+#: writes its verdict, which the re-sent landing reads.
 REVERIFY_STEP = "clean_overlay_verify.reverify_on_mismatch"
 REVERIFY_STEP_SECS = 8.0
 
 
+INFLIGHT_FILE = "overlay-inflight"
+INFLIGHT_TTL_S = 3 * TEST_TIMEOUT_S
+
+
+def _inflight_path(root: Path, run_id: str) -> Path:
+    return verdict_path(root, run_id).with_name(INFLIGHT_FILE)
+
+
+def _claim_inflight(root: Path, run_id: str) -> bool:
+    """Create the run's in-flight marker exclusively: False when a detached overlay younger than
+    `INFLIGHT_TTL_S` already holds it (a marker older than that is a dead child's and is replaced)."""
+    path = _inflight_path(root, run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            return True
+        except FileExistsError:
+            try:
+                if time.time() - path.stat().st_mtime < INFLIGHT_TTL_S:
+                    return False
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                return False
+        except OSError:
+            return True
+    return False
+
+
+def _release_inflight(root: Path, run_id: str) -> None:
+    try:
+        _inflight_path(root, run_id).unlink()
+    except OSError:
+        pass
+
+
 def reverify_on_mismatch(
-    root: Path, run_id: str, measured: dict, stale: OverlayVerdict, *,
-    spawn=None, wait_s: float = REVERIFY_WAIT_S, sleep=time.sleep, clock=time.monotonic,
+    root: Path, run_id: str, measured: dict, stale: OverlayVerdict, *, spawn=None,
 ) -> OverlayVerdict:
-    """Re-run the overlay for a "mismatch" `stale` verdict over the current `measured` candidate: this
-    module's CLI is launched detached (the overlay's git and pytest children never run inside the engine
-    op) and its verdict file is polled for at most `wait_s`. Returns the fresh verdict when it is green or
-    red; any other `stale`, no recorded seeds, no candidate, a failed launch, a timeout or an inconclusive
-    re-verify returns `stale` unchanged (the child still writes its verdict for the refire). The wait
-    runs under the `REVERIFY_STEP` step, so a poll that outlives the step cap or the land budget
-    raises `land_deadline.LandDeadlineExceeded` rather than returning."""
+    """Re-run the overlay for a "mismatch" `stale` verdict over the current `measured` candidate. Reads
+    the verdict file once: a green, red or pre_existing verdict keyed to this landing is returned. With none,
+    this module's CLI is launched detached (the overlay's git and pytest children never run inside the
+    engine op) and the landing parks by raising `land_deadline.LandDeadlineExceeded(REVERIFY_STEP,
+    step=True)`; the op never waits on the child. Any other `stale`, no recorded seeds, no candidate, an
+    inconclusive fresh verdict or a failed launch returns `stale` unchanged. An `overlay-inflight` marker
+    (claimed before the launch, released by the child) keeps a re-sent landing from launching a second
+    overlay while one runs: it parks without spawning."""
     if stale.verdict != "mismatch" or not stale.seeds or overlay_candidate(measured) is None:
         return stale
     if spawn is None:
@@ -803,20 +838,19 @@ def reverify_on_mismatch(
 
     engine = Path(__file__).resolve().parents[3]
     argv = ["--run-id", run_id, "--repo-root", str(root)]
-    with land_deadline.step(REVERIFY_STEP, min(wait_s, REVERIFY_STEP_SECS)):
-        if not spawn(str(engine), str(Path(__file__).resolve()), argv):
+    with land_deadline.step(REVERIFY_STEP, REVERIFY_STEP_SECS):
+        fresh = check_verdict(root, run_id, measured)
+        if fresh.verdict in ("green", "red", "pre_existing"):
+            return fresh
+        if fresh.verdict == "inconclusive":
             return stale
-        deadline = clock() + wait_s
-        while True:
-            left = land_deadline.step_remaining()
-            sleep(_REVERIFY_POLL_S if left is None else min(_REVERIFY_POLL_S, left))
-            land_deadline.step_check()
-            fresh = check_verdict(root, run_id, measured)
-            if fresh.verdict not in ("mismatch", "missing"):
-                return fresh if fresh.verdict in ("green", "red", "pre_existing") else stale
-            land_deadline.step_check()
-            if clock() >= deadline:
+        if _claim_inflight(root, run_id):
+            if not spawn(str(engine), str(Path(__file__).resolve()), argv):
+                _release_inflight(root, run_id)
                 return stale
+        raise land_deadline.LandDeadlineExceeded(
+            REVERIFY_STEP, land_deadline.leg_costs(), land_deadline.BOUND_STEP, step=True
+        )
 
 
 def remedy_call(run_id: Optional[str], root: Optional[Path] = None) -> str:
@@ -877,12 +911,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if sha is None:
         print("measured-rev record carries no candidate sha", file=sys.stderr)
         return 2
-    outcome = name_peer_owners(
-        verify(
-            root, args.run_id, sha, seeds_for_landing(root, paths), base_sha=measured.get("base_sha"), touched=paths,
-        ), measured,
-    )
-    write_verdict(root, args.run_id, measured, outcome)
+    try:
+        outcome = name_peer_owners(
+            verify(
+                root, args.run_id, sha, seeds_for_landing(root, paths), base_sha=measured.get("base_sha"), touched=paths,
+            ), measured,
+        )
+        write_verdict(root, args.run_id, measured, outcome)
+    finally:
+        _release_inflight(root, args.run_id)
     print(f"overlay verdict: {outcome.verdict}")
     return {"green": 0, "pre_existing": 0, "red": 1}.get(outcome.verdict, 2)
 

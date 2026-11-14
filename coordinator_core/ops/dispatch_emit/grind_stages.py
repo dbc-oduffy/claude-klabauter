@@ -1273,6 +1273,123 @@ def compose_verify_agent_call(
     )
 
 
+def compose_verify_routing_batch_call(
+    *,
+    models: Optional[Mapping[str, str]] = None,
+    label: str,
+    phase_title: str,
+    rows_js: str,
+    agent_type_host: Optional[str] = None,
+    run_key: str = DEFAULT_RUN_KEY,
+    preamble_expr: Optional[str] = None,
+    targeted_runner: bool = False,
+    profile: str = "",
+    run_id_js: Optional[str] = None,
+    repo_root_js: str = "REPO_ROOT",
+    hand_back: bool = False,
+    retire: bool = False,
+) -> str:
+    """The routing `verify` call for one brief kind over many rows. ``rows_js`` is a JS expression for an array
+    of row objects carrying ``rowId``, ``path``, ``evidence``, ``fixPlan`` and ``digest``; the reply is
+    ``{verdicts: [{row_id, outcome, reason, covered_by?, right_home?}]}``, one entry per row. ``hand_back`` and
+    ``retire`` carry the per-row call's model pin and brief: ``hand_back`` runs on
+    ``ROUTING_VERIFY_HAND_BACK_MODEL``; ``retire`` judges only that the cited artifact covers the claim and
+    never sets ``right_home``. With ``profile`` the verifier records each `fail` as a ledger line for that row."""
+    run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
+    row_lines = (
+        f"({rows_js}).map(r => JSON.stringify({{row_id: r.rowId, path: r.path, evidence: r.evidence, "
+        "fixPlan: r.fixPlan, digest: r.digest})).join('\\n')"
+    )
+    parts: list[tuple[str, str]] = [
+        *_preamble_parts(preamble_expr),
+        (
+            "lit",
+            "You are the routing verify stage for a batch of rows. No fix has run for any of them and none is "
+            "expected. Each line below is one row as JSON (row_id, path, triage evidence, fix plan, digest). "
+            "Judge every row independently and return exactly one verdict per row, keyed by its `row_id` "
+            "verbatim. ",
+        ),
+        (
+            "lit",
+            (
+                _RETIRE_VERIFY_CLAUSE if retire
+                else _ROUTING_VERIFY_CLAUSE + _COVERED_BY_CLAUSE + _ROUTING_COVERED_ANYWHERE_CLAUSE
+            ),
+        ),
+    ]
+    item_props: dict = {
+        "row_id": {"type": "string", "description": "the row_id exactly as given on its line"},
+        "outcome": {"type": "string", "enum": ["pass", "fail"]},
+        "reason": {"type": "string"},
+        "covered_by": {"type": "string"},
+    }
+    item_required = ["row_id", "outcome", "reason"]
+    if not retire:
+        item_props["right_home"] = {"type": "string"}
+    if targeted_runner and retire:
+        parts.append(("lit", _RETIRE_RERUN_CLAUSE))
+        parts.extend(_runner_invocation_parts(
+            profile=profile,
+            row_path_part=("lit", "<row path>"),
+            touched_parts=[("lit", "<the row's surface>")],
+            run_id_part=run_id_part,
+            row_id_part=("lit", "<row_id>"),
+            repo_root_js=repo_root_js,
+            committed_head=True,
+        ))
+        parts.append(("lit", _RETIRE_RERUN_TAIL + " Return them on that row's verdict."))
+        item_required += ["tests_record", "tests_outcome"]
+        item_props["tests_record"] = {"type": "string"}
+        item_props["tests_outcome"] = {"type": "string", "enum": list(RUNNER_OUTCOMES)}
+        item_props["tests_failing_ids"] = {"type": "array", "items": {"type": "string"}}
+    elif targeted_runner:
+        parts.append(("lit", _ROUTING_VERIFY_RUNNER_CLAUSE))
+    if profile:
+        parts.extend([
+            (
+                "lit",
+                " For each row whose outcome is fail, write the failing check, what it expected and what you saw "
+                "to that row's evidence file below (append a section if it exists), return that text as its "
+                "`reason`, and run `" + ASSEMBLE_CMD + f" grind-row append --profile {profile} --row-id <row_id> "
+                "--digest <digest> --stage verify --verdict fail --outcome fail --evidence-file ",
+            ),
+            *_evidence_path_parts(profile, run_id_part, ("lit", "<row_id>"), "verify"),
+            ("lit", " --run-stamp "),
+            run_id_part,
+            ("lit", " --repo-root "),
+            _shq_part(repo_root_js),
+            ("lit", "`, with that row's own values for the angle-bracket fields."),
+        ])
+        if not retire:
+            parts.append(("lit", _COVERED_BY_LEDGER_CLAUSE))
+    parts.append(("lit", "\n\nRows:\n"))
+    parts.append(("expr", row_lines))
+    schema = {
+        "type": "object",
+        "required": ["verdicts"],
+        "properties": {
+            "verdicts": {
+                "type": "array",
+                "items": {"type": "object", "required": item_required, "properties": item_props},
+            },
+        },
+    }
+    return _agent_call(
+        _join_prompt_parts(parts),
+        stage="verify-routing",
+        models=models,
+        label=label,
+        phase_title=phase_title,
+        agent_type=ROUTING_VERIFY_AGENT_TYPE,
+        agent_type_host=agent_type_host,
+        run_key=run_key,
+        effort="medium",
+        schema=schema,
+        is_expr=True,
+        carve_out_model=ROUTING_VERIFY_HAND_BACK_MODEL if hand_back else None,
+    )
+
+
 def _verify_op_record_parts(
     *, profile: str, row_id_js: str, row_path_js: str, digest_js: str,
     run_id_js: Optional[str], repo_root_js: str,

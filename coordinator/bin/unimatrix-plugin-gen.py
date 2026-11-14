@@ -13,6 +13,7 @@ session, which nothing here covers.
 """
 import json
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -283,9 +284,12 @@ def _hook_name(event):
 
 
 SHIM_REL = "hooks/agy-hook-run.py"
+GUARD_REL = "unimatrix-host-guard.py"
 SHIM_SOURCE = '''"""agy hook launcher: runs the settings-home hook-run door with stdin mode `hook`, shell-neutral.
 
-argv: [--quiet] [--pass-2] <hook-run args...>. --quiet drops the door's stderr; --pass-2 maps its exit 2 to 0.
+argv: [--quiet] [--pass-2] [--host-guard <guard.py> --host agy] <hook-run args...>. --quiet drops the door's
+stderr; --pass-2 maps its exit 2 to 0; --host-guard first asks the host guard (shim, agy adapter, DIY nag)
+and answers with its deny or reasoned ask, else falls through to the door.
 An agy tool event (payload carries `toolCall`) is translated to the Claude shape for the door and the
 door's verdict back to an explicit agy decision (agy fails closed on `{}`); any other payload passes whole.
 """
@@ -293,10 +297,54 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 
 RESULT_KEYS = ("toolResult", "toolOutput", "toolResponse", "result", "output")
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def settings_home():
+    return Path(os.environ.get("COORDINATOR_SETTINGS_HOME") or Path.home() / ".coordinator-claude-settings")
+
+
+def engine_root():
+    """Published engine root: COORDINATOR_ENGINE_ROOT, else registry key repos.claude_klabauter; None on a miss."""
+    env = os.environ.get("COORDINATOR_ENGINE_ROOT")
+    if env and Path(env).is_dir():
+        return env
+    ml = Path(os.environ.get("MACHINE_LOCAL_REGISTRY_DIR") or settings_home() / "machine-local")
+    root = None
+    for name in ("registry.toml", "registry.local.toml"):
+        try:
+            data = tomllib.loads((ml / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        repos = data.get("repos")
+        root = (repos.get("claude_klabauter") if isinstance(repos, dict) else None) or data.get("repos.claude_klabauter") or root
+    return root if root and (Path(root) / "coordinator_core").is_dir() else None
+
+
+def guard_answer(payload, guard, host):
+    """The host guard's answer when it is a deny or an ask carrying a reason, else None (fall through to the door)."""
+    guard = Path(guard)
+    if not guard.is_file():
+        guard = settings_home() / "unimatrix" / guard.name
+    root = engine_root()
+    if not (root and guard.is_file()):
+        return None
+    try:
+        res = subprocess.run([sys.executable, str(guard), "--host", host, "--engine-root", root], input=payload,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+        answer = json.loads(res.stdout)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(answer, dict) or res.returncode != 0:
+        return None
+    if answer.get("decision") == "deny" or (answer.get("decision") == "ask" and answer.get("reason")):
+        return answer
+    return None
 
 
 def agy_event(p):
@@ -350,14 +398,23 @@ def to_agy(rc, out, err):
 def main(argv):
     quiet = "--quiet" in argv
     pass_2 = "--pass-2" in argv
-    rest = [a for a in argv if a not in ("--quiet", "--pass-2")]
-    home = os.environ.get("COORDINATOR_SETTINGS_HOME") or str(Path.home() / ".coordinator-claude-settings")
-    door = Path(home) / "bin" / ("hook-run.exe" if os.name == "nt" else "hook-run")
+    guard = argv[argv.index("--host-guard") + 1] if "--host-guard" in argv[:-1] else None
+    host = argv[argv.index("--host") + 1] if "--host" in argv[:-1] else "agy"
+    skip = {"--quiet", "--pass-2"}
+    if guard:
+        skip |= {"--host-guard", guard, "--host", host}
+    rest = [a for a in argv if a not in skip]
+    door = settings_home() / "bin" / ("hook-run.exe" if os.name == "nt" else "hook-run")
     env = dict(os.environ, COORDINATOR_DOOR_STDIN_MODE="hook")
     try:
         payload = sys.stdin.buffer.read()
     except (OSError, ValueError):
         payload = b""
+    if guard:
+        answer = guard_answer(payload, guard, host)
+        if answer is not None:
+            sys.stdout.write(json.dumps(answer))
+            return 0
     payload, agy = to_claude(payload)
     extra = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE} if agy else {}
     if not agy:
@@ -411,10 +468,14 @@ def _agy_hook_command(command, out_dir):
     if not m:
         return None
     flags = (" --quiet" if m["quiet"] else "") + (" --pass-2" if m["pass2"] else "")
-    shim = f"{str(out_dir).replace(chr(92), '/').rstrip('/')}/{SHIM_REL}"
-    if " " in shim:
-        shim = f'"{shim}"'
-    return f"{_agy_python()} {shim}{flags}{m['rest']}"
+    root = str(out_dir).replace(chr(92), "/").rstrip("/")
+    if m["rest"].strip() == "hooks.preuse_bash_dispatch":
+        flags += f" --host-guard {_quote_if_space(posixpath.dirname(root) + '/' + GUARD_REL)} --host agy"
+    return f"{_agy_python()} {_quote_if_space(f'{root}/{SHIM_REL}')}{flags}{m['rest']}"
+
+
+def _quote_if_space(path):
+    return f'"{path}"' if " " in path else path
 
 
 def _fold_args(command, args):

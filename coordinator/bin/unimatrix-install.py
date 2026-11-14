@@ -81,7 +81,9 @@ PLUGIN_GEN_SCRIPT = "unimatrix-plugin-gen.py"
 AGY_PLUGIN_TREE_DIR = "agy-plugin"
 CODEX_SHELL_MATCHER = ".*"
 GROK_TOOL_MATCHER = ("Bash|bash|shell|run_command|run_shell_command|"
-                     "Edit|Write|MultiEdit|NotebookEdit|edit_file|write_file")
+                     "Edit|Write|MultiEdit|NotebookEdit|edit_file|write_file|"
+                     "read_file|spawn_subagent")
+GROK_HOOKS_FILE = "coordinator.json"
 HOST_NAMES = ("claude", "codex", "agy", "grok")
 
 _BIN_DIR = Path(__file__).resolve().parent
@@ -1346,8 +1348,8 @@ def grok_present():
 
 
 def grok_hooks_path():
-    """Grok's hook registration file: $GROK_HOME/hooks.json, kept apart from config.toml so that stays untouched."""
-    return grok_config_path().with_name("hooks.json")
+    """Grok's hook registration file: $GROK_HOME/hooks/coordinator.json; grok loads hooks/*.json, never a bare hooks.json."""
+    return grok_config_path().parent / "hooks" / GROK_HOOKS_FILE
 
 
 def grok_hook_entry(dest_dir, engine_root=None):

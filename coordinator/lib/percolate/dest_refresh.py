@@ -65,6 +65,7 @@ from __future__ import annotations
 import os
 import re
 import io
+import time
 
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -633,6 +634,75 @@ def preflight_dest_refresh(result: RefreshResult) -> RefreshResult:
     return replace(result, refresh_head=head, landing_tip=upstream)
 
 
+_MTIME_SLACK_SECS = 0.1  # filesystem timestamp coarseness against time.time()
+
+
+def _nul_paths(repo_root: Path, args: List[str]) -> List[str]:
+    listed = _git(repo_root, args)
+    return [p for p in (listed.stdout or "").split("\0") if p] if listed.returncode == 0 else []
+
+
+def _rollback_failed_ff(
+    repo_root: Path, prior: Optional[str], upstream: str, merge: GitResult, started: float
+) -> str:
+    """After a failed `merge --ff-only`, put the tree back at `prior`; returns a reason suffix.
+
+    A budget-killed merge strands a zero-byte `.git/index.lock` and a half-written tree
+    while HEAD stays at `prior`. Rolls back only while HEAD is still `prior`: removes the
+    lock only if it is newer than `started` (our killed child's, never a live peer's),
+    restores the `prior..upstream` diff paths from `prior`, and deletes files only
+    upstream adds that this merge wrote. Never `reset --hard`; never raises.
+    """
+    try:
+        if prior is None or _resolve_commit(repo_root, "HEAD") != prior:
+            return ""
+        lock_path = _git(repo_root, ["rev-parse", "--git-path", "index.lock"]).stdout.strip()
+        lock = Path(lock_path) if lock_path else None
+        if lock is not None and not lock.is_absolute():
+            lock = repo_root / lock
+        if lock is not None:
+            try:
+                if lock.stat().st_mtime >= started - _MTIME_SLACK_SECS:
+                    lock.unlink()
+            except OSError:
+                pass
+        diff = ["diff", "--name-only", "-z", "--no-renames"]
+        touched = _nul_paths(repo_root, [*diff, prior, upstream])
+        added = set(_nul_paths(repo_root, [*diff, "--diff-filter=A", prior, upstream]))
+        kept = [p for p in touched if p not in added]
+        if kept:
+            stdin = "\0".join(kept).encode("utf-8") + b"\0"
+            run_git(
+                ["-C", str(repo_root), "--no-optional-locks", "checkout", prior,
+                 "--pathspec-from-file=-", "--pathspec-file-nul"],
+                input=stdin,
+            )
+        for rel in added:
+            target = repo_root / rel
+            try:
+                if target.is_file() and target.stat().st_mtime >= started - _MTIME_SLACK_SECS:
+                    target.unlink()
+                    for parent in target.parents:
+                        if parent == repo_root:
+                            break
+                        parent.rmdir()
+            except OSError:
+                pass
+        if added:
+            run_git(
+                ["-C", str(repo_root), "--no-optional-locks", "reset", "-q", prior,
+                 "--pathspec-from-file=-", "--pathspec-file-nul"],
+                input="\0".join(sorted(added)).encode("utf-8") + b"\0",
+            )
+        dirty = _git(repo_root, ["status", "--porcelain", "--untracked-files=all"]).stdout.strip()
+        note = "timed out" if merge.timed_out else "failed"
+        if dirty:
+            return "; the merge {0} and the tree could not be restored to {1}".format(note, prior[:12])
+        return "; the merge {0} and the tree was restored to {1}".format(note, prior[:12])
+    except Exception as exc:  # contract: never raises
+        return "; rollback failed ({0})".format(exc)
+
+
 def fast_forward_dest(result: RefreshResult, *, out: TextIO, err: TextIO) -> RefreshResult:
     """Every worktree/ref write of a refresh, applied to a `fetch_dest_upstream` result.
 
@@ -674,9 +744,12 @@ def fast_forward_dest(result: RefreshResult, *, out: TextIO, err: TextIO) -> Ref
 
     fast_forwarded = False
     if behind:
+        prior = _resolve_commit(repo_root, "HEAD")
+        started = time.time()
         merge = _git(repo_root, ["merge", "--ff-only", upstream])
         if merge.returncode != 0:
             detail = _last_line(merge.stderr or merge.stdout, "ff-only merge failed")
+            detail += _rollback_failed_ff(repo_root, prior, upstream, merge, started)
             return replace(
                 result,
                 ok=False,
@@ -848,11 +921,14 @@ def fast_forward_consumer(repo_root: Path, *, ignore_dirty: Sequence[str] = ()) 
                 _put_back(repo_root, saved)
                 return result(False, "could not restore {0} ({1})".format(
                     ", ".join(ignored_dirty), _last_line(restore.stderr or restore.stdout, "checkout failed")))
+        prior = _resolve_commit(repo_root, "HEAD")
+        started = time.time()
         merge = _git(repo_root, ["merge", "--ff-only", upstream])
         if merge.returncode != 0:
+            detail = _last_line(merge.stderr or merge.stdout, "ff-only merge failed")
+            detail += _rollback_failed_ff(repo_root, prior, upstream, merge, started)
             _put_back(repo_root, saved)
-            return result(False, "could not fast-forward ({0})".format(
-                _last_line(merge.stderr or merge.stdout, "ff-only merge failed")))
+            return result(False, "could not fast-forward ({0})".format(detail))
         return result(True, b=0, ff=True)
     except Exception as exc:  # contract: never raises
         return RefreshResult(repo_root, ok=False, reason="fast_forward_consumer failed: {0}".format(exc))
