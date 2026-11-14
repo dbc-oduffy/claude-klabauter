@@ -921,9 +921,12 @@ def codex_hooks_path():
     return (Path(env) if env else Path.home() / ".codex") / "hooks.json"
 
 
-def _hook_command(dest_dir, script_name, *args):
-    argv = [_console_python(), str(Path(dest_dir) / script_name), *args]
+def _quote_argv(argv):
     return subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(shlex.quote(a) for a in argv)
+
+
+def _hook_command(dest_dir, script_name, *args):
+    return _quote_argv([_console_python(), str(Path(dest_dir) / script_name), *args])
 
 
 def _engine_args(engine_root):
@@ -1529,9 +1532,14 @@ AGY_ALLOW_RULE = "command(coordinator-invoke engine_ask.submit --params-file .co
 AGY_LEGACY_ALLOW_RULE = "command(coordinator-invoke *)"
 
 
+def invoke_launcher_path():
+    """The box's absolute settings-home coordinator-invoke launcher; hosts that refuse a PATH-resolved executable need it spelled out."""
+    return str(settings_home() / "bin" / ("coordinator-invoke.exe" if sys.platform == "win32" else "coordinator-invoke"))
+
+
 def agy_absolute_allow_rule():
     """The submit grant naming coordinator-invoke by its settings-home path, for hosts where the bare name does not resolve."""
-    exe = str(settings_home() / "bin" / "coordinator-invoke")
+    exe = invoke_launcher_path()
     return AGY_ALLOW_RULE.replace("command(coordinator-invoke ", f"command({exe} ", 1)
 
 
@@ -2004,7 +2012,7 @@ def reap_stale_relays(dest_dir, ps=None, kill=None):
 def render_peer_doctrine(dest_dir, template=None):
     """Return the managed block: the doctrine template with {SEND} bound to the installed send command."""
     body = Path(template or PEER_DOCTRINE_TEMPLATE).read_text(encoding="utf-8").strip("\n")
-    body = body.replace("{SEND}", _hook_command(dest_dir, SEND_SCRIPT))
+    body = body.replace("{SEND}", _hook_command(dest_dir, SEND_SCRIPT)).replace("{INVOKE}", _quote_argv([invoke_launcher_path()]))
     return f"{DOCTRINE_BEGIN}\n{body}\n{DOCTRINE_END}\n"
 
 
@@ -2653,6 +2661,10 @@ def _seed_standing_doctrine(out, want_codex, want_agy, codex_rp, agy_rp, codex_s
                 raise OSError(f"global-doctrine/ not found: {detail}")
             res = seed.seed_block(rp, seed.render_coordinator_doctrine(root, cap), seed.DOCTRINE_BEGIN, seed.DOCTRINE_END)
             print(f"{label} coordinator doctrine {res} in {rp} (doctrine from {rung}: {detail})", file=out)
+            lines, size = seed.unmanaged_extent(rp, (seed.DOCTRINE_BEGIN, seed.DOCTRINE_END), (DOCTRINE_BEGIN, DOCTRINE_END))
+            if lines:
+                print(f"WARN: {label} rules file {rp} holds {lines} non-blank line(s) ({size} bytes) outside the "
+                      f"coordinator-doctrine block, left untouched; project rules belong in that repo's AGENTS.md", file=out)
         except (OSError, ValueError) as exc:
             missing.append(f"{label} coordinator doctrine")
             print(f"WARN: {label} coordinator doctrine not installed: {exc}", file=out)

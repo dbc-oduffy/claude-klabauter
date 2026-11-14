@@ -132,3 +132,20 @@ def test_other_mutating_ops_do_not_claim_a_resend_is_safe():
 
 def test_the_door_still_never_replays_an_emit():
     assert "dispatch.emit" not in client._COLD_REPLAY_SAFE
+
+
+def test_the_hooks_own_premint_marker_is_not_a_resend_holder_so_the_script_is_written(repo, sessions):
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
+
+    run_id = run_token.new_ask_run_id()
+    run_token.mint(
+        repo, run_id, f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs", session_id="s1", marker=True,
+        ask_sha256=normalized_ask_hash(ASK),
+    )
+
+    reply = emit_op._dispatch_emit({"ask": ASK, "preminted_run_id": run_id}, repo)
+
+    assert reply["run_id"] == run_id
+    assert "deduped" not in reply
+    assert Path(reply["path"]).is_file() and reply["sha256"] and reply["receipt"]

@@ -22,6 +22,8 @@ DOCTRINE_END = "<!-- END coordinator-doctrine -->"
 CODEX_CAP_BYTES = 32768
 AGY_CAP_BYTES = 24000
 MANAGED_SUFFIX = ".coordinator-managed"
+PROJECT_STEER = "<!-- EXAMPLE-RETRIEVAL-REPO-STEER: wording owned by example-retrieval-repo; placeholder until its surface supplies it -->"
+PER_PROJECT_STEER = "Project-specific rules belong in that repo's own AGENTS.md, never in this global file."
 DOCTRINE_SOURCES = ("global-doctrine/CLAUDE.md", "global-doctrine/rules/rules.md")
 
 
@@ -65,6 +67,21 @@ def seed_block(path, block, begin, end):
     return "updated"
 
 
+def unmanaged_extent(path, *blocks):
+    """Return (non-blank lines, UTF-8 bytes) outside every managed (begin, end) block; read-only."""
+    path = Path(path)
+    if not path.exists():
+        return 0, 0
+    outside = path.read_text(encoding="utf-8")
+    for begin, end in blocks:
+        parts = split_block(outside, begin, end)
+        if parts is not None:
+            outside = parts[0] + parts[1]
+    if not outside.strip():
+        return 0, 0
+    return sum(1 for ln in outside.splitlines() if ln.strip()), len(outside.encode("utf-8"))
+
+
 def unseed_block(path, begin, end):
     """Remove only the managed block (deleting a file left empty); return "removed" or "absent"."""
     path = Path(path)
@@ -89,7 +106,7 @@ def render_coordinator_doctrine(plugin_root, cap_bytes):
     """Return the managed block of global-doctrine CLAUDE.md then rules.md; ValueError above cap_bytes UTF-8 bytes."""
     root = Path(plugin_root)
     body = "\n\n".join((root / rel).read_text(encoding="utf-8").strip("\n") for rel in DOCTRINE_SOURCES)
-    block = f"{DOCTRINE_BEGIN}\n{body}\n{DOCTRINE_END}\n"
+    block = f"{DOCTRINE_BEGIN}\n{body}\n\n{PER_PROJECT_STEER}\n{PROJECT_STEER}\n{DOCTRINE_END}\n"
     size = len(block.encode("utf-8"))
     if size > cap_bytes:
         raise ValueError(f"coordinator doctrine block is {size} bytes, over the {cap_bytes}-byte host cap")

@@ -657,6 +657,15 @@ def test_default_install_writes_doctrine_block_for_codex_and_agy(monkeypatch, tm
         assert ui.DOCTRINE_BEGIN in text and ui.DOCTRINE_END in text
         assert str(dest / ui.SEND_SCRIPT) in text and "{SEND}" not in text
         assert "--to <sender>" in text and "--list" in text
+        assert f"{ui._quote_argv([ui.invoke_launcher_path()])} engine_ask.submit" in text and "{INVOKE}" not in text
+        assert "`coordinator-invoke engine_ask.submit" not in text
+
+
+def test_invoke_launcher_path_suffix_follows_platform(monkeypatch):
+    monkeypatch.setattr(ui.sys, "platform", "win32")
+    assert ui.invoke_launcher_path().endswith("coordinator-invoke.exe")
+    monkeypatch.setattr(ui.sys, "platform", "linux")
+    assert ui.invoke_launcher_path().endswith("coordinator-invoke") and not ui.invoke_launcher_path().endswith(".exe")
 
 
 def test_doctrine_reinstall_is_idempotent_and_keeps_foreign_text(tmp_path):
@@ -713,6 +722,7 @@ def test_grok_install_seeds_peer_doctrine_into_grok_home_rules_and_uninstall_rem
     text = rules.read_text(encoding="utf-8")
     assert "engine_ask.submit" in text and ui.DOCTRINE_BEGIN in text and "{SEND}" not in text
     assert str(tmp_path / "dest" / ui.SEND_SCRIPT) in text
+    assert f"{ui._quote_argv([ui.invoke_launcher_path()])} engine_ask.submit" in text and "`coordinator-invoke engine_ask.submit" not in text
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf) == 0
     assert "grok peer doctrine present" in buf.getvalue() and rules.read_text(encoding="utf-8") == text

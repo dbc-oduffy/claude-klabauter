@@ -729,6 +729,14 @@ def _reserved_run(root: Path, reserved: object, sizing_doc: Optional[dict], sizi
 _UNFIRED_RESEND_WINDOW_SECS = 120.0
 
 
+def _script_written(root: Path, record: dict) -> bool:
+    script = record.get("script_path")
+    if not isinstance(script, str) or not script:
+        return False
+    path = Path(script)
+    return (path if path.is_absolute() else root / path).is_file()
+
+
 def _resend_holder(
     root: Path, sizing_rel: Optional[str], ask: object, exclude: Optional[str] = None
 ) -> Optional[str]:
@@ -757,8 +765,12 @@ def _resend_holder(
     now = time.time()
     for record in sorted(held, key=lambda r: float(r.get("minted_at") or 0), reverse=True):
         minted = record.get("minted_at")
+        # Trap: the submit hook's pre-mint marker carries ask_sha256 before any script exists; taking
+        # it as a holder deduped every raw ask against itself, so no script was ever written
+        # (bd878a, f53cf3). A lost reply always follows the script write, so a holder has its script.
         if (
             isinstance(minted, (int, float)) and now - minted <= _UNFIRED_RESEND_WINDOW_SECS
+            and _script_written(root, record)
             and warp_live._unfired(root, record, dirs)
         ):
             return record["run_id"]

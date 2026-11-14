@@ -202,6 +202,55 @@ def test_doctrine_installs_from_content_root_pointer_and_names_rung(tmp_path, kl
     assert "Doctrine from the DoE root" in rp.read_text(encoding="utf-8")
 
 
+def _seed_codex(mod, tmp_path, home):
+    import io
+    (home / ".claude" / ".coordinator-content-root").write_text(str(_content_root(tmp_path)) + "\n", encoding="utf-8")
+    out = io.StringIO()
+    rp = tmp_path / "codex" / "AGENTS.md"
+    return out, rp, lambda: mod._seed_standing_doctrine(out, True, False, rp, None, tmp_path / "codex" / "skills", None)
+
+
+def test_unmanaged_text_is_reported_untouched_and_block_carries_steer(tmp_path, klabauter_mirror):
+    mod, home = klabauter_mirror
+    out, rp, run = _seed_codex(mod, tmp_path, home)
+    rp.parent.mkdir(parents=True)
+    outside = "## Unreal Engine\n\n- hand-written UE rule\n"
+    rp.write_text(outside, encoding="utf-8")
+    assert run() == []
+    text = out.getvalue()
+    assert "WARN" in text and str(rp) in text and "2 non-blank line(s)" in text
+    seeded = rp.read_text(encoding="utf-8")
+    assert seeded.startswith(outside)
+    assert ds.PROJECT_STEER in seeded and ds.PER_PROJECT_STEER in seeded
+    assert ds.split_block(seeded, B, E)[0] == outside + "\n"
+
+
+def test_block_tracks_the_live_source_on_every_run(tmp_path, klabauter_mirror):
+    mod, home = klabauter_mirror
+    out, rp, run = _seed_codex(mod, tmp_path, home)
+    assert run() == []
+    src = tmp_path / "doe" / "global-doctrine" / "rules" / "rules.md"
+    src.write_text(src.read_text(encoding="utf-8") + "\n- a fresh live rule\n", encoding="utf-8")
+    assert run() == []
+    seeded = rp.read_text(encoding="utf-8")
+    assert "a fresh live rule" in seeded
+    src.write_text("- only rule\n", encoding="utf-8")
+    assert run() == []
+    seeded = rp.read_text(encoding="utf-8")
+    assert "a fresh live rule" not in seeded and "- only rule" in seeded
+
+
+def test_clean_file_prints_no_unmanaged_advisory(tmp_path, klabauter_mirror):
+    mod, home = klabauter_mirror
+    out, rp, run = _seed_codex(mod, tmp_path, home)
+    assert run() == []
+    assert "outside the coordinator-doctrine block" not in out.getvalue()
+    out.truncate(0)
+    out.seek(0)
+    assert run() == []
+    assert "outside the coordinator-doctrine block" not in out.getvalue()
+
+
 def test_doctrine_miss_names_the_pointer_files_read(tmp_path, klabauter_mirror):
     mod, home = klabauter_mirror
     missing, text, rp = _seed_agy(mod, tmp_path)
