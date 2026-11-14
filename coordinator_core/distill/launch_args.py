@@ -68,11 +68,13 @@ def stub(path: str, sha256: str) -> dict[str, str]:
 
 def build(payload: dict[str, Any], *, run_dir: Optional[Path] = None) -> dict[str, Any]:
     """Write ``launch-args.json`` for `payload` (a `distill.workflow_input` result) and return
-    ``{"path", "sha256", "args"}``.
+    ``{"path", "sha256", "args", "args_bytes"}``.
 
     The file lives in `run_dir`, default ``<repoRoot>/<RUN_DIR_REL>/<runId>``, both from the payload.
     `args` is the payload plus ``argsInlined: true``, every array chunked to <= MAX_ARRAY_ENTRIES.
-    The sha256 is over the file's bytes, as the hook re-hashes them.
+    The sha256 is over the file's bytes, as the hook re-hashes them. `args_bytes` is that file's size:
+    the args reach the Workflow through the EM's tool call, so a large curated payload is EM context
+    (about bytes/4 tokens) on every launch and resume, and is reported rather than silent.
     """
     if not isinstance(payload, dict) or not payload.get("runId") or not payload.get("repoRoot"):
         raise ValueError("launch_args.build needs a payload carrying runId and repoRoot")
@@ -82,4 +84,4 @@ def build(payload: dict[str, Any], *, run_dir: Optional[Path] = None) -> dict[st
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / ARGS_FILE_NAME
     target.write_bytes(body)
-    return {"path": str(target), "sha256": hashlib.sha256(body).hexdigest(), "args": args}
+    return {"path": str(target), "sha256": hashlib.sha256(body).hexdigest(), "args": args, "args_bytes": len(body)}

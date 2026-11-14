@@ -5,7 +5,7 @@ Purpose: hand a distill Workflow its whole input inline. The Workflow VM cannot 
 filesystem, so without this op each batch and wikislug shard is relayed through a load agent.
 The op composes ``distill.workflow_input``'s payload (batches and wikiSlugs, validated) with the
 curated-clusters file's path and sha256, and writes it through ``launch_args.build``, which
-returns ``{path, sha256, args}``; the PreToolUse(Workflow) hook swaps the
+returns ``{path, sha256, args, args_bytes}``; the PreToolUse(Workflow) hook swaps the
 ``{argsFile, argsSha256}`` stub for the file's content.
 
 Wire params:
@@ -64,8 +64,9 @@ def _curated_target(root: Path, rel: str) -> Path:
 def _handler(params: dict, repo_root: Any = None) -> dict:
     """distill.launch_args handler.
 
-    Returns ``{"path", "sha256", "args"}`` as ``launch_args.build`` does: ``path`` is the written
-    ``launch-args.json``, ``sha256`` is over its bytes, ``args`` is the inlined payload. Raises
+    Returns ``{"path", "sha256", "args", "args_bytes"}`` as ``launch_args.build`` does: ``path`` is the
+    written ``launch-args.json``, ``sha256`` is over its bytes, ``args`` is the inlined payload,
+    ``args_bytes`` its size. Raises
     ValueError on a missing manifest/repo_root or a curated_file outside ``state/scratch/``.
     The ``repo_root`` handler arg is unused; the param names the root, as in distill.workflow_input.
     """

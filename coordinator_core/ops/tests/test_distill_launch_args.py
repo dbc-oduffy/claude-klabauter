@@ -6,6 +6,8 @@ import hashlib
 import json
 import subprocess
 
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.distill.manifest_schema import make_scope_manifest
@@ -99,6 +101,7 @@ def test_realistic_64kb_curated_payload_inlines_whole(tmp_path):
     out = dla._handler(_params(tmp_path))
     assert out["args"]["curatedTags"] == verdicts
     assert len((tmp_path / "state/scratch/artifact-distillation" / RUN_ID / "curated.json").read_bytes()) > 60_000
+    assert out["args_bytes"] == len(Path(out["path"]).read_bytes()) > 60_000
 
 
 @pytest.mark.parametrize("rel", ["../outside.json", "docs/curated.json", "state/scratch", "/abs/elsewhere.json"])
