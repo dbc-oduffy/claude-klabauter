@@ -224,7 +224,9 @@ def _parse_args() -> argparse.Namespace:
         "--doe-clone",
         metavar="PATH",
         help=(
-            "Override the DoE clone path. Default: resolve via machine-local registry "
+            "Override the DoE clone path: the DoE REPO ROOT (e.g. /Users/example-operator/X/coordinator-content-repo), "
+            "NOT its coordinator/cockpit-contract subdir (the drift check joins that segment itself). "
+            "Default: resolve via machine-local registry "
             "(repos.content_root in registry.local.toml / registry.toml). "
             "Reuses resolve_doe_clone() — never re-implements registry parsing (AC2)."
         ),
@@ -923,6 +925,11 @@ def main() -> None:  # noqa: C901  (complexity: deliberate — sequential steps 
         doe_clone = Path(args.doe_clone).expanduser().resolve()
         if not doe_clone.is_dir():
             _die(f"--doe-clone path does not exist or is not a directory: {doe_clone}")
+        if not (doe_clone / _DOE_CONTRACT_REL).is_dir():
+            _die(
+                f"--doe-clone must be the DoE repo root ({_DOE_CONTRACT_REL} not found under "
+                f"{doe_clone}); do not pass the cockpit-contract subdir."
+            )
         _info(f"  DoE clone (--override): {doe_clone}")
     else:
         try:

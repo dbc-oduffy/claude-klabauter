@@ -437,6 +437,12 @@ def replace_fm_field(fm: str, key: str, v: object, *, numeric_quoting: bool = Fa
     Negative-spec: does NOT insert a new line when the key is absent — call
     ``insert_fm_field`` for that.
 
+    Negative-spec: never pass a pre-built flow sequence (``'[a, b]'``) — the
+    scalar serializer single-quotes ``[``/``]``, writing a YAML STRING that
+    fails schema ``expected array`` validation. List fields (``blocked_by``,
+    ``gate_cleared_by``) go through ``replace_fm_field_raw`` /
+    ``insert_fm_field_raw``; see ``handoff_transition._yaml_flow_seq``.
+
     Negative-spec (break-class fix, 2026-08-01 — trailing-inline-comment
     preservation): delegates to ``replace_fm_field_raw``, which now preserves
     a pre-existing trailing ``# comment`` on the ``key:`` line being
@@ -551,6 +557,12 @@ def insert_fm_field(
     *,
     numeric_quoting: bool = False,
 ) -> str:
+    """Insert ``key: value`` serialized as a YAML scalar.
+
+    Negative-spec: list values must use ``insert_fm_field_raw`` — a pre-built
+    ``'[a, b]'`` string is single-quoted into a YAML string, not an array.
+    See ``replace_fm_field``.
+    """
     serialized = serialize_yaml_scalar(v, numeric_quoting=numeric_quoting)
     new_line = f'{key}: {serialized}'
 

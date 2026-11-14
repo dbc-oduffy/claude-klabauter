@@ -7,14 +7,9 @@ from coordinator_core.ops.dispatch_emit.grind_admission import admit, receipt_bl
 IDS = tuple(f"r{i}" for i in range(61))
 
 
-def test_charge_reproduces_the_measured_batch_40_run():
-    # claude-klabauter 20261114T165441Z: 10 rows, one batch, 31 calls.
-    assert run_agent_calls(10, 40) == 31
-
-
-@pytest.mark.parametrize("rows,batch,actual", [(16, 4, 33), (12, 4, 44), (10, 40, 31)])
-def test_charge_covers_every_measured_run(rows, batch, actual):
-    assert run_agent_calls(rows, batch) >= actual
+def test_charge_covers_the_measured_batched_run():
+    # claude-klabauter 20261114T173532Z: 10 rows, one batch-40 batch, verify-routing batched, 17 calls.
+    assert 17 <= run_agent_calls(10, 40) <= 18
 
 
 def test_larger_batches_admit_more_rows_under_one_cap():
@@ -24,9 +19,9 @@ def test_larger_batches_admit_more_rows_under_one_cap():
 
 
 def test_bound_is_the_largest_count_whose_charge_fits():
-    a = admit(IDS, max_agent_calls=150, budget_tokens=None, batch_size=40)
+    a = admit(IDS, max_agent_calls=32, budget_tokens=None, batch_size=40)
     n = len(a.admitted)
-    assert run_agent_calls(n, 40) <= 150 < run_agent_calls(n + 1, 40)
+    assert run_agent_calls(n, 40) <= 32 < run_agent_calls(n + 1, 40)
 
 
 def test_caps_too_small_for_one_row_admit_none():

@@ -1,23 +1,20 @@
 """Pure grind admission arithmetic: how many selected rows a run's budget covers.
 
-Charge = RUN_FIXED + ceil(rows / batch_size) * BATCH + ceil(rows * ROW_CENTI / 100). Triage, fix,
-adjudicate, close and the op verify run once per batch; verify-routing runs once per row (more on
-retry). Each constant is the worst measured value across lessons-run receipts:
-- claude-klabauter 20261114T165441Z, batch 40, 10 rows in 1 batch: 31 calls = run 2 (commit,
-  ledger-sweep) + batch 6 (triage 1, fix 1, adjudicate 1, close 2, verify-op 1) + row 23
-  (verify-routing 13, retire 7, hand-back 3; every row retried).
-- example-stats-repo 20261113T035948Z, batch 4: 27 verify calls for 12 resolved rows (2.25 per row).
-- claude-klabauter 20261113T030828Z, batch 4: 19 verify calls for 16 rows (1.19 per row).
-Per-row verify dominates at any batch size: a batch-40 run is about 100 calls, so batching
-triage does not bring admission near the per-row floor; batching verify would.
+Charge = RUN_FIXED + ceil(rows / batch_size) * BATCH + ceil(rows * ROW_CENTI / 100). Triage, the
+batched verify-routing kinds (route, retire, hand-back), close and adjudicate run once per batch;
+fix, its verify-agent and the review wave run per row that needs a code fix.
+Calibrated on claude-klabauter 20261114T173532Z (batch 40, verify-routing batched, b2ed825d22): 10 rows,
+17 calls = run 2 (commit, ledger-sweep) + batch 6 (triage 1, verify-routing 4, close 1; adjudicate
+reserved, +1) + row 9 (fix 3, verify-agent 2, review 4), 795k subagent tokens, 9 rows landed.
+The unbatched receipts (20261114T165441Z: 23 verify calls for 10 rows) predate b2ed825d22.
 """
 
 from __future__ import annotations
 
 from typing import NamedTuple, Optional, Sequence
 
-ROW_AGENT_CALLS_CENTI = 230
-BATCH_AGENT_CALLS = 6
+ROW_AGENT_CALLS_CENTI = 90
+BATCH_AGENT_CALLS = 7
 RUN_FIXED_AGENT_CALLS = 2
 DEFAULT_BATCH_SIZE = 4
 ROW_OUTPUT_TOKENS = 140076
