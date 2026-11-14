@@ -1993,6 +1993,12 @@ def _settle_token(token_state: dict, *, landed: bool, receipt: Optional[dict] = 
         run_token.release(root, run_id, token, script_path)
 
 
+def _ledger_conflict_strings(verdict: object) -> tuple:
+    """The string entries of `ledger_verdict.conflicts`; absent or malformed is `()`."""
+    raw = verdict.get("conflicts") if isinstance(verdict, dict) else None
+    return tuple(c for c in raw if isinstance(c, str)) if isinstance(raw, list) else ()
+
+
 def _terminal_commit_inner(
     params: dict, repo_root: Optional[Path], stranded: dict, scope: dict,
     withheld: Optional[dict], blockers: Optional[dict],
@@ -3568,6 +3574,7 @@ def _terminal_commit_inner(
     foreign_held = _phg.landing_holds(
         worktree_root, session_id, sibling_run_id, request.plan_path, all_paths, deleted_paths,
         chunk_declared, own_declared, own_seniority,
+        ledger_conflicts=_ledger_conflict_strings(params.get("ledger_verdict")),
     )
     if foreign_held:
         all_paths = [p for p in all_paths if p not in foreign_held]

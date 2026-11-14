@@ -29,6 +29,16 @@ from coordinator_core.ops.dispatch_emit.tests.test_reverify_measures_landing_tre
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
+
+@pytest.fixture(autouse=True)
+def _isolated_system_temp(tmp_path, monkeypatch):
+    """The persistent mirror lives under the system Temp's coordinator root; every test gets its own."""
+    import tempfile
+
+    (tmp_path / "systemp").mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+
+
 READER = "t/test_reader.py"
 _READER_SRC = (
     "import pathlib\n\n\ndef test_reads_data():\n"
@@ -54,29 +64,47 @@ def test_peer_dirt_in_the_worktree_does_not_fail_the_overlay(tmp_path):
     out = cov.verify(root, "run1", head, [READER])
 
     assert out.verdict == "green", out
-    assert not cov.overlay_root(root, "run1").exists()
+    assert (root / "t" / "data.txt").read_text() == "peer dirt\n"
 
 
-def test_in_repo_overlay_holder_is_ledgered_for_the_run_end_reap(tmp_path):
-    from coordinator_core.ops.dispatch_emit import run_scratch
+def test_the_mirror_lives_under_the_managed_temp_root_outside_the_repo_and_survives_the_verify(tmp_path):
+    from coordinator_core import temp_layout
 
     root, head = _repo(tmp_path)
 
-    cov.verify(root, "run1", head, [READER])
+    assert cov.verify(root, "run1", head, [READER]).verdict == "green"
 
-    assert "scratch/clean-overlay/run1" in run_scratch.read_ledger(root, "run1")["paths"]
+    mirror = cov.mirror_root(root)
+    assert mirror.parent == temp_layout.coordinator_temp_root(root) / cov.MIRROR_DIRNAME
+    assert mirror.is_dir() and (mirror / root.name / ".git").exists()
+    assert root not in mirror.parents and not (root / "scratch").exists()
 
 
-def test_out_of_repo_overlay_holder_is_not_ledgered(tmp_path):
-    from coordinator_core.ops.dispatch_emit import run_scratch
-
+def test_a_configured_bulk_location_does_not_move_the_mirror(tmp_path, monkeypatch):
     root, head = _repo(tmp_path)
     bulk = tmp_path / "bulk"
     (root / "coordinator.local.md").write_text(f'---\nbulk_scratch_dir: "{bulk}"\n---\n', encoding="utf-8")
+    dests = _clone_dests(monkeypatch)
 
-    cov.verify(root, "run1", head, [READER])
+    assert cov.verify(root, "run1", head, [READER]).verdict == "green"
 
-    assert run_scratch.read_ledger(root, "run1")["paths"] == []
+    assert dests == [str(cov.mirror_root(root) / root.name)] and not bulk.exists()
+
+
+def test_the_mirror_name_is_not_a_managed_temp_shape_and_a_reap_pass_spares_it(tmp_path):
+    from coordinator_core import temp_layout
+
+    root, head = _repo(tmp_path)
+    assert cov.verify(root, "run1", head, [READER]).verdict == "green"
+    assert temp_layout._MANAGED_DIR_RE.fullmatch(cov.MIRROR_DIRNAME) is None
+    dead = temp_layout.managed_tempdir(root) / temp_layout.RUN_TEMP_DIRNAME / "99999999-abcdef-dead"
+    dead.mkdir(parents=True)
+
+    temp_layout._reap_dead_owner_dirs(dead.parent)
+
+    assert not dead.exists()
+    assert (cov.mirror_root(root) / root.name / ".git").exists()
+    assert cov.verify(root, "run2", head, [READER]).verdict == "green"
 
 
 def test_a_red_in_the_candidate_is_red_even_when_the_worktree_is_clean(tmp_path):
@@ -85,7 +113,6 @@ def test_a_red_in_the_candidate_is_red_even_when_the_worktree_is_clean(tmp_path)
     out = cov.verify(root, "run1", head, [READER])
 
     assert out.red, out
-    assert not cov.overlay_root(root, "run1").exists()
 
 
 def test_overlay_clone_keeps_the_live_repo_directory_name(tmp_path):
@@ -102,7 +129,6 @@ def test_overlay_clone_keeps_the_live_repo_directory_name(tmp_path):
     out = cov.verify(root, "run-id-not-repo", head, ["t/test_name.py"])
 
     assert out.verdict == "green", out
-    assert not cov.overlay_root(root, "run-id-not-repo").exists()
 
 
 def _pytest_argv_head(monkeypatch, root, head, pin):
@@ -133,10 +159,11 @@ def test_overlay_runs_pytest_under_the_repo_pinned_interpreter(tmp_path, monkeyp
 def test_overlay_falls_back_to_sys_executable_when_no_pin_or_the_pin_is_unresolved(tmp_path, monkeypatch):
     root, head = _repo(tmp_path)
     assert _pytest_argv_head(monkeypatch, root, head, None) == sys.executable
+    assert cov.mirror_root(root).exists()
     assert _pytest_argv_head(monkeypatch, root, head, tmp_path / "missing" / "python3.99") == sys.executable
 
 
-def test_the_overlay_checkout_runs_under_the_overlay_bound_not_the_2s_plumbing_budget(tmp_path, monkeypatch):
+def test_the_mirror_fill_runs_under_the_overlay_bound_not_the_2s_plumbing_budget(tmp_path, monkeypatch):
     """A full-tree checkout under run_git's 2s budget timed out on the live repo: rc -1, empty stderr."""
     root, head = _repo(tmp_path)
     seen = []
@@ -148,7 +175,8 @@ def test_the_overlay_checkout_runs_under_the_overlay_bound_not_the_2s_plumbing_b
 
     monkeypatch.setattr(cov, "_run", spy)
     assert cov.verify(root, "run1", head, [READER]).verdict == "green"
-    assert (["checkout"], cov.TEST_TIMEOUT_S) in seen
+    assert (["read-tree"], cov.TEST_TIMEOUT_S) in seen
+    assert not [s for s in seen if s[0] == ["checkout"]]
 
 
 def _pytest_calls(monkeypatch, tmp_path, run_ids):
@@ -180,6 +208,7 @@ def test_each_overlay_run_gets_its_own_basetemp_with_matching_tmp_under_the_regi
     assert Path(env_a["TEMP"]) == base_a.parent / "tmp" and env_a["TMP"] == env_a["TEMP"]
     assert Path(env_b["TEMP"]) == base_b.parent / "tmp"
     assert not base_a.parent.exists() and not base_b.parent.exists()
+    assert argv_a[argv_a.index("--rootdir") + 1] == str(cov.mirror_root(tmp_path / "repo") / "repo")
 
 
 def test_overlay_without_a_registry_root_falls_back_to_the_temp_layout_never_pytest_of_user(tmp_path, monkeypatch):
@@ -268,7 +297,7 @@ def test_a_red_that_fails_identically_at_base_is_pre_existing_and_names_the_ids(
 
     assert out.verdict == "pre_existing", out
     assert f"{READER}::test_reads_data" in out.detail
-    assert not cov.overlay_root(root, "run1").exists()
+    assert cov.verify(root, "run2", head, [READER, _SECOND]).verdict == "red"
 
 
 def test_a_red_that_passes_at_base_stays_red(tmp_path):
@@ -310,7 +339,7 @@ def test_a_timed_out_overlay_checkout_is_named_with_its_budget_never_silent(tmp_
     monkeypatch.setattr(cov, "_run", slow)
     out = cov.verify(root, "run1", head, [READER])
     assert out.verdict == "inconclusive"
-    assert "TimeoutExpired" in out.detail and f"{cov.TEST_TIMEOUT_S} seconds" in out.detail, out.detail
+    assert f"timed out after {cov.TEST_TIMEOUT_S}s" in out.detail and f"{cov.TEST_TIMEOUT_S} seconds" in out.detail, out.detail
 
 
 def _clone_dests(monkeypatch):
@@ -326,48 +355,12 @@ def _clone_dests(monkeypatch):
     return dests
 
 
-def test_a_configured_bulk_location_receives_the_overlay_clone_and_is_reaped(tmp_path, monkeypatch):
-    root, head = _repo(tmp_path)
-    bulk = tmp_path / "bulk"
-    (root / "coordinator.local.md").write_text(f'---\nbulk_scratch_dir: "{bulk}"\n---\n', encoding="utf-8")
-    dests = _clone_dests(monkeypatch)
-
-    out = cov.verify(root, "run1", head, [READER])
-
-    assert out.verdict == "green", out
-    assert dests == [str(bulk / "clean-overlay" / "run1" / root.resolve().name)]
-    assert not (root / "scratch").exists()
-    assert not (bulk / "clean-overlay" / "run1").exists()
-
-
-def test_unconfigured_or_relative_bulk_falls_back_to_repo_scratch(tmp_path, monkeypatch):
-    root, head = _repo(tmp_path)
-    expected = str(root / "scratch" / "clean-overlay" / "run1" / root.resolve().name)
-    dests = _clone_dests(monkeypatch)
-
-    assert cov.verify(root, "run1", head, [READER]).verdict == "green"
-    (root / "coordinator.local.md").write_text("---\nbulk_scratch_dir: rel/dir\n---\n", encoding="utf-8")
-    assert cov.verify(root, "run1", head, [READER]).verdict == "green"
-
-    assert dests == [expected, expected]
-    assert not cov.overlay_root(root, "run1").exists()
-
-
-def test_a_bulk_overlay_is_reaped_when_the_candidate_is_unreachable(tmp_path):
-    root, head = _repo(tmp_path)
-    bulk = tmp_path / "bulk"
-    (root / "coordinator.local.md").write_text(f'---\nbulk_scratch_dir: "{bulk}"\n---\n', encoding="utf-8")
-
-    assert cov.verify(root, "run1", "0" * 40, [READER]).verdict == "inconclusive"
-    assert not cov.overlay_root(root, "run1").exists()
-
-
 def test_no_seeds_and_an_unreachable_candidate_are_inconclusive_never_red(tmp_path):
     root, head = _repo(tmp_path)
 
     assert cov.verify(root, "run1", head, []).verdict == "inconclusive"
     assert cov.verify(root, "run1", "0" * 40, [READER]).verdict == "inconclusive"
-    assert not cov.overlay_root(root, "run1").exists()
+    assert cov.verify(root, "run2", head, [READER]).verdict == "green"
 
 
 def _no_spawn(monkeypatch):
@@ -588,7 +581,6 @@ def test_cli_writes_a_verdict_land_run_reads(tmp_path, monkeypatch):
     assert cov.main(["--run-id", run, "--repo-root", str(root)]) == 0
 
     assert cov.check_verdict(root, run, measured).verdict == "green"
-    assert not cov.overlay_root(root, run).exists()
 
 
 def test_reading_the_verdict_stays_inside_the_brightline(tmp_path):
@@ -696,3 +688,467 @@ def test_a_removed_touched_path_and_a_record_without_touched_are_not_leftovers(t
 
     assert cov.check_verdict(root, "run1", {**base, "touched": [READER, "t/gone.txt"]}).verdict == "green"
     assert cov.check_verdict(root, "run1", base).verdict == "green"
+
+
+_RUN_MOD_TEST = "t/test_run_mod.py"
+
+
+def _peer_import_repo(tmp_path):
+    """HEAD holds only the reader; the run's declared test imports `t/peer_mod.py`, an uncommitted peer file."""
+    root, head = _repo(tmp_path)
+    _write(root, _RUN_MOD_TEST, "import peer_mod\n\n\ndef test_uses_peer():\n    assert peer_mod.VALUE == 1\n")
+    _write(root, "t/peer_mod.py", "VALUE = 1\n")
+    return root, head
+
+
+def _pytest_in(root, export, *ids):
+    return cov._run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *ids], export, 120).returncode
+
+
+def test_clean_export_carries_head_plus_declared_paths_and_no_other_worktree_dirt(tmp_path):
+    root, _head = _peer_import_repo(tmp_path)
+    _write(root, "t/data.txt", "peer dirt\n")
+
+    with cov.clean_export(root, "run1", [_RUN_MOD_TEST]) as export:
+        assert (export / _RUN_MOD_TEST).is_file()
+        assert not (export / "t" / "peer_mod.py").exists()
+        assert (export / "t" / "data.txt").read_text().strip() == "ok"
+        assert _pytest_in(root, export, _RUN_MOD_TEST) != 0
+    assert _pytest_in(root, root, _RUN_MOD_TEST) == 0
+
+
+def test_a_declared_peer_module_is_in_the_export_and_a_declared_deletion_is_applied(tmp_path):
+    root, _head = _peer_import_repo(tmp_path)
+    (root / READER).unlink()
+
+    with cov.clean_export(root, "run1", [_RUN_MOD_TEST, "t/peer_mod.py", READER]) as export:
+        assert (export / "t" / "peer_mod.py").is_file() and not (export / READER).exists()
+        assert _pytest_in(root, export, _RUN_MOD_TEST) == 0
+
+
+def test_a_later_export_drops_the_previous_runs_overlay_and_a_bad_path_fails_before_any_write(tmp_path):
+    root, _head = _peer_import_repo(tmp_path)
+
+    with cov.clean_export(root, "run1", [_RUN_MOD_TEST, "t/peer_mod.py"]) as first:
+        assert (first / "t" / "peer_mod.py").is_file()
+    with cov.clean_export(root, "run2", [_RUN_MOD_TEST]) as second:
+        assert second == first and not (second / "t" / "peer_mod.py").exists()
+        assert _pytest_in(root, second, _RUN_MOD_TEST) != 0
+
+    with pytest.raises(cov.ExportError):
+        with cov.clean_export(root, "run3", ["../escape.txt"]):
+            raise AssertionError("a bad declared path must fail before the body runs")
+
+
+def _legs(into):
+    """A leg hook that records `(name, files_written)` and offers the extra dict a `LegMeter` would."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def leg(name):
+        extra = {}
+        yield extra
+        into.append((name, extra.get("files_written")))
+
+    return leg
+
+
+def test_a_second_verify_reuses_the_mirror_and_writes_only_the_changed_paths(tmp_path, monkeypatch):
+    root, base, head = _two_commits(tmp_path, "ok\n", "ok\n\n")
+    clones = _clone_dests(monkeypatch)
+    legs: list = []
+
+    assert cov.verify(root, "run1", base, [READER], leg=_legs(legs)).verdict == "green"
+    cold = dict(legs)
+    legs.clear()
+    assert cov.verify(root, "run2", head, [READER, _SECOND], leg=_legs(legs)).verdict == "green"
+    legs_warm = dict(legs)
+    legs.clear()
+    assert cov.verify(root, "run3", head, [READER, _SECOND], leg=_legs(legs)).verdict == "green"
+
+    assert len(clones) == 1 and "clone" in cold and "clone" not in legs_warm
+    assert cold["checkout"] == 2 and legs_warm["checkout"] == 3
+    assert dict(legs)["checkout"] == 0 and "clone" not in dict(legs)
+
+
+def test_a_warm_advance_writes_the_diff_by_index_info_never_a_tree_walk_or_full_checkout(tmp_path, monkeypatch):
+    root, base, head = _two_commits(tmp_path, "ok\n", "ok\n\n")
+    assert cov.verify(root, "run1", base, [READER]).verdict == "green"
+    seen = []
+    real = cov._run
+
+    def spy(argv, cwd, timeout, **kw):
+        seen.append(argv[1:])
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    assert cov.verify(root, "run2", head, [READER, _SECOND]).verdict == "green"
+
+    assert any(a[:1] == ["diff-tree"] and a[-2:] == [_git(root, "rev-parse", base + "^{commit}").strip(), head] for a in seen), seen
+    assert any(a[:1] == ["update-index"] and "--index-info" in a for a in seen), seen
+    assert any(a[:1] == ["checkout-index"] for a in seen), seen
+    assert not [a for a in seen if a[:1] in (["read-tree"], ["checkout"]) or "--detach" in a]
+
+
+def test_a_warm_advance_reproduces_the_target_tree_across_add_modify_delete_mode_and_dir_swaps(tmp_path):
+    root, base = _repo(tmp_path)
+    mroot = cov.mirror_root(root)
+    with cov._mirror_lock(root) as held:
+        dest = cov._prepare_guarded(root, held, base, cov._no_leg)
+    _write(root, "t/data.txt", "changed\n")
+    _write(root, "t/new/deep/file.txt", "new\n")
+    _write(root, "archive/hidden.txt", "hidden\n")
+    _write(root, "swap", "a file\n")
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "second")
+    second = _git(root, "rev-parse", "HEAD").strip()
+    (root / "swap").unlink()
+    _write(root, "swap/inner.txt", "now a dir\n")
+    (root / "t" / "test_reader.py").unlink()
+    _git(root, "add", "-A")
+    _git(root, "update-index", "--chmod=+x", "t/data.txt")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "third")
+    third = _git(root, "rev-parse", "HEAD").strip()
+
+    for target in (second, third):
+        with cov._mirror_lock(root) as held:
+            cov._prepare_guarded(root, held, target, cov._no_leg)
+        assert _git(dest, "write-tree").strip() == _git(root, "rev-parse", target + "^{tree}").strip()
+        assert _git(dest, "diff", "--stat").strip() == ""
+
+    assert not (dest / "t" / "test_reader.py").exists() and (dest / "swap" / "inner.txt").is_file()
+    assert (dest / "t" / "new" / "deep" / "file.txt").read_text() == "new\n"
+    assert not (dest / "archive").exists()
+    assert cov._state_read(mroot) == third
+
+
+def test_a_second_export_writes_only_the_overlaid_paths_that_differ(tmp_path):
+    root, _head = _peer_import_repo(tmp_path)
+    legs: list = []
+
+    declared = [_RUN_MOD_TEST, "t/peer_mod.py"]
+    with cov.clean_export(root, "run1", declared, leg=_legs(legs)) as export:
+        untouched = (export / READER).stat().st_mtime_ns
+    assert dict(legs)["checkout"] == 2 + 2
+    legs.clear()
+    with cov.clean_export(root, "run2", declared, leg=_legs(legs)) as export:
+        assert (export / READER).stat().st_mtime_ns == untouched
+    assert dict(legs)["checkout"] == 2 + 2 and "clone" not in dict(legs)
+    legs.clear()
+    _write(root, "t/peer_mod.py", "VALUE = 22\n")
+    with cov.clean_export(root, "run3", declared, leg=_legs(legs)) as export:
+        assert (export / "t" / "peer_mod.py").read_text() == "VALUE = 22\n"
+        assert (export / READER).stat().st_mtime_ns == untouched
+    assert dict(legs)["checkout"] == 2 + 2
+
+
+def test_a_mirror_that_cannot_advance_is_rebuilt_once_and_the_verify_still_runs(tmp_path, monkeypatch):
+    root, base, head = _two_commits(tmp_path, "ok\n", "ok\n\n")
+    clones = _clone_dests(monkeypatch)
+    assert cov.verify(root, "run1", base, [READER]).verdict == "green"
+    cov._state_write(cov.mirror_root(root), "0" * 40)
+
+    assert cov.verify(root, "run2", head, [READER, _SECOND]).verdict == "green"
+
+    assert len(clones) == 2
+
+
+def test_a_mirror_that_stays_unusable_after_one_rebuild_fails_naming_the_cause(tmp_path, monkeypatch):
+    root, base, head = _two_commits(tmp_path, "ok\n", "ok\n\n")
+    assert cov.verify(root, "run1", base, [READER]).verdict == "green"
+    clones = _clone_dests(monkeypatch)
+    real = cov._run
+
+    def broken(argv, cwd, timeout, **kw):
+        if argv[1] in ("diff-tree", "read-tree"):
+            return subprocess.CompletedProcess(argv, 128, "", "fatal: index is corrupt")
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", broken)
+    out = cov.verify(root, "run2", head, [READER, _SECOND])
+
+    assert out.verdict == "inconclusive" and "index is corrupt" in out.detail, out
+    assert len(clones) == 1
+
+
+def test_an_interrupted_advance_leaves_the_mirror_marked_and_the_next_verify_rebuilds_it(tmp_path, monkeypatch):
+    root, base, head = _two_commits(tmp_path, "ok\n", "ok\n\n")
+    assert cov.verify(root, "run1", base, [READER]).verdict == "green"
+    real = cov._run
+
+    def timeout_on_update_index(argv, cwd, timeout, **kw):
+        if argv[1:2] == ["update-index"]:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", timeout_on_update_index)
+    assert cov.verify(root, "run2", head, [READER, _SECOND]).verdict == "inconclusive"
+    monkeypatch.setattr(cov, "_run", real)
+    clones = _clone_dests(monkeypatch)
+
+    assert cov.verify(root, "run3", head, [READER, _SECOND]).verdict == "green"
+
+    assert len(clones) == 1
+
+
+def test_a_busy_mirror_fails_the_verify_naming_the_lock_and_never_runs_unlocked(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    monkeypatch.setattr(cov, "TEST_TIMEOUT_S", 1)
+    ran = []
+    real = cov._run
+    monkeypatch.setattr(cov, "_run", lambda *a, **k: ran.append(a) or real(*a, **k))
+
+    with cov._mirror_lock(root, "peer"):
+        out = cov.verify(root, "run1", head, [READER])
+
+    assert out.verdict == "inconclusive" and "busy" in out.detail and "1s" in out.detail, out
+    assert not ran
+
+
+def test_verify_holds_the_mirror_lock_across_pytest_and_the_base_rerun(tmp_path, monkeypatch):
+    root, base, head = _two_commits(tmp_path, "broken\n", "broken\n")
+    depth = {"now": 0, "pytest_and_base": []}
+    real_lock = cov._mirror_lock
+
+    @__import__("contextlib").contextmanager
+    def counted(*a, **k):
+        with real_lock(*a, **k) as m:
+            depth["now"] += 1
+            try:
+                yield m
+            finally:
+                depth["now"] -= 1
+
+    real = cov._run
+
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" in argv:
+            depth["pytest_and_base"].append(depth["now"])
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_mirror_lock", counted)
+    monkeypatch.setattr(cov, "_run", spy)
+
+    assert cov.verify(root, "run1", head, [READER, _SECOND], base_sha=base).verdict == "pre_existing"
+
+    assert depth["pytest_and_base"] == [1, 1] and depth["now"] == 0
+
+
+def _record(root, run, head, paths):
+    record = cov.measured_rev_record_path(root, run)
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps({"sha": head, "base_sha": head, "paths": paths}), encoding="utf-8")
+
+
+def test_export_run_runs_the_command_in_the_mirror_under_its_lock_and_passes_its_status_through(tmp_path, monkeypatch, capsys):
+    root, head = _peer_import_repo(tmp_path)
+    _record(root, "run1", head, [_RUN_MOD_TEST])
+    held = []
+    real = cov._run
+
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" in argv:
+            with pytest.raises(cov.ExportError, match="busy"):
+                monkeypatch.setattr(cov, "TEST_TIMEOUT_S", 1)
+                with cov._mirror_lock(root):
+                    pass
+            monkeypatch.setattr(cov, "TEST_TIMEOUT_S", 120)
+            held.append(Path(cwd))
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", _RUN_MOD_TEST]
+
+    code = cov.main(["--export-run", "--run-id", "run1", "--repo-root", str(root), "--", *cmd])
+
+    assert code != 0 and held == [cov.mirror_root(root) / root.name]
+    assert "peer_mod" in capsys.readouterr().out
+
+
+def test_export_run_is_green_when_the_declared_paths_carry_what_the_command_needs(tmp_path, capsys):
+    root, head = _peer_import_repo(tmp_path)
+    _record(root, "run1", head, [_RUN_MOD_TEST, "t/peer_mod.py"])
+    cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", _RUN_MOD_TEST]
+
+    assert cov.main(["--export-run", "--run-id", "run1", "--repo-root", str(root), "--", *cmd]) == 0
+
+
+def test_export_run_without_a_command_a_record_or_a_good_path_exits_nonzero(tmp_path, capsys):
+    root, head = _repo(tmp_path)
+
+    with pytest.raises(SystemExit):
+        cov.main(["--export-run", "--run-id", "run1", "--repo-root", str(root)])
+    with pytest.raises(SystemExit):
+        cov.main(["--run-id", "run1", "--repo-root", str(root), "--", "echo"])
+    assert cov.main(["--export-run", "--run-id", "run1", "--repo-root", str(root), "--", "echo"]) == 2
+
+    _record(root, "run2", head, ["/abs/path.py"])
+    assert cov.main(["--export-run", "--run-id", "run2", "--repo-root", str(root), "--", sys.executable, "-c", "pass"]) == 2
+    assert "clean export failed" in capsys.readouterr().err
+
+
+def test_export_only_is_retired(tmp_path):
+    root, head = _repo(tmp_path)
+    _record(root, "run1", head, [READER])
+
+    with pytest.raises(SystemExit):
+        cov.main(["--export-only", "--run-id", "run1", "--repo-root", str(root)])
+
+
+_PEER_IMPORT_COMMIT_TEST = "t/test_run_imports_peer.py"
+
+
+def test_a_run_that_imports_an_uncommitted_peer_module_is_red_in_verify(tmp_path):
+    """The candidate commit carries the run's test; the module it imports exists only in the shared worktree."""
+    root, base = _repo(tmp_path)
+    _write(root, _PEER_IMPORT_COMMIT_TEST, "import peer_mod\n\n\ndef test_uses_peer():\n    assert peer_mod.VALUE == 1\n")
+    _git(root, "add", _PEER_IMPORT_COMMIT_TEST)
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "run")
+    head = _git(root, "rev-parse", "HEAD").strip()
+    _write(root, "t/peer_mod.py", "VALUE = 1\n")
+    assert _pytest_in(root, root, _PEER_IMPORT_COMMIT_TEST) == 0
+
+    out = cov.verify(root, "run1", head, [_PEER_IMPORT_COMMIT_TEST], base_sha=base)
+
+    assert out.red and "collection failed" in out.detail and "peer_mod" in out.detail, out
+
+
+def test_a_collection_error_is_red_naming_it_and_a_non_collection_exit_two_is_not():
+    boom = "ERROR collecting t/test_x.py\nModuleNotFoundError: No module named 'peer_mod'\n1 error in 0.1s\n"
+    assert cov.collection_error(2, boom)
+    assert cov.collection_error(2, "Interrupted: 1 error during collection\n")
+    assert not cov.collection_error(2, "KeyboardInterrupt\n")
+    assert not cov.collection_error(1, boom)
+
+
+_PROBE_MOD = "coordinator_core/__init__.py"
+_PROBE_TEST = "t/test_probe_import.py"
+
+
+def test_import_coordinator_core_resolves_to_the_mirror_never_the_callers_repo(tmp_path, monkeypatch):
+    root, _head = _repo(tmp_path)
+    _write(root, _PROBE_MOD, "WHERE = 'mirror'\n")
+    _write(
+        root, _PROBE_TEST,
+        "import pathlib\nimport coordinator_core\n\n\ndef test_resolves_inside_the_export():\n"
+        "    here = pathlib.Path(__file__).resolve().parents[1]\n"
+        "    assert pathlib.Path(coordinator_core.__file__).resolve().is_relative_to(here)\n"
+        "    assert coordinator_core.WHERE == 'mirror'\n",
+    )
+    _git(root, "add", _PROBE_MOD, _PROBE_TEST)
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "probe")
+    head = _git(root, "rev-parse", "HEAD").strip()
+    decoy = tmp_path / "decoy"
+    _write(decoy, "coordinator_core/__init__.py", "WHERE = 'caller'\n")
+    monkeypatch.setenv("PYTHONPATH", str(decoy))
+    monkeypatch.setenv("PYTHONSAFEPATH", "1")
+
+    out = cov.verify(root, "run1", head, [_PROBE_TEST])
+
+    assert out.verdict == "green", out
+    assert cov._mirror_env({"PYTHONPATH": "caller"}, Path("mirror"))["PYTHONPATH"] == "mirror"
+
+
+_HELPER = "t/helper_mod.py"
+_IMPORTER = "t/test_uses_helper.py"
+_UNRELATED = "t/test_unrelated_slow.py"
+
+
+def _importer_repo(tmp_path):
+    root, _base = _repo(tmp_path)
+    _write(root, _HELPER, "VALUE = 1\n")
+    _write(root, _IMPORTER, "import helper_mod\n\n\ndef test_helper():\n    assert helper_mod.VALUE == 1\n")
+    _write(root, _UNRELATED, "def test_unrelated():\n    assert True\n")
+    _git(root, "add", _HELPER, _IMPORTER, _UNRELATED)
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "helper")
+    return root, _git(root, "rev-parse", "HEAD").strip()
+
+
+def _pytest_targets(monkeypatch):
+    seen = []
+    real = cov._run
+
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" in argv:
+            seen.append(argv[argv.index("--basetemp") + 2:])
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    return seen
+
+
+def test_the_pytest_set_is_the_touched_tests_plus_the_test_files_that_import_a_touched_module(tmp_path, monkeypatch):
+    root, head = _importer_repo(tmp_path)
+    seen = _pytest_targets(monkeypatch)
+
+    out = cov.verify(root, "run1", head, [READER], touched=[_HELPER, READER])
+
+    assert out.verdict == "green", out
+    assert seen == [[READER, _IMPORTER]]
+
+
+def test_no_touched_module_means_the_seeds_alone_and_a_runaway_importer_set_is_capped(tmp_path, monkeypatch):
+    root, head = _importer_repo(tmp_path)
+    seen = _pytest_targets(monkeypatch)
+    assert cov.verify(root, "run1", head, [READER]).verdict == "green"
+    assert seen == [[READER]]
+
+    monkeypatch.setattr(cov, "IMPORTER_CAP", 1)
+    for n in range(3):
+        _write(root, f"t/test_more_{n}.py", "import helper_mod\n\n\ndef test_m():\n    assert helper_mod.VALUE == 1\n")
+    _git(root, "add", *[f"t/test_more_{n}.py" for n in range(3)])
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "more")
+    head = _git(root, "rev-parse", "HEAD").strip()
+    seen.clear()
+
+    out = cov.verify(root, "run2", head, [READER], touched=[_HELPER])
+
+    assert len(seen[0]) == 2 and "importer cap 1" in out.detail, (seen, out)
+
+
+def test_verify_timeout_detail_names_the_timeout_and_its_budget(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    monkeypatch.setattr(cov, "TEST_TIMEOUT_S", 7)
+
+    def slow(argv, cwd, timeout, **kw):
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    monkeypatch.setattr(cov, "_run", slow)
+    out = cov.verify(root, "run1", head, [READER])
+
+    assert out.verdict == "inconclusive" and "timed out after 7s" in out.detail, out.detail
+
+
+def test_the_base_rerun_moves_the_mirror_by_index_info_never_a_second_full_checkout(tmp_path, monkeypatch):
+    root, base, head = _two_commits(tmp_path, "broken\n", "broken\n")
+    seen = []
+    real = cov._run
+
+    def spy(argv, cwd, timeout, **kw):
+        seen.append(argv[1:])
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    out = cov.verify(root, "run1", head, [READER, _SECOND], base_sha=base)
+
+    assert out.verdict == "pre_existing", out
+    assert not [a for a in seen if a[:1] == ["checkout"] or "--detach" in a]
+    assert any(a[:1] == ["diff-tree"] and base in a and head in a for a in seen)
+    assert any(a[:1] == ["update-index"] and "--force-remove" in a for a in seen)
+    assert not [a for a in seen if a[:1] == ["read-tree"] and len(a) > 4]
+
+
+def test_a_path_the_candidate_added_is_absent_when_the_base_is_rerun_and_the_mirror_still_advances(tmp_path):
+    """READER passes at base only if the candidate-added `extra.txt` is gone; the next verify starts from base."""
+    root, base = _repo(tmp_path, data="broken\n")
+    _write(root, "t/extra.txt", "x\n")
+    _git(root, "add", "t/extra.txt")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "candidate")
+    head = _git(root, "rev-parse", "HEAD").strip()
+    dest = cov.mirror_root(root) / root.name
+
+    assert cov.verify(root, "run1", head, [READER], base_sha=base).verdict == "pre_existing"
+    assert not (dest / "t" / "extra.txt").exists() and (dest / "t" / "data.txt").read_text() == "broken\n"
+
+    assert cov.verify(root, "run2", head, [READER]).verdict == "red"
+    assert (dest / "t" / "extra.txt").exists()

@@ -34,6 +34,15 @@ def _write(repo: Path, rel: str, text: str) -> None:
     (repo / rel).write_text(text, encoding="utf-8", newline="\n")
 
 
+@pytest.fixture(autouse=True)
+def _isolated_system_temp(tmp_path, monkeypatch):
+    """The persistent mirror lives under the system Temp's coordinator root; every test gets its own."""
+    import tempfile
+
+    (tmp_path / "systemp").mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+
+
 @pytest.fixture
 def repo(tmp_path):
     """A committed base; the run's declared files and a peer's module are uncommitted in the worktree."""
@@ -101,4 +110,3 @@ def test_a_verify_timeout_exits_inconclusive_and_the_detail_names_the_timeout(re
     verdict = _verdict(repo)
     assert verdict["verdict"] == "inconclusive"
     assert "timed out" in verdict["detail"], verdict
-    assert not cov.overlay_root(repo, RUN).exists()

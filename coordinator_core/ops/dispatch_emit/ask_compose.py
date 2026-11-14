@@ -1573,7 +1573,9 @@ def _ledger_shadowed(blitz_fn: str, *, em_brief: bool) -> str:
 _ROW_VERIFY_PROMPT_OPEN = "`Run and report on the scoped test target(s) for ${id}: `"
 
 
-def _test_instruction_js(review_edits_base: str, repo_root: Optional[str] = None) -> str:
+def _test_instruction_js(
+    review_edits_base: str, repo_root: Optional[str] = None, export_command: Optional[str] = None
+) -> str:
     """JS expression for the verify agent's scoped-test instructions, scoped at run time to the manifest's test targets.
 
     The plan is authored inside the run, so the scope cannot resolve at compose time; the stage
@@ -1582,9 +1584,34 @@ def _test_instruction_js(review_edits_base: str, repo_root: Optional[str] = None
     step precedes the targets so a HEAD-measured test reads the candidate commit; the env is set
     in the test process environment, never as a shell prefix. Trap: the env is prompt-enforced
     only; `measured_rev_drift` at the landing gates backstops file changes, not a runner that ignores the sha.
+
+    With `export_command` the targets run in the clean export that command prints, never the shared worktree;
+    a failed export is a red result, not a fallback.
     """
     from coordinator_core.ops.dispatch_emit.ask_contract import MEASURED_REV_ENV, MEASURED_REV_OP
 
+    if export_command is not None:
+        return _cat(
+            f"First run `coordinator-invoke {MEASURED_REV_OP}` with run_id ",
+            "js:_runId",
+            " and paths [",
+            "js:(_manifest.review_declared_paths ?? []).join(', ')",
+            "]; it returns a candidate commit sha. Then run every scoped test target through this export "
+            "command, appending the test runner argv after the `--`; it runs that argv with a clean export "
+            "(HEAD plus the run's declared paths, none of the shared worktree's other changes) as the working "
+            f"directory and removes the export itself:\n\n{export_command}\n\n"
+            f"Set {MEASURED_REV_ENV} to the sha in the test process environment. If the op or the export command "
+            "exits 2 or reports a failed export or a timeout, report that as a red verify result naming the "
+            "cause; never fall back to the working tree. Run the scoped test targets: [",
+            "js:(_manifest.test_targets ?? []).join(', ')",
+            "]. "
+            + _emit._review_edits_clause(review_edits_base)
+            + " "
+            + _emit._test_runner_clause(repo_root)
+            + " "
+            + (_emit._baseline_context_clause(review_edits_base) + " " if _emit._is_full_sha(review_edits_base) else "")
+            + "Report raw evidence; do not gate. Write your record and return its path as sidecar_path -- required.",
+        )
     return _cat(
         f"First run `coordinator-invoke {MEASURED_REV_OP}` with run_id ",
         "js:_runId",
@@ -2344,8 +2371,8 @@ def _overlay_verify_call(*, head: str, anchor: str, repo_root: str, run_id: str)
     writes `overlay-verdict.json` beside the run's `measured-rev.json` for `dispatch.land_run` to read.
 
     Runs after the verify leg's measured-rev call has written its record. Exit 0 is green, 1 red (the
-    stage folds it into the test result as a failure), 2 inconclusive or no measured-rev record (evidence,
-    never a stage failure)."""
+    stage folds it into the test result as a failure), 2 inconclusive, timed out or no measured-rev record
+    (the fold also fails the test result, naming the cause)."""
     prompt = _cat(
         f"{head}\n\n{anchor}\n\nphase: {ASK_VERIFY_PHASE}\n\nRun exactly this one command as its own Bash call, "
         "no wrapper, no edit to it, and do not retry it:\n\n"
@@ -2362,15 +2389,19 @@ def _overlay_verify_call(*, head: str, anchor: str, repo_root: str, run_id: str)
 
 _OVERLAY_FOLD_JS = (
     f"    if (!_halted && _testWanted && _verify && ({_VERIFY_TEST_RESULT_VAR} || _verify.test)) {{\n"
-    "      let _ov = null;\n"
+    "      let _ov = null; let _ovThrew = '';\n"
     "      try { _ov = await __OVERLAY__; } catch (e) { const _m = String((e && e.message) ?? e); "
-    "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('overlay-verify leg threw: ' + _m); } }\n"
-    "      if (_ov && _ov.exit_code === 1 && !/No module named .?coordinator_core/.test(String(_ov.detail ?? ''))) {\n"
+    "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { _ovThrew = _m; log('overlay-verify leg threw: ' + _m); } }\n"
+    "      if (_ov && _ov.exit_code === 1) {\n"
     f"        const _t = _verify.test ?? {_VERIFY_TEST_RESULT_VAR} ?? {{}};\n"
     "        _verify.test = { ..._t, status: 'fail', tests_failed: Math.max(1, Number(_t.tests_failed) || 0), "
     "summary: String('clean-overlay verdict red: ' + (_ov.detail ?? '') + ' | ' + (_t.summary ?? '')).slice(0, 300) };\n"
-    "      } else if (_ov && _ov.exit_code !== 0) {\n"
-    "        log('overlay verdict inconclusive (exit ' + _ov.exit_code + '): ' + String(_ov.detail ?? ''));\n"
+    "      } else if (!_halted && (!_ov || _ov.exit_code !== 0)) {\n"
+    "        const _why = _ov ? String(_ov.detail ?? '') : (_ovThrew || 'overlay-verify leg returned no result');\n"
+    "        log('overlay verdict inconclusive (exit ' + (_ov ? _ov.exit_code : 'none') + '): ' + _why);\n"
+    f"        const _t = _verify.test ?? {_VERIFY_TEST_RESULT_VAR} ?? {{}};\n"
+    "        _verify.test = { ..._t, status: 'fail', tests_failed: Math.max(1, Number(_t.tests_failed) || 0), "
+    "summary: String('clean-overlay verdict inconclusive (exit ' + (_ov ? _ov.exit_code : 'none') + '): ' + _why + ' | ' + (_t.summary ?? '')).slice(0, 300) };\n"
     "      }\n"
     "    }"
 )
@@ -6229,8 +6260,13 @@ def compose_ask_script(
         test_result_var=_VERIFY_TEST_RESULT_VAR,
     )
     verify_tests_call = _verify_tests_call(
-        head=head, anchor=anchor, test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root), run_id=run_id,
-        stager=stager, agent_type_host=agent_type_host,
+        head=head, anchor=anchor, run_id=run_id, stager=stager, agent_type_host=agent_type_host,
+        test_js=_test_instruction_js(
+            run_base_sha or "HEAD", repo_root,
+            export_command=engine_module_command(
+                _OVERLAY_VERIFY_MODULE, repo_root, f"--export-run --run-id {run_id} --repo-root {Path(repo_root).as_posix()} --"
+            ),
+        ),
     )
     unjudged = (
         "{ status: 'indeterminate', differs_from_baseline: null, observation: 'unjudged: verify leg returned "
@@ -6637,7 +6673,8 @@ def compose_ask_script(
     if objective_cfg is not None:
         b.append("  if (_nextAction.params && _objResult) { _nextAction.params.objective_loop = _objResult; }")
     b.append(
-        "  if (_nextAction.params && _ledger) { _nextAction.params.ledger_verdict = { items: (_ledger.items ?? [])"
+        "  if (_nextAction.params && _ledger) { _nextAction.params.ledger_verdict = { "
+        "conflicts: Array.isArray(_ledger.conflicts) ? _ledger.conflicts : [], items: (_ledger.items ?? [])"
         ".map((i) => ({ id: i.id, status: i.status, essential: i.essential !== false, wired: i.wired === true, "
         "...(i.superseded_by ? { superseded_by: i.superseded_by } : {}), "
         "...(i.withheld_by ? { withheld_by: i.withheld_by } : {}), "

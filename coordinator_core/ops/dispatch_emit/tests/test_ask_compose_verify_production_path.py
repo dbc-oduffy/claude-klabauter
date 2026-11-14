@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
@@ -82,7 +87,7 @@ def test_overlay_producer_is_not_in_the_verify_agent_prompt():
 def test_overlay_exit_one_folds_into_a_red_test_and_other_exits_do_not():
     fold = ask_compose._OVERLAY_FOLD_JS
     assert "_ov.exit_code === 1" in fold and "status: 'fail'" in fold
-    assert "else if (_ov && _ov.exit_code !== 0)" in fold and "log(" in fold
+    assert "(!_ov || _ov.exit_code !== 0)" in fold and "log(" in fold
     text = _compose()
     assert text.index("overlay-verify") < text.index("_testResult = _verify.test")
 
@@ -93,11 +98,75 @@ def test_overlay_runs_when_the_tests_leg_ran_even_if_the_verify_result_lacks_tes
     assert "_testWanted && _verify && (_verifyTest || _verify.test)" in head
     assert "_verify.test = { ..._t, status: 'fail'" in fold
     assert "const _t = _verify.test ?? _verifyTest ?? {};" in fold
-    assert "No module named .?coordinator_core" in fold
+    assert "No module named" not in fold
     assert "_ov.exit_code !== 0" in fold
     assert fold.index("_verify.test = { ..._t") > fold.index("_ov.exit_code === 1")
     text = _compose()
     assert text.index("(_verifyTest || _verify.test)") < text.index("_testResult = _verify.test")
+
+
+def _fold_with(overlay_js: str, halted: bool = False) -> dict:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    fold = ask_compose._OVERLAY_FOLD_JS.replace("__OVERLAY__", overlay_js)
+    program = (
+        "const _USAGE_LIMIT_RE = /zzz/; const _haltOnUsageLimit = () => {}; const log = () => {};\n"
+        f"(async () => {{ const _halted = {str(halted).lower()}, _testWanted = true;\n"
+        "let _verifyTest = null; let _verify = { test: { status: 'pass', tests_failed: 0, summary: 's' } };\n"
+        f"{fold}\nprocess.stdout.write(JSON.stringify(_verify.test)); }})();\n"
+    )
+    done = subprocess.run([node, "-"], input=program, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+def _resolved(exit_code, detail) -> str:
+    return f"Promise.resolve({json.dumps({'exit_code': exit_code, 'detail': detail})})"
+
+
+@pytest.mark.parametrize("exit_code", [2, 3, 124])
+def test_overlay_non_zero_exit_fails_the_test_naming_the_timeout(exit_code):
+    test = _fold_with(_resolved(exit_code, "overlay verify timed out after 120s: TimeoutExpired"))
+    assert test["status"] == "fail" and test["tests_failed"] >= 1
+    assert test["summary"].startswith(f"clean-overlay verdict inconclusive (exit {exit_code}): ")
+    assert "timed out after 120s" in test["summary"]
+
+
+def test_overlay_thrown_leg_and_null_result_fail_the_test():
+    thrown = _fold_with("Promise.reject(new Error('leg crashed'))")
+    assert thrown["status"] == "fail" and "inconclusive (exit none)" in thrown["summary"] and "leg crashed" in thrown["summary"]
+    null = _fold_with("Promise.resolve(null)")
+    assert null["status"] == "fail" and "inconclusive (exit none)" in null["summary"]
+
+
+def test_overlay_green_and_halted_runs_still_pass():
+    assert _fold_with(_resolved(0, "overlay verdict: green"))["status"] == "pass"
+    assert _fold_with("Promise.resolve(null)", halted=True)["status"] == "pass"
+
+
+def test_overlay_interpreter_import_fault_fails_closed_never_passes_open():
+    test = _fold_with(_resolved(1, "/usr/bin/python: No module named coordinator_core"))
+    assert test["status"] == "fail" and test["tests_failed"] >= 1
+    assert "No module named coordinator_core" in test["summary"]
+
+
+def test_verify_tests_leg_builds_and_runs_in_the_clean_export():
+    text = _compose()
+    marker = "clean_overlay_verify --export-run --run-id run-1"
+    assert marker in text
+    leg = text[text.index(marker) - 600 : text.index(marker) + 1600]
+    assert "clean export" in leg and "never fall back to the working tree" in leg
+    assert "appending the test runner argv after the `--`" in leg
+    assert "Run every scoped test target in the working tree" not in leg
+
+
+def test_verify_agent_prompt_does_not_run_the_export():
+    call = ask_compose._verify_call(
+        head="h", anchor="a", test_js=ask_compose._test_instruction_js("HEAD", "REPO"), docs_parts=(),
+        verdict_parts=("v",), judged=False, schema={}, run_id="run-1", test_result_var="_verifyTest",
+    )
+    assert "--export-run" not in call
 
 
 def test_overlay_producer_command_imports_coordinator_core_from_a_consumer_cwd(tmp_path):

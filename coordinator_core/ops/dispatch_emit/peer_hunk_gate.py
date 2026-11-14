@@ -2,8 +2,8 @@
 
 `co_declared_peer_holds` names the landing paths this run declares that another unlanded run also
 claims (a path-level commit cannot split the peer's hunks off). `out_of_ask_holds` names the
-landing paths a findings-ledger row marks `out_of_ask: true` (the structured marker; reviewer prose
-is never read) whose status is still unresolved.
+landing paths a findings-ledger row marks `out_of_ask: true` or rates critical (P0; the structured
+fields; reviewer prose is never read) whose status is still unresolved.
 `refusal_message` words both for the operator.
 
 Invariants: in-process file reads only (no spawn), except the
@@ -379,11 +379,19 @@ def _names_path(finding: str, path: str, basename_unique: bool) -> bool:
     return basename_unique and path.rpartition("/")[2] in text
 
 
+_ARM_OUT_OF_ASK = "out-of-ask"
+_ARM_CRITICAL = "critical"
+_ARM_CONFORMANCE = "conformance"
+LEDGER_CONFLICT_STEM = "ledger-conflict"
+
+
 def _unresolved_out_of_ask(text: str) -> list:
-    """`(label, naming_text)` for each findings-ledger row carrying the structured `out_of_ask: true`
-    marker whose status is not applied or em-rejected. Prose is never read: a row with no explicit
-    status is unresolved."""
+    """`(label, naming_text, arm)` for each unresolved findings-ledger row (status not applied or
+    em-rejected; a row with no explicit status is unresolved): one carrying the structured
+    `out_of_ask: true` marker (arm `out-of-ask`), else one whose `severity` canonicalises to P0
+    (arm `critical`). Prose is never read."""
     from coordinator_core.ops.review_findings_ledger import LedgerError, _parse_ledger_rows
+    from coordinator_core.ops.review_mint.wave_bookkeeping import _canonical_severity
 
     try:
         rows = _parse_ledger_rows(text) or []
@@ -391,12 +399,18 @@ def _unresolved_out_of_ask(text: str) -> list:
         return []
     out = []
     for row in rows:
-        if row.get("out_of_ask") is not True or row.get("status") in _RESOLVED:
+        if row.get("status") in _RESOLVED:
+            continue
+        if row.get("out_of_ask") is True:
+            arm = _ARM_OUT_OF_ASK
+        elif _canonical_severity(row.get("severity")) == "P0":
+            arm = _ARM_CRITICAL
+        else:
             continue
         files = row.get("files") if isinstance(row.get("files"), list) else [row.get("file")]
         named = " ".join(str(f) for f in files if isinstance(f, str))
-        label = str(row.get("summary") or row.get("title") or row.get("id") or "out-of-ask")
-        out.append((label, named))
+        label = str(row.get("summary") or row.get("title") or row.get("id") or arm)
+        out.append((label, named, arm))
     return out
 
 
@@ -435,11 +449,15 @@ def landing_holds(
     worktree_root: Path, session_id: Optional[str], run_id: str, plan_path: Optional[str],
     all_paths: Sequence[str], deleted_paths: Sequence[str], chunk_declared: Iterable[str],
     own_declared: Iterable[str], own_seniority: Optional[tuple],
+    ledger_conflicts: Sequence[str] = (),
 ) -> dict:
     """`{path: holding run id}` the landing must withhold: paths a halted peer withholds, plus paths a
-    reviewer's unresolved out-of-ask finding names while a peer co-declares them. A declared path in
-    either set is released when `landable_under_hold` can carry it (the peer's hunks are absent, or
-    this run's own hunks split off as a settled blob; an out-of-ask path only through the split), and
+    reviewer's unresolved out-of-ask finding, unresolved critical finding or a ledger conflict
+    (`ledger_conflicts`, each string naming a landing path) names while a peer co-declares them. A
+    critical or conflict path is held only while a foreign hunk is attributed to it or a peer
+    co-declares it; an out-of-ask path is held regardless. A declared path in any of these sets is
+    released when `landable_under_hold` can carry it (the peer's hunks are absent, or this run's own
+    hunks split off as a settled blob; a reviewer- or conflict-named path only through the split), and
     a deleted path or an unreadable halt record releases the hold."""
     from coordinator_core.ops.dispatch_emit import hunk_provenance
     from coordinator_core.ops.dispatch_emit.land_run import UNREADABLE_HALT_RECORD, foreign_halted_withheld
@@ -448,10 +466,17 @@ def landing_holds(
 
     held = foreign_halted_withheld(worktree_root, run_id, plan_path, [*all_paths, *deleted_paths])
     oa_stems: dict = {}
-    for p, stem, _label in out_of_ask_holds(
+    needs_foreign_hunk: set = set()
+    unconditional: set = set()
+    for p, stem, _label, arm in _scan_holds(
         worktree_root, review_owner(session_id) or resolve_session_id(), run_id, all_paths,
     ):
         oa_stems.setdefault(p, stem)
+        (needs_foreign_hunk if arm == _ARM_CRITICAL else unconditional).add(p)
+    for p in _conflict_paths(ledger_conflicts, all_paths):
+        oa_stems.setdefault(p, LEDGER_CONFLICT_STEM)
+        needs_foreign_hunk.add(p)
+    needs_foreign_hunk -= unconditional
     oa_paths = sorted(set(oa_stems) - set(held))
     if oa_paths:
         held.update(co_declared_peer_holds(
@@ -460,7 +485,10 @@ def landing_holds(
         unheld = [p for p in oa_paths if p not in held]
         attributed = _attributed_owners(worktree_root, run_id, plan_path, unheld)
         for p in unheld:
-            held[p] = attributed.get(p) or oa_stems[p]
+            if attributed.get(p):
+                held[p] = attributed[p]
+            elif p not in needs_foreign_hunk:
+                held[p] = oa_stems[p]
     declared = set(chunk_declared)
     live_held = _live_sibling_holds(
         worktree_root, run_id, plan_path,
@@ -479,6 +507,17 @@ def landing_holds(
             if p in carried or h == UNREADABLE_HALT_RECORD or p in deleted_paths:
                 del held[p]
     return held
+
+
+def _conflict_paths(conflicts: Sequence[str], landing_paths: Iterable[str]) -> list:
+    """Each landing path a ledger conflict string names, by path or by a basename unique within
+    `landing_paths`. Sorted."""
+    paths = sorted({_norm(p) for p in landing_paths if p} - {""})
+    names = [p.rpartition("/")[2] for p in paths]
+    return sorted({
+        path for text in conflicts if isinstance(text, str) for path, name in zip(paths, names)
+        if _names_path(text, path, names.count(name) == 1)
+    })
 
 
 def _live_sibling_holds(
@@ -513,6 +552,16 @@ def _live_sibling_holds(
         for path, owner in found.items():
             if path not in held and path not in candidates and owner and not hunk_provenance._non_live(root, owner):
                 held[path] = owner
+        orphaned = [
+            p for p, owner in found.items()
+            if p not in held and owner and owner != hunk_provenance.UNKNOWN_OWNER and hunk_provenance._non_live(root, owner)
+        ]
+        if orphaned:  # a halted owner's hunk: its live refire declaring the path holds it (junior or not)
+            for path, holder in co_declared_peer_holds(
+                root, run_id, orphaned, own_declared, own_plan=plan_path, minted_before=None,
+            ):
+                if holder != UNREADABLE_PEER_CLAIMS and not hunk_provenance._non_live(root, holder):
+                    held.setdefault(path, holder)
         return held
     except Exception:  # noqa: BLE001 -- a hold that cannot be computed adds none
         return {}
@@ -545,8 +594,16 @@ def out_of_ask_holds(
     worktree_root: Path, session_id: str, run_id: str, landing_paths: Iterable[str],
 ) -> list:
     """`[(path, sidecar_stem, label)]` for each landing path an unresolved `out_of_ask: true` ledger
-    row in one of the run's integrated wave sidecars names in `file`/`files`, by path or by a
-    basename unique within `landing_paths`. Sorted by path. Never raises."""
+    row, a critical (P0) ledger row or an unmet `brief_conformance` row in one of the run's integrated
+    wave sidecars names in `file`/`files`, by path or by a basename unique within `landing_paths`.
+    Sorted by path. Never raises."""
+    return sorted({h[:3] for h in _scan_holds(worktree_root, session_id, run_id, landing_paths)})
+
+
+def _scan_holds(
+    worktree_root: Path, session_id: str, run_id: str, landing_paths: Iterable[str],
+) -> list:
+    """`[(path, stem, label, arm)]` behind `out_of_ask_holds`; `arm` is why the row holds the path."""
     root = Path(worktree_root)
     paths = sorted({_norm(p) for p in landing_paths if p} - {""})
     if not paths or not session_id:
@@ -572,10 +629,14 @@ def out_of_ask_holds(
                 text = (share / f"{stem}.md").read_text(encoding="utf-8")
             except OSError:
                 continue
-            for label, named in (*_unresolved_out_of_ask(text), *_unmet_conformance(text)):
+            rows = (
+                *_unresolved_out_of_ask(text),
+                *((label, named, _ARM_CONFORMANCE) for label, named in _unmet_conformance(text)),
+            )
+            for label, named, arm in rows:
                 for path, name in zip(paths, names):
                     if _names_path(named, path, names.count(name) == 1):
-                        holds.add((path, stem, label))
+                        holds.add((path, stem, label, arm))
     except Exception:  # noqa: BLE001 -- record unknown: hold nothing
         return []
     return sorted(holds)

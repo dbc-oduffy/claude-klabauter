@@ -301,15 +301,21 @@ def _freeze_whole_by_base(
 
 
 def foreign_claims(
-    repo_root: Path, rev_range: str, paths: List[str], own_session: str, scanned: Optional[frozenset] = None
+    repo_root: Path,
+    rev_range: str,
+    paths: List[str],
+    own_session: str,
+    scanned: Optional[frozenset] = None,
+    dirty: Optional[frozenset] = None,
 ) -> List[str]:
-    """Declared `paths` changed by a commit in `rev_range` that a live session other than
-    `own_session` claims. `scanned` (the peer-base log's changed set) answers it with no spawn;
-    without it, one `git log` spawn; none when `paths` is empty."""
+    """Declared `paths` changed by a commit in `rev_range`, or dirty in the worktree (`dirty`, an
+    already-computed set: no spawn), that a live session other than `own_session` claims. `scanned`
+    (the peer-base log's changed set) answers the commit side with no spawn; without it, one `git log`
+    spawn; none when `paths` is empty."""
     if not paths:
         return []
     if scanned is not None:
-        changed = sorted(scanned)
+        changed = sorted(scanned | dirty) if dirty else sorted(scanned)
     else:
         proc = run_git(
             ["-C", str(repo_root), "log", "--name-only", "--format=", rev_range, "--", *map(git_pathspec, paths)],
@@ -317,7 +323,7 @@ def foreign_claims(
         )
         if proc.returncode != 0:
             return []
-        changed = sorted({ln.strip() for ln in proc.stdout.splitlines() if ln.strip()})
+        changed = sorted({ln.strip() for ln in proc.stdout.splitlines() if ln.strip()} | set(dirty or ()))
     if not changed:
         return []
     claims = claim_index.lookup(changed, cwd=str(repo_root))
@@ -942,7 +948,8 @@ def _compute(
         from coordinator_core.ops.review_peer_bases import PeerBases
 
         scanned = peer_bases.changed if isinstance(peer_bases, PeerBases) else None
-        out["foreign_claims"] = foreign_claims(repo_root, rev_range, paths, session, scanned)
+        dirty = frozenset(part.get("worktree_paths") or []) | frozenset(part.get("fallback_paths") or [])
+        out["foreign_claims"] = foreign_claims(repo_root, rev_range, paths, session, scanned, dirty or None)
     out["sidecar_path"] = _rel(sidecar, repo_root)
     with review_prep_legs.leg("write_sidecar"):
         _write_sidecar(sidecar, out, session, paths, head)
