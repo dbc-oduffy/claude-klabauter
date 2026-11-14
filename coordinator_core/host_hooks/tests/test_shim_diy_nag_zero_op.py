@@ -95,3 +95,22 @@ def test_subagent_fire_gets_no_nag(monkeypatch, repo):
     monkeypatch.setattr(shim, "_dial", lambda request: {"result": {}})
     payload = {**_payload("codex", repo, "sub-sid"), "agent_id": "child"}
     assert NAG not in str(shim.run("codex", json.dumps(payload)))
+
+
+def _write_payload(host, root, sid):
+    if host == "agy":
+        return {"conversationId": sid, "workspacePaths": [str(root)],
+                "toolCall": {"name": "write_file", "args": {"TargetFile": str(root / "f0.txt"), "CodeContent": "c"}}}
+    tool = {"codex": "apply_patch", "grok": "write_file"}[host]
+    return {"hook_event_name": "PreToolUse", "session_id": sid, "cwd": str(root), "tool_name": tool,
+            "tool_input": {"path": str(root / "f0.txt"), "file_path": str(root / "f0.txt"), "content": "c"}}
+
+
+@pytest.mark.parametrize("host", ["codex", "agy", "grok"])
+def test_cold_engine_write_nags_without_the_cold_chain(monkeypatch, repo, host):
+    """A warm miss on a hand-edit answers the nag before the ~800ms cold guard chain, which the host guard's
+    500ms wall killed every time (goal-1 probes, 2026-11-14: no nag on agy, grok or codex)."""
+    monkeypatch.setattr(shim, "_dial", lambda request: None)
+    monkeypatch.setattr(shim, "_cold_verdict", lambda *a, **k: pytest.fail("cold chain ran before the nag"))
+    out = shim.run(host, json.dumps(_write_payload(host, repo, "cold-write")))
+    assert _shows_nag(host, out), out

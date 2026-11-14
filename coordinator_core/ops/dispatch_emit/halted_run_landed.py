@@ -356,7 +356,10 @@ def _launcher_gone(root: Path, run_id: str) -> bool:
     """True when no launcher can still be driving *run_id*: its token is not live, or its run dir records a terminal stage.
 
     Trap: a halted or abandoned run keeps an unclaimed in-TTL token (nothing redeems it), so the
-    token alone reads such a run as live; the run dir's own terminal record settles it.
+    token alone reads such a run as live; the run dir's own terminal record settles it. A still-``halted``
+    ``halted.json`` marker counts too, since a refusal-halted run re-armed as a full pass keeps its
+    marker while ``run-stage.json`` drifts back to ``staged``.
+    A ``resumed`` marker never counts: a successor owns the run.
     """
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run, run_token
 
@@ -366,7 +369,12 @@ def _launcher_gone(root: Path, run_id: str) -> bool:
         record_dir = ask_contract.record_dir(root, run_id)
     except ValueError:
         return False
-    return _terminal(record_dir) and not halted_run._is_shell(record_dir)
+    marker = halted_run._read(record_dir)
+    if marker is not None and marker.get("status") == halted_run.STATUS_RESUMED:
+        return False
+    if _terminal(record_dir) and not halted_run._is_shell(record_dir):
+        return True
+    return marker is not None and marker.get("status") == halted_run.STATUS_HALTED
 
 
 _REPO_QUALIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]+:(?=[^/\\])")

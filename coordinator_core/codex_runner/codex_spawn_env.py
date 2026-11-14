@@ -7,6 +7,7 @@ preflight judges the env that is actually spawned.
 from __future__ import annotations
 
 import os
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -84,5 +85,51 @@ def shape_codex_child(
         tmp.mkdir(parents=True, exist_ok=True)
         for name in ("TEMP", "TMP"):
             env[_key(env, name) or name] = str(tmp)
+    if writable_root is not None:
+        _isolate_codex_home(env, Path(writable_root), os.environ if environ is None else environ)
     check_pwsh_launchable(env)
     return env
+
+
+def _real_codex_home(env: Mapping[str, str], environ: Mapping[str, str]) -> Path:
+    for source in (env, environ):
+        k = _key(source, "CODEX_HOME")
+        if k and source[k]:
+            return Path(source[k])
+    return Path.home() / ".codex"
+
+
+def _home_writable(home: Path) -> bool:
+    probe = home / "tmp" / f".probe-{os.getpid()}"
+    try:
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_bytes(b"")
+        probe.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def _isolate_codex_home(env: dict[str, str], writable_root: Path, environ: Mapping[str, str]) -> None:
+    """Point the child's CODEX_HOME at `<writable_root>/scratch/codex-home`, seeded with auth and config.
+
+    Only when the parent is codex-sandboxed (CODEX_SANDBOX / CODEX_SANDBOX_NETWORK_DISABLED set) or the
+    real home rejects a write; otherwise the env is untouched. Copies only auth.json and config.toml,
+    never sessions, logs or tmp. Child env only.
+    """
+    real = _real_codex_home(env, environ)
+    sandboxed = any(_key(environ, n) for n in ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED"))
+    if not sandboxed and _home_writable(real):
+        return
+    home = writable_root / "scratch" / "codex-home"
+    home.mkdir(parents=True, exist_ok=True)
+    for name in ("auth.json", "config.toml"):
+        src, dst = real / name, home / name
+        try:
+            if src.is_file() and (not dst.is_file() or src.stat().st_mtime > dst.stat().st_mtime):
+                part = home / f"{name}.{os.getpid()}.part"
+                shutil.copy2(src, part)
+                os.replace(part, dst)
+        except OSError:
+            continue
+    env[_key(env, "CODEX_HOME") or "CODEX_HOME"] = str(home)

@@ -191,6 +191,12 @@ def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
     denied = backstop.match(event)
     if denied is not None:
         return adapter.render(event, denied)
+    # Trap: the nag must answer before the cold guard chain. That chain costs ~800ms of process time, so
+    # under the host guard's 500ms wall it was killed every time and the nag never reached any non-Claude EM.
+    # The backstop above still holds the irreversible denies, and no other guard may deny recoverable work.
+    nag = _nag_text(host, event, engine_event)
+    if nag:
+        return adapter.render(event, {"additionalContext": nag})
     cold = _cold_verdict(event, engine_event)
     if cold:
         return adapter.render(event, _with_nag(host, event, engine_event, cold))
@@ -198,8 +204,7 @@ def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
         _degrade("KIND_HOOK_TIMEOUT", "host_hooks.shim %s: engine dial exceeded %.0fms" % (host, DIAL_BUDGET_SECS * 1000))
     else:
         _degrade("KIND_COLD_RUN", "host_hooks.shim %s: no engine verdict" % host)
-    nag = _nag_text(host, event, engine_event)
-    return adapter.render(event, {"additionalContext": nag}) if nag else neutral_fallback(host)
+    return neutral_fallback(host)
 
 
 def run(host: str, stdin_text: str) -> Dict[str, Any]:
