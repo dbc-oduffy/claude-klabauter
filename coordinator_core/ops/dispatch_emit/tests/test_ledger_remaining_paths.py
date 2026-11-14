@@ -309,3 +309,60 @@ def test_derive_ledger_rows_drops_excluded_writes(tmp_path):
     args = (_rem("edit global-doctrine/x.py pkg/mod.py"), [], ["R1"], {}, [], root)
     assert derive_ledger_rows(*args)[0][0]["writes"] == ["global-doctrine/x.py", "pkg/mod.py"]
     assert derive_ledger_rows(*args, exclude=["global-doctrine"])[0][0]["writes"] == ["pkg/mod.py"]
+
+
+_OUTBOX = ".coordinator-local/memo-outbox"
+
+
+def _drafts(root, **to_by_slug):
+    (root / _OUTBOX).mkdir(parents=True)
+    for slug, to in to_by_slug.items():
+        front = f"---\nto: {to}\n---\n" if to else ""
+        (root / _OUTBOX / f"{slug}.md").write_text(front + "body\n", encoding="utf-8")
+
+
+def test_two_memo_drafts_for_two_receivers_split_into_rows_each_with_memo_to(tmp_path):
+    import yaml
+
+    from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import derive_ledger_rows
+    from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+
+    root = _repo(tmp_path)
+    (root / ".git").mkdir()
+    _drafts(root, a="claude-klabauter", b="rag")
+    rem = _rem(f"send {_OUTBOX}/a.md and {_OUTBOX}/b.md", "fix pkg/mod.py")
+    rows, underivable = derive_ledger_rows(rem, [], ["R1"], {}, [], root)
+    assert underivable == []
+    memo = {r["memo_to"]: r["writes"] for r in rows if "memo_to" in r}
+    assert memo == {"claude-klabauter": [f"{_OUTBOX}/a.md"], "rag": [f"{_OUTBOX}/b.md"]}
+    assert [r["writes"] for r in rows if "memo_to" not in r] == [["pkg/mod.py"]]
+    assert len({r["id"] for r in rows}) == 3
+    plan = root / "p.md"
+    spine = yaml.safe_dump(rows, sort_keys=False)
+    plan.write_text(
+        f"---\ntitle: p\n---\n\n# p\n\n## Goal\n\ng\n\n## Tasks\n\n```yaml plan-tasks\n{spine}```\n", encoding="utf-8"
+    )
+    assert {r.id for r in read_spine(plan)} == {r["id"] for r in rows}
+
+
+def test_single_memo_draft_row_keeps_plain_title_and_carries_memo_to(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import derive_ledger_rows
+
+    root = _repo(tmp_path)
+    _drafts(root, a="claude-klabauter")
+    rows, _ = derive_ledger_rows(_rem(f"send {_OUTBOX}/a.md"), [], ["R1"], {}, [], root)
+    assert len(rows) == 1
+    assert rows[0]["memo_to"] == "claude-klabauter"
+    assert "(memo to" not in rows[0]["title"]
+
+
+def test_memo_draft_without_resolvable_receiver_is_underivable_not_an_unstageable_row(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import derive_ledger_rows
+
+    root = _repo(tmp_path)
+    _drafts(root, a="claude-klabauter", b=None)
+    rows, underivable = derive_ledger_rows(
+        _rem(f"send {_OUTBOX}/a.md and {_OUTBOX}/b.md"), [], ["R1"], {}, [], root
+    )
+    assert rows == []
+    assert underivable == ["R1"]

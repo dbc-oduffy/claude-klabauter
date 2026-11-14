@@ -1417,6 +1417,24 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
             except OSError:
                 pass
 
+    # 7a. DIY-nag advisory: worktree-scoped ops only (repo_root is None otherwise, so the
+    #     detector returns None before any git spawn). Rides beside `result`; never
+    #     alters result, error or exit code. --bare keeps stdout the result JSON, so the
+    #     advisory goes to stderr there.
+    if isinstance(response, dict) and repo_root is not None:
+        try:
+            from coordinator_core.session.op_dispatch_nag import advisory_for_dispatch
+
+            _advisory = advisory_for_dispatch(repo_root, _resolved_sid(), os.environ)
+        except Exception:
+            _advisory = None
+        if _advisory:
+            if args.bare:
+                print(_advisory, file=sys.stderr)
+                sys.stderr.flush()
+            else:
+                response["advisory"] = _advisory
+
     # 7b. WARM_DISPATCH_INDETERMINATE (-32004) carrying `error.data.dispatch_key`
     #     (C5, contract § 9) -- print the exact, runnable poll command to stderr.
     #     Built from `data.dispatch_key`/`data.reconcile` directly, never by

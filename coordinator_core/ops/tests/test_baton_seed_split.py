@@ -46,8 +46,8 @@ def _root(monkeypatch):
     monkeypatch.setattr(op, "locked_rmw", _plain_rmw)
 
 
-def _seed(root: Path, text: str = SEED, subdir: str = "") -> Path:
-    p = root / "state" / "handoffs" / subdir / "2026-10-07-women.md"
+def _seed(root: Path, text: str = SEED) -> Path:
+    p = root / "state" / "handoffs" / "2026-10-07-women.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
     return p
@@ -96,13 +96,3 @@ def test_destination_collision_leaves_original_untouched(tmp_path):
     r = op._handler({"seed": "hnd-women-first-aaaaaa", "gate_free": ["men"], "today": "2026-10-08"}, tmp_path)
     assert r["exit_code"] == 1 and "already exists" in r["error"]
     assert p.read_text(encoding="utf-8") == SEED
-
-
-def test_finds_a_seed_in_a_month_subdir_but_not_in_archive(tmp_path):
-    _seed(tmp_path, subdir="2026-11")
-    r = op._handler({"seed": "hnd-women-first-aaaaaa", "gate_free": ["men comparison"], "today": "2026-11-14"}, tmp_path)
-    assert r["exit_code"] == 0 and r["applied"] is True, r
-    other = tmp_path / "other"
-    _seed(other, subdir="archive")
-    r = op._handler({"seed": "hnd-women-first-aaaaaa", "gate_free": ["men comparison"]}, other)
-    assert r["exit_code"] == 1 and "not found" in r["error"], r

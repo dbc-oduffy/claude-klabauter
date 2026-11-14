@@ -1017,23 +1017,6 @@ _GATES: dict[str, _GateFn] = {
 Adding it later is additive (a new key here), not a reshape of this table."""
 
 
-def _run_gate(gate_id: str, root: Path, settings_home: Path, overrides: dict) -> GateResult:
-    """Run one gate; a gate that raises is UNAVAILABLE, never an op-level error.
-
-    An escaping exception would turn the whole reply into a JSON-RPC error
-    envelope with no `result` key, discarding every other gate's verdict.
-    """
-    try:
-        return _GATES[gate_id](root, settings_home, overrides)
-    except Exception as exc:  # noqa: BLE001 — one crashed gate must not erase the battery's verdicts
-        return GateResult(
-            gate_id,
-            GateVerdict.UNAVAILABLE,
-            f"gate raised {type(exc).__name__}: {exc}",
-            detail={"exception": type(exc).__name__},
-        )
-
-
 @register_op("updatedocs.gates")
 def _updatedocs_gates(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "updatedocs.gates" handler — runs the named gate subset and
@@ -1076,7 +1059,8 @@ def _updatedocs_gates(params: dict, repo_root: Optional[Path] = None) -> dict:
     overrides_by_gate: dict[str, dict] = params.get("overrides") or {}
     results: list[GateResult] = []
     for gate_id in requested:
-        results.append(_run_gate(gate_id, root, settings_home, overrides_by_gate.get(gate_id, {})))
+        fn = _GATES[gate_id]
+        results.append(fn(root, settings_home, overrides_by_gate.get(gate_id, {})))
 
     return {
         "gates": [r.to_dict() for r in results],

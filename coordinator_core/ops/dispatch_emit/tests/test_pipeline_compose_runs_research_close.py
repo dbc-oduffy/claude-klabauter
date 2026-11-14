@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from coordinator_core.ops.dispatch_emit.pipeline_compose import CLOSE_AGENT_TYPE
+from coordinator_core.contract.grind_vocab import OP_RUNNER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_chain_script
 from coordinator_core.ops.dispatch_emit.tests.test_pipeline_compose_brief_and_halt import (
     GATE_SCHEMA,
@@ -22,10 +22,10 @@ def _chain(tmp_path, action):
     )
 
 
-def test_scoped_close_runs_an_op_relay_call_gated_on_delivered(tmp_path):
+def test_scoped_close_runs_an_op_runner_call_gated_on_delivered(tmp_path):
     script = _chain(tmp_path, CLOSE)
     assert script.count("label: 'research-close'") == 1
-    assert f"agentType: '{CLOSE_AGENT_TYPE}'" in script and "model: '" in script
+    assert f"agentType: '{OP_RUNNER_AGENT_TYPE}'" in script and "model: '" in script
     assert "'coordinator-invoke ' + action.op" in script
     assert 'const NEXT_ACTION = {"op": "research.close", "params": {"note": "it\'s", "run_id": "r1"}};' in script
     assert "const closed = delivered ? await closeInRun(effective) : null;" in script

@@ -3715,6 +3715,8 @@ def _evaluate(
             spooled = _spool_envelope(payload, root, why) if why and nothing_minted else None
             if spooled is not None:
                 return spooled
+            if isinstance(exc, PermissionError):
+                return _refuse(_DENIED_RECORD_WRITE.format(cause=_cause(exc)))
             return _refuse(_name_root_tried(f"The engine refused the submission: {_cause(exc)}", root, sizing_rel))
 
     if isinstance(result, dict) and result.get("status") == "handover_pending" and not result.get("run_id"):

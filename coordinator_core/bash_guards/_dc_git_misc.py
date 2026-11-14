@@ -850,7 +850,58 @@ def _after_reset_slice(seg: str) -> str:
         position = _git_argv_subcommand_position(tokens or [])
         if position is not None and tokens[position] == "reset":
             return " " + " ".join(tokens[position + 1:])
-    return re.sub(r".*(^|\s)reset(\s|$)", " ", seg, count=1)
+    return re.sub(r"\A(?:[^\n]*\n)*?[^\n]*(^|\s)reset(\s|$)", " ", seg, count=1)
+
+
+def _reset_own_ref_part(after: str) -> str:
+    """The prefix of `after` that is the reset's own ref position: cut at the
+    first top-level newline or bare `--` (pathspecs follow it, no ref moves).
+
+    "Top level" means outside any `$(...)`/`(...)` nesting and backtick pair, so
+    a subshell target that spans lines or contains its own `--` stays whole and
+    still reaches the subshell arm; later commands in a multi-line segment do not.
+    """
+    depth = 0
+    in_bt = False
+    n = len(after)
+    for i, ch in enumerate(after):
+        if ch == "`":
+            in_bt = not in_bt
+        elif in_bt:
+            continue
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            if ch == "\n":
+                return after[:i]
+            if (
+                ch == "-"
+                and after.startswith("--", i)
+                and (i == 0 or after[i - 1].isspace())
+                and (i + 2 >= n or after[i + 2].isspace())
+            ):
+                return after[:i]
+    return after
+
+
+def _reset_ref_parts(seg: str, after: str) -> list:
+    """Ref-position text of each `reset` in `seg`, for CHECK 1's subshell test.
+
+    A single-line segment has one. A multi-line one is scanned per `reset`
+    occurrence so a subshell target after an earlier path-limited reset still
+    denies. An ambiguous heredoc segment (not resolvable to a git reset) keeps
+    the whole slice: its body may be this command's argv.
+    """
+    if "<<" in seg and _seg_resolved_git_subcommand(seg) is None:
+        return [after]
+    if "\n" not in seg and "<<" not in seg:
+        return [_reset_own_ref_part(after)]
+    return [
+        _reset_own_ref_part(seg[m.end():])
+        for m in re.finditer(r"(?:^|\s)reset(?:\s|$)", seg)
+    ] or [after]
 
 
 def _reset_ref_moving_mode(seg: str):
@@ -1052,12 +1103,10 @@ def check_destructive_git_orphan(
             # arm for Python/Node bodies -- so what reaches `after` with
             # delimiters still in it is shell, where they mean what they say.
             # Past a bare `--` the operands are pathspecs: an index-only unstage, no ref moves.
-            _ref_part = (
-                after
-                if "<<" in seg or "\n" in seg
-                else re.split(r"(?:^|\s)--(?:\s|$)", after, maxsplit=1)[0]
-            )
-            if re.search(r"\$\(.*\)|`.*`", _ref_part, re.DOTALL):
+            if any(
+                re.search(r"\$\(.*\)|`.*`", part, re.DOTALL)
+                for part in _reset_ref_parts(seg, after)
+            ):
                 return _alt_record(
                     "deny", "destructive-git-orphan",
                     "BLOCKED: 'git reset %s' targets a subshell-resolved "

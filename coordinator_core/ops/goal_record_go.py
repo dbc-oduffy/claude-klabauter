@@ -79,10 +79,7 @@ def _find_goal(worktree: Path, ref: str) -> Optional[tuple[Path, dict]]:
 def _goal_seeds(worktree: Path, goal_id: str) -> dict[str, str]:
     """handoff_id -> repo-relative path of every live, undone roadmap-seed of the goal."""
     found: dict[str, str] = {}
-    home = Path(record_homes.home_dir(str(worktree), "handoffs"))
-    # doc-new files seeds under a monthly subdir (handoffs/2026-11/); archive/ holds retired ones.
-    paths = [*home.glob("*.md"), *(q for q in home.glob("*/*.md") if q.parent.name != "archive")]
-    for path in sorted(paths):
+    for path in sorted(Path(record_homes.home_dir(str(worktree), "handoffs")).glob("*.md")):
         try:
             fm = _parse_frontmatter(path.read_text(encoding="utf-8", errors="replace"))
         except OSError:

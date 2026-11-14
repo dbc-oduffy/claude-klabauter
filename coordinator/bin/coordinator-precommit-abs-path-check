@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 coordinator-precommit-abs-path-check — pre-commit gate for any repo: refuse a
 commit whose STAGED blobs add a concrete machine path (drive letter, POSIX

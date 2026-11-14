@@ -303,14 +303,3 @@ def test_reap_closes_the_build_without_firing_it(repo):
     out = abandoned_runs._handler({}, repo_root=repo / ".git")
     assert rid in out["reaped"], out
     _assert_build_closed(repo, s, "research-run-reaped")
-
-
-@pytest.mark.parametrize("flat", [True, False])
-def test_split_plan_edge_names_the_layout_the_repo_uses(repo, flat):
-    seed = "docs/plans/2026-10-01-seed.md" if flat else "docs/plans/2026-10/2026-10-01-seed.md"
-    (repo / seed).parent.mkdir(parents=True, exist_ok=True)
-    (repo / seed).write_text("x\n", encoding="utf-8")
-    s = _split(repo)
-    for slice_ in (s["research"], s["build"]):
-        edge = yaml.safe_load((repo / slice_["sizing"]).read_text(encoding="utf-8"))["plan"]
-        assert (edge.count("/") == 2) is flat, edge

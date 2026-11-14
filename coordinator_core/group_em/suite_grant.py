@@ -71,6 +71,12 @@ GROUP_EM_NOT_LIVE = "GROUP_EM_NOT_LIVE"
 ISSUER_UNRESOLVED = "ISSUER_UNRESOLVED"
 RELAY_ISSUER_ENV = "COORDINATOR_GROUP_EM_RELAY_ISSUER_SID"
 GRANTEE_UNRESOLVED = "GRANTEE_UNRESOLVED"
+#: Detail on a refused bare grantee: a name resolves only against this box's own session registry, so a session on
+#: another box must be addressed by box.
+ACCEPTED_GRANTEE_FORMS = (
+    "accepted: <session_id> | <registry name of a live session on this box> | "
+    "<box_id>:<session_id> | <member_host>:<session_id>"
+)
 GRANTEE_NOT_LIVE = "GRANTEE_NOT_LIVE"
 TTL_OUT_OF_RANGE = "TTL_OUT_OF_RANGE"
 NOTE_EMPTY = "NOTE_EMPTY"
@@ -177,9 +183,29 @@ def _resolve_grantee(grantee: str) -> tuple[Optional[str], Optional[session_regi
     return None, None
 
 
+def _member_host_key(grantee: str, home: Optional[Path]) -> str:
+    """``grantee`` with a verified-member head (``mac-mini.local:<sid>``, ``user@host:<sid>``, a box id in any case)
+    rewritten to ``<membership box id>:<sid>``; a head the membership does not name is returned unchanged."""
+    head, sep, tail = grantee.partition(remote_identity.SEP)
+    if not sep or not tail:
+        return grantee
+    box_id = member_box.member_box_id(head, home=home)
+    return f"{box_id}{remote_identity.SEP}{tail}" if box_id else grantee
+
+
 def _home_of(directory: Optional[Path]) -> Optional[Path]:
     """The settings home owning the ``state/group-em`` dir ``directory`` (None: this box's home)."""
     return Path(directory).parent.parent if directory is not None else None
+
+
+def _dials_member_host(box: dict) -> bool:
+    """True when the row is a relay row dialling a raw member host (``user@host`` or a dotted mDNS name) rather than a
+    registered ssh alias; only such a row can be stale and is worth re-resolving."""
+    transport = box.get("transport")
+    if not isinstance(transport, dict) or "relay_key" not in transport:
+        return False
+    host = transport.get("host")
+    return isinstance(host, str) and ("@" in host or "." in host)
 
 
 def _far_box(
@@ -188,11 +214,13 @@ def _far_box(
     """The box.json row for ``box_id``, else the row ``member_box`` materialises from verified membership;
     ``(None, reason)`` with ``BOX_UNKNOWN`` (plus the membership failure detail, when not a plain miss)."""
     box = next((b for b in box_registry.read_boxes(directory) if b.get("box_id") == box_id), None)
-    if box is not None:
+    if box is not None and not _dials_member_host(box):
         return box, ""
     resolved = member_box.resolve_member_box(box_id, home=home)
     if resolved.get("ok") is True:
         return resolved["box"], ""
+    if box is not None:
+        return box, ""
     why = str(resolved.get("reason") or BOX_UNKNOWN)
     return None, BOX_UNKNOWN if why == BOX_UNKNOWN else f"{BOX_UNKNOWN}:{why}"
 
@@ -467,6 +495,8 @@ def issue_suite_grant(
     ):
         return IssueResult(False, TTL_OUT_OF_RANGE, None)
     home = _home_of(directory)
+    if remote:
+        grantee = _member_host_key(grantee, home)
     grantee_box, remote_sid = remote_identity.parse_key(grantee, box_registry.local_box_id(home))
     if grantee_box != box_registry.local_box_id(home):
         return _relay_grant(
@@ -474,7 +504,7 @@ def issue_suite_grant(
         )
     grantee_sid, row = _resolve_grantee(grantee)
     if not _safe_sid(grantee_sid):
-        return IssueResult(False, GRANTEE_UNRESOLVED, None)
+        return IssueResult(False, f"{GRANTEE_UNRESOLVED}:{ACCEPTED_GRANTEE_FORMS}", None)
     scope_root = repo or (row.cwd if row is not None else "")
     if not scope_root:
         return IssueResult(False, GRANTEE_UNRESOLVED, None)
@@ -539,6 +569,7 @@ def revoke_suite_grant(
         return IssueResult(False, ISSUER_UNRESOLVED, None)
     home = _home_of(directory)
     if isinstance(grantee, str) and ":" in grantee:
+        grantee = _member_host_key(grantee, home)
         box_id, bare = remote_identity.parse_key(grantee, box_registry.local_box_id(home))
         if box_id != box_registry.local_box_id(home):
             return _revoke_remote(sid, grantee, directory, home, now)

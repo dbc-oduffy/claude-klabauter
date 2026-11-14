@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Mapping, Sequence
 
+from coordinator_core.contract.grind_vocab import OP_RUNNER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit.emit import (
     _AGENT_MODELS,
     _EXECUTOR_AGENT_TYPE,
@@ -914,15 +915,10 @@ _CLOSE_SCHEMA = {
 }
 
 
-# op-relay, not the queue-grind op-runner: the op-runner's contract admits only `--params-file
-# <run_dir>/records/<batch>.json` and refuses the inline-JSON call closeInRun sends.
-CLOSE_AGENT_TYPE = "coordinator:op-relay"
-
-
 def _close_agent_options(agent_type_host: str | None) -> str:
     return ", ".join([
-        f"agentType: {_js_string_literal(_degrade_agent_type(CLOSE_AGENT_TYPE, agent_type_host))}",
-        f"model: {_js_string_literal(resolve_agent_model(CLOSE_AGENT_TYPE))}",
+        f"agentType: {_js_string_literal(_degrade_agent_type(OP_RUNNER_AGENT_TYPE, agent_type_host))}",
+        f"model: {_js_string_literal(resolve_agent_model(OP_RUNNER_AGENT_TYPE))}",
         f"schema: {json.dumps(_CLOSE_SCHEMA, sort_keys=True)}",
     ])
 

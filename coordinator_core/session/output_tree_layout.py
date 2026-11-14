@@ -135,7 +135,7 @@ def locate(repo_root: str, rel: str) -> str:
 
     The flat path if it is a file; else the tree's REDIRECTS.md old -> new row; else the shard rule.
     A path under no LAYOUT tree, already nested, or whose name no extractor accepts returns normalized
-    and unchanged. A sharded cite that does not exist returns its flat file when that is a file, else unchanged.
+    and unchanged. A sharded cite that does not exist also returns unchanged.
     """
     p = _norm(rel)
     for tree in trees():
@@ -148,48 +148,11 @@ def locate(repo_root: str, rel: str) -> str:
             return hit
         rest = p[len(tree) + 1:]
         if "/" in rest:
-            month, _, name = rest.partition("/")
-            if _MONTH_DIR.match(month) and "/" not in name and os.path.isfile(os.path.join(repo_root, tree, name)):
-                return f"{tree}/{name}"
             return p
         try:
             return shard_path(tree, rest)
         except ValueError:
             return p
-    return p
-
-
-def _tree_is_flat(repo_root: str, tree: str) -> bool:
-    """True when the tree holds entries at its root and no `YYYY-MM` shard dir."""
-    flat = False
-    try:
-        with os.scandir(os.path.join(repo_root, tree)) as it:
-            for e in it:
-                if e.is_dir():
-                    if _MONTH_DIR.match(e.name):
-                        return False
-                elif not is_exempt(e.name):
-                    flat = True
-    except OSError:
-        return False
-    return flat
-
-
-def layout_edge(repo_root: str, rel: str) -> str:
-    """The path a cite of a written or not-yet-written entry takes in the layout the repo uses.
-
-    An existing file wins in either layout (`locate`); otherwise a sharded cite in a tree that is
-    flat (root entries, no shard dir) becomes its flat path. Anything else returns as `locate` does.
-    """
-    p = locate(repo_root, rel)
-    if os.path.isfile(os.path.join(repo_root, p)):
-        return p
-    for tree in trees():
-        if p.startswith(tree + "/"):
-            month, _, name = p[len(tree) + 1:].partition("/")
-            if name and "/" not in name and _MONTH_DIR.match(month) and _tree_is_flat(repo_root, tree):
-                return f"{tree}/{name}"
-            break
     return p
 
 

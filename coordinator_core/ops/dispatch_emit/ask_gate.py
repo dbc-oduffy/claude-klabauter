@@ -169,7 +169,6 @@ def _research_build_split_verdict(
         split_research_build,
     )
     from coordinator_core.session import claimed_write
-    from coordinator_core.session.output_tree_layout import layout_edge
 
     targets, missing = notebooklm_targets_or_halt(sizing["research"])
     if missing:
@@ -180,10 +179,11 @@ def _research_build_split_verdict(
     base = f"{sizing_rel[: -len('.yaml')] if sizing_rel.endswith('.yaml') else sizing_rel}-{uuid.uuid4().hex[:6]}"
     rels = (f"{base}-research.yaml", f"{base}-build.yaml")
     for rel, doc in zip(rels, (research_doc, build_doc)):
-        # The fan-out requires a plan edge. A sizing with none gets the path coordinator-doc-new will
-        # mint for that slice's own stem, in the layout the repo's docs/plans uses (`layout_edge`).
+        # The fan-out requires a plan edge. A sizing with none gets the month-dir path
+        # coordinator-doc-new will mint for that slice's own stem: a flat path makes plan-blitz refuse
+        # "sizing already cites plan".
         if not (isinstance(doc.get("plan"), str) and doc["plan"].strip()):
-            doc["plan"] = layout_edge(str(repo_root), split_plan_rel(rel))
+            doc["plan"] = split_plan_rel(rel)
     for rel, doc in zip(rels, (research_doc, build_doc)):
         claimed_write.create_exclusive(
             Path(repo_root) / rel, yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
@@ -915,9 +915,7 @@ def _bind_plan_edge(repo_root: Path, sizing: dict, sizing_rel: str, plan_rel: st
     from coordinator_core.ops.dispatch_emit import requirements_ledger
     from coordinator_core.ops.dispatch_emit.sizing_fire import single_dated_plan_edge
 
-    from coordinator_core.session.output_tree_layout import layout_edge
-
-    plan_rel = layout_edge(str(repo_root), single_dated_plan_edge(plan_rel))
+    plan_rel = single_dated_plan_edge(plan_rel)
 
     def mutate(old: str) -> str:
         doc = yaml.safe_load(old) or {}

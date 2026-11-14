@@ -3458,14 +3458,17 @@ def _routed_row_js(work_label: str, exec_phase: str) -> str:
 
 
 def _family_enabled(repo_root: str, sizing_rel: Optional[str]) -> bool:
-    """True unless the run's sizing is readable now and does not name the stage-family binding.
+    """True unless the run's sizing is readable now and names neither the stage-family binding nor a
+    `family`. Must accept every opt-in `ask_stage.stage` routes on: a row staged to the family runner
+    without this leg is parsed as an executor reply and halts for want of a status line.
     The manifest is staged at run time, so the script cannot see a row's `family` at compose time;
     a sizing minted at run time (bare prompt, or a path not yet written) is opted in by `ask_stage.stage`
     after this script is composed, so it gets the inert-without-`r.family` leg rather than none."""
     if not sizing_rel:
         return True
     try:
-        return _stage_family_binding.opted_in(load_sizing(Path(repo_root), sizing_rel))
+        sizing = load_sizing(Path(repo_root), sizing_rel)
+        return bool((sizing or {}).get("family")) or _stage_family_binding.opted_in(sizing)
     except (SizingFireRefused, OSError, ValueError, KeyError):
         return True
 

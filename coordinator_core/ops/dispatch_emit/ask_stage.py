@@ -879,40 +879,16 @@ def _refuse_unapproved_design(sizing: Mapping, sizing_rel: str) -> None:
         raise AskStageError(refusal)
 
 
-_FLAT_PLAN_EDGE = re.compile(r"^(docs/plans/)((\d{4}-\d{2})-\d{2}-[^/]+)$")
-
-
-def _plan_edge_layouts(edge: str) -> list[str]:
-    """`edge` plus its collapsed-date, flat and sharded (`docs/plans/YYYY-MM/`) layout twins, in probe order."""
-    from coordinator_core.ops.dispatch_emit.sizing_fire import flat_plan_edge, single_dated_plan_edge
-
-    out: list[str] = []
-    for cand in (edge, single_dated_plan_edge(edge)):
-        for twin in (cand, flat_plan_edge(cand)):
-            m = _FLAT_PLAN_EDGE.match(twin)
-            for path in (twin, f"{m.group(1)}{m.group(3)}/{m.group(2)}" if m else None):
-                if path and path not in out:
-                    out.append(path)
-    return out
-
-
 def _sizing_plan_edge(root: Path, sizing_rel: str) -> Optional[str]:
-    """The sizing's `plan:` edge resolved to an existing plan file, in whichever layout (flat or sharded) holds it.
+    """The sizing's `plan:` edge when it names an existing plan file under the repo, else None.
 
-    Raises AskStageError `PLAN-EDGE-DANGLING` when the edge exists in no layout. Returns None for an
-    unloadable sizing, an edge-less sizing, or an edge escaping the repo (left to the sizing_path arm)."""
+    Trap: an unloadable sizing or a dangling edge returns None, leaving the refusal to the sizing_path arm."""
     sizing = _run_sizing(root, sizing_rel)
     edge = sizing.get("plan") if sizing else None
     if not isinstance(edge, str) or not edge.strip():
         return None
-    edge = edge.strip()
-    if contained_path(root / edge, [root]) is None:
-        return None
-    for cand in _plan_edge_layouts(edge):
-        found = contained_path(root / cand, [root])
-        if found is not None and found.is_file():
-            return cand
-    raise AskStageError(f"PLAN-EDGE-DANGLING: {sizing_rel} has plan edge {edge!r}, but that file exists in no layout")
+    plan_path = contained_path(root / edge.strip(), [root])
+    return edge.strip() if plan_path is not None and plan_path.is_file() else None
 
 
 def _refuse_misrouted_xs_mint(sizing: Mapping, sizing_rel: str, writes: Sequence[str]) -> None:

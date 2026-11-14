@@ -155,19 +155,6 @@ def test_plan_moved_after_minting_discharges_at_its_written_path_only(tmp_path):
     assert _call(repo, plan)["applied"] is True
 
 
-@pytest.mark.parametrize("sidecar_text, found", [
-    ("- a\n- b\n", "found list"),
-    ("em_discharged:\n- E1\n", "found em_discharged: list"),
-])
-def test_malformed_sidecar_refusal_names_file_and_wanted_shape(tmp_path, sidecar_text, found):
-    repo, plan = _plan(tmp_path)
-    evidence_sidecar_path(plan).write_text(sidecar_text, encoding="utf-8")
-    result = _call(repo, plan)
-    msg = str(result)
-    assert result["exit_code"] != 0 and evidence_sidecar_path(plan).name in msg
-    assert "wanted a mapping" in msg and found in msg
-
-
 def test_second_discharge_is_noop_not_overwrite(tmp_path):
     repo, plan = _plan(tmp_path)
     _call(repo, plan)

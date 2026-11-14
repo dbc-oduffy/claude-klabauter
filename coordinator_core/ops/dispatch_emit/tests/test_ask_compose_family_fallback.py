@@ -101,6 +101,17 @@ def test_bare_prompt_run_carries_the_leg_because_its_sizing_is_minted_at_run_tim
     assert script.count("r.family ? _familyRun(r) : ") == 2
 
 
+def test_sizing_family_without_binding_carries_the_leg(monkeypatch):
+    # ask_stage routes rows to the family runner on a bare `family:`; the compose gate must agree.
+    monkeypatch.setattr(ask_compose, "load_sizing", lambda root, rel: {"family": "codex"})
+    assert ask_compose._family_enabled("REPO", "sizing.yaml") is True
+
+
+def test_sizing_with_neither_opt_in_omits_the_leg(monkeypatch):
+    monkeypatch.setattr(ask_compose, "load_sizing", lambda root, rel: {})
+    assert ask_compose._family_enabled("REPO", "sizing.yaml") is False
+
+
 def test_unminted_sizing_path_carries_the_leg(monkeypatch):
     def _missing(root, rel):
         raise FileNotFoundError(rel)

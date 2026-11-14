@@ -6,12 +6,7 @@ Purpose: authoritative-mutation engine for the plan `## Tasks` task-spine —
 verbs `add-task` (append a chunk row, fail-loud on duplicate `id`), `stamp`
 (update fields across multiple ids in one atomic `locked_rmw`), and `resolve`
 (write a row's `disposition`/`disposition_ref`/`disposition_detail` atomically,
-refusing an ungated closed disposition — D4); plus `reopen` (id, disposition_detail),
-`depends-on` (id, action, chunk, gate_kind?, note?), `evidence-append` (id, text),
-`em-discharge` (id, text, commit?, evidence? — records an em-performed row as done in
-`<plan-stem>.evidence.yaml` under `em_discharged`, leaving the spine row as is),
-`premise-record` (id, verdict, ref), `note` (id, text) and `clear-gate` (id, owner_repo?, evidence?,
-condition?, gate_index?). Zero-spawn hot-path: validates
+refusing an ungated closed disposition — D4). Zero-spawn hot-path: validates
 rows in-process against the vendored `_PLAN_TASKS_SCHEMA`
 (coordinator_core.frontmatter.schema_validate) — no runtime shell-out to DoE's
 schema-cli.js.
@@ -279,7 +274,7 @@ Negative-spec:
   - Does NOT mutate plan frontmatter or any body text outside the fence-body
     span — this op is a body-block RMW, not a frontmatter transition; the
     memo/handoff replace_fm_field helpers do not apply here.
-  - Does NOT support verbs beyond those named in Purpose above (no
+  - Does NOT support verbs beyond add-task / stamp / resolve (no
     delete/dedup, and no standalone reorder verb — `resolve`'s own D5
     auto-repositioning, 2026-08-06, moves ONLY the rows a call itself
     just closed, into their disposition-derived grouping position; it is
@@ -1008,23 +1003,6 @@ def _reopen(plan_path: str, task_id: str, detail: str, worktree: Path, repo_root
     return _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
 
 
-def _note(plan_path: str, task_id: str, text: object, worktree: Path, repo_root: Path) -> dict:
-    """Apply the note verb: set row `task_id`'s `note` to `text` via the spine dumper.
-
-    The cheap correct path for a plan-author note: the dumper quotes a value
-    carrying ": " so the spine stays parseable. An empty `text` is refused;
-    drop a note with stamp's null."""
-    if not task_id:
-        return _err("note: 'id' is required")
-    if not isinstance(text, str) or not text.strip():
-        return _err("note: 'text' must be a non-empty string")
-    result = _stamp(plan_path, [{"id": task_id, "note": text.strip()}], worktree, repo_root)
-    if result.get("error"):
-        return _err(result["error"].replace("stamp:", "note:", 1))
-    result["message"] = result.get("message", "").replace("stamp:", "note:", 1)
-    return result
-
-
 _DEPENDS_ON_WRITABLE_KINDS = ("output-consumption-runtime", "epistemic-premise")
 
 
@@ -1446,11 +1424,7 @@ def _em_discharge(
         if loaded is None:
             loaded = {}
         if not isinstance(loaded, dict) or not isinstance(loaded.get(EM_DISCHARGE_KEY, {}), dict):
-            found = type(loaded).__name__ if not isinstance(loaded, dict) else f"{EM_DISCHARGE_KEY}: {type(loaded[EM_DISCHARGE_KEY]).__name__}"
-            raise MutateAbort(
-                f"em-discharge: sidecar {sidecar.name} has an unexpected shape: wanted a mapping whose "
-                f"{EM_DISCHARGE_KEY!r} is a mapping of row id to entry, found {found}"
-            )
+            raise MutateAbort("em-discharge: sidecar has an unexpected shape")
         discharged = loaded.setdefault(EM_DISCHARGE_KEY, {})
         if row_id in discharged:
             return old_text
@@ -2963,8 +2937,6 @@ async def _handler_core(params: dict, repo_root: Optional[Path] = None) -> dict:
                    writes `premises.<id>` {verdict, ref, recorded_at} to the
                    evidence sidecar; a repeat replaces. Refuses unknown id and
                    any other verdict.
-        note     : id (str), text (str, non-empty) — sets the row's `note`
-                   through the spine dumper (": " in text stays parseable).
         evidence-append : id (str), text (str, non-empty) — appends a
                    {recorded_at, text} entry for row `id` to the sidecar
                    `<plan-stem>.evidence.yaml` beside the plan. Never touches
@@ -3092,16 +3064,6 @@ async def _handler_core(params: dict, repo_root: Optional[Path] = None) -> dict:
             repo_root,
         )
 
-    if verb == "note":
-        return await asyncio.to_thread(
-            _note,
-            plan_path,
-            (params.get("id") or "").strip(),
-            params.get("text"),
-            worktree,
-            repo_root,
-        )
-
     if verb == "evidence-append":
         return await asyncio.to_thread(
             _evidence_append,
@@ -3167,6 +3129,6 @@ async def _handler_core(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
 
     return _err(
-        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, reopen, depends-on, clear-gate, evidence-append, em-discharge, premise-record, note; "
+        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, reopen, depends-on, clear-gate, evidence-append, em-discharge, premise-record; "
         + _MARK_CODED_SHAPE
     )

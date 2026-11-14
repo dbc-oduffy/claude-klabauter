@@ -104,7 +104,7 @@ def test_empty_note_ttl_and_grantee_refusals(env):
     assert suite_grant.issue_suite_grant(PEER, "  ", directory=env["dir"], now=NOW).reason == suite_grant.NOTE_EMPTY
     assert _issue(env, ttl_minutes=0).reason == suite_grant.TTL_OUT_OF_RANGE
     assert _issue(env, ttl_minutes=721).reason == suite_grant.TTL_OUT_OF_RANGE
-    assert _issue(env, "nobody").reason == suite_grant.GRANTEE_UNRESOLVED
+    assert _issue(env, "nobody").reason.startswith(f"{suite_grant.GRANTEE_UNRESOLVED}:")
     env["live"].discard(PEER)
     assert _issue(env).reason == suite_grant.GRANTEE_NOT_LIVE
     assert _grant_files(env) == []

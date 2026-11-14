@@ -523,6 +523,17 @@ def mint(
     return token
 
 
+def _assert_creatable(directory: str) -> None:
+    """Raises the PermissionError of a denied create in `directory` on the first try.
+    Trap: `tempfile.mkstemp` on Windows treats a PermissionError in a directory `os.access` calls writable
+    (every ACL-denied one, as a sandbox leaves it) as a name collision and retries 10000 times, minutes of
+    CPU before it raises, so the denial would reach the submit hook as a stall."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    probe = os.path.join(directory, f".mint-probe.{secrets.token_hex(6)}")
+    os.close(os.open(probe, flags, 0o600))
+    os.remove(probe)
+
+
 def _publish_record(path: Path, text: str) -> None:
     """Write `text` to a sibling temp file and replace `path` with it, unless the context's `WriteGate`
     was cancelled meanwhile: a write that outlives its abandoned caller leaves no record, only a
@@ -532,6 +543,7 @@ def _publish_record(path: Path, text: str) -> None:
     gate = WRITE_GATE.get()
     if gate is not None and not gate.begin():
         raise RecordWriteCancelled(path.stem)
+    _assert_creatable(str(path.parent))
     fd, tmp = tempfile.mkstemp(prefix=".mint.", dir=str(path.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:

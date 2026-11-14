@@ -278,6 +278,8 @@ def derive_ledger_rows(
         LEDGER_DERIVED_ROW_PREFIX,
     )
     from coordinator_core.ops.dispatch_emit.emit import _is_immutable_body_path
+    from coordinator_core.ops.dispatch_emit.sizing_xs_mint import MemoReceiverUnresolvedError, _memo_receiver
+    from coordinator_core.ops.fleet.memo_wire import memo_outbox_topic
 
     rerule = note_rerules(notes)
     sha_notes = [str(n) for n in notes if sha_tokens(n)]
@@ -313,8 +315,28 @@ def derive_ledger_rows(
             if not rerule:
                 underivable.append(item)
             continue
-        body_writes = [w for w in writes if _is_immutable_body_path(w)]
-        partitions = [p for p in ([w for w in writes if w not in body_writes], body_writes) if p]
+        by_receiver: dict[str, list[str]] = {}
+        unresolved = False
+        for w in writes:
+            if memo_outbox_topic(w) is None:
+                continue
+            try:
+                by_receiver.setdefault(_memo_receiver({}, "", w, repo_root), []).append(w)
+            except MemoReceiverUnresolvedError:
+                unresolved = True
+        if unresolved:
+            underivable.append(item)
+            continue
+        memo_writes = {w for ws in by_receiver.values() for w in ws}
+        body_writes = [w for w in writes if _is_immutable_body_path(w) and w not in memo_writes]
+        rest = [w for w in writes if w not in body_writes and w not in memo_writes]
+        partitions = [
+            (p, None, " (plan body)" if p is body_writes else "")
+            for p in (rest, body_writes)
+            if p
+        ] + [(ws, to, f" (memo to {to})") for to, ws in by_receiver.items()]
+        if len(partitions) == 1:
+            partitions = [(partitions[0][0], partitions[0][1], "")]
         lines = [
             f"Ledger item {item} is open. Gaps to close (each line is still true; make it false):",
             *(f"- {s}" for s in steps),
@@ -325,23 +347,25 @@ def derive_ledger_rows(
         if dropped:
             lines.append("Not declared (no tracked or present path): " + ", ".join(dropped))
         lines.append(f"Done when: no gap line above holds at HEAD and the ledger check judges {item} met.")
-        for part in partitions:
+        for part, memo_to, suffix in partitions:
             rid = f"{LEDGER_DERIVED_ROW_PREFIX}{item}"
             n = 1
             while rid in taken:
                 n += 1
                 rid = f"{LEDGER_DERIVED_ROW_PREFIX}{item}-{n}"
             taken.add(rid)
-            rows.append({
+            row = {
                 "id": rid,
-                "title": (GAP_TITLE_PREFIX + steps[0] if steps else f"Serve revise note for {item}")
-                + (" (plan body)" if part is body_writes and len(partitions) > 1 else ""),
+                "title": (GAP_TITLE_PREFIX + steps[0] if steps else f"Serve revise note for {item}") + suffix,
                 "change_kind": "code-edit",
                 "writes": part,
                 "register_rows": [item],
                 "disposition": "open",
                 "body": "\n".join(lines),
-            })
+            }
+            if memo_to:
+                row["memo_to"] = memo_to
+            rows.append(row)
     return rows, underivable
 
 

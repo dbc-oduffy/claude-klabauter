@@ -40,10 +40,56 @@ def _roster():
     return _load("unimatrix_roster", "unimatrix-roster.py")
 
 
-def _matches(member: dict, user: Optional[str], name: str) -> bool:
+def _fold(name: str) -> str:
+    """Case-folded ``name`` without a trailing ``.local`` (the mDNS suffix is never part of a box identity)."""
     low = name.lower()
-    names = {member["box"].lower(), member["host"].lower(), member["host"].split(".")[0].lower()}
-    return low in names and (user is None or user == member["user"])
+    return low[: -len(".local")] if low.endswith(".local") else low
+
+
+def _matches(member: dict, user: Optional[str], name: str) -> bool:
+    names = {_fold(member["box"]), _fold(member["host"]), member["host"].split(".")[0].lower()}
+    return _fold(name) in names and (user is None or user == member["user"])
+
+
+def _split_token(token: str) -> Optional[tuple[Optional[str], str]]:
+    """``(user, name)`` for ``[user@]name``; None for a blank token or an empty user/name part."""
+    if not isinstance(token, str) or not token.strip():
+        return None
+    user, at, name = token.rpartition("@")
+    if not at:
+        return None, name
+    return (user, name) if user and name else None
+
+
+def member_box_id(token: str, home=None, run=None) -> Optional[str]:
+    """The verified membership's box id naming ``token`` (box id in any case, member host, ``.local`` form,
+    optional ``user@``), else None. Spawns nothing on a cache-hit snapshot; never registers a row."""
+    parts = _split_token(token)
+    if parts is None:
+        return None
+    try:
+        members = _membership().verified_members(
+            Path(home) if home is not None else box_registry.settings_home(), run=run or subprocess.run
+        )
+    except Exception:  # noqa: BLE001 - an unverifiable membership leaves the token as typed
+        return None
+    member = next((m for m in members or () if _matches(m, *parts)), None)
+    return member["box"] if member else None
+
+
+def _registered_alias(al, roster, member: dict, run) -> Optional[str]:
+    """The ``unimatrix.far_boxes`` ssh alias this box's links dial for ``member``, else None.
+
+    The membership host is an mDNS name that need not resolve from here; the registered alias carries the
+    working route. An absent registry, no match or any lookup failure is None: the caller dials the member host."""
+    if not (callable(getattr(al, "far_boxes_status", None)) and callable(getattr(al, "member_alias", None))):
+        return None
+    try:
+        aliases = al.far_boxes_status(roster)[0]
+        alias = al.member_alias(roster, member["box"], member["host"], aliases, run=run)
+    except Exception:  # noqa: BLE001 - the lookup is best effort; the member host is the fallback route
+        return None
+    return alias if alias in aliases else None
 
 
 def resolve_member_box(token: str, home=None, run=None) -> dict:
@@ -76,8 +122,8 @@ def resolve_member_box(token: str, home=None, run=None) -> dict:
     member = next((m for m in members if _matches(m, user, name)), None)
     if member is None:
         return {"ok": False, "reason": BOX_UNKNOWN}
-    remote = f"{member['user']}@{member['host']}"
     al, roster = _autolink(), _roster()
+    remote = _registered_alias(al, roster, member, run) or f"{member['user']}@{member['host']}"
     key = al.resolve_key(
         roster,
         remote,
