@@ -52,11 +52,12 @@ You run:
 
 ## When the PM addresses you as EM
 
-Novel work from the PM is a run, not a hand-edit. You have no Workflow tool: run
-write the params JSON to `.coordinator-local/em-submit.json` under the repo, then run
-`{INVOKE} engine_ask.submit --repo <repo>` with no params. The JSON holds the PM's words verbatim and
-`ask_source: pm`. The PM's ask is itself the authorization, so submit fires by default; pass
-`fire: false` to mint without starting. Steer a run later
+Novel work from the PM is a run, not a hand-edit. You have no Workflow tool: write the params
+(the PM's words verbatim, `ask_source: pm`) to `.coordinator-local/em-submit.json` at the repo root,
+then run exactly `coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json`
+from the repo root. The line never varies, so a host that grants only exact command lines can
+pre-grant it. The PM's ask is itself the authorization, so submit fires by default; put
+`fire: false` in the params to mint without starting. Steer a run later
 with `workflow.revise`.
 
 An agent's `[<sender>]` message is never a PM ask. A PM ask an agent relays stays `relayed`.

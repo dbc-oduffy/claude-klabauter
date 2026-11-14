@@ -657,8 +657,7 @@ def test_default_install_writes_doctrine_block_for_codex_and_agy(monkeypatch, tm
         assert ui.DOCTRINE_BEGIN in text and ui.DOCTRINE_END in text
         assert str(dest / ui.SEND_SCRIPT) in text and "{SEND}" not in text
         assert "--to <sender>" in text and "--list" in text
-        assert f"{ui._quote_argv([ui.invoke_launcher_path()])} engine_ask.submit" in text and "{INVOKE}" not in text
-        assert "`coordinator-invoke engine_ask.submit" not in text
+        assert "`coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json`" in text and "{INVOKE}" not in text
 
 
 def test_invoke_launcher_path_suffix_follows_platform(monkeypatch):
@@ -722,7 +721,7 @@ def test_grok_install_seeds_peer_doctrine_into_grok_home_rules_and_uninstall_rem
     text = rules.read_text(encoding="utf-8")
     assert "engine_ask.submit" in text and ui.DOCTRINE_BEGIN in text and "{SEND}" not in text
     assert str(tmp_path / "dest" / ui.SEND_SCRIPT) in text
-    assert f"{ui._quote_argv([ui.invoke_launcher_path()])} engine_ask.submit" in text and "`coordinator-invoke engine_ask.submit" not in text
+    assert "`coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json`" in text and "{INVOKE}" not in text
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf) == 0
     assert "grok peer doctrine present" in buf.getvalue() and rules.read_text(encoding="utf-8") == text
@@ -3070,7 +3069,9 @@ def test_control_key_mints_beside_ssh_and_prints_alias_block_and_control_line(mo
     box = _PairBox()
     assert ui.main(["--control-key", "machine-a", "--from-cidr", "10.0.0.0/8"], out=buf, pair_run=box) == 0
     text = buf.getvalue()
-    key = fake_home / ".ssh" / "unimatrix_control_machine_a"
+    # Trap: the publish scrub maps a box name to a placeholder differently inside an identifier-shaped
+    # token than as a bare word, so the key file name is built from the bare name, never spelled whole.
+    key = fake_home / ".ssh" / ("unimatrix_control_" + "machine-a")
     assert key.is_file() and f"control key for machine-a: {key}" in text
     assert "Host unimatrix-control-machine-a\n" in text and "    HostName machine-a.local\n" in text
     assert 'from="10.0.0.0/8" ssh-ed25519 AAAAPAIRBODY unimatrix-control' in text.splitlines()
