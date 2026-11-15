@@ -508,7 +508,10 @@ def _default_emit(params: dict, repo_root: Path) -> dict:
 #: Total stall one hook call may absorb across every read it makes; a read past it returns
 #: `STALLED` without waiting. Outside `evaluate` each direct call is bounded by it alone.
 _READ_DEADLINE_MS = 300.0
-_INFLIGHT: set = set()
+#: Read key -> (monotonic start, generation). An entry older than `_INFLIGHT_STALE_MS` is superseded by
+#: a fresh read, so a read hung in the kernel cannot poison its key for the life of the warm engine.
+_INFLIGHT: dict = {}
+_INFLIGHT_STALE_MS = 3000.0
 _INFLIGHT_LOCK = threading.Lock()
 #: `evaluate`'s per-call budget. Trap: the warm engine serves a parallel tool-call pair on two threads of
 #: one process, so a module global would let one call's spend, or its exit, reach the other's reads.
@@ -516,7 +519,50 @@ _BUDGET_VAR: "contextvars.ContextVar[Optional[list]]" = contextvars.ContextVar("
 
 
 class _SizingStalled(Exception):
-    """The sizing read outlived the stall budget: its ask_parent marker and research block are unknown."""
+    """The sizing read outlived the stall budget: its ask_parent marker and research block are unknown.
+    `in_flight_ms` is the age of an earlier read still holding the key (None: this call's own read outran
+    its budget); `retry_after_ms` is when that entry is superseded."""
+
+    def __init__(self, sizing_rel: str, in_flight_ms: Optional[float] = None, retry_after_ms: float = 0.0) -> None:
+        super().__init__(sizing_rel)
+        self.sizing_rel = sizing_rel
+        self.in_flight_ms = in_flight_ms
+        self.retry_after_ms = retry_after_ms
+
+
+def _claim_inflight(key: Any) -> Optional[object]:
+    """The generation token of a newly claimed `key`, None while a read younger than `_INFLIGHT_STALE_MS`
+    holds it. An older entry is superseded."""
+    import time
+
+    now = time.monotonic()
+    with _INFLIGHT_LOCK:
+        held = _INFLIGHT.get(key)
+        if held is not None and (now - held[0]) * 1000.0 < _INFLIGHT_STALE_MS:
+            return None
+        token = object()
+        _INFLIGHT[key] = (now, token)
+        return token
+
+
+def _release_inflight(key: Any, token: object) -> None:
+    """Drop `key` only while `token` is still its generation: a superseded read's finish leaves its successor's entry."""
+    with _INFLIGHT_LOCK:
+        held = _INFLIGHT.get(key)
+        if held is not None and held[1] is token:
+            del _INFLIGHT[key]
+
+
+def _inflight_age_ms(key: Any) -> Optional[float]:
+    """Age of the live (not yet superseded) read holding `key`, else None."""
+    import time
+
+    with _INFLIGHT_LOCK:
+        held = _INFLIGHT.get(key)
+    if held is None:
+        return None
+    age = (time.monotonic() - held[0]) * 1000.0
+    return age if age < _INFLIGHT_STALE_MS else None
 
 
 def _in_scope(fn: Callable[[], Any]) -> Callable[[], Any]:
@@ -1450,7 +1496,8 @@ def _bounded_call(key: Any, fn: Callable[[], Any], deadline_ms: Optional[float] 
     """`fn()` run on a daemon thread joined for the remaining hook budget (at most `deadline_ms`);
     `halt_resume_record.STALLED` when it outlives that (the thread is left to finish), and `fn`'s own
     exception re-raised. A spent budget returns `STALLED` without starting `fn`.
-    At most one call per `key` is in flight: a second while one is outstanding returns `STALLED` at once."""
+    At most one call per `key` is in flight: a second while one younger than `_INFLIGHT_STALE_MS` is
+    outstanding returns `STALLED` at once; an older one is superseded by a fresh call."""
     import time
 
     from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
@@ -1458,10 +1505,9 @@ def _bounded_call(key: Any, fn: Callable[[], Any], deadline_ms: Optional[float] 
     wait = _wait_ms(deadline_ms)
     if wait <= 0:
         return STALLED
-    with _INFLIGHT_LOCK:
-        if key in _INFLIGHT:
-            return STALLED
-        _INFLIGHT.add(key)
+    token = _claim_inflight(key)
+    if token is None:
+        return STALLED
     box: list = []
     done = threading.Event()
 
@@ -1471,15 +1517,13 @@ def _bounded_call(key: Any, fn: Callable[[], Any], deadline_ms: Optional[float] 
         except BaseException as exc:
             box.append((False, exc))
         finally:
-            with _INFLIGHT_LOCK:
-                _INFLIGHT.discard(key)
+            _release_inflight(key, token)
             done.set()
 
     try:
         threading.Thread(target=_in_scope(work), daemon=True).start()
     except BaseException:
-        with _INFLIGHT_LOCK:
-            _INFLIGHT.discard(key)
+        _release_inflight(key, token)
         return STALLED
     started = time.monotonic()
     finished = done.wait(wait / 1000.0)
@@ -1498,12 +1542,17 @@ def _load_sizing_doc(root: Path, sizing_rel: str) -> dict:
     from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
     from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
 
+    key = ("sizing", str(root), sizing_rel)
+    earlier = _inflight_age_ms(key)
     try:
-        doc = _bounded_call(("sizing", str(root), sizing_rel), lambda: load_sizing(root, sizing_rel))
+        doc = _bounded_call(key, lambda: load_sizing(root, sizing_rel))
     except SizingFireRefused:
         return {}
     if doc is STALLED:
-        raise _SizingStalled(sizing_rel)
+        if earlier is None:
+            raise _SizingStalled(sizing_rel)
+        age = _inflight_age_ms(key) or earlier
+        raise _SizingStalled(sizing_rel, age, max(0.0, _INFLIGHT_STALE_MS - age))
     return doc if isinstance(doc, dict) else {}
 
 
@@ -1523,29 +1572,26 @@ def _load_sizing_docs(root: Path, sizing_rels: Sequence[str]) -> dict:
     slots: dict = {}
     for rel in sizing_rels:
         key = ("sizing", str(root), rel)
-        with _INFLIGHT_LOCK:
-            if key in _INFLIGHT:
-                slots[rel] = None
-                continue
-            _INFLIGHT.add(key)
+        token = _claim_inflight(key)
+        if token is None:
+            slots[rel] = None
+            continue
         box: list = []
         done = threading.Event()
 
-        def work(rel=rel, key=key, box=box, done=done) -> None:
+        def work(rel=rel, key=key, token=token, box=box, done=done) -> None:
             try:
                 box.append(load_sizing(root, rel))
             except BaseException:  # SizingFireRefused included: an unreadable sizing is left to the engine's refusal
                 box.append({})
             finally:
-                with _INFLIGHT_LOCK:
-                    _INFLIGHT.discard(key)
+                _release_inflight(key, token)
                 done.set()
 
         try:
             threading.Thread(target=_in_scope(work), daemon=True).start()
         except BaseException:
-            with _INFLIGHT_LOCK:
-                _INFLIGHT.discard(key)
+            _release_inflight(key, token)
             slots[rel] = None
             continue
         slots[rel] = (box, done)
@@ -3595,7 +3641,7 @@ def _evaluate(
 
     try:
         sizing_doc = _load_sizing_doc(root, sizing_rel) if sizing_rel else {}
-    except _SizingStalled:
+    except _SizingStalled as stalled:
         from coordinator_core.ops.dispatch_emit import halt_resume_record as _hrr
 
         if asks is not None:
@@ -3608,7 +3654,12 @@ def _evaluate(
         else:
             hinted = _hrr.read_hint(root, sizing_rel)
         if hinted is None:
-            return _refuse(f"The sizing read of {sizing_rel} stalled; its ask_parent marker is unknown. Re-submit once.")
+            if stalled.in_flight_ms is not None:
+                return _refuse(
+                    f"The sizing read of {sizing_rel} is held by an earlier read in flight {stalled.in_flight_ms:.0f}ms. "
+                    f"Next: submit again after {stalled.retry_after_ms:.0f}ms."
+                )
+            return _refuse(f"The sizing read of {sizing_rel} outran its {_READ_DEADLINE_MS:.0f}ms budget. Next: submit again.")
         sizing_doc, reserved_run_id = {}, hinted
     if sizing_submitted and repo_arg and Path(repo_arg).is_absolute():
         cross = _cross_repo_refusal(root, _repo_root(None, payload), _has_research_block(sizing_doc), approved)

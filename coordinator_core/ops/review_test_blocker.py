@@ -40,6 +40,12 @@ class TestBlocker:
 NOT_FOUND_RE = re.compile(r"^\s*(?:ERROR:\s*)?not found:", re.IGNORECASE | re.MULTILINE)
 
 
+#: Message of an owned node id the targeted tier named that executed 0 times (deselected by a marker or
+#: `-k` filter): unverified, never a pass. `retest_targeted` writes it; a node carrying it always blocks.
+ZERO_RAN_MESSAGE = "unverified: ran 0 times (deselected or not collected)"
+ZERO_RAN_RE = re.compile(r"^\s*(?:ERROR:\s*)?unverified: ran 0 times", re.IGNORECASE | re.MULTILINE)
+
+
 def _detail(result: Mapping[str, Any]) -> dict:
     """`failing_detail` (a list of {node_id, message}) as {node_id: message}."""
     raw = result.get(FAILING_DETAIL_FIELD)
@@ -141,12 +147,16 @@ def own_diff_blockers(
     The file part is the text before the first `::`; both sides are normalised to `/`
     separators with a leading `./` stripped. `pre_existing` nodes are already excluded. A node in an
     own file whose message is pytest's "not found:" was renamed or removed by the run: it is no
-    failure, and the file's other nodes still decide.
+    failure, and the file's other nodes still decide. A node whose message is `ZERO_RAN_MESSAGE` ran
+    0 times: unverified, so it blocks whatever its file.
     """
     own = {_norm_path(p) for p in own_paths or []}
     base = {_norm_path(i) for i in result.get("passed_at_base") or []}
     out = []
     for b in from_reverify(result, root):
+        if ZERO_RAN_RE.search(b.message):
+            out.append(b)
+            continue
         in_own = _norm_path(b.node_id.split("::", 1)[0]) in own
         if in_own and NOT_FOUND_RE.search(b.message):
             continue

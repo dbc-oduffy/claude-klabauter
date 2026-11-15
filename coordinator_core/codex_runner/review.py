@@ -64,6 +64,18 @@ _ENV_ALLOW = ("PATH", "HOME", "USERPROFILE", "CODEX_HOME", "LANG")
 # USERPROFILE rides in the base allowlist. Shared by the agy and grok spawn envs.
 _ENV_ALLOW_WINDOWS = ("SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "COMSPEC")
 
+# Locators a claude or grok child needs to find its stored sign-in; copied from the parent env only
+# when set, never an API key. Used by the grok and workflow-agent spawn envs.
+CREDENTIAL_CONTEXT_ENV = ("CLAUDE_CONFIG_DIR", "CLAUDE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME")
+CREDENTIAL_CONTEXT_ENV_WINDOWS = ("USERDOMAIN", "PROGRAMDATA", "ALLUSERSPROFILE")
+
+# The one user-profile inheritance rule for spawned claude/grok children: each key is copied from the
+# parent only when present. Sign-in stores and the machine-local registry both resolve through these.
+USER_PROFILE_ENV = (
+    "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH", "USERNAME",
+    "COORDINATOR_SETTINGS_HOME",
+)
+
 _ABS_RE = re.compile(r"^(?:/|~|[A-Za-z]:[\\/]|\\\\)")
 _SHELL_FLAG_RE = re.compile(r"^-[A-Za-z]*c$")
 _HARMLESS = frozenset({"/dev/null"})

@@ -1288,7 +1288,24 @@ def _router_harness(tmp_path, monkeypatch, answers):
     monkeypatch.delenv("UNIMATRIX_ROUTER_SUPERVISION", raising=False)
     monkeypatch.setattr(mirror_all, "router_answers", lambda ctl: answers())
     monkeypatch.setattr(mirror_all.R, "spawn", lambda cmd: started.append(cmd) or FakeProc(555))
+    monkeypatch.setattr(mirror_all, "kickstart_router_agent", lambda say: False)
     return mirror_all, started
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="router supervision is POSIX-only")
+def test_ensure_router_defers_to_launchd_when_the_login_agent_is_loaded(tmp_path, monkeypatch):
+    seen = iter([False, True])
+    mirror_all, started = _router_harness(tmp_path, monkeypatch, lambda: next(seen))
+    kicked = []
+    monkeypatch.setattr(mirror_all, "kickstart_router_agent", lambda say: kicked.append(1) or True)
+    assert mirror_all.ensure_router(lambda m: None) is True
+    assert kicked == [1] and started == []
+
+
+def test_kickstart_router_agent_is_false_off_darwin(monkeypatch):
+    mirror_all = load("mirror-all")
+    monkeypatch.setattr(mirror_all.sys, "platform", "linux")
+    assert mirror_all.kickstart_router_agent(lambda m: None) is False
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="router supervision is POSIX-only")

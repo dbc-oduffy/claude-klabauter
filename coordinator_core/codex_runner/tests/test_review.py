@@ -331,7 +331,8 @@ def test_ps7_placed_ahead_of_windowsapps_at_popen(env):
     mp.setattr(review.subprocess, "Popen", spy)
     review.run(req, run_dir, lambda pid: None)
     entries = seen["PATH"].split(os.pathsep)
-    assert entries.index(ps7) < entries.index(apps)
+    assert ps7 in entries
+    assert apps not in entries
     assert not (tmp_path / "scratch").exists()
 
 

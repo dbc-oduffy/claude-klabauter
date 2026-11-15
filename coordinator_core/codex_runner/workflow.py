@@ -32,7 +32,12 @@ from coordinator_core.codex_runner.sandbox_preflight import (
     SandboxSetupRefused,
     check_workspace_write,
 )
-from coordinator_core.codex_runner.review import _unattended_env
+from coordinator_core.codex_runner.review import (
+    CREDENTIAL_CONTEXT_ENV,
+    CREDENTIAL_CONTEXT_ENV_WINDOWS,
+    USER_PROFILE_ENV,
+    _unattended_env,
+)
 from coordinator_core.bash_guards import _heavy_command_class as capacity
 from coordinator_core.group_em import admission_post, slot_grant, slot_wait
 from coordinator_core.agent_pipe.model_tiers import model_for_tier
@@ -116,9 +121,8 @@ def _environment() -> dict[str, str]:
     from coordinator_core.warm.engine_root import current_engine_clone
     env['COORDINATOR_ENGINE_ROOT'] = str(current_engine_clone())
     # Native tools/hooks need these Windows and coordinator runtime locations.
-    for key in ("TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "COMSPEC",
-                "PATHEXT", "USERPROFILE", "HOME", "HOMEDRIVE", "HOMEPATH", "SYSTEMROOT",
-                "COORDINATOR_SETTINGS_HOME", "MACHINE_LOCAL_REGISTRY_DIR"):
+    for key in ("TEMP", "TMP", "COMSPEC", "PATHEXT", "SYSTEMROOT", "MACHINE_LOCAL_REGISTRY_DIR",
+                *USER_PROFILE_ENV, *CREDENTIAL_CONTEXT_ENV, *CREDENTIAL_CONTEXT_ENV_WINDOWS):
         if source.get(key):
             env[key] = source[key]
     return env

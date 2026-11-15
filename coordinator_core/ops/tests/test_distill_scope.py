@@ -734,7 +734,7 @@ def test_compute_scope_without_fate_rows_emits_empty_mechanical(fixture_repo):
     assert result.counts["mechanical"] == 0
 
 
-def test_handler_workflow_input_excludes_mechanical_rows(fixture_repo):
+def test_handler_workflow_input_excludes_mechanical_rows(fixture_repo, wide_budget):
     _write(fixture_repo / "cross-repo" / "archive" / "2026-07-04-memo-promote.md", "---\ndistill_fate: commitment\n---\nm\n")
     before = _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo / ".git")
     before_total = json.loads((fixture_repo / before["workflow_input_path"]).read_text(encoding="utf-8"))[
@@ -1363,7 +1363,7 @@ def test_cite_keys_name_plans_by_dated_stem_or_path():
     ]
 
 
-def test_admission_takes_logs_first_newest_first_then_cited_plans(fixture_repo):
+def test_admission_takes_logs_first_newest_first_then_cited_plans(fixture_repo, wide_budget):
     cited = _heavy_plan(fixture_repo, "2026-11-01-big")
     _log(fixture_repo, "2026-11-02", cited)
     _log(fixture_repo, "2026-11-03", "nothing of note")
@@ -1394,7 +1394,7 @@ def test_admission_refuses_uncited_plans_and_light_plans_and_names_why(fixture_r
     assert scope.counts["not_admitted"] == len(reasons)
 
 
-def test_admission_refuses_what_a_guide_or_decision_already_cites(fixture_repo):
+def test_admission_refuses_what_a_guide_or_decision_already_cites(fixture_repo, wide_budget):
     in_guide = _heavy_plan(fixture_repo, "2026-11-01-in-guide")
     in_decision = _heavy_plan(fixture_repo, "2026-11-02-in-decision")
     fresh = _heavy_plan(fixture_repo, "2026-11-03-fresh")
@@ -1434,7 +1434,7 @@ def test_log_headers_are_not_log_entries(fixture_repo):
     ]
 
 
-def test_cited_plans_rank_by_citation_count_then_bytes(fixture_repo):
+def test_cited_plans_rank_by_citation_count_then_bytes(fixture_repo, wide_budget):
     once = _heavy_plan(fixture_repo, "2026-11-01-once")
     twice = _heavy_plan(fixture_repo, "2026-11-02-twice")
     fatter = _heavy_plan(fixture_repo, "2026-11-03-fatter", extra="more\n" * 2000)
@@ -1513,7 +1513,7 @@ def test_cohort_excluded_counts_the_dropped_default_cohorts_and_lists_none(fixtu
     assert "handoffs" not in scope.manifest["cohorts"]
 
 
-def test_the_op_default_admits_under_the_pm_ruling_set(fixture_repo):
+def test_the_op_default_admits_under_the_pm_ruling_set(fixture_repo, wide_budget):
     plan = _heavy_plan(fixture_repo, "2026-11-01-big")
     _log(fixture_repo, "2026-11-02", plan)
     result = _handler({"run_id": "r"}, repo_root=fixture_repo / ".git")
@@ -1667,18 +1667,22 @@ def _narrow_to_topics(monkeypatch, topics: int, agents: int = 1000, minutes: int
 
     cap = RunBudget(agents, _fit_tokens_for_topics(topics), minutes)
     monkeypatch.setattr(ds._run_budget, "load", lambda _c, path=None: cap)
+    # no whole-backlog lift: the narrowed token cap is the one that binds
+    monkeypatch.setattr(ds._run_budget, "whole_backlog_bar", lambda path=None: cap.tokens)
 
 
-def test_default_admission_fits_the_fixture_backlog_and_defers_nothing(tmp_path, monkeypatch):
+def test_default_admission_takes_a_backlog_that_fits_the_whole_backlog_bar_whole(tmp_path, monkeypatch):
     from coordinator_core.contract import run_budget
 
     root = _watermarked_repo(tmp_path, monkeypatch)
     scope = _admit_scope(root)
     cap = run_budget.load("distill")
     block = scope.manifest["budget"]
+    # five files exceed the 200K slice token cap at the measured constants but fit the 1M bar: not cut
+    assert block["projected"]["tokens"] > cap.tokens
     assert len(_batched(scope)) == len(_LOG_DAYS) and scope.counts["deferred"] == 0
-    assert block["cap"]["agents"] == cap.agents
-    assert block["within"] == {"agents": True, "tokens": True, "minutes": True}
+    assert block["cap"]["tokens"] == run_budget.whole_backlog_bar()
+    assert all(block["within"].values())
 
 
 def _files_for_topics(topics: int) -> int:
@@ -1768,7 +1772,7 @@ def test_default_admission_narrows_on_the_agents_axis_and_still_meets_the_bar(tm
     assert all(block["within"].values()) and block["projected"]["agents"] == cap.agents
 
 
-def test_default_admission_at_default_args_meets_every_bar_axis_on_a_large_backlog(tmp_path, monkeypatch):
+def test_default_admission_at_default_args_floors_at_one_file_on_a_large_backlog(tmp_path, monkeypatch):
     from coordinator_core.contract import run_budget
 
     monkeypatch.setattr(ds, "registry_get", lambda _key: None)
@@ -1777,8 +1781,8 @@ def test_default_admission_at_default_args_meets_every_bar_axis_on_a_large_backl
     scope = _admit_scope(root)
     block = scope.manifest["budget"]
     admitted = len(_batched(scope))
-    assert 0 < admitted < 28 and scope.counts["deferred"] == 28 - admitted
-    assert all(block["within"].values()) and block["cap"]["agents"] == cap.agents
+    assert admitted == 1 and scope.counts["deferred"] == 28 - admitted
+    assert block["within"]["agents"] and block["within"]["minutes"] and block["cap"]["agents"] == cap.agents
     # the largest slice the shared projection allows: one more file breaks an axis
     more = ds.projected_cost(
         ds.run_fixed_cost({}),
@@ -1787,15 +1791,28 @@ def test_default_admission_at_default_args_meets_every_bar_axis_on_a_large_backl
         scan_bytes=ds.scan_bytes_bound(10_000, len(scope.manifest["batches"])),
     )
     assert not _meets_every_axis(more, cap)
+    # the cut backlog is over the bar, so tokens keep the slice cap
+    assert block["cap"]["tokens"] == cap.tokens
+
+
+def test_a_backlog_over_the_whole_backlog_bar_is_still_cut():
+    from coordinator_core.contract import run_budget
+
+    fixed = ds.run_fixed_cost({})
+    fits = ds.fit_files(fixed, _paths(2000), lambda _p: 1_000)
+    assert 0 < fits < 2000
+    whole = ds.fit_files(fixed, _paths(3), lambda _p: 1_000)
+    assert whole == 3
+    cost = ds.projected_cost(fixed, topics=ds.projected_topics(3), batches=1, scan_bytes=3_000)
+    assert run_budget.load("distill").tokens < cost.tokens <= run_budget.whole_backlog_bar()
 
 
 def test_default_admission_covers_a_backlog_under_the_whole_backlog_bar(tmp_path, monkeypatch):
-    from coordinator_core.contract import run_budget
     from coordinator_core.contract.run_budget import RunBudget
 
     root = _watermarked_repo(tmp_path, monkeypatch)
     fixed = ds.run_fixed_cost({})
-    cap = RunBudget(1000, 200_000, 10_000)
+    cap = RunBudget(1000, 1_000_000, 10_000)
     monkeypatch.setattr(ds._run_budget, "load", lambda _c, path=None: cap)
     size = 1_000
 
@@ -1813,15 +1830,15 @@ def test_default_admission_covers_a_backlog_under_the_whole_backlog_bar(tmp_path
     assert _meets_every_axis(slice_cost(len(_LOG_DAYS)), cap)
     assert _admit_scope(root, batch_size=1).counts["deferred"] == 0
     assert ds.fit_files(fixed, _paths(7), lambda _p: size) == 7
-    # a larger backlog is cut to the largest slice meeting every axis, and the covering slices,
-    # each repaying the fixed relay, sum under the 1M whole-backlog bar
+    # a larger backlog is cut to the largest slice meeting every axis and covered by several runs; at the
+    # measured synthesis constants their summed tokens pass the whole-backlog bar, which the backlog-pass
+    # ledger reports rather than guarantees
     big = 40
     admitted = ds.fit_files(fixed, _paths(big), lambda _p: size)
     assert 0 < admitted < big
     assert _meets_every_axis(slice_cost(admitted), cap) and not _meets_every_axis(slice_cost(admitted + 1), cap)
-    bar = json.loads((Path(run_budget.__file__).parent / "ceremony-budget.json").read_text())["whole_backlog_token_bar"]
     covering = [min(admitted, big - done) for done in range(0, big, admitted)]
-    assert sum(slice_cost(n).tokens for n in covering) <= bar
+    assert len(covering) > 1 and all(_meets_every_axis(slice_cost(n), cap) for n in covering)
 
 
 def test_the_topic_file_cap_holds_when_no_watermark_resolves(tmp_path, monkeypatch):

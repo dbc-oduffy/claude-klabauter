@@ -35,6 +35,7 @@ from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 from coordinator_core.ops.dispatch_emit import landing_retest
 from coordinator_core.ops.dispatch_emit import landing_targeted_tests
 from coordinator_core.ops.dispatch_emit import red_attribution
+from coordinator_core.ops.review_test_blocker import ZERO_RAN_MESSAGE
 from coordinator_core.telemetry import host_sampler
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -397,6 +398,21 @@ def worker_cap() -> int:
     return max(1, min(cores, ram, RETEST_MAX_WORKERS))
 
 
+def _drop_marker_filter(tokens: list[str]) -> list[str]:
+    """``tokens`` minus a ``-m <expr>`` / ``-m<expr>`` marker filter: every id the tier names runs whatever
+    its markers (the declared-launcher arm; ``_strip_collection_roots`` does the same for ``fast_test_cmd``)."""
+    out: list[str] = []
+    skip = False
+    for tok in tokens:
+        if skip:
+            skip = False
+        elif tok == "-m":
+            skip = True
+        elif not (tok.startswith("-m") and not tok.startswith("--")):
+            out.append(tok)
+    return out
+
+
 def _cap_workers(tokens: list[str], cap: int) -> list[str]:
     """``tokens`` with any ``-n``/``--numprocesses`` count clamped to ``cap`` (``auto`` becomes ``cap``)
     and ``--maxprocesses`` dropped; a command naming no worker option is unchanged."""
@@ -477,7 +493,7 @@ def _launch_plan(root: Path, tests: list[str], *, keep_tier: bool = False) -> "t
             return f"{ti.LAUNCHER_KEY} {declared!r} is not a repo-relative file that exists"
         pin = ti.resolve_targeted_test_python(root)
         python = pin.command if pin.command and pin.defect is None else sys.executable
-        return [python, *_cap_workers(shlex.split(declared), cap)], groups
+        return [python, *_cap_workers(_drop_marker_filter(shlex.split(declared)), cap)], groups
     resolved = resolve_validation_cmd.resolve_fast_test_cmd(str(config))
     if resolved.returncode != 0:
         return f"fast_test_cmd unresolved (read {config.as_posix()}/coordinator.local.md): {resolved.stderr.strip()}"
@@ -636,6 +652,32 @@ def _ran_total(log: Path) -> Optional[int]:
                 total += int(count)
                 seen = True
     return total if seen else None
+
+
+def _deselected_total(log: Path) -> int:
+    """Sum of the ``N deselected`` counts over every pytest summary line in ``log``; 0 when none."""
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    return sum(
+        int(count) for body in _SUMMARY_LINE.findall(text)
+        for count, kind in re.findall(r"(\d+) ([a-z]+)", body) if kind == "deselected"
+    )
+
+
+def _zero_ran_owned(run, root: Path, tests: list[str], log: Path, deadline: float) -> list[str]:
+    """The named node ids in ``tests`` that ran 0 times. Only a log reporting deselection triggers a
+    ``--collect-only`` session; an id with no collected match (itself, ``id[...]`` or ``id::...``) was
+    deselected. Fail closed: when collection is unavailable every named node id is unproven."""
+    owned = [t for t in tests if "::" in t or t.endswith(".py")]
+    if not owned or not _deselected_total(log):
+        return []
+    collected = _collect_ids(run, root, tests, log.with_suffix(".collect.log"), deadline)
+    if isinstance(collected, str):
+        return owned
+    ids = collected[0]
+    return [t for t in owned if not any(i == t or i.startswith((t + "[", t + "::")) for i in ids)]
 
 
 def _read_record(path: Path) -> Optional[dict]:
@@ -814,6 +856,13 @@ def _run_pass(run, root: Path, tests: list[str], log_path: Path, deadline: float
     elif all(c == NO_TESTS_COLLECTED for c in codes):
         status = NO_TESTS_STATUS
         reason = f"launcher collected no tests from: {', '.join(tests)}"
+    if status in ("pass", NO_TESTS_STATUS):
+        unran = _zero_ran_owned(run, root, tests, log_path, deadline)
+        if unran:
+            with log_path.open("a", encoding="utf-8") as fh:
+                fh.write("".join(f"\nFAILED {t} - {ZERO_RAN_MESSAGE}" for t in unran) + "\n")
+            codes.append(1)
+            status, reason = "fail", f"{ZERO_RAN_MESSAGE}: {', '.join(unran)}"
     return status, reason, codes, True
 
 
@@ -1247,6 +1296,59 @@ def _names_own_path(log: Path, nodes: Sequence[str], write_set: Sequence[str]) -
     return red_attribution.names_own_path(text, nodes, write_set)
 
 
+_SECTION_HEAD = re.compile(r"^_{2,} (.+?) _{2,}$", re.MULTILINE)
+_SUMMARY_HEAD = re.compile(r"^=+ short test summary info =+$", re.MULTILINE)
+_PATH_TOKEN = re.compile(r"(?<![\w./\\-])((?:[\w.-]+/)+[\w.-]+\.\w+)")
+_ASSERT_LINE = re.compile(r"^E\s.*$", re.MULTILINE)
+_MAX_NAMED_PATHS = 200
+
+
+def _named_paths(log: Path, strip: Sequence[Path], ids: Sequence[str]) -> dict[str, set[str]]:
+    """``{id: repo-relative POSIX paths its failure text names}`` from the ``E`` assertion lines of the pytest
+    FAILURES section headed by the id's test name (traceback frames excluded) and the id's ``FAILED`` summary
+    message in ``log``; an absolute ``strip`` root prefix is cut
+    first. An id with no text maps to an empty set."""
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace").replace("\\", "/")
+    except OSError:
+        return {i: set() for i in ids}
+    for base in strip:
+        text = text.replace(base.as_posix() + "/", "")
+    cut = _SUMMARY_HEAD.search(text)
+    body, summary = (text[:cut.start()], text[cut.start():]) if cut else (text, "")
+    heads = list(_SECTION_HEAD.finditer(body))
+    sections: dict[str, str] = {}
+    for n, m in enumerate(heads):
+        end = heads[n + 1].start() if n + 1 < len(heads) else len(body)
+        sections[m.group(1)] = sections.get(m.group(1), "") + body[m.end():end]
+    named: dict[str, set[str]] = {}
+    for i in ids:
+        test = i.replace("\\", "/").partition("::")[2].replace("::", ".")
+        message = "".join(re.findall(rf"^FAILED {re.escape(i)} - (.*)$", summary, flags=re.MULTILINE))
+        named[i] = set(_PATH_TOKEN.findall("\n".join(_ASSERT_LINE.findall(sections.get(test, ""))) + "\n" + message))
+    return named
+
+
+def _peer_held_reds(
+    root: Path, export_root: Path, export_log: Path, run_id: str, write_set: Sequence[str], ids: Sequence[str],
+) -> dict[str, list[str]]:
+    """``{id: [peer-held paths]}`` for each of ``ids`` whose failure text names a path outside ``write_set``
+    that a live peer run holds (one claim lookup over every named path) and names none of ``write_set``: a
+    red on the run's own paths stays the run's. Empty when nothing is named or held. No git spawn per id.
+    Trap: only ``E`` lines and the FAILED message name paths; a peer-held path only in an assertion message with
+    no own path named reads foreign."""
+    from coordinator_core.ops.dispatch_emit.run_write_set import _split_peer_held
+
+    own = {str(w).replace("\\", "/") for w in write_set}
+    named = _named_paths(export_log, (export_root, root), ids)
+    candidates = sorted({p for paths in named.values() for p in paths} - own)[:_MAX_NAMED_PATHS]
+    if not candidates:
+        return {}
+    held = _split_peer_held(root, candidates, "", run_id)[1]
+    out = {i: sorted(p for p in paths if p in held) for i, paths in named.items() if not paths & own}
+    return {i: hit for i, hit in out.items() if hit}
+
+
 def _write_dual(
     root, path, log_path, export_log, run_id, tests, dropped, drop_note, meta, dirty, head_sha,
     export_pass, live_pass, fail, baseline=None,
@@ -1273,6 +1375,16 @@ def _write_dual(
     }
     record.update(baseline or {})
     measured_baseline = record.get("baseline")
+    if isinstance(measured_baseline, dict) and measured_baseline.get("caused") and export_log_used:
+        peer = _peer_held_reds(
+            root, Path(meta["root"]), export_log, run_id, meta["write_set"], measured_baseline["caused"],
+        )
+        if peer:
+            measured_baseline["caused"] = [n for n in measured_baseline["caused"] if n not in peer]
+            measured_baseline["foreign"] = [*measured_baseline.get("foreign", []), *peer]
+            measured_baseline["foreign_reason"] = {
+                **measured_baseline.get("foreign_reason", {}), **{n: landing_targeted_tests.PEER_HELD_PATH for n in peer},
+            }
     if isinstance(measured_baseline, dict) and export_log_used and _ran_total(export_log) is not None:
         live_only = [n for n in live_failed if n not in export_failed and n not in measured_baseline.get("foreign", [])]
         own = _names_own_path(log_path, live_only, meta["write_set"])

@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
 from typing import Optional
 
@@ -74,18 +73,6 @@ def reply(run_id: str, action: Optional[str], *, fire_args: Optional[dict] = Non
 def is_minted_only(run_dir: Path) -> bool:
     """True when ``run_dir`` exists and holds no work past ``minted`` (the halted_run shell predicate)."""
     return run_dir.is_dir() and _is_shell(run_dir)
-
-
-_WORKFLOW_READER = re.compile(r"\bawait\s+workflow\s*\(")
-
-
-def holds_workflow_reader(repo_root: Path, script_rel: str) -> bool:
-    """True when the run script awaits its own `workflow()` reader. Such a script must be started directly:
-    a wrapper would put that reader at a second nesting level. A launcher child holds none. An unreadable script reads False."""
-    try:
-        return bool(_WORKFLOW_READER.search((repo_root / script_rel).read_text(encoding="utf-8")))
-    except OSError:
-        return False
 
 
 def start_args(repo_root: Path, run_id: str) -> dict:

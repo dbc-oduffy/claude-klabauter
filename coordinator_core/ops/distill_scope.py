@@ -528,6 +528,15 @@ def _within(budget: _run_budget.RunBudget, cost: _run_budget.UnitCost) -> bool:
     return cost.agents <= budget.agents and cost.tokens <= budget.tokens and cost.minutes <= budget.minutes
 
 
+def whole_backlog_budget(budget: _run_budget.RunBudget) -> _run_budget.RunBudget:
+    """``budget`` with its token cap lifted to ``whole_backlog_bar`` when that is larger: the cap for a
+    run that covers the entire backlog."""
+    bar = _run_budget.whole_backlog_bar()
+    if bar <= budget.tokens:
+        return budget
+    return _run_budget.RunBudget(budget.agents, bar, budget.minutes, source=budget.source)
+
+
 def fit_files(
     fixed: _run_budget.UnitCost,
     paths: Sequence[str],
@@ -539,8 +548,9 @@ def fit_files(
 ) -> int:
     """Largest prefix of ``paths`` (ranked, packed as ``pack_batches`` packs) whose ``projected_cost``
     meets every axis of the ``distill`` run budget; at least one, the floor ``fit_units`` also keeps,
-    when ``paths`` is non-empty. Greedy packing is prefix-stable, so one pass prices every prefix and
-    a bisection finds the cut."""
+    when ``paths`` is non-empty. All of ``paths`` when that whole backlog meets the agents and minutes
+    caps and its tokens fit ``whole_backlog_bar``. Greedy packing is prefix-stable, so one pass prices
+    every prefix and a bisection finds the cut."""
     if not paths:
         return 0
     budget = _run_budget.load("distill")
@@ -555,9 +565,9 @@ def fit_files(
             bytes_to.append((bytes_to[-1] if bytes_to else 0) + max(0, size_of(rel)))
             batch_of.append(batches)
 
-    def fits(n: int) -> bool:
+    def fits(n: int, cap: _run_budget.RunBudget = budget) -> bool:
         return _within(
-            budget,
+            cap,
             projected_cost(
                 fixed,
                 topics=projected_topics(n),
@@ -566,6 +576,8 @@ def fit_files(
             ),
         )
 
+    if fits(len(paths), whole_backlog_budget(budget)):
+        return len(paths)
     low, high = 1, len(paths)
     while low < high:
         mid = (low + high + 1) // 2
@@ -576,10 +588,15 @@ def fit_files(
     return low
 
 
-def budget_block(fixed: _run_budget.UnitCost, *, files: int, batches: int, scan_bytes: int) -> dict[str, Any]:
+def budget_block(
+    fixed: _run_budget.UnitCost, *, files: int, batches: int, scan_bytes: int, whole_backlog: bool = False
+) -> dict[str, Any]:
     """The manifest's ``budget``: cap and ``projected_cost`` per axis for a run over ``files`` admitted
-    files in ``batches`` batches reading ``scan_bytes``."""
+    files in ``batches`` batches reading ``scan_bytes``; ``whole_backlog`` caps tokens at the
+    whole-backlog bar, as ``fit_files`` does for a run that defers nothing."""
     budget = _run_budget.load("distill")
+    if whole_backlog:
+        budget = whole_backlog_budget(budget)
     return _run_budget.budget_report(
         budget,
         projected_cost(fixed, topics=projected_topics(files), batches=batches, scan_bytes=scan_bytes),
@@ -1584,6 +1601,8 @@ def compute_scope(
                 byte_budget=byte_budget,
                 entry_cost_of=fit_entry_cost,
             )
+            # A file count bounds the batch count from above, so the batch cut below never binds;
+            # the file cap (applied to ``scannable``) is the real limit.
             max_scan_batches = file_cap
             fitted_batches = len(
                 pack_batches(
@@ -1677,6 +1696,7 @@ def compute_scope(
             scan_bytes=scan_bytes_bound(
                 sum(digest_bytes.get(rel, keys[rel][1] if rel in keys else 0) for rel in scannable), len(batches)
             ),
+            whole_backlog=not deferred,
         )
 
     counts = {
@@ -2161,6 +2181,7 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
         scan_bytes=scan_bytes_bound(
             sum(_file_bytes(worktree_root, result.digests.get(rel, rel)) for rel in kept), len(payload["batches"])
         ),
+        whole_backlog=not manifest["deferred"],
     )
     if override:
         manifest["measurement_override"] = override

@@ -44,7 +44,12 @@ from coordinator_core.codex_runner.contract import (
     RunResult,
 )
 from coordinator_core.codex_runner.resolve import CodexUnavailable, resolve_native_cli
-from coordinator_core.codex_runner.review import _ENV_ALLOW_WINDOWS as _REVIEW_ENV_ALLOW_WINDOWS
+from coordinator_core.codex_runner.review import (
+    CREDENTIAL_CONTEXT_ENV,
+    CREDENTIAL_CONTEXT_ENV_WINDOWS,
+    USER_PROFILE_ENV,
+    _ENV_ALLOW_WINDOWS as _REVIEW_ENV_ALLOW_WINDOWS,
+)
 
 GROK_TIMEOUT_S = 900
 GROK_IDLE_S = 180
@@ -62,8 +67,8 @@ PROVENANCE_SOURCE = "grok -p"
 DENY_RULES = ("Edit", "Write", "Bash", "MCPTool")
 FORBIDDEN_FLAGS = ("--always-approve", "--dangerously-skip-permissions", "--yolo")
 
-_ENV_ALLOW = ("PATH", "HOME", "USERPROFILE", "LANG", "GROK_HOME")
-_ENV_ALLOW_WINDOWS = _REVIEW_ENV_ALLOW_WINDOWS
+_ENV_ALLOW = ("PATH", "LANG", "GROK_HOME") + USER_PROFILE_ENV + CREDENTIAL_CONTEXT_ENV
+_ENV_ALLOW_WINDOWS = _REVIEW_ENV_ALLOW_WINDOWS + CREDENTIAL_CONTEXT_ENV_WINDOWS
 _TEXT_EVENTS = frozenset({"assistant", "message", "text", "agent_message", "agent_message_chunk", "content"})
 
 

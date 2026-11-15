@@ -206,11 +206,13 @@ function _emitRefusalReason(child, e, chained) {
   if (!e || typeof e !== 'object') return 'emit reply is not an object';
   if (typeof e.error === 'string' && e.error !== '') return 'emit failed: ' + e.error;
   if (chained) {
+    // Trap: `chained` is true or the id of the run the child's first leg started; a chained reply is stale only when it names that run. A first leg redirected to another id leaves the child's minted id unstarted, and the chain emit rightly binds the sibling sizing to it.
+    const startedRun = (typeof chained === 'string' && chained !== '') ? chained : child.run_id;
     const pathRun = _pathRunId(e.path);
     if (typeof e.path === 'string' && e.path !== '' && pathRun === '') {
       return 'chain emit reply path ' + JSON.stringify(e.path) + ' yields an empty run id';
     }
-    if (typeof e.path === 'string' && e.path !== '' && pathRun === child.run_id) {
+    if (typeof e.path === 'string' && e.path !== '' && pathRun === startedRun) {
       return 'chain emit reply path run id ' + JSON.stringify(pathRun) + ' is not a fresh run id';
     }
   } else if (e.run_id !== child.run_id && !_isOwnRedirect(child, e) && !_isOwnRecompose(child, e)) return 'emit reply run_id ' + String(e.run_id) + ' is not ' + child.run_id;
@@ -326,7 +328,7 @@ function _handoffOf(result) {
 }
 
 // Trap: one hop only. The chained run's own hand-off is refused, so a chain can never loop.
-async function _chainHop(child, handoff) {
+async function _chainHop(child, handoff, firstRun) {
   const named = (v) => typeof v === 'string' && v !== '';
   const sizing = named(handoff.sizing_path) ? handoff.sizing_path : named(handoff.from_sizing) ? handoff.from_sizing : child.sizing_rel;
   const refire = __REFIRE_HEAD__ + JSON.stringify(sizing) + __REFIRE_TAIL__;
@@ -351,7 +353,7 @@ async function _chainHop(child, handoff) {
     }
   }
   emitted = _handoffScript(emitted);
-  const refusal = _emitRefusal(child, emitted, true);
+  const refusal = _emitRefusal(child, emitted, firstRun || true);
   if (refusal !== null) return fail(refusal);
   emitted = { ...emitted, run_id: _pathRunId(emitted.path) };
   const chained = await _startLoop(child, _normEmitPath(emitted.path));
@@ -401,7 +403,7 @@ async function _runChild(child, emitted) {
   if (first.status !== 'ok') _abandonRedirect(child, emitted);
   const handoff = first.status === 'ok' ? _handoffOf(first.result) : null;
   const { started: _started, ...firstOut } = first;
-  return handoff === null ? firstOut : _chainHop(child, handoff);
+  return handoff === null ? firstOut : _chainHop(child, handoff, _pathRunId(emitted.path));
 }
 
 async function _startAll() {

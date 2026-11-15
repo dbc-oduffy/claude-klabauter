@@ -109,6 +109,20 @@ def test_codex_unrestricted_still_reaches_the_spawn(rig, tmp_path, monkeypatch):
         agents.run_agent("x", {}, repo_root=rig["repo"], artifact_dir=tmp_path / "agent")
 
 
+def test_child_env_forwards_credential_context_and_never_api_keys(monkeypatch):
+    from coordinator_core.codex_runner.review import CREDENTIAL_CONTEXT_ENV, CREDENTIAL_CONTEXT_ENV_WINDOWS
+
+    keys = CREDENTIAL_CONTEXT_ENV + CREDENTIAL_CONTEXT_ENV_WINDOWS
+    for key in keys:
+        monkeypatch.setenv(key, f"v-{key}")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    env = agents._environment()
+    assert all(env.get(k) == f"v-{k}" for k in keys)
+    assert "OPENAI_API_KEY" not in env
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    assert "CLAUDE_CONFIG_DIR" not in agents._environment()
+
+
 @pytest.mark.parametrize("inherited", [None, "0", "1"])
 def test_child_env_keeps_warmth_on_and_pins_both_autostarts_off(monkeypatch, inherited):
     if inherited is None:

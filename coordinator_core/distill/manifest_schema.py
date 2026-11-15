@@ -119,10 +119,11 @@ SCAN_BATCH_TOKENS: int = 115_000
 SCAN_BATCH_MINUTES: int = 3
 
 #: Post-scan synthesis, priced as one fixed harvest relay over the whole slice plus one synth per
-#: topic. PROVISIONAL (recalibrate from the first measured run of the rebuilt harvest, plan row C5):
-#: SYNTHESIS_FIXED_TOKENS is the relayed ~25_000 (R1 of the 2026-11-15 scope-fit sizing), not a
-#: measurement. SYNTHESIS_PER_TOPIC_TOKENS 18_604 = 818_611 // 44, the per-file synth average of the
-#: 44-file run 2026-11-14-22h12; a topic is priced no cheaper than that. Topics exist only after
+#: topic. Tokens are total-class, measured by run wf_91f5af15-174 of the rebuilt harvest (DoE
+#: beecfce63b, 3 files, 17 topics, 3 agents, 1_686_940 tokens): SYNTHESIS_FIXED_TOKENS 128_536 is its
+#: fixed digest/scan agent; SYNTHESIS_PER_TOPIC_TOKENS 91_671 = ceil(1_558_404 / 17), its synth agents'
+#: tokens per topic. The fixed figure includes the digest/scan read, so it overlaps SCAN_BATCH_TOKENS
+#: (an over-count, never an under-count). Agents and minutes are not measured per topic. Topics exist only after
 #: clustering, so scope projects them as ceil(files * SYNTHESIS_CORPUS_TOPICS / SYNTHESIS_CORPUS_FILES).
 #: The corpus ratio is 109 topics per 143 artifacts opened, kept as the pair (never floored to 1, which
 #: priced every file as its own topic) from the
@@ -130,10 +131,10 @@ SCAN_BATCH_MINUTES: int = 3
 #: (plan row C0 evidence). Per-topic minutes keep the minutes axis from binding before tokens.
 #: Not `backlog_first_pass_tokens.SYNTHESIS_OVERHEAD_TOKENS_PER_TOPIC` (1_500), a digest-only pass.
 SYNTHESIS_FIXED_AGENTS: int = 1
-SYNTHESIS_FIXED_TOKENS: int = 25_000
+SYNTHESIS_FIXED_TOKENS: int = 128_536
 SYNTHESIS_FIXED_MINUTES: int = 2
 SYNTHESIS_PER_TOPIC_AGENTS: int = 1
-SYNTHESIS_PER_TOPIC_TOKENS: int = 18_604
+SYNTHESIS_PER_TOPIC_TOKENS: int = 91_671
 SYNTHESIS_PER_TOPIC_MINUTES: int = 1
 SYNTHESIS_CORPUS_FILES: int = 143
 SYNTHESIS_CORPUS_TOPICS: int = 109

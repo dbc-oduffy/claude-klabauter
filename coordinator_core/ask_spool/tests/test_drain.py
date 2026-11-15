@@ -437,7 +437,7 @@ def test_a_refire_spooled_after_the_last_listing_of_another_key_stays_pending(tm
     assert len(record.list_pending(str(tmp_path))) == 1
 
 
-def test_a_late_refire_of_a_sizing_whose_live_run_this_drain_never_minted_coalesces_in_that_drain(tmp_path, monkeypatch):
+def test_a_late_refire_of_a_sizing_whose_live_run_this_drain_never_minted_is_withdrawn_in_that_drain(tmp_path, monkeypatch):
     _write_sizing(tmp_path, plan=None)
     other = "state/sizings/2026-11/other.yaml"
     (tmp_path / other).write_text(json.dumps({"schema": "sizing-object"}), encoding="utf-8")
@@ -452,9 +452,9 @@ def test_a_late_refire_of_a_sizing_whose_live_run_this_drain_never_minted_coales
     monkeypatch.setattr(drain, "_drain_remote_failover", tail_launches_the_run_and_spools_the_refire)
     engine = Engine(tmp_path)
     counts = drain.run(str(tmp_path), evaluate=engine)
-    assert engine.calls == 1 and counts["minted"] == 1 and counts["coalesced"] == 1
-    header, _ = record.read_entry(record.entry_path(str(tmp_path), refire[0], record.MINTED_SUFFIX))
-    assert header["coalesced_into"] == run_id
+    assert engine.calls == 1 and counts["minted"] == 1 and counts["withdrawn"] == 1 and counts["coalesced"] == 0
+    header = _withdrawn(tmp_path, refire[0])
+    assert header["superseded_by"] == run_id and run_id in header["withdraw_reason"]
     assert record.list_pending(str(tmp_path)) == []
 
 
@@ -507,16 +507,40 @@ def _live_refire(root, run_id, sizing=SIZING, live=True):
         run_token.mint(root, run_id, "scratch/warp/x.js", session_id="other", sizing_rel=sizing)
 
 
-def test_spool_of_a_sizing_whose_refired_run_is_live_coalesces_with_no_second_launch(tmp_path):
+def test_spool_of_a_sizing_whose_refired_run_is_live_is_withdrawn_naming_the_run_with_no_second_launch(tmp_path):
     _write_sizing(tmp_path, plan=None)
     run_id = "ask-20261104T150000-eeeeee"
     _live_refire(tmp_path, run_id)
     sid = _spool_sizing(tmp_path, "tuA")
     engine = Engine(tmp_path)
     counts = drain.run(str(tmp_path), evaluate=engine)
-    assert engine.calls == 0 and counts["coalesced"] == 1 and counts["minted"] == 0
-    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
-    assert header["coalesced_into"] == run_id
+    assert engine.calls == 0 and counts["withdrawn"] == 1 and counts["minted"] == 0 and counts["coalesced"] == 0
+    header = _withdrawn(tmp_path, sid)
+    assert header["superseded_by"] == run_id and run_id in header["withdraw_reason"]
+    assert [(n["status"], n["run_id"]) for n in _notices(tmp_path)] == [("withdrawn", run_id)]
+
+
+def test_example_game_repo_fb_spooled_sizing_refire_while_an_immediate_retry_already_started_the_run_is_withdrawn(tmp_path):
+    _write_sizing(tmp_path, plan=None)
+    run_id = "ask-20261104T150000-bbbbbb"
+    _live_refire(tmp_path, run_id)
+    now = time.time()
+    os.utime(tmp_path / "scratch" / "warp" / run_id, (now, now))
+    sid = _spool_sizing(tmp_path, "tuRefire")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 0 and counts["withdrawn"] == 1 and counts["minted"] == 0
+    assert _withdrawn(tmp_path, sid)["superseded_by"] == run_id
+
+
+def test_a_spooled_sizing_whose_run_holds_no_live_token_is_not_withdrawn_by_the_live_run_dedupe(tmp_path):
+    _write_sizing(tmp_path, plan=None)
+    _live_refire(tmp_path, "ask-20261104T150000-cccccc", live=False)
+    now = time.time()
+    os.utime(tmp_path / "scratch" / "warp" / "ask-20261104T150000-cccccc", (now, now))
+    _spool_sizing(tmp_path, "tuA")
+    counts = drain.run(str(tmp_path), evaluate=Engine(tmp_path))
+    assert counts["withdrawn"] == 0 and counts["coalesced"] == 1
 
 
 def test_spool_of_a_sizing_whose_old_run_holds_no_live_token_still_mints(tmp_path):

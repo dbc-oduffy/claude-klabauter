@@ -488,6 +488,26 @@ def _router_module():
     return _ROUTER_MODULE
 
 
+def kickstart_router_agent(say):
+    """True when launchd's login agent was kickstarted to start the router (darwin, agent loaded).
+
+    Trap: a router spawned here is this supervisor's child and inherits its nice (20 when launched
+    under a niced shell); it also wins the race against autolink's kickstart, which then finds a live
+    router and does nothing. Only a launchd start runs the router at the agent's nice."""
+    spec = importlib.util.spec_from_file_location("unimatrix_autolink", HERE / "unimatrix-autolink.py")
+    autolink = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(autolink)
+    target = autolink.launchd_agent_target()
+    if not target:
+        return False
+    started = autolink.run_launchctl("kickstart", target)
+    if started is None or started.returncode != 0:
+        say(f"launchctl kickstart {target} failed; spawning the router directly")
+        return False
+    say(f"router not answering; kickstarted launchd agent {target}")
+    return True
+
+
 def router_answers(ctl):
     """True when the router control endpoint answers {"op":"list"}."""
     try:
@@ -521,8 +541,9 @@ def ensure_router(say, wait=3.0):
                 if not transport.lock_file(lease):
                     return False
                 transport.unlock_file(lease)
-            p = _roster().spawn([_roster().console_python(), str(HERE / "unimatrix-peer-router.py")])
-            say(f"router not answering at {ctl}; spawned router pid {p.pid}")
+            if not kickstart_router_agent(say):
+                p = _roster().spawn([_roster().console_python(), str(HERE / "unimatrix-peer-router.py")])
+                say(f"router not answering at {ctl}; spawned router pid {p.pid}")
             deadline = time.time() + wait
             while time.time() < deadline and not router_answers(ctl):
                 time.sleep(0.2)

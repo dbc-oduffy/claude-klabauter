@@ -1397,3 +1397,100 @@ def test_run_naming_no_repo_falls_back_to_the_cwd_repo(repo, tmp_path, monkeypat
     monkeypatch.chdir(repo)
     assert retest_targeted._run_repo({"script_path": "s.mjs"}) is None
     assert retest_targeted._repo_root(None, {"script_path": "s.mjs"}) == Path(retest_targeted.show_toplevel())
+
+
+_SLOW_MODULE = "import pytest\n\npytestmark = pytest.mark.slow\n\n\ndef test_owned():\n    pass\n"
+
+
+def _slow_repo(repo: Path, *, addopts: str = "") -> None:
+    (repo / "test_slow.py").write_text(_SLOW_MODULE, encoding="utf-8")
+    (repo / "pytest.ini").write_text(f"[pytest]\nmarkers = slow\n{addopts}", encoding="utf-8")
+    (repo / "scripts").mkdir(exist_ok=True)
+    (repo / "scripts" / "run.py").write_text("import sys\nimport pytest\n\nsys.exit(pytest.main(sys.argv[1:]))\n", encoding="utf-8")
+
+
+def _slow_verdict(repo, tmp_path, named="test_slow.py::test_owned"):
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", named, "--repo-root", str(repo), "--detached-child"],
+    )
+    return rc, json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+
+
+def test_declared_launcher_marker_filter_is_dropped_so_an_owned_slow_id_runs(repo, tmp_path):
+    _slow_repo(repo)
+    _declare(repo, targeted_test_launcher="\"scripts/run.py -q -m 'not slow'\"")
+    rc, record = _slow_verdict(repo, tmp_path)
+    assert rc == 0 and record["status"] == "pass"
+
+
+def test_drop_marker_filter_both_spellings_and_keeps_long_options():
+    out = retest_targeted._drop_marker_filter(["scripts/run.py", "-m", "not slow", "-mfoo", "-q", "--maxfail=1"])
+    assert out == ["scripts/run.py", "-q", "--maxfail=1"]
+
+
+def test_owned_id_deselected_by_config_ran_zero_times_fails_as_unverified(repo, tmp_path):
+    _slow_repo(repo, addopts="addopts = -m \"not slow\"\n")
+    _declare(repo, targeted_test_launcher="scripts/run.py -q")
+    rc, record = _slow_verdict(repo, tmp_path)
+    assert rc == 1 and record["status"] == "fail"
+    assert record["failed_tests"] == ["test_slow.py::test_owned"]
+    assert "ran 0 times" in record["reason"]
+
+
+def test_owned_id_that_ran_never_pays_the_collect_session(repo, tmp_path, monkeypatch):
+    _slow_repo(repo)
+    _declare(repo, targeted_test_launcher="scripts/run.py -q")
+    monkeypatch.setattr(retest_targeted, "_collect_ids", lambda *a, **k: pytest.fail("no deselection, no collect"))
+    rc, record = _slow_verdict(repo, tmp_path)
+    assert rc == 0 and record["status"] == "pass"
+
+
+def test_fast_test_cmd_arm_owned_id_deselected_by_config_fails_as_unverified(repo, tmp_path, monkeypatch):
+    _slow_repo(repo, addopts="addopts = -m \"not slow\"\n")
+    monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "python3 -m pytest -q -m 'not slow'")
+    rc, record = _slow_verdict(repo, tmp_path)
+    assert rc == 1 and record["status"] == "fail" and record["failed_tests"] == ["test_slow.py::test_owned"]
+
+
+def _failure_log(tmp_path, section: str, message: str = "") -> Path:
+    log = tmp_path / "export.log"
+    log.write_text(
+        f"=== FAILURES ===\n___ t0 ___\n{section}\n=== short test summary info ===\n"
+        f"FAILED test_a.py::t0 - {message}\n1 failed in 0.1s\n",
+        encoding="utf-8",
+    )
+    return log
+
+
+def test_named_paths_reads_assertion_lines_and_not_traceback_frames(tmp_path):
+    log = _failure_log(
+        tmp_path,
+        "pkg/helper.py:9: in check\n    assert ok\nE   AssertionError: wrote pkg/named.py\n",
+    )
+
+    assert retest_targeted._named_paths(log, (), ["test_a.py::t0"]) == {"test_a.py::t0": {"pkg/named.py"}}
+
+
+def test_named_paths_reads_the_failed_summary_message(tmp_path):
+    log = _failure_log(tmp_path, "pkg/helper.py:9: in check\n", "AssertionError: wrote pkg/msg.py")
+
+    assert retest_targeted._named_paths(log, (), ["test_a.py::t0"]) == {"test_a.py::t0": {"pkg/msg.py"}}
+
+
+def test_peer_held_reds_looks_up_at_most_the_cap_and_keeps_a_held_path_within_it(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_write_set
+
+    paths = [f"pkg/p{n:04d}.py" for n in range(retest_targeted._MAX_NAMED_PATHS + 50)]
+    log = _failure_log(tmp_path, "E   AssertionError: " + " ".join(paths) + "\n")
+    seen: list[list[str]] = []
+
+    def _split(_root, candidates, _base, _run_id):
+        seen.append(list(candidates))
+        return [], {paths[0]: ["peer"]}
+
+    monkeypatch.setattr(run_write_set, "_split_peer_held", _split)
+
+    out = retest_targeted._peer_held_reds(tmp_path, tmp_path, log, "run-x", ["src/own.py"], ["test_a.py::t0"])
+
+    assert len(seen[0]) == retest_targeted._MAX_NAMED_PATHS
+    assert out == {"test_a.py::t0": [paths[0]]}

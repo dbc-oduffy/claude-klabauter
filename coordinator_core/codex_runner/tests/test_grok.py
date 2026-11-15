@@ -181,6 +181,18 @@ def test_windows_env_keeps_essentials():
     assert {"SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "COMSPEC"}.isdisjoint(grok._build_env(src, windows=False))
 
 
+def test_credential_context_keys_forwarded_per_platform_and_never_api_keys():
+    from coordinator_core.codex_runner.review import CREDENTIAL_CONTEXT_ENV, CREDENTIAL_CONTEXT_ENV_WINDOWS
+    src = {k: f"v-{k}" for k in CREDENTIAL_CONTEXT_ENV + CREDENTIAL_CONTEXT_ENV_WINDOWS} | {"XAI_API_KEY": "k"}
+    posix = grok._build_env(src, windows=False)
+    assert all(posix[k] == f"v-{k}" for k in CREDENTIAL_CONTEXT_ENV)
+    assert set(CREDENTIAL_CONTEXT_ENV_WINDOWS).isdisjoint(posix) and "XAI_API_KEY" not in posix
+    win = grok._build_env(src, windows=True)
+    assert all(win[k] == f"v-{k}" for k in CREDENTIAL_CONTEXT_ENV + CREDENTIAL_CONTEXT_ENV_WINDOWS)
+    assert "XAI_API_KEY" not in win
+    assert not any(k in grok._build_env({"PATH": "/p"}, windows=True) for k in CREDENTIAL_CONTEXT_ENV)
+
+
 def test_env_allowlist():
     src = {"PATH": "/p", "HOME": "/h", "XAI_API_KEY": "k", "GROK_HOME": "/g", "SYSTEMROOT": "S"}
     assert {k:v for k,v in grok._build_env(src, windows=False).items() if not k.startswith("COORDINATOR_")} == {"PATH": "/p", "HOME": "/h", "GROK_HOME": "/g"}

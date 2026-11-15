@@ -77,3 +77,28 @@ def test_handler_threads_run_key(world):
         {"base": BASE, "slice_prefix": PREFIX, "session_id": SESSION, "failing": FAILING, "run_key": RUN}, world
     )
     assert out["owned_red"] == FAILING
+
+
+def test_zero_ran_owned_id_blocks_whatever_its_file():
+    from coordinator_core.ops import review_test_blocker as rtb
+
+    # `src/mod.py` is the only own path: the slow test's file is not in it, yet it blocks.
+    result = {
+        "failing": ["tests/test_slow.py::test_owned", "tests/test_other.py::test_x"],
+        "failing_detail": [
+            {"node_id": "tests/test_slow.py::test_owned", "message": rtb.ZERO_RAN_MESSAGE},
+            {"node_id": "tests/test_other.py::test_x", "message": "assert 0"},
+        ],
+    }
+    blocked = rtb.own_diff_blockers(result, ["src/mod.py"])
+    assert [b.node_id for b in blocked] == ["tests/test_slow.py::test_owned"]
+
+
+def test_not_found_owned_id_still_never_blocks():
+    from coordinator_core.ops import review_test_blocker as rtb
+
+    result = {
+        "failing": ["tests/test_slow.py::test_gone"],
+        "failing_detail": [{"node_id": "tests/test_slow.py::test_gone", "message": "ERROR: not found: x"}],
+    }
+    assert rtb.own_diff_blockers(result, ["tests/test_slow.py"]) == []
