@@ -330,6 +330,24 @@ def _append_record_sync(
         return
 
 
+def recounted(record: dict) -> dict:
+    """Return `record` with a stored zero re-checked against its transcript.
+
+    Trap: SubagentStop can fire before the agent's last transcript line is flushed. A
+    Workflow agent whose only call is StructuredOutput was recorded as zero while its
+    transcript, read a moment later, held that call (example-retrieval-repo, 2026-11-15). So a zero
+    is confirmed at read time; only a zero record carries `agent_transcript_path`, so
+    the store is never re-read for healthy agents. Pure: the store is not rewritten.
+    """
+    path = record.get("agent_transcript_path")
+    if record.get("tool_use_count") != 0 or not isinstance(path, str) or not path:
+        return record
+    count = _count_tool_use_blocks(path)
+    if not count:
+        return record
+    return {**record, "tool_use_count": count, "recounted": True}
+
+
 @register_op("hooks.subagent_zero_tool_use")
 async def _handler(params: dict, repo_root=None) -> dict:
     params = payload_of(params)
@@ -383,6 +401,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
         "tool_use_count": tool_use_count,
         "recorded_at": recorded_at,
     }
+    if tool_use_count == 0:
+        entry["agent_transcript_path"] = transcript_path
 
     await asyncio.to_thread(
         _append_record_sync,

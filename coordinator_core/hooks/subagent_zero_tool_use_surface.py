@@ -73,6 +73,7 @@ from pathlib import Path
 from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._payload import field
+from coordinator_core.hooks.subagent_zero_tool_use import recounted
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session_hub_path import hub_for_common
 
@@ -117,7 +118,7 @@ def _read_store_sync(store_path: str) -> dict:
             continue
         if parsed.get("kind") != _RECORD_KIND:
             continue
-        records.append(parsed)
+        records.append(recounted(parsed))
 
     return {
         "records": records,

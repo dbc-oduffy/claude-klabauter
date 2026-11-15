@@ -8,6 +8,7 @@ from pathlib import Path
 from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._payload import field
+from coordinator_core.hooks.subagent_zero_tool_use import recounted
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session_hub_path import hub_for_common
 
@@ -81,7 +82,7 @@ def _resolve_store_sync(store_path: str, agent_id: str) -> dict:
             store_path=store_path,
         )
 
-    count = matched.get("tool_use_count")
+    count = recounted(matched).get("tool_use_count")
     if not isinstance(count, int) or isinstance(count, bool):
         return _verdict(
             "unknown",

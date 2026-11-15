@@ -2507,8 +2507,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "03b052522b35d6f2a5b1350a91dc50e6d7c82dbd",
-    "coordinator_core/_engine_stamp": "ec0a28c5da5916f393da868bb558174a568e8f05",
+    "coordinator_core/_engine_published_at": "e3e04d948a09d0010d3e8266d37354c12677cb2d",
+    "coordinator_core/_engine_stamp": "3b2e0a6a87b871326140dc2b224aef5967a3b3e5",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4876,10 +4876,10 @@
     "coordinator_core/hooks/subagent_fabrication_check.py": "a930508bea13eb5245f55876613811ae96b36297",
     "coordinator_core/hooks/subagent_review_mark.py": "fad5a8cf3a38165a5a0ebce64b54c1aa4b3396aa",
     "coordinator_core/hooks/subagent_sidecar_fill_check.py": "ecf09a30a45d7ccfd3f78bd9add3f8de8068f63b",
-    "coordinator_core/hooks/subagent_zero_tool_use.py": "a7982d6327d62b7e2faa7f3232174775f4acb630",
+    "coordinator_core/hooks/subagent_zero_tool_use.py": "27b94c085b0660697d569d629e67b952a7c2ef8e",
     "coordinator_core/hooks/subagent_zero_tool_use_detect.py": "39abd6a464a2356f9d33aec3ab327ef0c9171215",
-    "coordinator_core/hooks/subagent_zero_tool_use_resolve.py": "9a83794bd8433ea3a64a4bb74242cdf110b16f2c",
-    "coordinator_core/hooks/subagent_zero_tool_use_surface.py": "9bf42c63009e2b6ca5c04c8f2151890921f406e4",
+    "coordinator_core/hooks/subagent_zero_tool_use_resolve.py": "61333c61b4e7e0f929e6019bf5f334aca2ef34af",
+    "coordinator_core/hooks/subagent_zero_tool_use_surface.py": "4d6e4132b94630139e96f7ad11e277c239caa868",
     "coordinator_core/hooks/submit_bug_blitz.py": "755da7063854ead47dcd992224f3384a61af7fa4",
     "coordinator_core/hooks/submit_engine_ask.py": "a9185d24dd42f3d20610ec532b8db63d5881524d",
     "coordinator_core/hooks/suggest_sonnet_research.py": "164e1eee86c32df38894a53ed42dfc805f76842e",
@@ -4929,7 +4929,7 @@
     "coordinator_core/hooks/test_subagent_sidecar_fill_check.py": "4bde6ec6039a77d013bd790c4caa5cf036b1b03b",
     "coordinator_core/hooks/test_subagent_zero_tool_use.py": "b10d9f7f1606f2f0d6744ecad2fa3343925e0117",
     "coordinator_core/hooks/test_subagent_zero_tool_use_resolve.py": "5bb44e0e80800beb3d06a686eafeb955655620d6",
-    "coordinator_core/hooks/test_subagent_zero_tool_use_surface.py": "e68c718bf81417fddc4daeed6935fb66fd34b26c",
+    "coordinator_core/hooks/test_subagent_zero_tool_use_surface.py": "faddeeb9b2082198423a2a5c6e1db289b7c1ab04",
     "coordinator_core/hooks/test_suggest_sonnet_research.py": "28a167d7f71169686198e27c38e73d424b29f9fb",
     "coordinator_core/hooks/test_ue_knowledge_distrust.py": "ac4cabdc216a83ea0bdb53d439456a01ae4eaef2",
     "coordinator_core/hooks/test_workflow_step_dispatch.py": "a2792804d8ec76d1e6ca6fb8bbe35d587da5a2a5",
@@ -12492,5 +12492,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "2b5496923a53262a1de56069fbd398372c55e6fe"
+  "source_head": "8823a7359666c7258c853bbfd19d90ccbcd3ad89"
 }

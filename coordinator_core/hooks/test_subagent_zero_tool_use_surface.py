@@ -171,3 +171,33 @@ class TestRegistrationQuad:
         assert _OP_KEY_SCOPE[op_key] == "common_dir"
         # hooks ops map to the package; the module self-registers on package import.
         assert OP_MODULE_MAP[op_key] == "coordinator_core.hooks"
+
+
+def test_a_zero_recorded_before_the_final_call_flushed_is_recounted(tmp_path):
+    # example-retrieval-repo 2026-11-15: SubagentStop counted a StructuredOutput-only agent's
+    # transcript before its one tool_use line landed; the stored 0 was a false no-op.
+    from coordinator_core.hooks import subagent_zero_tool_use_resolve as resolve
+    from coordinator_core.hooks import subagent_zero_tool_use_surface as surface
+
+    transcript = tmp_path / "agent-x.jsonl"
+    transcript.write_text(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": "StructuredOutput", "input": {}}]}}) + "\n")
+    store = tmp_path / "store.jsonl"
+    store.write_text(json.dumps({"kind": "zero-tool-use", "agent_id": "ax", "tool_use_count": 0,
+                                 "agent_transcript_path": str(transcript)}) + "\n")
+    [rec] = surface._read_store_sync(str(store))["records"]
+    assert rec["tool_use_count"] == 1 and rec["recounted"] is True
+    assert resolve._resolve_store_sync(str(store), "ax")["verdict"] == "did-work"
+
+
+def test_a_zero_whose_transcript_still_has_no_call_stays_zero(tmp_path):
+    from coordinator_core.hooks import subagent_zero_tool_use_surface as surface
+
+    transcript = tmp_path / "agent-y.jsonl"
+    transcript.write_text(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "done"}]}}) + "\n")
+    store = tmp_path / "store.jsonl"
+    store.write_text(json.dumps({"kind": "zero-tool-use", "agent_id": "ay", "tool_use_count": 0,
+                                 "agent_transcript_path": str(transcript)}) + "\n")
+    [rec] = surface._read_store_sync(str(store))["records"]
+    assert rec["tool_use_count"] == 0 and "recounted" not in rec
