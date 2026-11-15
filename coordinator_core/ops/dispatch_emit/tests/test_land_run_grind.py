@@ -350,6 +350,65 @@ def test_imageless_path_held_by_a_live_peer_is_dropped_and_the_rest_lands(repo, 
     assert "Row-Unlanded: r1 a.py unattributed-shared" in _message(repo)
 
 
+def test_land_green_rows_makes_one_scoped_commit_per_row(repo):
+    before = int(_git(["rev-list", "--count", "HEAD"], repo))
+    params = {"run_id": RUN, "grind": {"profile": PROFILE, "rows": [_row("r1", ["a.py"]), _row("r2", ["b.py"])]}}
+    out = land_run_grind.land_green_rows(repo, repo / ".git", params)
+    assert out["committed"] is True
+    assert int(_git(["rev-list", "--count", "HEAD"], repo)) == before + 2
+    assert [c["row_id"] for c in out["commits"]] == ["r1", "r2"]
+    assert out["commits"][0]["sha"] != out["commits"][1]["sha"] == out["sha"]
+    assert _git(["show", "--name-only", "--format=", "HEAD~1"], repo).split() == ["a.py"]
+    assert _head_files(repo) == {"b.py"}
+    assert "Grind-Row: r2" in _message(repo) and "Grind-Row: r1" not in _message(repo)
+    assert [r["row_id"] for r in out["rows"]] == ["r1", "r2"]
+    assert _status(repo) == {"other.py": " M"}
+
+
+def test_land_green_rows_stop_midway_leaves_only_unreached_rows_dirty(repo):
+    (repo / "b.py").unlink()
+    params = {"run_id": RUN, "grind": {"profile": PROFILE, "rows": [_row("r1", ["a.py"]), _row("r2", ["b.py"])]}}
+    out = land_run_grind.land_green_rows(repo, repo / ".git", params)
+    assert [c["row_id"] for c in out["commits"]] == ["r1"]
+    assert [u["row_id"] for u in out["unlanded"]] == ["r2"]
+    assert "a.py" not in _status(repo)
+
+
+def test_land_green_rows_refuses_malformed_params(repo):
+    out = land_run_grind.land_green_rows(repo, repo / ".git", {"run_id": RUN, "grind": {"profile": "", "rows": []}})
+    assert out["committed"] is False and out["refused"] == "grind-params"
+
+
+def _fix_row(row_id, paths):
+    return {**_row(row_id, paths), "closed_by": "fix"}
+
+
+def test_closed_by_fix_with_a_landed_sha_is_not_refused(repo):
+    out = _call(repo, [_fix_row("r1", ["a.py"])])
+    assert out["committed"] is True and "close_refused" not in out
+
+
+def test_closed_by_fix_with_no_commit_is_refused_while_other_closers_pass(repo):
+    flake = {**_row("r2", []), "closed_by": "flake"}
+    out = _call(repo, [_fix_row("r1", []), flake, _row("r3", ["a.py"])])
+    assert out["committed"] is True
+    assert [c["row_id"] for c in out["close_refused"]] == ["r1"]
+    assert "fix" in out["close_refused"][0]["reason"]
+
+
+def test_closed_by_fix_dropped_path_is_refused_in_per_row_mode(repo):
+    (repo / "b.py").unlink()
+    params = {"run_id": RUN, "grind": {"profile": PROFILE, "rows": [_fix_row("r1", ["b.py"]), _fix_row("r2", ["a.py"])]}}
+    out = land_run_grind.land_green_rows(repo, repo / ".git", params)
+    assert [c["row_id"] for c in out["close_refused"]] == ["r1"]
+
+
+def test_closed_by_fix_refused_when_nothing_commits(repo):
+    out = _call(repo, [_fix_row("r1", [EVIDENCE])])
+    assert out["committed"] is False
+    assert [c["row_id"] for c in out["close_refused"]] == ["r1"]
+
+
 def _no_tests_credit(tmp_path, reverify):
     from types import SimpleNamespace
 
@@ -380,3 +439,44 @@ def test_not_run_reverify_never_reads_as_pass_but_credits_a_no_tests_partial(tmp
     assert _no_tests_credit(tmp_path, {**not_run, "failing": ["t.py::x"]}) == {}
     assert _no_tests_credit(tmp_path, {**not_run, "reverify_error": "boom"}) == {}
     assert _no_tests_credit(tmp_path, {"status_before": "indeterminate"}) == {}
+
+
+def test_per_row_grind_through_the_entry_lands_one_commit_per_row(repo):
+    before = int(_git(["rev-list", "--count", "HEAD"], repo))
+    out = _call(repo, [_row("r1", ["a.py"]), _row("r2", ["b.py"])], grind={"per_row": True})
+    assert [c["row_id"] for c in out["commits"]] == ["r1", "r2"]
+    assert int(_git(["rev-list", "--count", "HEAD"], repo)) == before + 2
+
+
+def test_grind_without_per_row_still_lands_one_batch_commit(repo):
+    before = int(_git(["rev-list", "--count", "HEAD"], repo))
+    out = _call(repo, [_row("r1", ["a.py"]), _row("r2", ["b.py"])])
+    assert "commits" not in out
+    assert int(_git(["rev-list", "--count", "HEAD"], repo)) == before + 1
+
+
+def test_per_row_with_a_run_token_redeems_it_once_and_lands_every_row(repo):
+    token = run_token.mint(repo, RUN, "run.mjs")
+    before = int(_git(["rev-list", "--count", "HEAD"], repo))
+    out = _call(repo, [_row("r1", ["a.py"]), _row("r2", ["b.py"])], grind={"per_row": True}, run_token=token)
+    assert [c["row_id"] for c in out["commits"]] == ["r1", "r2"]
+    assert int(_git(["rev-list", "--count", "HEAD"], repo)) == before + 2
+    assert not run_token.admits(repo, RUN, token, "run.mjs")
+
+
+def test_resumed_per_row_run_does_not_reland_a_committed_row(repo):
+    rows = [_row("r1", ["a.py"]), _row("r2", ["b.py"])]
+    _call(repo, rows, grind={"per_row": True})
+    head = _git(["rev-parse", "HEAD"], repo)
+    again = _call(repo, rows, grind={"per_row": True})
+    assert again["committed"] is False and again["commits"] == []
+    assert _git(["rev-parse", "HEAD"], repo) == head
+
+
+def test_resumed_per_row_run_on_a_spent_token_relands_nothing(repo):
+    token = run_token.mint(repo, RUN, "run.mjs")
+    rows = [_row("r1", ["a.py"]), _row("r2", ["b.py"])]
+    _call(repo, rows, grind={"per_row": True}, run_token=token)
+    head = _git(["rev-parse", "HEAD"], repo)
+    _call(repo, rows, grind={"per_row": True}, run_token=token)
+    assert _git(["rev-parse", "HEAD"], repo) == head

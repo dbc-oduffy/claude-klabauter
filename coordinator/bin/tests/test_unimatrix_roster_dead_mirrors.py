@@ -153,7 +153,7 @@ def test_codex_peer_face_with_no_recorded_holder_is_unlisted_once_past_its_grace
     assert roster.entry_listed(_codex_face(roster, 5))
 
 
-def test_far_codex_row_reported_holderless_is_not_mirrored_and_an_unreporting_box_is_listed(roster):
+def test_far_codex_row_reported_holderless_and_an_unreporting_row_past_grace_are_not_mirrored(roster):
     def row(**extra):
         entry = {"messagingSocketPath": "/far/a.sock", "name": "codex-x", "vendor": "codex",
                  "startedAt": int((time.time() - 5000) * 1000), **extra}
@@ -161,7 +161,7 @@ def test_far_codex_row_reported_holderless_is_not_mirrored_and_an_unreporting_bo
     assert roster.mirrorable([row(codexHolder="dead")], set(), set()) == {}
     assert roster.mirrorable([row(codexHolder="unknown")], set(), set()) == {}
     assert roster.mirrorable([row(codexHolder="live")], set(), set()) != {}
-    assert roster.mirrorable([row()], set(), set()) != {}
+    assert roster.mirrorable([row()], set(), set()) == {}
 
 
 def test_local_codex_face_exports_its_holder_state_and_a_mirror_identity_never_does(roster, tmp_path, monkeypatch):

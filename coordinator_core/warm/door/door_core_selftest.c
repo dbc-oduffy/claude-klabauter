@@ -297,6 +297,28 @@ int main(int argc, char **argv) {
                   door_argv_declares_advisory(2, NULL), 0);
     }
 
+    {
+        const char *both[] = {"door.exe", "--advisory", "--stdin-hook", "hooks.some_hook"};
+        check_int("stdin_hook/declared_in_leading_run",
+                  door_argv_declares_stdin_hook(4, both), 1);
+        check_int("stdin_hook/leading_count_two", door_leading_flag_count(4, both), 2);
+
+        const char *after_op[] = {"door.exe", "hooks.some_hook", "--stdin-hook"};
+        check_int("stdin_hook/after_op_is_an_argument",
+                  door_argv_declares_stdin_hook(3, after_op), 0);
+        check_int("stdin_hook/after_op_count_zero", door_leading_flag_count(3, after_op), 0);
+
+        const char *advisory_only[] = {"door.exe", "--advisory", "hooks.some_hook"};
+        check_int("stdin_hook/advisory_alone_is_not_hook",
+                  door_argv_declares_stdin_hook(3, advisory_only), 0);
+        check_int("stdin_hook/advisory_count_one", door_leading_flag_count(3, advisory_only), 1);
+
+        const char *argv0_only[] = {"--stdin-hook"};
+        check_int("stdin_hook/argv0_excluded",
+                  door_argv_declares_stdin_hook(1, argv0_only), 0);
+        check_int("stdin_hook/null_argv", door_argv_declares_stdin_hook(2, NULL), 0);
+    }
+
     
     {
         check_int("stdin_basename/listed",

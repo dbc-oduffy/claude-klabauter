@@ -473,3 +473,209 @@ def test_sweep_unresolvable_named_images_keeps_an_extensionless_script(tmp_path)
     door_install.named_forwarder_path(bin_dst, "static-check").write_bytes(b"x")
 
     assert door_install._sweep_unresolvable_named_images(bin_dst, engine_root) == []
+
+
+# --- windowless image (door-w.exe) ---------------------------------------------------------
+
+import os
+import struct
+
+_WIN = pytest.mark.skipif(sys.platform != "win32", reason="windowless image is a Windows artifact")
+_MZ = b"MZ" + b"\x00" * 64
+
+
+def _pe_subsystem(path):
+    data = path.read_bytes()
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    return struct.unpack_from("<H", data, pe + 24 + 68)[0]
+
+
+def test_windowless_link_flags_for_both_compilers():
+    clang = door_build._compile_flags("clang", True)
+    assert clang[-4:] == ["-Xlinker", "/SUBSYSTEM:WINDOWS", "-Xlinker", "/ENTRY:mainCRTStartup"]
+    cl = door_build._compile_flags("cl", True)
+    assert cl[-2:] == ["/SUBSYSTEM:WINDOWS", "/ENTRY:mainCRTStartup"]
+    for kind in ("clang", "cl"):
+        assert not any("SUBSYSTEM" in f for f in door_build._compile_flags(kind, False))
+
+
+@pytest.mark.parametrize("kind", ["clang", "cl"])
+def test_compile_passes_subsystem_only_for_the_windowless_link(tmp_path, monkeypatch, kind):
+    seen = []
+
+    def _run(cmd, **kwargs):
+        seen.append(cmd)
+        return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(door_build.subprocess, "run", _run)
+    door_build._compile(kind, "cc", tmp_path / "a.c", tmp_path / "a.exe", windowless=True)
+    door_build._compile(kind, "cc", tmp_path / "a.c", tmp_path / "b.exe")
+    assert any("/SUBSYSTEM:WINDOWS" in a for a in seen[0])
+    assert any("/ENTRY:mainCRTStartup" in a for a in seen[0])
+    assert not any("SUBSYSTEM" in a for a in seen[1])
+
+
+@_WIN
+def test_committed_images_are_gui_and_console_subsystems():
+    if not door_install._PREBUILT_WINDOWLESS_EXE.exists():
+        pytest.skip("no committed door-w.exe")
+    assert _pe_subsystem(door_install._PREBUILT_WINDOWLESS_EXE) == 2
+    assert _pe_subsystem(door_install._PREBUILT_DOOR_EXE) == 3
+    record = json.loads(door_install._WINDOWLESS_PREBUILT_PROVENANCE.read_text(encoding="utf-8"))
+    assert record["image_sha256"] == hashlib.sha256(door_install._PREBUILT_WINDOWLESS_EXE.read_bytes()).hexdigest()
+    assert "/SUBSYSTEM:WINDOWS" in record["compile_flags"]
+
+
+def test_windowless_names_are_hook_run_on_windows_only(monkeypatch):
+    monkeypatch.setattr(door_install.sys, "platform", "win32")
+    assert door_install.name_gets_windowless_image("hook-run") is True
+    assert door_install.name_gets_windowless_image("cross-repo-memo") is False
+    monkeypatch.setattr(door_install.sys, "platform", "linux")
+    assert door_install.name_gets_windowless_image("hook-run") is False
+
+
+@_WIN
+def test_install_door_lands_the_windowless_image_and_provenance_beside_the_door(tmp_path, monkeypatch):
+    if not door_install._PREBUILT_WINDOWLESS_EXE.exists():
+        pytest.skip("no committed door-w.exe")
+    engine_root = tmp_path / "engine"
+    _stamp_engine_root(engine_root)
+    bin_dst = tmp_path / "bin"
+    monkeypatch.setattr(door_install, "committed_prebuilt_source_drift", lambda: [])
+
+    door_install.install_door(bin_dst, engine_root)
+
+    landed = door_install.windowless_image_path(bin_dst)
+    assert landed.read_bytes() == door_install._PREBUILT_WINDOWLESS_EXE.read_bytes()
+    assert (bin_dst / "door-w.exe.provenance.json").exists()
+    assert (bin_dst / door_install.DOOR_INSTALLED_NAME).read_bytes() == door_install._PREBUILT_DOOR_EXE.read_bytes()
+
+
+@_WIN
+def test_hook_run_links_the_windowless_image_and_every_other_name_the_door(tmp_path, monkeypatch):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    door = bin_dst / door_install.DOOR_INSTALLED_NAME
+    door.write_bytes(_MZ + b"door")
+    windowless = door_install.windowless_image_path(bin_dst)
+    windowless.write_bytes(_MZ + b"windowless")
+
+    hook = door_install.install_named_forwarder(bin_dst, tmp_path, "hook-run", source=door)
+    other = door_install.install_named_forwarder(bin_dst, tmp_path, "cross-repo-memo", source=door)
+
+    assert os.path.samefile(hook, windowless)
+    assert os.path.samefile(other, door)
+    assert not os.path.samefile(hook, door)
+
+
+@_WIN
+def test_hook_run_falls_back_to_the_door_when_no_windowless_image_is_installed(tmp_path):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    door = bin_dst / door_install.DOOR_INSTALLED_NAME
+    door.write_bytes(_MZ + b"door")
+
+    hook = door_install.install_named_forwarder(bin_dst, tmp_path, "hook-run", source=door)
+
+    assert os.path.samefile(hook, door)
+
+
+@_WIN
+def test_audit_judges_hook_run_against_the_windowless_image(tmp_path):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    door = bin_dst / door_install.DOOR_INSTALLED_NAME
+    door.write_bytes(_MZ + b"door")
+    windowless = door_install.windowless_image_path(bin_dst)
+    windowless.write_bytes(_MZ + b"windowless")
+    other = door_install.named_forwarder_path(bin_dst, "cross-repo-memo")
+    os.link(door, other)
+    hook = door_install.named_forwarder_path(bin_dst, "hook-run")
+    os.link(windowless, hook)
+
+    audit = door_install.audit_installed_image_currency(bin_dst, ["hook-run", "cross-repo-memo"])
+    assert sorted(audit.current) == ["cross-repo-memo", "hook-run"]
+    assert audit.stale == []
+
+    hook.unlink()
+    os.link(door, hook)
+    audit = door_install.audit_installed_image_currency(bin_dst, ["hook-run", "cross-repo-memo"])
+    assert audit.stale == ["hook-run"]
+    assert audit.current == ["cross-repo-memo"]
+
+
+@_WIN
+def test_audit_reads_a_windowless_slot_stale_when_no_windowless_image_is_installed(tmp_path):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    door = bin_dst / door_install.DOOR_INSTALLED_NAME
+    door.write_bytes(_MZ + b"door")
+    os.link(door, door_install.named_forwarder_path(bin_dst, "hook-run"))
+
+    assert door_install.audit_installed_image_currency(bin_dst, ["hook-run"]).stale == ["hook-run"]
+
+
+@_WIN
+def test_replacing_the_door_relinks_hook_run_to_the_windowless_image_not_the_door(tmp_path):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    door = bin_dst / door_install.DOOR_INSTALLED_NAME
+    door.write_bytes(_MZ + b"old-door")
+    windowless = door_install.windowless_image_path(bin_dst)
+    windowless.write_bytes(_MZ + b"windowless")
+    hook = door_install.named_forwarder_path(bin_dst, "hook-run")
+    other = door_install.named_forwarder_path(bin_dst, "cross-repo-memo")
+    os.link(door, hook)
+    os.link(door, other)
+    prior = door_install._file_identity(door)
+    door.unlink()
+    door.write_bytes(_MZ + b"new-door")
+
+    moved = door_install._relink_names_stranded_on(bin_dst, door, prior)
+
+    assert moved == 2
+    assert os.path.samefile(other, door)
+    assert os.path.samefile(hook, windowless)
+
+
+@_WIN
+def test_drift_covers_the_windowless_provenance(tmp_path, monkeypatch):
+    sources = {p.name: door_build.source_sha256(p) for p in door_build.SOURCES}
+    door_prov = tmp_path / "door.exe.provenance.json"
+    door_prov.write_text(json.dumps({"sources": sources}), encoding="utf-8")
+    behind = dict(sources, **{"door_core.c": "0" * 64})
+    (tmp_path / "door-w.exe.provenance.json").write_text(json.dumps({"sources": behind}), encoding="utf-8")
+
+    assert door_install.committed_prebuilt_source_drift(provenance_path=door_prov) == ["door_core.c"]
+
+    (tmp_path / "door-w.exe.provenance.json").write_text(json.dumps({"sources": sources}), encoding="utf-8")
+    assert door_install.committed_prebuilt_source_drift(provenance_path=door_prov) == []
+
+
+@_WIN
+def test_mirror_rebuild_ships_both_images(tmp_path):
+    mirror = tmp_path / "mirror"
+    door_dir = mirror / "coordinator_core" / "warm" / "door"
+    door_dir.mkdir(parents=True)
+    (door_dir / "door.c").write_text("int main(void){return 0;}\n", encoding="utf-8")
+    (door_dir / "build.py").write_text(
+        "import json, hashlib\n"
+        "from pathlib import Path\n"
+        "_PROVENANCE_SUFFIX = '.provenance.json'\n"
+        "SOURCES = (Path(__file__).parent / 'door.c',)\n"
+        "def build(engine_root, *, python_bin=None, compiler=None, output=None):\n"
+        "    src = {p.name: hashlib.sha256(p.read_bytes().replace(b'\\r', b'')).hexdigest() for p in SOURCES}\n"
+        "    for name in (output.name, 'door-w.exe'):\n"
+        "        (output.parent / name).write_bytes(b'MZ' + name.encode())\n"
+        "        (output.parent / (name + _PROVENANCE_SUFFIX)).write_text(json.dumps({'sources': src}))\n"
+        "    return output\n",
+        encoding="utf-8",
+    )
+    engine_root = tmp_path / "engine"
+    _stamp_engine_root(engine_root)
+
+    assert door_install.rebuild_door_for_mirror(mirror, engine_root) is True
+
+    assert (door_dir / "door-w.exe").read_bytes() == b"MZdoor-w.exe"
+    assert (door_dir / "door-w.exe.provenance.json").exists()
+    assert (door_dir / "door.exe").exists()

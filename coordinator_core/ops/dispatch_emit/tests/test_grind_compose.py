@@ -2887,7 +2887,7 @@ def test_the_terminal_commit_prompt_and_schema_carry_already_landed_and_unlanded
     script = _compose()
     call = script[script.index("async function _terminalCommitCall"): script.index("function _counts()")]
     assert grind_commit_contract.ALREADY_LANDED_KEY in call and grind_commit_contract.UNLANDED_KEY in call
-    assert f"{grind_commit_contract.ALREADY_LANDED_KEY} and {grind_commit_contract.UNLANDED_KEY}, verbatim" in call
+    assert f"{grind_commit_contract.ALREADY_LANDED_KEY}, {grind_commit_contract.UNLANDED_KEY} and close_refused, verbatim" in call
 
 
 def test_the_emitted_terminal_commit_reads_unlanded_rows_with_the_engines_reason():
@@ -3288,3 +3288,208 @@ def test_group_into_batches_bounds_a_packed_batch_and_keeps_a_lone_oversize_row(
     for bid, rows in batches:
         total = sum(estimate_tokens(gc._entry_bytes(e, tmp_path)) for e in rows)
         assert total <= LONG_PROMPT_TIER_TOKENS or len(rows) == 1
+
+
+# ---------------------------------------------------------------------------
+# Scripted triage wiring: flakes close, clusters batch together, checkpoints
+# ---------------------------------------------------------------------------
+
+
+def _entries(*row_ids: str) -> list[ManifestEntry]:
+    return [
+        ManifestEntry(row_id=r, path=f"state/bug-backlog/{r}.yaml", digest=f"{i:064x}", batch_key="P0")
+        for i, r in enumerate(row_ids)
+    ]
+
+
+def test_chunk_entries_without_clusters_is_plain_slicing():
+    rows = _entries("a", "b", "c", "d", "e")
+    assert [[e.row_id for e in c] for c in gc._chunk_entries(rows, 2, None)] == [["a", "b"], ["c", "d"], ["e"]]
+
+
+def test_chunk_entries_keeps_a_fitting_cluster_in_one_chunk():
+    rows = _entries("a", "b", "c", "d", "e", "f")
+    clusters = {"a": 0, "b": 1, "c": 0, "d": 1, "e": 2, "f": 2}
+    chunks = [[e.row_id for e in c] for c in gc._chunk_entries(rows, 2, clusters)]
+    assert chunks == [["a", "c"], ["b", "d"], ["e", "f"]]
+
+
+def test_chunk_entries_spills_a_cluster_larger_than_size_into_adjacent_chunks():
+    rows = _entries("a", "b", "c", "d", "e", "f")
+    clusters = {"a": 0, "b": 1, "c": 0, "d": 1, "e": 0, "f": 2}
+    chunks = [[e.row_id for e in c] for c in gc._chunk_entries(rows, 2, clusters)]
+    assert chunks == [["a", "c"], ["e"], ["b", "d"], ["f"]]
+
+
+def _git_repo(tmp_path: Path, files: dict[str, str]) -> Path:
+    root = tmp_path / "repo"
+    root.mkdir()
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    for argv in (["init", "-q"], ["add", "."], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"]):
+        subprocess.run(["git", "-C", str(root), *argv], check=True, capture_output=True)
+    return root
+
+
+def _row_file(root: Path, row_id: str, **fields) -> ManifestEntry:
+    rel = f"state/bug-backlog/{row_id}.yaml"
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(yaml.safe_dump({"title": row_id, "status": "open", **fields}), encoding="utf-8")
+    return ManifestEntry(row_id=row_id, path=rel, digest="0" * 64, batch_key="P0")
+
+
+def test_triage_manifest_drops_a_row_citing_a_path_gone_at_head_and_keeps_the_rest(tmp_path):
+    root = _git_repo(tmp_path, {"pkg/live.py": "x = 1\n"})
+    entries = (
+        _row_file(root, "live1", surface="pkg/live.py"),
+        _row_file(root, "gone1", surface="gone/missing.py"),
+        _row_file(root, "live2", surface="pkg/live.py"),
+    )
+    manifest = Manifest(entries=entries, batch_sizes={"P0": 4}, source=None, digest="keep-me")
+    outcome = gc.triage_manifest(manifest, root, "bug")
+    assert [e.row_id for e in outcome.manifest.entries] == ["live1", "live2"]
+    assert outcome.manifest.digest == "keep-me"
+    assert [(c["row_id"], c["verdict"]) for c in outcome.closed] == [("gone1", "not_reproduced")]
+    assert outcome.clusters == {"live1": 0, "live2": 0}
+    assert outcome.error == ""
+
+
+def test_triage_manifest_does_not_verify_a_non_test_row_in_an_unlisted_profile(tmp_path):
+    root = _git_repo(tmp_path, {"live.py": "x = 1\n"})
+    manifest = Manifest(
+        entries=(_row_file(root, "r1", surface="gone/missing.py"),), batch_sizes={"P0": 4}, source=None, digest="d"
+    )
+    outcome = gc.triage_manifest(manifest, root, "improvement")
+    assert [e.row_id for e in outcome.manifest.entries] == ["r1"]
+    assert outcome.closed == ()
+
+
+def test_triage_manifest_drops_a_test_row_that_passes_in_isolation(tmp_path, monkeypatch):
+    from coordinator_core.grind_triage import triage as triage_mod
+    from coordinator_core.grind_triage.contract import TriageResult, Verdict
+
+    root = _git_repo(tmp_path, {"tests/test_a.py": "def test_a():\n    assert True\n"})
+    entries = (
+        _row_file(root, "tf1", title="TF: tests/test_a.py::test_a", tags=["tf"], surface="tests/test_a.py"),
+        _row_file(root, "tf2", title="TF: tests/test_a.py::test_b", tags=["tf"], surface="tests/test_a.py"),
+    )
+    seen = {}
+
+    def fake(rows, repo_root):
+        seen["rows"] = list(rows)
+        return [
+            TriageResult(key=r.key, verdict=Verdict.FLAKE if r.key == "tf1" else Verdict.SURVIVOR, evidence="e")
+            for r in rows
+        ]
+
+    monkeypatch.setattr(triage_mod, "triage", fake)
+    manifest = Manifest(entries=entries, batch_sizes={"P0": 4}, source=None, digest="d")
+    outcome = gc.triage_manifest(manifest, root, "bug")
+    assert all(r.is_test for r in seen["rows"])
+    assert [e.row_id for e in outcome.manifest.entries] == ["tf2"]
+    assert [c["verdict"] for c in outcome.closed] == ["flake"]
+
+
+def test_triage_manifest_fails_open_when_triage_raises(tmp_path, monkeypatch):
+    from coordinator_core.grind_triage import triage as triage_mod
+
+    root = _git_repo(tmp_path, {"live.py": "x\n"})
+    manifest = Manifest(entries=(_row_file(root, "r1", surface="live.py"),), batch_sizes={"P0": 4}, source=None, digest="d")
+    monkeypatch.setattr(triage_mod, "triage", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    outcome = gc.triage_manifest(manifest, root, "bug")
+    assert outcome.manifest is manifest and "boom" in outcome.error
+
+
+def _outcome_with_one_closed(manifest: Manifest) -> "gc.TriageOutcome":
+    return gc.TriageOutcome(
+        manifest=manifest,
+        closed=({"row_id": "row0", "path": "state/bug-backlog/row0.yaml", "verdict": "flake", "evidence": "ok", "closed": False},),
+    )
+
+
+def test_close_triaged_rows_closes_as_flake_under_the_run_id_stamp(tmp_path, monkeypatch):
+    from coordinator_core.backlog_grind_assemble import grind_rows
+
+    calls = []
+    monkeypatch.setattr(grind_rows, "cmd_close", lambda argv: calls.append(argv) or 0)
+    manifest = _fixture_manifest()
+    closed = gc.close_triaged_rows(
+        _outcome_with_one_closed(manifest), manifest, _fixture_profile(), tmp_path, run_key="warp-x-20261115T023927-abc"
+    )
+    argv = dict(zip(calls[0][::2], calls[0][1::2]))
+    assert argv["--closed-by"] == "flake" and argv["--verdict"] == "refute-close"
+    assert argv["--run-stamp"] == "20261115T023927" and argv["--row"] == "state/bug-backlog/row0.yaml"
+    assert closed[0]["closed"] is True
+    assert Path(argv["--evidence-file"]).read_text(encoding="utf-8").startswith("triage flake")
+
+
+def test_close_triaged_rows_leaves_a_refused_row_open_and_names_why(tmp_path, monkeypatch):
+    from coordinator_core.backlog_grind_assemble import grind_rows
+
+    monkeypatch.setattr(grind_rows, "cmd_close", lambda argv: 2)
+    manifest = _fixture_manifest()
+    closed = gc.close_triaged_rows(
+        _outcome_with_one_closed(manifest), manifest, _fixture_profile(), tmp_path, run_key="run-1", run_stamp="20261115T000000Z"
+    )
+    assert closed[0]["closed"] is False and closed[0]["error"] == "exit 2"
+
+
+def test_close_triaged_rows_closes_a_not_reproduced_row_already_green_not_flake(tmp_path, monkeypatch):
+    from coordinator_core.backlog_grind_assemble import grind_rows
+
+    calls = []
+    monkeypatch.setattr(grind_rows, "cmd_close", lambda argv: calls.append(argv) or 0)
+    manifest = _fixture_manifest()
+    outcome = _outcome_with_one_closed(manifest)
+    outcome = gc.TriageOutcome(
+        manifest=outcome.manifest, closed=({**outcome.closed[0], "verdict": "not_reproduced"},)
+    )
+    gc.close_triaged_rows(outcome, manifest, _fixture_profile(), tmp_path, run_key="warp-x-20261115T023927-abc")
+    argv = dict(zip(calls[0][::2], calls[0][1::2]))
+    assert argv["--closed-by"] == "already-green"
+
+
+def test_close_triaged_rows_closes_nothing_without_a_run_stamp(tmp_path, monkeypatch):
+    from coordinator_core.backlog_grind_assemble import grind_rows
+
+    calls = []
+    monkeypatch.setattr(grind_rows, "cmd_close", lambda argv: calls.append(argv) or 0)
+    manifest = _fixture_manifest()
+    closed = gc.close_triaged_rows(_outcome_with_one_closed(manifest), manifest, _fixture_profile(), tmp_path, run_key="run-1")
+    assert calls == [] and closed[0]["closed"] is False and "run stamp" in closed[0]["error"]
+
+
+def test_compose_with_repo_root_drops_triaged_rows_and_reports_them(tmp_path, monkeypatch):
+    full = _fixture_manifest()
+    survivors = Manifest(entries=full.entries[1:], batch_sizes=full.batch_sizes, source=None, digest=full.digest)
+    outcome = gc.TriageOutcome(
+        manifest=survivors,
+        closed=({"row_id": "row0", "path": full.entries[0].path, "verdict": "flake", "evidence": "e", "closed": False},),
+        clusters={e.row_id: 0 for e in survivors.entries},
+    )
+    monkeypatch.setattr(gc, "triage_manifest", lambda m, root, name: outcome)
+    monkeypatch.setattr(
+        gc, "close_triaged_rows", lambda o, m, p, root, **kw: tuple({**c, "closed": True} for c in o.closed)
+    )
+    profile = _fixture_profile()
+    script = gc.compose_grind_script(
+        full,
+        profile,
+        gp.resolve_appetite(profile, "standard"),
+        run_dir=Path("state/queue-grind/fixture/run-1"),
+        appetite="standard",
+        agent_type_host=None,
+        queue_dirs=["state/bug-backlog"],
+        repo_root=tmp_path,
+        **REVIEW_KW,
+    )
+    const = json.loads(re.search(r"const QUEUE_GRIND_MANIFEST = (\{.*\});", script).group(1))
+    assert [e["row_id"] for e in const["entries"]] == [f"row{i}" for i in range(1, 7)]
+    assert const["triaged"][0]["row_id"] == "row0" and const["triaged"][0]["closed"] is True
+    assert "_checkpoint();" in script and "checkpoints: _checkpointsReported" in script
+
+
+def test_compose_without_repo_root_never_triages(monkeypatch):
+    monkeypatch.setattr(gc, "triage_manifest", lambda *a, **k: pytest.fail("triage ran without a repo_root"))
+    assert "const _checkpointsReported" in _compose()

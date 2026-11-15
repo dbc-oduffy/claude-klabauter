@@ -412,7 +412,7 @@ def verify_reproducible(
 
     with managed_temp_dir("door-verify-") as tmp:
         rebuilt = tmp / "door-rebuilt.exe"
-        build(engine_root, python_bin=python_bin, compiler=compiler, output=rebuilt)
+        build(engine_root, python_bin=python_bin, compiler=compiler, output=rebuilt, windowless=False)
         return _sha256_file(prebuilt) == _sha256_file(rebuilt)
 
 
@@ -441,7 +441,26 @@ def _find_compiler(requested: str | None) -> tuple[str, str]:
     )
 
 
-def _compile(kind: str, compiler: str, source_path: Path, output_path: Path) -> None:
+#: Name of the GUI-subsystem twin of `door.exe`, written beside it by `build()`.
+WINDOWLESS_EXE_NAME = "door-w.exe"
+
+_WINDOWLESS_CLANG_LINK = ["-Xlinker", "/SUBSYSTEM:WINDOWS", "-Xlinker", "/ENTRY:mainCRTStartup"]
+_WINDOWLESS_CL_LINK = ["/SUBSYSTEM:WINDOWS", "/ENTRY:mainCRTStartup"]
+
+
+def _compile_flags(kind: str, windowless: bool = False) -> list[str]:
+    """The flag list `_compile` links with, minus the output/source operands --
+    also what provenance records, so the two cannot drift."""
+    if kind == "clang":
+        flags = ["-O2", "-Wall", "-Wextra", "-I", str(_SOURCE.parent), "-ladvapi32", "-lshell32", "-Xlinker", "/Brepro"]
+        return flags + (_WINDOWLESS_CLANG_LINK if windowless else [])
+    flags = ["/nologo", "/O2", "/W3", "/I" + str(_SOURCE.parent), "/link", "Advapi32.lib", "Shell32.lib", "/Brepro"]
+    return flags + (_WINDOWLESS_CL_LINK if windowless else [])
+
+
+def _compile(
+    kind: str, compiler: str, source_path: Path, output_path: Path, *, windowless: bool = False
+) -> None:
     """`/Brepro` (both branches -- clang here targets lld-link, which
     understands the same MSVC-compatible linker flag cl.exe's own `link.exe`
     does) replaces the PE header's embedded build timestamp with a
@@ -467,6 +486,7 @@ def _compile(kind: str, compiler: str, source_path: Path, output_path: Path) -> 
             "-o", str(output_path), str(source_path), str(_CORE_SOURCE),
             "-ladvapi32", "-lshell32",
             "-Xlinker", "/Brepro",
+            *(_WINDOWLESS_CLANG_LINK if windowless else []),
         ]
     else:
         cmd = [
@@ -474,6 +494,7 @@ def _compile(kind: str, compiler: str, source_path: Path, output_path: Path) -> 
             f"/I{include_dir}",
             f"/Fe:{output_path}", str(source_path), str(_CORE_SOURCE),
             "/link", "Advapi32.lib", "Shell32.lib", "/Brepro",
+            *(_WINDOWLESS_CL_LINK if windowless else []),
         ]
     try:
         proc = subprocess.run(
@@ -500,9 +521,14 @@ def build(
     output: Path | None = None,
     engine_stamp: str | None = None,
     require_warm: bool = False,
+    windowless: bool = True,
 ) -> Path:
     """Compiles `door.exe` and writes its sidecar for `engine_root`, so a
-    local build stays one command. To ship the SAME compiled `door.exe`
+    local build stays one command. `windowless` also links the same
+    sources a second time as the GUI-subsystem `door-w.exe` (plus its
+    provenance) beside `output`; hook doors run under it so a hook fire
+    allocates no conhost.exe. Returns the `door.exe` path.
+    To ship the SAME compiled `door.exe`
     to another box, copy it there and call `write_sidecar()` again for
     that box's own engine root -- no recompile, no compiler needed on
     that box.
@@ -541,20 +567,25 @@ def build(
     # Lazy: the mirror's build.py is file-loaded by door_install, so no top-level engine import.
     from coordinator_core.temp_layout import managed_temp_dir
 
+    variants = [(output, False)]
+    if windowless and not require_warm:
+        variants.append((output.parent / WINDOWLESS_EXE_NAME, True))
+
     with managed_temp_dir("door-generated-") as tmp:
         generated = tmp / "door_generated.c"
         generated.write_text(rendered, encoding="utf-8", newline="\n")
-        _compile(kind, compiler_path, generated, output)
+        for target, gui in variants:
+            _compile(kind, compiler_path, generated, target, windowless=gui)
 
     write_sidecar(output, engine_root)
-    image_sha256 = _sha256_file(output)
-    write_provenance(
-        output, kind, compiler_path, engine_root,
-        image_sha256=image_sha256, engine_stamp=engine_stamp,
-        require_warm=require_warm, python_bin=python_bin,
-        rendered_source_sha256=hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
-        compile_flags=(["-O2", "-Wall", "-Wextra", "-I", str(_SOURCE.parent), "-ladvapi32", "-lshell32", "-Xlinker", "/Brepro"] if kind == "clang" else ["/nologo", "/O2", "/W3", "/I" + str(_SOURCE.parent), "/link", "Advapi32.lib", "Shell32.lib", "/Brepro"]),
-    )
+    for target, gui in variants:
+        write_provenance(
+            target, kind, compiler_path, engine_root,
+            image_sha256=_sha256_file(target), engine_stamp=engine_stamp,
+            require_warm=require_warm, python_bin=python_bin,
+            rendered_source_sha256=hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+            compile_flags=_compile_flags(kind, gui),
+        )
 
     return output
 

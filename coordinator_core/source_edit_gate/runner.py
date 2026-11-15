@@ -279,6 +279,7 @@ def _run_with_group_cleanup(argv: list, *, cwd: str, timeout_s: float) -> "bool 
             **({"env": nested_session_guard.guarded_child_env(os.environ)} if is_pytest else {}),
             **_no_console_group_popen_kwargs(),
         },
+        background=is_pytest,
     )
     if admission is not None:
         from coordinator_core.bash_guards._heavy_command_class import register_spawn

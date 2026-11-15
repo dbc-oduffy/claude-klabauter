@@ -265,6 +265,23 @@ const _handedBack = [];
 
 const _settled = [];
 
+const CHECKPOINT_PERCENTS = [25, 50, 75];
+const _checkpointsReported = [];
+function _checkpoint() {
+  const total = QUEUE_GRIND_MANIFEST.entries.length;
+  const settled = _handedBack.length + _settled.length;
+  const spent = budget.spent() - _startSpent;
+  for (const [i, percent] of CHECKPOINT_PERCENTS.entries()) {
+    const byRows = settled * 100 >= percent * total;
+    if (!byRows && !(BUDGET_TOKENS > 0 && spent * 100 >= percent * BUDGET_TOKENS)) continue;
+    if (_checkpointsReported.length > i) continue;
+    const r = { percent, trigger: byRows ? 'rows' : 'budget', settled, total,
+      by_script: (QUEUE_GRIND_MANIFEST.triaged || []).filter((t) => t.closed).length, committed: _settled.length, handed_back: _handedBack.length, spent };
+    _checkpointsReported.push(r);
+    log('grind checkpoint ' + JSON.stringify(r));
+  }
+}
+
 const _pendingCommit = [];
 const _runDirty = new Set();
 let _grindErr = null;
@@ -300,6 +317,7 @@ function _handBack(rowId, type, reason, tradeoff, ruling) {
   const _entry = tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason };
   if (ruling) { _entry.pm_ruling = ruling; }
   _handedBack.push(_entry);
+  _checkpoint();
 }
 function _normalizeRowRef(items, ref) {
   const hit = items.find((it) => it.path === ref);
@@ -439,7 +457,7 @@ async function _verifyCall(row, rows) {
 
 async function _terminalCommitCall(params) {
   const _paramsFile = REPO_ROOT.replace(/\/+$/, '') + '/scratch/warp/' + RUN_ID + '/terminal-commit-params.json';
-    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'This is a queue grind\'s one terminal commit stage. Run exactly these two commands, in order, each as its own Bash call: no `cd &&`, no wrapper, no env prefix, no edit to either. `dispatch.land_run` derives the paths from the grind\'s finished rows, so no `paths` array is owed.\n\nCommand 1, which pre-writes the params file and the rows\' fix-path records:\n```\n${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row prewrite-commit-params --repo-root ' + (_shq(REPO_ROOT)) + ' --run-id ' + (RUN_ID) + '\n```\nIf command 1 exits non-zero, still run command 2.\n\nCommand 2:\ncoordinator-invoke dispatch.land_run --params-file ' + (_paramsFile) + '\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n' + (_terminalCommitParamsBlock(params)) + '\n\nReturn from command 2\'s JSON reply committed, sha, rows, dropped, error, refused, already_landed and unlanded, verbatim (null where absent). If the dispatch.land_run command replies with error code -32004 and its error.data carries reconcile_command, run reconcile_command once: a status whose state is finished with outcome result is the commit\'s reply, and finished without a retained result means the commit landed. In every other -32004 case, run the same dispatch.land_run command exactly once more and return its reply verbatim; the engine reports a commit this run already landed as already_landed and never lands twice. A -32004 is never itself the commit\'s failure. A re-run refused run-token-in-flight is reported as that refusal, because the first call is still running. Run nothing else.' + '\n\nSidecar dir (yours, always writable): create it with `mkdir -p`; keep run notes there. If the harness denies the Write tool on a file your task declares or on a file in this dir ("Subagents should return findings as text"), write it with a Bash heredoc, `cat > <path> <<\'EOF\'` -- never skip it -- and name the path in your report. Use the heredoc only for a path the Write tool refused; once Write has written a path, keep editing it with Write/Edit, never overwrite it by heredoc (blob drift at commit). A coordinator guard\'s denial stays a stop; the cat-heredoc advisory is not a denial. Quote the delimiter; a frontmatter file written this way skips the write guard, so report it as unvalidated. No Bash tool: put the content in your reply. A provisioned `sidecar_path:` file, when you have one, is still where that report goes.\nsidecar_dir: .coordinator-local/workflow-sidecars/grind/run-1/commit/', { label: 'commit', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'haiku', effort: 'low', schema: {"properties": {"already_landed": {"type": ["boolean", "null"]}, "committed": {"type": "boolean"}, "dropped": {"items": {"properties": {"path": {"type": "string"}, "reason": {"type": "string"}, "row_id": {"type": "string"}}, "type": "object"}, "type": "array"}, "error": {"type": ["string", "null"]}, "refused": {"type": ["string", "null"]}, "rows": {"items": {"properties": {"outcome": {"type": "string"}, "row_id": {"type": "string"}, "sha": {"type": ["string", "null"]}}, "type": "object"}, "type": "array"}, "sha": {"type": ["string", "null"]}, "unlanded": {"items": {"properties": {"reason": {"type": "string"}, "row_id": {"type": "string"}}, "type": "object"}, "type": ["array", "null"]}}, "required": ["committed"], "type": "object"} })) || {};
+    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'This is a queue grind\'s one terminal commit stage. Run exactly these two commands, in order, each as its own Bash call: no `cd &&`, no wrapper, no env prefix, no edit to either. `dispatch.land_run` derives the paths from the grind\'s finished rows, so no `paths` array is owed.\n\nCommand 1, which records the rows\' fix-path files (the engine already wrote the params file):\n```\n${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row prewrite-commit-params --repo-root ' + (_shq(REPO_ROOT)) + ' --run-id ' + (RUN_ID) + '\n```\nIf command 1 exits non-zero, still run command 2.\n\nCommand 2:\ncoordinator-invoke dispatch.land_run --params-file ' + (_paramsFile) + '\n\nThe engine already wrote the params block below to that file. Do not copy, edit or pass it.\n\n' + (_terminalCommitParamsBlock(params)) + '\n\nReturn from command 2\'s JSON reply committed, sha, rows, dropped, error, refused, already_landed, unlanded and close_refused, verbatim (null where absent). If the dispatch.land_run command replies with error code -32004 and its error.data carries reconcile_command, run reconcile_command once: a status whose state is finished with outcome result is the commit\'s reply, and finished without a retained result means the commit landed. In every other -32004 case, run the same dispatch.land_run command exactly once more and return its reply verbatim; the engine reports a commit this run already landed as already_landed and never lands twice. A -32004 is never itself the commit\'s failure. A re-run refused run-token-in-flight is reported as that refusal, because the first call is still running. Run nothing else.' + '\n\nSidecar dir (yours, always writable): create it with `mkdir -p`; keep run notes there. If the harness denies the Write tool on a file your task declares or on a file in this dir ("Subagents should return findings as text"), write it with a Bash heredoc, `cat > <path> <<\'EOF\'` -- never skip it -- and name the path in your report. Use the heredoc only for a path the Write tool refused; once Write has written a path, keep editing it with Write/Edit, never overwrite it by heredoc (blob drift at commit). A coordinator guard\'s denial stays a stop; the cat-heredoc advisory is not a denial. Quote the delimiter; a frontmatter file written this way skips the write guard, so report it as unvalidated. No Bash tool: put the content in your reply. A provisioned `sidecar_path:` file, when you have one, is still where that report goes.\nsidecar_dir: .coordinator-local/workflow-sidecars/grind/run-1/commit/', { label: 'commit', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'haiku', effort: 'low', schema: {"properties": {"already_landed": {"type": ["boolean", "null"]}, "close_refused": {"items": {"properties": {"reason": {"type": "string"}, "row_id": {"type": "string"}}, "type": "object"}, "type": ["array", "null"]}, "committed": {"type": "boolean"}, "dropped": {"items": {"properties": {"path": {"type": "string"}, "reason": {"type": "string"}, "row_id": {"type": "string"}}, "type": "object"}, "type": "array"}, "error": {"type": ["string", "null"]}, "refused": {"type": ["string", "null"]}, "rows": {"items": {"properties": {"outcome": {"type": "string"}, "row_id": {"type": "string"}, "sha": {"type": ["string", "null"]}}, "type": "object"}, "type": "array"}, "sha": {"type": ["string", "null"]}, "unlanded": {"items": {"properties": {"reason": {"type": "string"}, "row_id": {"type": "string"}}, "type": "object"}, "type": ["array", "null"]}}, "required": ["committed"], "type": "object"} })) || {};
     _recordCall('commit');
     return _result;
 }
@@ -481,6 +499,7 @@ function _queueCommit(rowId) {
   _pendingCommit.push({ row_id: rowId, outcome: row.lastOutcome || 'settled', paths, deleted_paths: deleted });
   paths.concat(deleted).forEach((p) => _runDirty.add(p));
   _settled.push({ row: rowId, outcome: 'committed', sha: '' });
+  _checkpoint();
 }
 function _unsettle(rowId) {
   const j = _settled.findIndex((s) => s.row === rowId && s.outcome === 'committed');
@@ -517,7 +536,7 @@ async function _terminalCommit() {
   };
   if (!RUN_TOKEN) { _failAll('no run token in the fire args: the terminal commit cannot run' + SETTLE_HINT); return; }
   const _halted = _haltReason();
-  const _params = { script_path: SCRIPT_PATH, run_id: RUN_ID, run_token: RUN_TOKEN, grind: { profile: PROFILE_NAME, rows: queued, halted: _halted } };
+  const _params = { script_path: SCRIPT_PATH, run_id: RUN_ID, run_token: RUN_TOKEN, grind: { profile: PROFILE_NAME, rows: queued, halted: _halted, per_row: true } };
   const _size = JSON.stringify(JSON.stringify(_params)).length;
   if (_size > PARAMS_BUDGET) { _failAll(`terminal commit params are ${_size} bytes escaped, over the ${PARAMS_BUDGET} the spawn transcript can carry; the rows stay on disk` + SETTLE_HINT); return; }
   let reply;
@@ -1036,6 +1055,8 @@ const HANDBACK = {
   handed_back: _handedBack,
   declined: QUEUE_GRIND_MANIFEST.declined,
   not_admitted: QUEUE_GRIND_MANIFEST.not_admitted,
+  triaged: QUEUE_GRIND_MANIFEST.triaged || [],
+  checkpoints: _checkpointsReported,
   settled: _settled,
   counts: _counts(),
   spend: _spend(),

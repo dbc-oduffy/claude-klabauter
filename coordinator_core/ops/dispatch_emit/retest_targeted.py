@@ -127,6 +127,7 @@ def _run_argv(
                 cwd=str(cwd), env=env, creationflags=_NO_WINDOW, stdin=subprocess.DEVNULL,
                 stdout=sink, stderr=subprocess.STDOUT,
             ),
+            background=True,
         )
         register_spawn(admission.key, admission.peak_gib, proc.pid)
         try:

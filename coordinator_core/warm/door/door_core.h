@@ -221,6 +221,18 @@ int door_argv_declares_params_stdin(int argc, const char *const *argv);
 
 int door_argv_declares_advisory(int argc, const char *const *argv);
 
+/* `--stdin-hook` declares hook mode from argv, equivalent to
+ * `DOOR_STDIN_MODE_ENV_NAME=hook`, so a host that execs the door directly needs no env. It is
+ * honoured only in the leading run of door flags (argv[1..], flags drawn from
+ * {--stdin-hook, --advisory}); past the first non-flag it is an op argument. */
+#define DOOR_STDIN_HOOK_FLAG "--stdin-hook"
+
+int door_argv_declares_stdin_hook(int argc, const char *const *argv);
+
+/* Length of the leading run of door flags in argv[1..]; the caller strips exactly that many
+ * before forwarding argv to the engine or the cold leg. */
+int door_leading_flag_count(int argc, const char *const *argv);
+
 /* =========================================================================
  * The stdin-reading basename gate -- deliberately mirrors
  * `door_argv_declares_params_stdin` above, for the same stated reason: "so

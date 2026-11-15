@@ -403,3 +403,98 @@ def test_hook_mode_passes_loudly_when_the_cold_guard_does_not_answer(tmp_path: P
     assert "permissionDecision" not in body["hookSpecificOutput"]
     assert "cold guard" in body["systemMessage"]
     assert "did not run" in body["hookSpecificOutput"]["additionalContext"]
+
+
+# =============================================================================
+# `--stdin-hook` declares hook mode from argv (no env), and the door's own flags never
+# reach the engine or the cold leg; `--advisory` never turns a hook failure into exit 2.
+# =============================================================================
+
+_HOOK_EVENT = (
+    b'{"hook_event_name":"PreToolUse","tool_name":"Bash",'
+    b'"tool_input":{"command":"echo hi"}}'
+)
+
+
+def _run_door_argv(
+    engine_root: Path, args: list[str], stdin_payload: bytes, *, hook_env: bool = False
+) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env["COORDINATOR_DOOR_ENGINE_ROOT"] = str(engine_root)
+    if hook_env:
+        env[_STDIN_MODE_ENV] = _STDIN_MODE_HOOK_VALUE
+    else:
+        env.pop(_STDIN_MODE_ENV, None)
+    return subprocess.run(
+        [str(door_under_default_name(engine_root)), *args],
+        input=stdin_payload,
+        capture_output=True,
+        env=env,
+        timeout=60,
+        cwd=str(engine_root),
+        **no_console_creationflags(),
+    )
+
+
+def test_stdin_hook_flag_is_defined_once_and_both_doors_honour_it():
+    assert _header_define("DOOR_STDIN_HOOK_FLAG") == "--stdin-hook"
+    assert "door_argv_declares_stdin_hook" in read(DOOR_CORE_C)
+    assert "door_argv_declares_stdin_hook" in read(DOOR_WINDOWS_C)
+    assert "door_argv_declares_stdin_hook" in read(DOOR_POSIX_C)
+    assert "door_leading_flag_count" in read(DOOR_WINDOWS_C)
+    assert "door_leading_flag_count" in read(DOOR_POSIX_C)
+
+
+@WINDOWS_ONLY
+def test_stdin_hook_flag_with_no_env_is_hook_mode_and_is_stripped_from_the_request(
+    tmp_path: Path,
+) -> None:
+    """Both sides: with the flag the payload is read and the engine request carries neither
+    door flag; without flag or env nothing is read (the leg-(b) test above pins that)."""
+    root = make_stub_engine_root(tmp_path)
+    reply = (
+        '{"jsonrpc":"2.0","id":1,"result":'
+        '{"stdout":"decided\\n","stderr":"","exit_code":0}}\n'
+    ).encode("utf-8")
+    server = ReplyingServer(pipe_name_for(root), reply)
+    try:
+        proc = _run_door_argv(
+            root, ["--advisory", "--stdin-hook", "hooks.some_hook"], _HOOK_EVENT
+        )
+    finally:
+        server.close()
+
+    request = json.loads(server.request.decode("utf-8").strip())
+    assert request["params"]["stdin"] == _HOOK_EVENT.decode("utf-8")
+    assert request["params"]["argv"] == ["hooks.some_hook"]
+    assert proc.returncode == 0
+    assert proc.stdout == b"decided\n"
+
+
+@WINDOWS_ONLY
+def test_the_cold_leg_never_sees_the_door_flags(tmp_path: Path) -> None:
+    root = make_stub_engine_root(tmp_path)
+    (root / "coordinator" / "bin" / "coordinator-invoke.py").write_text(
+        "import json, sys\nprint(json.dumps(sys.argv[1:]))\n", encoding="utf-8"
+    )
+
+    proc = _run_door_argv(root, ["--stdin-hook", "--advisory", "hooks.some_hook"], _HOOK_EVENT)
+
+    assert proc.returncode == 0
+    assert json.loads(proc.stdout.decode("utf-8")) == ["hooks.some_hook"]
+
+
+@WINDOWS_ONLY
+def test_advisory_with_an_unservable_op_exits_zero_and_stays_silent(tmp_path: Path) -> None:
+    """The stub cold guard answers nothing usable. Advisory stays silent with exit 0; the
+    same call without `--advisory` passes loudly (a systemMessage envelope), so the flag is
+    what changes the outcome. Neither is ever exit 2."""
+    root = make_stub_engine_root(tmp_path)
+
+    advisory = _run_door_argv(root, ["--advisory", "hooks.some_hook"], _HOOK_EVENT, hook_env=True)
+    guard = _run_door_argv(root, ["hooks.some_hook"], _HOOK_EVENT, hook_env=True)
+
+    assert advisory.returncode == 0
+    assert advisory.stdout == b""
+    assert guard.returncode == 0
+    assert b"systemMessage" in guard.stdout

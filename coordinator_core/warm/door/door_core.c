@@ -606,6 +606,26 @@ int door_argv_declares_advisory(int argc, const char *const *argv) {
     return 0;
 }
 
+int door_leading_flag_count(int argc, const char *const *argv) {
+    if (argv == NULL) return 0;
+    int n = 0;
+    for (int i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+        if (arg == NULL) break;
+        if (strcmp(arg, DOOR_STDIN_HOOK_FLAG) != 0 && strcmp(arg, DOOR_ADVISORY_FLAG) != 0) break;
+        n++;
+    }
+    return n;
+}
+
+int door_argv_declares_stdin_hook(int argc, const char *const *argv) {
+    int n = door_leading_flag_count(argc, argv);
+    for (int i = 1; i <= n; i++) {
+        if (strcmp(argv[i], DOOR_STDIN_HOOK_FLAG) == 0) return 1;
+    }
+    return 0;
+}
+
 /* =========================================================================
  * The stdin-reading basename table -- see door_core.h for the full policy
  * and cross-reference to C1's derivation. THE LIST LIVES HERE, NOT IN A
@@ -978,9 +998,12 @@ done:
 #endif
 
 int build_hook_spooled_envelope(buf_t *out, const char *spool_id, const char *event_name) {
-    char text[160];
+    /* The withdraw hint trails the text; an overlong spool_id truncates it silently. */
+    char text[384];
     snprintf(text, sizeof text,
-             "Engine unavailable; ask spooled as %s; it mints when the engine recovers.", spool_id);
+             "Engine unavailable; ask spooled as %s; it mints when the engine recovers. "
+             "To withdraw: coordinator-invoke ask_spool.withdraw '{\"spool_id\":\"%s\",\"reason\":\"...\"}'.",
+             spool_id, spool_id);
     int ok = 1;
     ok &= buf_append_cstr(out, "{\"systemMessage\":\"coordinator: ");
     ok &= buf_append_json_escaped(out, text, strlen(text));

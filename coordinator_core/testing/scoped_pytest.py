@@ -123,7 +123,7 @@ def _spawn(argv: list) -> tuple:
                 ctypes.CDLL(None).prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
 
         kwargs["preexec_fn"] = pdeathsig
-    return cr.spawn_in_capped_job(argv, popen_kwargs=kwargs)
+    return cr.spawn_in_capped_job(argv, popen_kwargs=kwargs, background=True)
 
 
 RUN_ROOT_KEY = "paths.pytest_run_root"

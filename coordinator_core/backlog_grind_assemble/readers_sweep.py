@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.backlog_grind_assemble import directives
+from coordinator_core.backlog_grind_assemble.readers_blitz import triage_preview
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
@@ -44,7 +45,7 @@ def _open_bug_backlog_records(repo_root: Path) -> list[dict]:
     ]
 
 
-def _pre_dispatch_verification_due(open_count: int) -> ReaderResult:
+def _pre_dispatch_verification_due(open_count: int, triage_note: str = "") -> ReaderResult:
     return ReaderResult(
         judgment_points=[
             build_judgment_point(
@@ -66,6 +67,7 @@ def _pre_dispatch_verification_due(open_count: int) -> ReaderResult:
                     "backlog entry's claim is a semantic read against "
                     "current HEAD, never a disk/git predicate the engine "
                     "can resolve on its own"
+                    + (f" | {triage_note}" if triage_note else "")
                 ),
                 reason="insufficient-evidence",
             )
@@ -140,11 +142,12 @@ def collect(cadence: str, *, run_id: Optional[str] = None) -> ReaderResult:
         return ReaderResult()
 
     repo_root = Path(state_root_str).parent
-    open_count = len(_open_bug_backlog_records(repo_root))
+    open_records = _open_bug_backlog_records(repo_root)
+    open_count = len(open_records)
 
     results = [_tier_u_grant_flow(open_count)]
     if open_count > 0:
-        results.append(_pre_dispatch_verification_due(open_count))
+        results.append(_pre_dispatch_verification_due(open_count, triage_preview(open_records, repo_root, "bug")))
 
     all_directives: list[dict[str, Any]] = []
     all_judgment_points: list[dict[str, Any]] = []

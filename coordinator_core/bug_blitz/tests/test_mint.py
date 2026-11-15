@@ -280,6 +280,54 @@ def test_empty_tests_mints_nothing(tmp_path):
     assert mint_tf_rows(tmp_path, "r1", (), target_ref="t") == []
 
 
+def test_two_run_ids_minting_concurrently_yield_one_row_per_target(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from coordinator_core.bug_blitz import mint as mint_mod
+
+    real_append = mint_mod._append
+
+    def slow_append(*args, **kwargs):
+        time.sleep(0.15)
+        return real_append(*args, **kwargs)
+
+    monkeypatch.setattr(mint_mod, "_append", slow_append)
+    results: dict[str, list[str]] = {}
+
+    def run(run_id: str) -> None:
+        results[run_id] = mint_tf_rows(tmp_path, run_id, _tests(), target_ref="t")
+
+    first = threading.Thread(target=run, args=("190644Z",))
+    second = threading.Thread(target=run, args=("190655Z",))
+    first.start()
+    time.sleep(0.05)
+    second.start()
+    first.join()
+    second.join()
+
+    assert results["190644Z"] == results["190655Z"]
+    assert len(_rows(tmp_path)) == len(_tests())
+    for row in _rows(tmp_path).values():
+        assert {run_tag("190644Z"), run_tag("190655Z")} <= set(row["tags"])
+
+
+def test_mint_lock_is_the_repo_queue_dir_not_the_run_dir(tmp_path, monkeypatch):
+    from coordinator_core.bug_blitz import mint as mint_mod
+
+    targets: list[Path] = []
+    real = mint_mod.held_lock
+
+    def spy(target, **kwargs):
+        targets.append(Path(target))
+        return real(target, **kwargs)
+
+    monkeypatch.setattr(mint_mod, "held_lock", spy)
+    mint_tf_rows(tmp_path, "r1", _tests(), target_ref="t", run_dir=tmp_path / "scratch" / "r1")
+    mint_tf_rows(tmp_path, "r2", _tests(), target_ref="t", run_dir=tmp_path / "scratch" / "r2")
+    assert targets == [tmp_path / "state" / "bug-backlog"] * 2
+
+
 def test_a_crlf_row_gains_the_tag_and_keeps_its_line_endings():
     from coordinator_core.bug_blitz.mint import _with_tag
 

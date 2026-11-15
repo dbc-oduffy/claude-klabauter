@@ -50,9 +50,9 @@ ADDON = "example-retrieval-repo-ue-addon-1a"
 ADDON_PIPE = r"\\.\pipe\LOCAL\cc-msg-d07d9f0d4bd8ab47b5e3187d7b3bd0fb"
 GROUP_EM = "group-em-56"
 GROUP_EM_PIPE = r"\\.\pipe\LOCAL\cc-msg-8a74c379b5ea7ab9c5e159287ad5288b"
-CLAUDE_KLABAUTER = "claude-klabauter-66"
+ENGINE_TREE = "claude-klabauter-66"
 PID = 4242
-SENDERS = {GROUP_EM: "example-game-workbench-repo-78", CLAUDE_KLABAUTER: "example-retrieval-repo-ue-addon-83"}
+SENDERS = {GROUP_EM: "example-game-workbench-repo-78", ENGINE_TREE: "example-retrieval-repo-ue-addon-83"}
 
 
 def _frame(sender, body="hello"):
@@ -118,7 +118,7 @@ def test_leg_delivers_its_own_session_entry_to_its_own_endpoint(leg):
     assert [e for e, _ in leg.writes] == [GROUP_EM_PIPE]
 
 
-@pytest.mark.parametrize("name", [GROUP_EM, CLAUDE_KLABAUTER])
+@pytest.mark.parametrize("name", [GROUP_EM, ENGINE_TREE])
 def test_leg_launched_for_a_name_refuses_another_sessions_entry_and_endpoint(leg, name):
     """A leg paired with addon-1a's entry and pipe under another name must not deliver into addon-1a."""
     leg.register(ADDON, ADDON_PIPE)
@@ -156,7 +156,7 @@ def test_leg_refuses_an_entry_holding_no_endpoint(leg):
 
 def test_frame_has_no_addressee_so_the_leg_cannot_filter_per_frame(leg):
     """The far relay forwards raw bytes accepted on the leg's socket; the frame names only its sender."""
-    frames = [_frame(SENDERS[GROUP_EM]), _frame(SENDERS[CLAUDE_KLABAUTER])]
+    frames = [_frame(SENDERS[GROUP_EM]), _frame(SENDERS[ENGINE_TREE])]
     assert all(set(f) == {"from", "message"} for f in frames)
     leg.register(ADDON, ADDON_PIPE)
     leg.frames = frames
@@ -200,7 +200,7 @@ def _stub_relay_inbox(monkeypatch, tmp_path, raw_entry):
     return bound
 
 
-@pytest.mark.parametrize("name", [GROUP_EM, CLAUDE_KLABAUTER])
+@pytest.mark.parametrize("name", [GROUP_EM, ENGINE_TREE])
 def test_relay_inbox_refuses_a_registration_naming_another_session(monkeypatch, tmp_path, name):
     """`mirror_entry` overwrites the entry's name today; a registration for another session must be refused."""
     bound = _stub_relay_inbox(monkeypatch, tmp_path, {"name": ADDON, "messagingSocketPath": ADDON_PIPE})
@@ -243,7 +243,7 @@ def _write_session(directory, filename, name, endpoint, **extra):
         json.dumps({"peerToken": "a" * 32}))
 
 
-@pytest.mark.parametrize("name", [GROUP_EM, CLAUDE_KLABAUTER])
+@pytest.mark.parametrize("name", [GROUP_EM, ENGINE_TREE])
 def test_sender_resolving_another_name_never_connects_to_addon_socket(tmp_path, name):
     """The addressee is the socket the far sender connects to: `name` must never resolve to addon-1a's."""
     _write_session(tmp_path, "a.json", ADDON, ADDON_SOCK, **MIRROR)
@@ -255,7 +255,7 @@ def test_sender_resolving_another_name_never_connects_to_addon_socket(tmp_path, 
     assert r.resolve_sender(ADDON, "") == ADDON_SOCK
 
 
-@pytest.mark.parametrize("name", [GROUP_EM, CLAUDE_KLABAUTER])
+@pytest.mark.parametrize("name", [GROUP_EM, ENGINE_TREE])
 def test_stale_far_alias_on_addon_socket_is_refused_not_resolved(tmp_path, name):
     """addon-1a's row carrying another session's far name must resolve that name to nothing."""
     _write_session(tmp_path, "a.json", ADDON, ADDON_SOCK, unimatrixFarName=name, **MIRROR)
@@ -264,7 +264,7 @@ def test_stale_far_alias_on_addon_socket_is_refused_not_resolved(tmp_path, name)
     assert r.resolve_sender(name, "fallback") == ""
 
 
-FAR_ENDPOINTS = {GROUP_EM: GROUP_EM_SOCK, CLAUDE_KLABAUTER: "/tmp/cc-socks/unimatrix-claude-klabauter-66.sock",
+FAR_ENDPOINTS = {GROUP_EM: GROUP_EM_SOCK, ENGINE_TREE: "/tmp/cc-socks/unimatrix-claude-klabauter-66.sock",
                  ADDON: ADDON_SOCK}
 
 
@@ -281,14 +281,14 @@ def _mini_view(tmp_path, stale_for=None):
     return router.Router([], sessions_dir=tmp_path, state_dir=tmp_path / "state")
 
 
-@pytest.mark.parametrize("name", [GROUP_EM, CLAUDE_KLABAUTER, ADDON])
+@pytest.mark.parametrize("name", [GROUP_EM, ENGINE_TREE, ADDON])
 def test_mini_view_each_far_name_resolves_to_its_own_endpoint(tmp_path, name):
     r = _mini_view(tmp_path)
     assert r.resolve_sender(name, "") == FAR_ENDPOINTS[name]
     assert r.resolve_sender(f"{name}.machine-a", "") == FAR_ENDPOINTS[name]
 
 
-@pytest.mark.parametrize("name", [GROUP_EM, CLAUDE_KLABAUTER])
+@pytest.mark.parametrize("name", [GROUP_EM, ENGINE_TREE])
 def test_mini_view_stale_addon_row_under_another_far_name_fails_closed(tmp_path, name):
     """An addon-1a-derived mirror carrying `name` as its far name never lends addon-1a's endpoint to `name`."""
     r = _mini_view(tmp_path, stale_for=name)

@@ -239,8 +239,65 @@ def bare_cited_surface(surface: Optional[str]) -> Optional[str]:
     return stripped
 
 
+#: Profiles whose non-test rows cite a path in this repo, so a path gone at HEAD means the row no longer reproduces.
+HEAD_VERIFIED_PROFILES = frozenset({"bug", "debt"})
+
+
+def triage_row(row_id: str, fields: Any, profile_name: str) -> Any:
+    """The `grind_triage.TriageRow` for one queue row's frontmatter `fields`.
+
+    A `tf`-tagged (or `TF:`-titled) row is a test row whose target is the node id in its title; any other
+    row cites its bare `surface` path, and only under `HEAD_VERIFIED_PROFILES` (elsewhere the target is
+    empty, so no HEAD verdict is drawn). The one builder every grinder path shares."""
+    from coordinator_core.bug_blitz.mint import TF_TAG
+    from coordinator_core.grind_triage.contract import TriageRow
+
+    title = str(fields.get("title") or "")
+    tags = fields.get("tags")
+    if TF_TAG in (tags if isinstance(tags, list) else []) or title.startswith("TF:"):
+        return TriageRow(
+            key=row_id,
+            title=title,
+            is_test=True,
+            target=title[3:].strip() if title.startswith("TF:") else str(fields.get("surface") or ""),
+            signature_text=str(fields.get("body") or "").partition(" :: ")[2],
+        )
+    surface = bare_cited_surface(fields.get("surface")) if profile_name in HEAD_VERIFIED_PROFILES else None
+    return TriageRow(key=row_id, title=title, is_test=False, target=surface or "")
+
+
+def triage_preview(records: Sequence[Any], repo_root: Path, profile_name: str) -> str:
+    """One evidence clause: how many open `records` would leave a grind as flakes and how many clusters remain.
+
+    Read-only and cheap: only non-test rows go through `grind_triage.triage` (one batched HEAD read, no
+    test rerun, no write); a test row waits for the dispatch-time isolation rerun and is counted as such.
+    Empty string when `records` is empty."""
+    from coordinator_core.grind_triage.cluster import cluster_rows
+    from coordinator_core.grind_triage.contract import Verdict
+    from coordinator_core.grind_triage.triage import triage
+
+    rows = []
+    for record in records:
+        fields = record.get("frontmatter") if isinstance(record, dict) else None
+        if isinstance(fields, dict):
+            rows.append(triage_row(Path(str(record.get("path") or "")).stem, fields, profile_name))
+    if not rows:
+        return ""
+    cited = [r for r in rows if not r.is_test]
+    results = triage(cited, repo_root)
+    gone = {r.key for r in results if r.verdict is not Verdict.SURVIVOR}
+    tests = sum(1 for r in rows if r.is_test)
+    clusters = cluster_rows([r for r in rows if r.key not in gone])
+    return (
+        f"triage preview: {len(gone)} of {len(rows)} rows cite a path gone at HEAD "
+        f"(closed already-green at dispatch), {tests} test row(s) await the isolation rerun, "
+        f"{len(clusters)} cluster(s) among the rest"
+    )
+
+
 def _read_backlog_readiness() -> ReaderResult:
     repo_root_str = _repo_root()
+    preview = ""
     if repo_root_str is None:
         backlog_note = "state/bug-backlog/: repo root unresolved (not a git checkout?)"
     else:
@@ -249,6 +306,8 @@ def _read_backlog_readiness() -> ReaderResult:
             "bug-backlog", repo_root, where="status=open"
         )
         backlog_note = f"state/bug-backlog/ open-item count={len(records)}"
+        preview = triage_preview(records, repo_root, "bug")
+    preview_clause = f" | {preview}" if preview else ""
 
     jp = build_commit_readiness_gate(
         id=COMMIT_READINESS_JP_ID,
@@ -257,7 +316,7 @@ def _read_backlog_readiness() -> ReaderResult:
             "ready to commit this run's autonomous fixes?"
         ),
         evidence=(
-            f"{backlog_note} | reason: bug-blitz's commit-per-item/commit-per-wave "
+            f"{backlog_note}{preview_clause} | reason: bug-blitz's commit-per-item/commit-per-wave "
             "directives depend_on this judgment point per the plan's review-gate "
             "risk constraint, until hnd-bug-blitz-commits-autonomous-f-a7cb8f lands"
         ),

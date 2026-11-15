@@ -697,7 +697,11 @@ static int quote_arg_w(buf_t *out_u8, const wchar_t *arg) {
  * call site and any added later without a second edit. */
 static int g_door_hook_mode = 0;
 
-/* True iff the caller declared hook mode. `GetEnvironmentVariableW` mirrors
+/* Set once in `main` from argv (`--advisory` anywhere, per `door_argv_declares_advisory`); the
+ * argv forwarded onward has its leading door flags stripped, so this is the only record. */
+static int g_door_advisory = 0;
+
+/* True iff the caller declared hook mode.`GetEnvironmentVariableW` mirrors
  * the read shape this file already uses for `COORDINATOR_SETTINGS_HOME`/
  * session-id lookups (see those sites) rather than introducing `_wgetenv`
  * (deprecated by the UCRT). A value that does not fit `value` or does not
@@ -750,23 +754,34 @@ static int door_argv_declares_params_stdin_w(int argc, wchar_t **wargv) {
 }
 
 
-static int door_argv_declares_advisory_w(int argc, wchar_t **wargv) {
-    if (argc <= 1 || wargv == NULL) return 0;
-    const char **argv_u8 = (const char **)calloc((size_t)argc, sizeof(char *));
-    if (!argv_u8) return 0;
-    int declared = 0;
+/* Reads the door's own flags off argv and strips the leading run in place (shifting the
+ * pointers; the array's allocation is unchanged for LocalFree). `*stdin_hook` / `*advisory`
+ * are written only when non-NULL. Safe on NULL or an unconvertible argv: nothing stripped. */
+static void door_take_flags_w(int *argc, wchar_t **wargv, int *stdin_hook, int *advisory) {
+    if (stdin_hook) *stdin_hook = 0;
+    if (advisory) *advisory = 0;
+    if (!argc || *argc <= 1 || wargv == NULL) return;
+    const char **argv_u8 = (const char **)calloc((size_t)*argc, sizeof(char *));
+    if (!argv_u8) return;
+    const int orig_argc = *argc;
     int converted = 1;
-    for (int i = 1; i < argc; i++) {
+    for (int i = 1; i < orig_argc; i++) {
         int len = 0;
         argv_u8[i] = wide_to_utf8(wargv[i], &len);
         if (!argv_u8[i]) { converted = 0; break; }
     }
     if (converted) {
-        declared = door_argv_declares_advisory(argc, argv_u8);
+        if (stdin_hook) *stdin_hook = door_argv_declares_stdin_hook(*argc, argv_u8);
+        if (advisory) *advisory = door_argv_declares_advisory(*argc, argv_u8);
+        int n = door_leading_flag_count(*argc, argv_u8);
+        if (n > 0) {
+            for (int i = 1; i + n < *argc; i++) wargv[i] = wargv[i + n];
+            *argc -= n;
+            wargv[*argc] = NULL;
+        }
     }
-    for (int i = 1; i < argc; i++) free((void *)argv_u8[i]);
+    for (int i = 1; i < orig_argc; i++) free((void *)argv_u8[i]);
     free(argv_u8);
-    return declared;
 }
 
 /* Wide-basename adapter over `door_basename_declares_stdin_read`
@@ -871,6 +886,11 @@ typedef char door_hook_bounds_match_core_h[
 static DWORD g_hook_read_total_ms = 0;
 
 static ULONGLONG g_call_started_ticks = 0;
+/* The warm-call leg in flight (connect, deliver, read; "-" before the pipe is touched) and when
+ * it began; door_log_fail_open reports both so a freeze names its leg. */
+static const char *g_leg = "-";
+static ULONGLONG g_leg_started_ticks = 0;
+static void door_enter_leg(const char *leg) { g_leg = leg; g_leg_started_ticks = GetTickCount64(); }
 static int door_read_deadline_ms_for_mode(void);
 
 /* Appends one line per fail-open to <settings>\state\door-fail-open.log so a
@@ -891,14 +911,15 @@ static void door_log_fail_open(const char *cause) {
     SYSTEMTIME st;
     GetSystemTime(&st);
     unsigned long long elapsed = g_call_started_ticks ? (unsigned long long)(GetTickCount64() - g_call_started_ticks) : 0;
+    unsigned long long leg_ms = g_leg_started_ticks ? (unsigned long long)(GetTickCount64() - g_leg_started_ticks) : 0;
     char line[512];
     int n = snprintf(line, sizeof line,
-                     "ts=%04u-%02u-%02uT%02u:%02u:%02uZ deadline_ms=%d elapsed_ms=%llu op=%s door_pid=%lu engine_pid=- engine_start=- cause=%.160s\n",
+                     "ts=%04u-%02u-%02uT%02u:%02u:%02uZ deadline_ms=%d elapsed_ms=%llu op=%s door_pid=%lu leg=%s leg_ms=%llu cause=%.160s\n",
                      (unsigned)st.wYear, (unsigned)st.wMonth, (unsigned)st.wDay,
                      (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond,
                      door_read_deadline_ms_for_mode(),
                      elapsed, g_hook_op[0] ? g_hook_op : "-", (unsigned long)GetCurrentProcessId(),
-                     cause ? cause : "-");
+                     g_leg, leg_ms, cause ? cause : "-");
     if (n > 0) {
         if ((size_t)n >= sizeof line) { n = (int)sizeof line - 1; line[n - 1] = '\n'; }
         DWORD wrote = 0;
@@ -997,6 +1018,35 @@ static int spool_submit_ask(const char *reason, char id[17]) {
     return r != 0;
 }
 
+/* A submit-ask the engine did not take and the spool did not keep is answered with a loud
+ * advisory naming the remedy (recoverable, so never a deny): static bytes, no heap, so no
+ * allocation failure can leave stdout empty. */
+#define DOOR_SUBMIT_UNSPOOLED_ADVISORY \
+    "{\"systemMessage\":\"coordinator: the engine gave no answer and the ask could not be spooled; " \
+    "nothing was minted - re-submit, or check state/warp for a minted run.\",\"suppressOutput\":false," \
+    "\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"coordinator: " \
+    "the engine gave no answer and the ask could not be spooled; nothing was minted - re-submit, " \
+    "or check state/warp for a minted run.\"}}\n"
+
+static int hook_op_is_submit_ask(void) {
+    return strcmp(g_hook_op, DOOR_SUBMIT_ASK_OP) == 0;
+}
+
+static void emit_submit_unspooled_advisory(void) {
+    write_all(GetStdHandle(STD_OUTPUT_HANDLE), DOOR_SUBMIT_UNSPOOLED_ADVISORY,
+              sizeof DOOR_SUBMIT_UNSPOOLED_ADVISORY - 1);
+}
+
+/* A spooled ask whose spooled envelope could not be built: heap-free allow advisory. */
+#define DOOR_SUBMIT_SPOOLED_ADVISORY \
+    "{\"systemMessage\":\"coordinator: the ask was spooled; the drain mints it - do not re-submit.\"," \
+    "\"suppressOutput\":false}\n"
+
+static void emit_submit_spooled_advisory(void) {
+    write_all(GetStdHandle(STD_OUTPUT_HANDLE), DOOR_SUBMIT_SPOOLED_ADVISORY,
+              sizeof DOOR_SUBMIT_SPOOLED_ADVISORY - 1);
+}
+
 static int emit_hook_pass_loudly(const char *reason) {
     door_log_fail_open(reason);
     buf_t event, out;
@@ -1008,12 +1058,18 @@ static int emit_hook_pass_loudly(const char *reason) {
         event_name = event.data;
     }
     int spooled = spool_submit_ask(reason, spool_id);
+    if (!spooled && hook_op_is_submit_ask()) {
+        if (have_event) free(event.data);
+        emit_submit_unspooled_advisory();
+        return 0;
+    }
     int built = buf_init(&out, 1024) &&
         (spooled ? build_hook_spooled_envelope(&out, spool_id, event_name)
                  : build_hook_pass_loudly_envelope(&out, reason, event_name));
     if (have_event) free(event.data);
     if (!built) {
-        fwprintf(stderr, L"door: guard did not run: %hs\n", reason);
+        if (spooled) emit_submit_spooled_advisory();
+        else fwprintf(stderr, L"door: guard did not run: %hs\n", reason);
         free(out.data);
         return 0;
     }
@@ -1060,7 +1116,7 @@ static int emit_hook_deny(const char *reason) {
     if (!buf_init(&out, 512) || !build_hook_deny_envelope(&out, reason)) {
         fwprintf(stderr, L"door: hook-mode deny (could not build the envelope)\n");
         free(out.data);
-        return 2;
+        return g_door_advisory ? 0 : 2;
     }
     HANDLE hout = GetStdHandle(STD_OUTPUT_HANDLE);
     write_all(hout, out.data, out.len);
@@ -1262,7 +1318,8 @@ static int write_all(HANDLE h, const char *data, size_t len);
 static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w) {
     if (emit_precheck_if_matched()) return 0;
 
-    int advisory = door_argv_declares_advisory_w(argc, wargv);
+    (void)argc;
+    int advisory = g_door_advisory;
 
     wchar_t script_path_w[MAX_PATH * 2];
     wchar_t *cmdline_w = build_fallback_cmdline(argc, wargv, engine_root_w, script_path_w);
@@ -1715,11 +1772,21 @@ static int emit_hook_post_delivery(const char *full_detail) {
     }
     char spool_id[17] = "";
     int spooled = spool_submit_ask("coordinator-door: engine gave no answer in time", spool_id);
+    if (!spooled && hook_op_is_submit_ask()) {
+        if (have_event) free(event.data);
+        emit_submit_unspooled_advisory();
+        return 0;
+    }
     int built = buf_init(&out, 1024) &&
         (spooled ? build_hook_spooled_envelope(&out, spool_id, event_name)
                  : door_engine_failure_allow_envelope(&out, detail, event_name));
     if (have_event) free(event.data);
     if (!built) {
+        if (spooled) {
+            emit_submit_spooled_advisory();
+            free(out.data);
+            return 0;
+        }
         fwprintf(stderr, L"door: engine gave no answer in time: %hs\n", g_hook_op);
         free(out.data);
         return 1;
@@ -2109,7 +2176,9 @@ int main(void) {
     wchar_t **wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
 
     
-    g_door_hook_mode = door_stdin_mode_is_hook();
+    int flag_stdin_hook = 0;
+    door_take_flags_w(&argc, wargv, &flag_stdin_hook, &g_door_advisory);
+    g_door_hook_mode = flag_stdin_hook || door_stdin_mode_is_hook();
     g_call_started_ticks = GetTickCount64();
 
     
@@ -2335,6 +2404,7 @@ int main(void) {
      * handle has no way to abandon a `ReadFile` that never returns. It
      * changes nothing about the protocol or the framing -- only who is
      * allowed to stop waiting. ---- */
+    door_enter_leg("connect");
     HANDLE pipe = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                                OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
     DWORD pipe_err = (pipe == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
@@ -2375,6 +2445,7 @@ int main(void) {
     /* Kernel server identity is checked before any request byte can be written. */
     if (!private_server(pipe)) { CloseHandle(pipe); return private_not_delivered("required server PID or raw birth mismatch"); }
 #endif
+    door_enter_leg("deliver");
     HANDLE pipe_event = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (pipe_event == NULL) {
         CloseHandle(pipe);
@@ -2666,6 +2737,7 @@ int main(void) {
         return emit_post_delivery_failure("out of memory reading the response",
                                           argc, wargv, engine_root_w);
     }
+    door_enter_leg("read");
     ULONGLONG read_started = GetTickCount64();
     DWORD read_total_ms = g_door_hook_mode ? (DWORD)door_hook_first_read_ms(g_hook_op) : DOOR_READ_DEADLINE_MS;
     int plan_consulted = 0;
@@ -2784,6 +2856,7 @@ do_fallback: {
         int fb_argc = 0;
         wchar_t **fb_argv = CommandLineToArgvW(GetCommandLineW(), &fb_argc);
         if (!fb_argv) { free(engine_root_w); return 1; }
+        door_take_flags_w(&fb_argc, fb_argv, NULL, NULL);
         int rc = fall_through(fb_argc, fb_argv, engine_root_w);
         LocalFree(fb_argv);
         free(engine_root_w);

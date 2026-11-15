@@ -16,6 +16,7 @@ import yaml
 
 from coordinator_core.bug_blitz.accounting import _nodeid, distinct_targets
 from coordinator_core.bug_blitz.contract import FailingTest, run_tag
+from coordinator_core.locked_write import contended_lock_wait_secs, held_lock
 from coordinator_core.ops.queue_append import _slug_from_title, append_queue_entry
 from coordinator_core.ops.queue_family import load_family_records
 from coordinator_core.repo_relative_text import to_repo_relative
@@ -43,7 +44,7 @@ def is_crash_shaped(message: str) -> bool:
     return any(token in low for token in CRASH_TOKENS)
 
 
-def _first_line(message: str) -> str:
+def first_line(message: str) -> str:
     for line in message.splitlines():
         line = line.strip()
         if line:
@@ -57,7 +58,7 @@ def _title(test: FailingTest) -> str:
 
 def _body(test: FailingTest) -> str:
     text = f"- {_nodeid(test)}"
-    first = _first_line(test.message)
+    first = first_line(test.message)
     if first:
         text += f" :: {first}"
     # The appender expands a literal backslash-n into a newline.
@@ -184,8 +185,27 @@ def mint_tf_rows(
     `minted.jsonl` (`created: True` for a new row, False for a reused one): a reused row before its
     tag edit, a new row as it is written, so a crash mid-mint never leaves a modified row off the
     manifest `minted_records.settle` lands or reaps.
+
+    The whole mint holds an exclusive lock on the `state/bug-backlog` queue dir, shared by every run on
+    the repo: a concurrent run with another run id waits, then sees the first run's rows and reuses them.
     """
     repo_root = Path(repo_root)
+    # Trap: two runs have two run dirs, so the lock is on the shared queue dir. A second run's snapshot
+    # of open rows is otherwise taken before the first run's rows land, and every target mints twice.
+    with held_lock(
+        repo_root / "state" / SCHEMA, timeout=contended_lock_wait_secs(), holder_label=f"bug-blitz mint {run_id}"
+    ):
+        return _mint_locked(repo_root, run_id, tests, target_ref=target_ref, run_dir=run_dir)
+
+
+def _mint_locked(
+    repo_root: Path,
+    run_id: str,
+    tests: tuple[FailingTest, ...],
+    *,
+    target_ref: str,
+    run_dir: Path | None,
+) -> list[str]:
     tag = run_tag(run_id)
     existing = _open_tf_rows_by_title(repo_root)
     targets = distinct_targets(tuple(tests))

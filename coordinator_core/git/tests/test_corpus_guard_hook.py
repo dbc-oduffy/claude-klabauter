@@ -56,25 +56,25 @@ def test_hook_body_refuses_stub_output(monkeypatch):
 
 
 def test_candidate_engine_roots_filters_dedupes_and_orders(tmp_path, monkeypatch):
-    claude_klabauter = tmp_path / "claude-klabauter"
+    engine_tree = tmp_path / "claude-klabauter"
     mirror = tmp_path / "mirror"
-    claude_klabauter.mkdir()
+    engine_tree.mkdir()
     mirror.mkdir()
     monkeypatch.setattr(
         "coordinator_core.machine_resolver.merged_flat_registry",
-        lambda: {"repos.claude_klabauter": str(claude_klabauter)},
+        lambda: {"repos.claude_klabauter": str(engine_tree)},
     )
     monkeypatch.setattr(
         "coordinator_core.engine_root.published_engine_mirror_path", lambda: str(mirror)
     )
     assert cgh.candidate_engine_roots() == [
-        str(claude_klabauter).replace("\\", "/"),
+        str(engine_tree).replace("\\", "/"),
         str(mirror).replace("\\", "/"),
     ]
     monkeypatch.setattr(
-        "coordinator_core.engine_root.published_engine_mirror_path", lambda: str(claude_klabauter)
+        "coordinator_core.engine_root.published_engine_mirror_path", lambda: str(engine_tree)
     )
-    assert cgh.candidate_engine_roots() == [str(claude_klabauter).replace("\\", "/")]
+    assert cgh.candidate_engine_roots() == [str(engine_tree).replace("\\", "/")]
     monkeypatch.setattr(
         "coordinator_core.engine_root.published_engine_mirror_path",
         lambda: str(tmp_path / "missing"),

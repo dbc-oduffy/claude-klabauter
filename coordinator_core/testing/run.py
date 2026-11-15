@@ -56,6 +56,7 @@ def _run_subprocess(
                 text=True,
                 **_NO_CONSOLE,
             ),
+            background=True,
         )
         try:
             stdout, _ = proc.communicate(timeout=timeout)

@@ -298,8 +298,8 @@ def test_the_stamp_has_exactly_one_definition():
 
 def test_stamp_names_the_committing_roots_source_not_the_engine(monkeypatch):
     """A DoE-sourced root must stamp DoE's pin: the engine key names claude-klabauter."""
-    claude_klabauter, doe = "a" * 40, "b" * 40
+    engine_tree, doe = "a" * 40, "b" * 40
     monkeypatch.setattr(publish, "_engine_toplevel_key", lambda: "/claude-klabauter")
-    pins = {"/claude-klabauter": claude_klabauter, "/doe": doe}
+    pins = {"/claude-klabauter": engine_tree, "/doe": doe}
     assert publish._source_sha_suffix(pins, source_head=doe) == f" [source-head {doe[:12]}]"
-    assert publish._source_sha_suffix(pins) == f" [source-head {claude_klabauter[:12]}]"
+    assert publish._source_sha_suffix(pins) == f" [source-head {engine_tree[:12]}]"

@@ -912,6 +912,10 @@ static int env_pair_append(buf_t *pairs, const char *name, size_t name_len,
 
 static int g_door_hook_mode = 0;
 
+/* Set once in `main` from argv; the leading door flags are stripped from the argv forwarded
+ * onward, so this is the only record. */
+static int g_door_advisory = 0;
+
 /* True iff the caller declared hook mode via `DOOR_STDIN_MODE_ENV_NAME`
  * (door_core.h), by VALUE, matching `DOOR_STDIN_MODE_HOOK_VALUE` exactly --
  * no third state, no partial match. */
@@ -1004,6 +1008,11 @@ static int read_hook_line(int fd, buf_t *resp) {
 }
 
 static long long g_call_started_ms = 0;
+/* The warm-call leg in flight (connect, deliver, read; "-" before the socket is touched) and when
+ * it began; door_log_fail_open reports both so a freeze names its leg. */
+static const char *g_leg = "-";
+static long long g_leg_started_ms = 0;
+static void door_enter_leg(const char *leg) { g_leg = leg; g_leg_started_ms = monotonic_ms(); }
 
 /* Appends one line per fail-open to <settings>/state/door-fail-open.log so a
  * stall names its cause. One O_APPEND write; every failure here is silent --
@@ -1023,12 +1032,14 @@ static void door_log_fail_open(const char *cause) {
     char ts[32] = "-";
     if (gmtime_r(&now, &tmv)) strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%SZ", &tmv);
     long long elapsed = g_call_started_ms ? monotonic_ms() - g_call_started_ms : 0;
+    long long leg_ms = g_leg_started_ms ? monotonic_ms() - g_leg_started_ms : 0;
     char line[512];
     int n = snprintf(line, sizeof line,
-                     "ts=%s deadline_ms=%d elapsed_ms=%lld op=%s door_pid=%ld engine_pid=- engine_start=- cause=%.160s\n",
+                     "ts=%s deadline_ms=%d elapsed_ms=%lld op=%s door_pid=%ld leg=%s leg_ms=%lld cause=%.160s\n",
                      ts, !g_door_hook_mode ? DOOR_READ_DEADLINE_MS
                          : g_hook_read_total_ms ? g_hook_read_total_ms : door_hook_read_deadline_ms(),
-                     elapsed, g_hook_op[0] ? g_hook_op : "-", (long)getpid(), cause ? cause : "-");
+                     elapsed, g_hook_op[0] ? g_hook_op : "-", (long)getpid(),
+                     g_leg, leg_ms, cause ? cause : "-");
     if (n > 0) {
         if ((size_t)n >= sizeof line) { n = (int)sizeof line - 1; line[n - 1] = '\n'; }
         write_all_fd(fd, line, (size_t)n);
@@ -1050,6 +1061,33 @@ static int spool_submit_ask(const char *reason, char id[17]) {
     return r != 0;
 }
 
+/* A submit-ask the engine did not take and the spool did not keep is answered with a loud
+ * advisory naming the remedy (recoverable, so never a deny): static bytes, no heap, so no
+ * allocation failure can leave stdout empty. */
+#define DOOR_SUBMIT_UNSPOOLED_ADVISORY \
+    "{\"systemMessage\":\"coordinator: the engine gave no answer and the ask could not be spooled; " \
+    "nothing was minted - re-submit, or check state/warp for a minted run.\",\"suppressOutput\":false," \
+    "\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"coordinator: " \
+    "the engine gave no answer and the ask could not be spooled; nothing was minted - re-submit, " \
+    "or check state/warp for a minted run.\"}}\n"
+
+static int hook_op_is_submit_ask(void) {
+    return strcmp(g_hook_op, DOOR_SUBMIT_ASK_OP) == 0;
+}
+
+static void emit_submit_unspooled_advisory(void) {
+    write_all_fd(STDOUT_FILENO, DOOR_SUBMIT_UNSPOOLED_ADVISORY, sizeof DOOR_SUBMIT_UNSPOOLED_ADVISORY - 1);
+}
+
+/* A spooled ask whose spooled envelope could not be built: heap-free allow advisory. */
+#define DOOR_SUBMIT_SPOOLED_ADVISORY \
+    "{\"systemMessage\":\"coordinator: the ask was spooled; the drain mints it - do not re-submit.\"," \
+    "\"suppressOutput\":false}\n"
+
+static void emit_submit_spooled_advisory(void) {
+    write_all_fd(STDOUT_FILENO, DOOR_SUBMIT_SPOOLED_ADVISORY, sizeof DOOR_SUBMIT_SPOOLED_ADVISORY - 1);
+}
+
 static int emit_hook_pass_loudly(const char *reason) {
     door_log_fail_open(reason);
     buf_t event, out;
@@ -1061,12 +1099,18 @@ static int emit_hook_pass_loudly(const char *reason) {
         event_name = event.data;
     }
     int spooled = spool_submit_ask(reason, spool_id);
+    if (!spooled && hook_op_is_submit_ask()) {
+        if (have_event) free(event.data);
+        emit_submit_unspooled_advisory();
+        return 0;
+    }
     int built = buf_init(&out, 1024) &&
         (spooled ? build_hook_spooled_envelope(&out, spool_id, event_name)
                  : build_hook_pass_loudly_envelope(&out, reason, event_name));
     if (have_event) free(event.data);
     if (!built) {
-        fprintf(stderr, "door: guard did not run: %s\n", reason);
+        if (spooled) emit_submit_spooled_advisory();
+        else fprintf(stderr, "door: guard did not run: %s\n", reason);
         free(out.data);
         return 0;
     }
@@ -1104,7 +1148,7 @@ static int emit_hook_deny(const char *reason) {
     if (!buf_init(&out, 512) || !build_hook_deny_envelope(&out, reason)) {
         fprintf(stderr, "door: hook-mode deny (could not build the envelope)\n");
         free(out.data);
-        return 2;
+        return g_door_advisory ? 0 : 2;
     }
     write_all_fd(STDOUT_FILENO, out.data, out.len);
     free(out.data);
@@ -1160,11 +1204,21 @@ static int emit_hook_post_delivery(const char *full_detail) {
     }
     char spool_id[17] = "";
     int spooled = spool_submit_ask("coordinator-door: engine gave no answer in time", spool_id);
+    if (!spooled && hook_op_is_submit_ask()) {
+        if (have_event) free(event.data);
+        emit_submit_unspooled_advisory();
+        return 0;
+    }
     int built = buf_init(&out, 1024) &&
         (spooled ? build_hook_spooled_envelope(&out, spool_id, event_name)
                  : door_engine_failure_allow_envelope(&out, detail, event_name));
     if (have_event) free(event.data);
     if (!built) {
+        if (spooled) {
+            emit_submit_spooled_advisory();
+            free(out.data);
+            return 0;
+        }
         fprintf(stderr, "door: engine gave no answer in time: %s\n", g_hook_op);
         free(out.data);
         return 1;
@@ -1467,7 +1521,8 @@ static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir
 static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     if (emit_precheck_if_matched()) return 0;
 
-    int advisory = door_argv_declares_advisory(argc, (const char *const *)argv);
+    (void)argc;
+    int advisory = g_door_advisory;
 
     char script_path[PATH_MAX];
     if (resolve_fallback_script(engine_root, script_path) != 0) {
@@ -1668,7 +1723,17 @@ int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
 
     
-    g_door_hook_mode = door_stdin_mode_is_hook();
+    {
+        int n = door_leading_flag_count(argc, (const char *const *)argv);
+        int flag_stdin_hook = door_argv_declares_stdin_hook(argc, (const char *const *)argv);
+        g_door_advisory = door_argv_declares_advisory(argc, (const char *const *)argv);
+        if (n > 0) {
+            for (int i = 1; i + n < argc; i++) argv[i] = argv[i + n];
+            argc -= n;
+            argv[argc] = NULL;
+        }
+        g_door_hook_mode = flag_stdin_hook || door_stdin_mode_is_hook();
+    }
     g_call_started_ms = monotonic_ms();
 
     /* THE READ ITSELF, gated on the flag above and nowhere else -- an
@@ -1862,6 +1927,7 @@ int main(int argc, char **argv) {
     char chosen_dir[PATH_MAX];
     chosen_dir[0] = '\0';
     char chosen_sock[sizeof(((struct sockaddr_un *)0)->sun_path)];
+    door_enter_leg("connect");
     for (int i = 0; i < base_count && fd < 0; i++) {
         char sock_dir[PATH_MAX];
         char sock_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
@@ -1906,7 +1972,7 @@ int main(int argc, char **argv) {
         return rc;
     }
 
-    
+    door_enter_leg("deliver");
     buf_t req;
     if (!buf_init(&req, 4096)) {
         close(fd);
@@ -2127,6 +2193,7 @@ int main(int argc, char **argv) {
         free(engine_root);
         return rc;
     }
+    door_enter_leg("read");
     int read_state = g_door_hook_mode ? read_hook_line(fd, &resp)
                                       : read_line_bounded(fd, &resp, DOOR_READ_DEADLINE_MS);
     close(fd);

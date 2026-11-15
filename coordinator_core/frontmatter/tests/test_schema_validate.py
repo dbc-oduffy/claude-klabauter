@@ -3536,6 +3536,53 @@ class TestArchivePathPrecedence:
         assert any(e['field'] == 'status' for e in (live_result.get('errors') or []))
 
 
+class TestUnregisteredKindSkipsGlobFallback:
+    """match_schema(): a declared kind no schema registers gets no schema, not the path glob."""
+
+    _VERDICT_PATH = 'docs/research/spikes/x/verdict.md'
+
+    def test_unregistered_kind_on_verdict_path_resolves_to_none(self):
+        schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
+        fm = {'title': 't', 'kind': 'spike-inconclusive'}
+        assert match_schema(self._VERDICT_PATH, fm, schemas) is None
+
+    def test_no_kind_on_verdict_path_still_resolves_and_fails_verdict_fields(self):
+        schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
+        fm = {'title': 't'}
+        resolved = match_schema(self._VERDICT_PATH, fm, schemas)
+        assert resolved is not None
+        result = validate_frontmatter_obj(fm, resolved['schema'])
+        missing = {e['field'] for e in (result.get('errors') or [])}
+        assert {'verdict', 'mechanism'} <= missing
+
+    def test_registered_kind_still_resolves_by_kind(self):
+        schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
+        resolved = match_schema(self._VERDICT_PATH, {'kind': 'session-handoff'}, schemas)
+        assert resolved is not None
+        assert resolved['schemaName'] == 'handoff'
+
+    @staticmethod
+    def _delivery_shape_schemas():
+        return {
+            '_byKind': {},
+            '_byGlob': [
+                {'glob': 'cross-repo/**/*.md', 'schemaName': 'cross-repo-memo'},
+                {'glob': 'docs/research/spikes/*/verdict.md', 'schemaName': 'verdict'},
+            ],
+            'cross-repo-memo': {'x': 'memo'},
+            'verdict': {'x': 'verdict'},
+        }
+
+    def test_memo_with_unregistered_kind_still_routes_by_glob(self):
+        resolved = match_schema('cross-repo/doe/m.md', {'kind': 'fyi'}, self._delivery_shape_schemas())
+        assert resolved is not None
+        assert resolved['schemaName'] == 'cross-repo-memo'
+
+    def test_non_memo_glob_still_skipped_for_unregistered_kind(self):
+        schemas = self._delivery_shape_schemas()
+        assert match_schema(self._VERDICT_PATH, {'kind': 'fyi'}, schemas) is None
+
+
 class TestPlansIndexRoutingExclusion:
     """match_schema(): docs/plans/INDEX.md and docs/plans/README.md (the
     plan-collector's own directory-index exclusion set,

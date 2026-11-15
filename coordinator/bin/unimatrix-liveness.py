@@ -241,6 +241,16 @@ def codex_holder_unbacked(state, d, now=None):
             and not stamp_fresh(d, "startedAt", CODEX_FACE_GRACE_SECONDS, now))
 
 
+def far_codex_row_unbacked(d, now=None):
+    """True for a far Codex row with no live holder: the far box reported "dead" or "unknown", or reported
+    nothing (a box that never stamps `codexHolder` cannot prove life), and the row is past
+    `CODEX_FACE_GRACE_SECONDS`. A row without an int `startedAt` is unprovable and answers False."""
+    if not isinstance(d, dict) or d.get("vendor") != "codex":
+        return False
+    holder = d.get("codexHolder")
+    return codex_holder_unbacked(holder if holder in ("live", "dead", "unknown") else "unknown", d, now)
+
+
 def codex_face_unbacked(d, home=None, now=None):
     """True for a local Codex peer face with no live attached holder; anything unprovable answers False."""
     return codex_holder_unbacked(codex_face_holder(d, home), d, now)
@@ -347,8 +357,12 @@ def _slug(alias):
     return alias.replace("@", "_at_")
 
 
-def healthy(state_dir, now=None):
+def healthy(state_dir, now=None, probe=None):
     """True only when the boxes cache is under 24h old and every listed alias has both supervisors live.
+
+    With `probe`, every alias is then probed concurrently (`probe(alias)` returns None when answered, a
+    reason string otherwise) and any reason makes it unhealthy; no probe runs while a supervisor is dead.
+    Speculative: no production caller passes `probe` yet (autolink calls `healthy` without it).
 
     A fresh cache listing zero aliases is healthy; a missing or unreadable cache is not."""
     sdir = Path(state_dir)
@@ -367,6 +381,10 @@ def healthy(state_dir, now=None):
         rec = read_record(sdir / f"autolink-{_slug(alias)}.json")
         if not all(supervisor_live(rec.get(role) or {}) for role in ROLES):
             return False
+    if probe is not None and aliases:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(aliases)) as pool:
+            return not any(list(pool.map(probe, aliases)))
     return True
 
 

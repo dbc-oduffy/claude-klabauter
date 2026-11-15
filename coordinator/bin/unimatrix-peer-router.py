@@ -1460,6 +1460,41 @@ class Router:
         self.log("RELAY-TARGET", name, "->", row[0], row[1])
         return {"ok": True, "endpoint": endpoint, "name": row[0], "box": row[1]}
 
+    def _session_rows(self):
+        """Every readable session entry in the registry, listed or not."""
+        rows = []
+        try:
+            files = os.listdir(self.sessions_dir)
+        except OSError:
+            return rows
+        for f in files:
+            if not f.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(self.sessions_dir, f), encoding="utf-8") as fh:
+                    row = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+        return rows
+
+    def resolve_send_target(self, name):
+        """{"ok": True, "endpoint", "name", "box"} when `name` is a session the roster listing shows, else
+        {"ok": False, "error"} naming it. A ghost or unknown name never reaches a bridge."""
+        endpoint = self.resolve_sender(name) if isinstance(name, str) and name else ""
+        if endpoint:
+            rows = self._session_rows()
+            held = [r for r in rows if r.get("messagingSocketPath") == endpoint]
+            if not any(_roster().listed_row(r, rows) for r in held):
+                endpoint = ""
+                self.last_refusal = "not in the live listing"
+        if not endpoint:
+            self.last_resolved_far, self.last_resolved_row = False, None
+            return {"ok": False, "error": f"no unique live session named {name}" + self._refusal_suffix()}
+        row = self.last_resolved_row or (name, "")
+        return {"ok": True, "endpoint": endpoint, "name": row[0], "box": row[1]}
+
     def _refusal_suffix(self):
         return f" ({self.last_refusal})" if self.last_refusal else ""
 
@@ -1488,10 +1523,11 @@ class Router:
         return "", f"{to} is a Windows pipe endpoint and this box has no relay route to it"
 
     async def _transport_send_to_session(self, source, to, text):
-        endpoint = self.resolve_sender(to)
+        target = self.resolve_send_target(to)
+        endpoint = target.get("endpoint", "")
         if not endpoint:
             self.log("RELAY-REFUSED", to, self.last_refusal or "no live session")
-            return {"ok": False, "error": f"no unique live session named {to}" + self._refusal_suffix(), "peers": sorted(self.peers)}
+            return {**target, "peers": sorted(self.peers)}
         far, reached = self.last_resolved_far, self.last_resolved_row
         endpoint, refusal = self.relay_route(endpoint, to)
         if refusal:
@@ -1576,10 +1612,11 @@ class Router:
 
     async def _peer_send_to_session(self, peer, to, text):
         """A peer's own addressed send to a Claude session `to`; marks the peer's open turn as answered."""
-        ep = self.resolve_sender(to)
+        target = self.resolve_send_target(to)
+        ep = target.get("endpoint", "")
         if not ep:
             self.log("RELAY-REFUSED", to, self.last_refusal or "no live session")
-            return {"ok": False, "error": f"no session named {to}" + self._refusal_suffix(), "peers": sorted(self.peers)}
+            return {**target, "peers": sorted(self.peers)}
         far, reached = self.last_resolved_far, self.last_resolved_row
         ep, refusal = self.relay_route(ep, to)
         if refusal:

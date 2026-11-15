@@ -243,6 +243,7 @@ def _spawn_pytest_capped(resolved: Sequence[str], cwd: Path, timeout: int) -> tu
             errors="replace",
             **no_console_creationflags(),
         ),
+        background=True,
     )
     try:
         try:

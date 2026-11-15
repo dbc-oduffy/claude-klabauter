@@ -86,6 +86,7 @@ from coordinator_core.contract.decision_object.judgment import (
     build_untrusted_gate_judgment_point,
 )
 from coordinator_core.ops.agent_worktree_sweep import _repo_root as _wt_repo_root
+from coordinator_core.backlog_grind_assemble.readers_blitz import triage_preview
 from coordinator_core.ops.queue_family import load_family_records
 
 __all__ = ["ReaderResult", "collect"]
@@ -187,6 +188,7 @@ def _build_batched_pm_gate(
     debt_open: list[dict],
     bug_overlaps: list[dict],
     improvement_open: list[dict],
+    triage_note: str = "",
 ) -> dict[str, Any]:
     """Build the ONE batched untrusted-gate judgment point mirroring
     `debt-triage/SKILL.md` Step 5's own PM gate ("This is the terminus's PM
@@ -219,6 +221,7 @@ def _build_batched_pm_gate(
         f"debt-backlog groups (surface path, else title/body path): {groups_str} | "
         f"improvement-queue open={len(improvement_open)} | "
         f"bug/debt exact-surface overlaps: {overlap_summary}"
+        + (f" | debt-backlog {triage_note}" if triage_note else "")
     )
     return build_untrusted_gate_judgment_point(
         id="j-debt-triage-batched-pm-gate",
@@ -259,5 +262,6 @@ def collect(cadence: str, *, run_id: Optional[str] = None) -> ReaderResult:
         debt_open=debt_open,
         bug_overlaps=bug_overlaps,
         improvement_open=improvement_open,
+        triage_note=triage_preview(debt_open, repo_root, "debt"),
     )
     return ReaderResult(directives=[], judgment_points=[jp])

@@ -15,6 +15,10 @@ settled afterwards. The run token is redeemed,
 consumed on a landed commit and released on every other return. A repeat call after a landing is
 answered from the run token's spent receipt; a requested row the receipt lacks lands in one follow-up
 commit under the same rules, and a repeat with nothing new lands nothing.
+
+A ``grind`` carrying ``per_row: true`` over more than one row lands through ``land_green_rows``: each row
+as its own commit instead of one batch. A row carrying
+``closed_by: fix`` with no landed commit sha is listed under ``close_refused`` in either mode.
 """
 
 from __future__ import annotations
@@ -47,6 +51,13 @@ POST_LANDING_RECEIPT = "review: post-landing (grind exemption, DR-grind-review-r
 DROP_MISSING = "missing-from-worktree"
 
 
+#: A row's ``closed_by`` value claiming a code fix. Trap: ``close_refused`` only reports; it blocks no close, and
+#: no composed-script row carries ``closed_by`` today, so the report fires only for a caller that sets it.
+CLOSED_BY_FIX = "fix"
+
+#: Reply key listing the ``closed_by: fix`` rows refused for want of a landed sha.
+CLOSE_REFUSED_KEY = "close_refused"
+
 #: Drops that never hold a row open: a ledger-root path is evidence, not product, and an unseen deletion is already true.
 _NON_PRODUCT_DROPS = frozenset({DROP_LEDGER_ROOT, DROP_UNSEEN_DELETION})
 
@@ -60,14 +71,89 @@ def land(worktree_root: Path, repo_root: Path, params: dict) -> dict:
     return commit_grind_rows(worktree_root, repo_root, params)
 
 
+def _fix_close_refusals(grind: object, reply: dict) -> list:
+    """``[{row_id, reason}]`` for each requested row carrying ``closed_by: fix`` that the reply shows
+    with no landed commit sha. Such a row's close is refused: a fix claim needs a commit to point at."""
+    rows = grind.get("rows") if isinstance(grind, dict) else None
+    if not isinstance(rows, list):
+        return []
+    landed = {
+        r.get("row_id") for r in reply.get("rows") or [] if isinstance(r, dict) and r.get("sha")
+    }
+    return [
+        {"row_id": r["row_id"], "reason": f"closed_by {CLOSED_BY_FIX} carries no landed commit sha"}
+        for r in rows
+        if isinstance(r, dict) and r.get("closed_by") == CLOSED_BY_FIX and r.get("row_id") not in landed
+    ]
+
+
+#: ``grind`` key a composed script sets to land each finished row as its own commit.
+PER_ROW_KEY = "per_row"
+
+
+def _wants_per_row(grind: object) -> bool:
+    rows = grind.get("rows") if isinstance(grind, dict) else None
+    return isinstance(grind, dict) and grind.get(PER_ROW_KEY) is True and isinstance(rows, list) and len(rows) > 1
+
+
 def commit_grind_rows(main_root: Path, repo_root: Path, params: dict, ledger_paths: Sequence[str] = ()) -> dict:
     """Land the finished rows in ``params[GRIND_COMMIT_PARAM]`` as one commit; the in-process entry
     ``grind_settle_run`` calls. Reply shape in ``grind_commit_contract``'s docstring plus ``stranded``
-    (``[{row_id, path, reason}]``, the dropped paths of finished rows) and ``paths``. ``repo_root`` is
+    (``[{row_id, path, reason}]``, the dropped paths of finished rows), ``paths`` and ``close_refused``
+    (``[{row_id, reason}]``: a ``closed_by: fix`` row with no landed sha). ``repo_root`` is
     the caller's common dir; the commit and every read go through ``main_root``.
 
     ``ledger_paths`` are the run's own manifest-named ledger-root files: the ones still changed ride
     in the same commit, except a landed row's ledger, which settle unlinks. They never hold a row."""
+    grind = params.get(GRIND_COMMIT_PARAM)
+    if _wants_per_row(grind):
+        return land_green_rows(main_root, repo_root, params, ledger_paths)
+    reply = _commit_grind_rows(main_root, repo_root, params, ledger_paths)
+    refused = _fix_close_refusals(grind, reply)
+    if refused:
+        reply = {**reply, CLOSE_REFUSED_KEY: refused}
+    return reply
+
+
+def land_green_rows(main_root: Path, repo_root: Path, params: dict, ledger_paths: Sequence[str] = ()) -> dict:
+    """Land each row of ``params[GRIND_COMMIT_PARAM]`` as its own scoped commit, in row order, so a stop
+    leaves only the rows not yet reached unlanded. Each commit carries only that row's declared paths
+    (the worker-reported touched files) and its own ``Grind-Row:`` trailer. ``run_token`` is redeemed by
+    the first row that lands; later rows land as late rows of the spent token. Reply: ``commit_grind_rows``'s shape merged over every
+    row, plus ``commits`` (``[{row_id, sha}]``, one per landed row) and ``sha`` of the last commit.
+
+    Entered from ``commit_grind_rows`` when ``grind.per_row`` is true, which the composed script sets.
+    Trap: ``ledger_paths`` go to every row's call, so the first commit also carries the ledger files of
+    rows not yet reached."""
+    grind = params[GRIND_COMMIT_PARAM]
+    bad = validate_grind_params(grind)
+    if bad is not None:
+        return _error(bad, refused="grind-params")
+    base_grind = {k: v for k, v in grind.items() if k != PER_ROW_KEY}
+    commits: list = []
+    merged: dict = {"dropped": [], "stranded": [], "rows": [], UNLANDED_KEY: [], "reopened": []}
+    refused: list = []
+    error: Optional[dict] = None
+    for row in grind["rows"]:
+        reply = commit_grind_rows(
+            main_root, repo_root, {**params, GRIND_COMMIT_PARAM: {**base_grind, "rows": [row]}}, ledger_paths,
+        )
+        for key in ("dropped", "stranded", "rows", UNLANDED_KEY, "reopened"):
+            merged[key] += reply.get(key) or []
+        refused += reply.get(CLOSE_REFUSED_KEY) or []
+        if reply.get("committed") is True:
+            commits.append({"row_id": row["row_id"], "sha": reply["sha"]})
+        elif reply.get("error") and error is None:
+            error = reply
+    out = {"committed": bool(commits), "sha": commits[-1]["sha"] if commits else None, "commits": commits, **merged}
+    if error is not None:
+        out.update(error=error["error"], refused=error.get("refused"))
+    if refused:
+        out[CLOSE_REFUSED_KEY] = refused
+    return out
+
+
+def _commit_grind_rows(main_root: Path, repo_root: Path, params: dict, ledger_paths: Sequence[str]) -> dict:
     from coordinator_core.ops.dispatch_emit import run_token
 
     grind = params[GRIND_COMMIT_PARAM]
@@ -87,7 +173,7 @@ def commit_grind_rows(main_root: Path, repo_root: Path, params: dict, ledger_pat
         if receipt is None:
             minted_in = _minting_checkout(main_root, run_id, token, script_path)
             if minted_in is not None:
-                return commit_grind_rows(minted_in, run_token._common_dir(minted_in), params, ledger_paths)
+                return _commit_grind_rows(minted_in, run_token._common_dir(minted_in), params, ledger_paths)
         if receipt is not None:
             return _land_late_rows(main_root, repo_root, receipt, grind, params, run_id, ledger_paths)
         return _error(

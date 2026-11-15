@@ -912,6 +912,30 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "parameter is a read-only commit-to-files lookup, no commit is made",
         "confirmed": True,
     },
+    "benchmarks/distill_bookkeeping_bench.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/update_docs_ops_budget.py::ensure_ops_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "ops/dispatch_emit/run_landing.py::_commit": {
+        "reason": "ineligible: run_landing has no production caller yet (the dormant rebuild of dispatch.land_run); land_run._attempt releases for the live path, and the wire-in must add the release here before run_landing goes live",
+        "confirmed": False,
+    },
+    "ops/dispatch_emit/run_landing.py::_fallback_commit": {
+        "reason": "ineligible: run_landing has no production caller yet (the dormant rebuild of dispatch.land_run); land_run._attempt releases for the live path, and the wire-in must add the release here before run_landing goes live",
+        "confirmed": False,
+    },
+    "ops/dispatch_emit/run_landing.py::_land_siblings": {
+        "reason": "ineligible: run_landing has no production caller yet (the dormant rebuild of dispatch.land_run); land_run._attempt releases for the live path, and the wire-in must add the release here before run_landing goes live",
+        "confirmed": False,
+    },
+    "ops/fleet/_receiver_materialize.py::materialize_memo": {
+        "reason": "ineligible: commits a delivered memo into the receiver repo, never the sending session's own worktree -- no session claims exist there to release",
+        "confirmed": True,
+    },
 }
 
 

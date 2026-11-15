@@ -27,9 +27,9 @@ def _ledger_path(repo_root: Path) -> Path:
     if override:
         return Path(override) / LEDGER_NAME
     if _same_path(str(repo_root), _claude_home()):
-        claude_klabauter = _claude_klabauter_root()
-        if claude_klabauter is not None:
-            return Path(claude_klabauter) / "state" / LEDGER_NAME
+        engine_tree = _claude_klabauter_root()
+        if engine_tree is not None:
+            return Path(engine_tree) / "state" / LEDGER_NAME
     return repo_root / "state" / LEDGER_NAME
 
 

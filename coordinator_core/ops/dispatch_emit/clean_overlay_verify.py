@@ -83,6 +83,7 @@ def _run(
             cwd=str(cwd), env=env, stdin=subprocess.DEVNULL if stdin_text is None else subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, errors="replace", **no_console_creationflags(),
         ),
+        background=True,
     )
     try:
         out, err = proc.communicate(input=stdin_text, timeout=timeout)
@@ -97,9 +98,15 @@ def _run(
 
 def _gate_python(root: Path) -> str:
     """The interpreter the repo's test gate pins (same ladder as `retest_targeted`), read from the live
-    repo's coordinator.local.md; `sys.executable` when none is pinned or the pin does not resolve."""
+    repo's coordinator.local.md; `sys.executable` when none is pinned or the pin does not resolve.
+    Trap: under the pythonw engine `sys.executable` is windowless; a windowless pytest hands its own
+    children invalid std handles (WinError 6 on any test that spawns git), so the console sibling runs it."""
+    from coordinator_core.pyresolve import _console_sibling
+
     pin = resolve_targeted_test_python(root)
-    return pin.command if pin.command and pin.defect is None else sys.executable
+    if pin.command and pin.defect is None:
+        return pin.command
+    return _console_sibling(sys.executable) or sys.executable
 
 
 def engine_python_command(root: Path) -> str:

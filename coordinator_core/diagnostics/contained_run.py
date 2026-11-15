@@ -191,6 +191,36 @@ if IS_WINDOWS:
         if not ok:
             raise ctypes.WinError(ctypes.get_last_error())
 
+    BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+
+    _kernel32.GetCurrentProcess.argtypes = []
+    _kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    _kernel32.GetProcessAffinityMask.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    _kernel32.GetProcessAffinityMask.restype = wintypes.BOOL
+    _kernel32.SetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.c_size_t]
+    _kernel32.SetProcessAffinityMask.restype = wintypes.BOOL
+
+    def _current_affinity_cpus() -> list[int]:
+        proc_mask = ctypes.c_size_t()
+        sys_mask = ctypes.c_size_t()
+        if not _kernel32.GetProcessAffinityMask(
+            _kernel32.GetCurrentProcess(), ctypes.byref(proc_mask), ctypes.byref(sys_mask)
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return [i for i in range(ctypes.sizeof(ctypes.c_size_t) * 8) if proc_mask.value >> i & 1]
+
+    def _apply_background_affinity(process_handle) -> None:
+        """Pin the (still suspended) child to `background_cpus`; descendants inherit the mask."""
+        mask = 0
+        for cpu in background_cpus(_current_affinity_cpus()):
+            mask |= 1 << cpu
+        if mask and not _kernel32.SetProcessAffinityMask(process_handle, mask):
+            raise ctypes.WinError(ctypes.get_last_error())
+
     def _resume_suspended_process(pid: int) -> None:
         """Resume every thread of a CREATE_SUSPENDED process by pid.
 
@@ -252,6 +282,41 @@ def derive_worker_cap() -> int:
 
 
 DEFAULT_ACTIVE_PROCESS_LIMIT = 50
+BACKGROUND_CPU_DIVISOR = 3
+POSIX_BACKGROUND_NICE = 10
+
+
+def background_cpus(allowed) -> list[int]:
+    """Lowest `max(1, len(allowed) // BACKGROUND_CPU_DIVISOR)` of the allowed cpu ids: a background leg's share."""
+    allowed = sorted(allowed)
+    return allowed[: max(1, len(allowed) // BACKGROUND_CPU_DIVISOR)]
+
+
+def _background_env(env) -> dict:
+    """`env` (default: this process's) with each BLAS pool capped at one thread unless the caller set it."""
+    from coordinator_core.testing.spawn_depth import BLAS_THREAD_KEYS
+
+    out = dict(os.environ if env is None else env)
+    for key in BLAS_THREAD_KEYS:
+        out.setdefault(key, "1")
+    return out
+
+
+def _posix_background_preexec(prior):
+    cpus = None
+    if hasattr(os, "sched_getaffinity") and hasattr(os, "sched_setaffinity"):
+        cpus = set(background_cpus(os.sched_getaffinity(0)))
+
+    def preexec() -> None:
+        if prior is not None:
+            prior()
+        os.nice(POSIX_BACKGROUND_NICE)
+        if cpus:
+            os.sched_setaffinity(0, cpus)
+
+    return preexec
+
+
 _MIN_JOB_MEMORY_BYTES = 512 * 1024 * 1024
 # Steady-state private commit (not RSS, not sessionstart) of one pytest process on a heavy
 # suite: collecting 80 dispatch_emit files peaks ~860 MiB per process; 8 workers died under a
@@ -310,8 +375,14 @@ def spawn_in_capped_job(
     active_process_limit: int = DEFAULT_ACTIVE_PROCESS_LIMIT,
     job_memory_limit_bytes=None,
     process_count: int | None = None,
+    background: bool = False,
 ):
     """Start `argv` inside a process-count- and memory-capped tree; returns `(proc, close)`.
+
+    `background=True` makes the tree a low-priority test leg: BelowNormal priority (nice +10 on
+    POSIX), affinity of the lowest `max(1, cpus // 3)` allowed cpus where the OS supports it
+    (applied before the child runs), and BLAS pools at one thread unless the caller's env sets
+    them. Default off: `private_engine` stays Normal.
 
     `process_count` is how many processes the caller expects live (e.g. xdist workers + 1); the
     default memory cap is that many x `PER_PROCESS_COMMIT_BYTES`. Ignored when
@@ -326,8 +397,12 @@ def spawn_in_capped_job(
     refuse fork for every peer session of the same user.
     """
     kwargs = dict(popen_kwargs or {})
+    if background:
+        kwargs["env"] = _background_env(kwargs.get("env"))
     if not IS_WINDOWS:
         kwargs["start_new_session"] = True
+        if background:
+            kwargs["preexec_fn"] = _posix_background_preexec(kwargs.get("preexec_fn"))
         from coordinator_core.win_portability import no_console_creationflags
 
         proc = subprocess.Popen(argv, **no_console_creationflags(), **kwargs)
@@ -344,6 +419,8 @@ def spawn_in_capped_job(
         job_memory_limit_bytes = default_job_memory_limit_bytes(process_count)
     job = create_capped_job(active_process_limit, job_memory_limit_bytes)
     base_flags = kwargs.pop("creationflags", CREATE_NO_WINDOW) | CREATE_SUSPENDED
+    if background:
+        base_flags |= BELOW_NORMAL_PRIORITY_CLASS
     proc = None
     try:
         proc = subprocess.Popen(argv, creationflags=base_flags, **kwargs)
@@ -359,6 +436,8 @@ def spawn_in_capped_job(
                 argv, creationflags=base_flags | CREATE_BREAKAWAY_FROM_JOB, **kwargs
             )
             _assign_to_job(job, int(proc._handle))
+        if background:
+            _apply_background_affinity(int(proc._handle))
         _resume_suspended_process(proc.pid)
     except BaseException:
         if proc is not None and proc.poll() is None:

@@ -89,14 +89,19 @@ actual lock scope and the prompt's own description of it never diverge.
 
 Negative-spec: this module performs no runtime read of any transcript,
 file, or clock at import or call time; ``compose_grind_script`` is a pure
-function of its arguments. It owns no CLI, no op registration, no disk
-write of its own -- ``queue_emit.py`` (C8) writes the returned text.
+function of its arguments, except that with ``repo_root`` it first runs
+``triage_manifest`` (git/pytest spawns) and ``close_triaged_rows`` (row
+closes). It owns no CLI and no op registration; ``queue_emit.py`` (C8)
+writes the returned text.
 
 Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md
 § Design § Composer, Tasks § C7.
 """
 from __future__ import annotations
 
+import contextlib
+import dataclasses
+import io
 import json
 import posixpath
 import re
@@ -1451,18 +1456,51 @@ def _split_over_tier(
     return out
 
 
+def _chunk_entries(
+    entries: list[ManifestEntry], size: int, clusters: Optional[Mapping[str, int]]
+) -> list[list[ManifestEntry]]:
+    """`size`-row chunks of `entries`; with `clusters` (row_id -> cluster rank) rows of one cluster sit
+    together and a cluster of at most `size` rows is never split across chunks. A larger cluster fills
+    consecutive chunks of its own: `size` bounds a triage agent's output."""
+    if not clusters:
+        return [entries[i : i + size] for i in range(0, len(entries), size)]
+    ordered = sorted(entries, key=lambda e: clusters.get(e.row_id, len(clusters) + 1))
+    groups: list[list[ManifestEntry]] = []
+    for entry in ordered:
+        rank = clusters.get(entry.row_id)
+        if groups and rank is not None and clusters.get(groups[-1][0].row_id) == rank:
+            groups[-1].append(entry)
+        else:
+            groups.append([entry])
+    chunks: list[list[ManifestEntry]] = []
+    current: list[ManifestEntry] = []
+    for group in groups:
+        if current and len(current) + len(group) > size:
+            chunks.append(current)
+            current = []
+        if len(group) > size:
+            chunks.extend(group[i : i + size] for i in range(0, len(group), size))
+        else:
+            current.extend(group)
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def _group_into_batches(
     manifest: Manifest,
     knobs: Mapping[str, Any],
     profile: Optional[Profile] = None,
     *,
     repo_root: Optional[Path] = None,
+    clusters: Optional[Mapping[str, int]] = None,
 ) -> list[tuple[str, list[ManifestEntry]]]:
     """Chunk rows per batch_key; with a `profile`, pack under-filled remainder chunks of compatible keys into `@packed-b<n>` batches
     (compatible: equal triage depth and equal verify spec on every verify node).
 
     With `repo_root`, a batch (packed or not) whose row files project over the long-prompt tier is split
-    after packing; the count knob alone governs below it.
+    after packing; the count knob alone governs below it. With `clusters` (see `triage_manifest`), rows
+    sharing a failure signature stay in one batch, so one agent takes the cluster.
     A packed batch mixes batch_keys, so consumers must read a row's own key from its manifest entry.
     """
     batch_size_knob = knobs.get("batch_size", 4)
@@ -1483,8 +1521,7 @@ def _group_into_batches(
             else batch_size_knob
         )
         size = max(1, int(size))
-        for i in range(0, len(entries), size):
-            chunk = entries[i : i + size]
+        for n, chunk in enumerate(_chunk_entries(entries, size, clusters)):
             # `-`, not `:` -- this id is embedded verbatim as a
             # `records/<batch-id>.json` filename in the composed triage and
             # verify-op stage prompts (grind_stages.py::compose_triage_call,
@@ -1494,7 +1531,7 @@ def _group_into_batches(
             # and is never parsed back out (grind_rows.py::_extract_batch_rows
             # matches the id by exact string equality), so the separator
             # carries no meaning worth an NTFS-illegal char.
-            own_id = f"{key}-b{i // size}"
+            own_id = f"{key}-b{n}"
             if profile is not None and len(chunk) < min(size, default_size):
                 remainders.append((own_id, key, chunk))
             else:
@@ -1520,6 +1557,134 @@ def _group_into_batches(
             batches.append((f"{PACKED_BATCH_PREFIX}{next_packed}", [e for _, _, c in pack for e in c]))
             next_packed += 1
     return _split_over_tier(batches, repo_root) if repo_root is not None else batches
+
+
+#: `closed_by` per triage verdict: a test row that passed in isolation is a flake, a non-test row whose
+#: cited path is gone at HEAD is already green. Two dispositions, never one value for both.
+TRIAGE_CLOSED_BY = {"flake": "flake", "not_reproduced": "already-green"}
+
+_RUN_STAMP_RE = re.compile(r"\d{8}T\d{6}Z?")
+
+
+@dataclass(frozen=True)
+class TriageOutcome:
+    """What `triage_manifest` decided: the survivor manifest, the rows closed before dispatch, the clusters.
+
+    `closed` is `[{row_id, path, verdict, evidence, closed}]` (`closed` False names a row excluded from this
+    run but left open, with `error`); `clusters` maps a survivor's row_id to its cluster rank; `error` is
+    non-empty when the stage failed open and every row survived."""
+
+    manifest: Manifest
+    closed: tuple[dict[str, Any], ...] = ()
+    clusters: Mapping[str, int] = field(default_factory=dict)
+    error: str = ""
+
+
+def _read_row_fields(entry: ManifestEntry, repo_root: Path) -> Optional[dict[str, Any]]:
+    """The row's frontmatter (or whole-document YAML) as a dict; None when unreadable."""
+    from coordinator_core.frontmatter import primitives as fm_primitives
+    from coordinator_core.frontmatter import schema_validate
+
+    path = Path(entry.path)
+    try:
+        text = (path if path.is_absolute() else Path(repo_root) / path).read_text(encoding="utf-8")
+        split = fm_primitives.split_frontmatter(text)
+        parsed = schema_validate.parse_yaml(split.fm_text if split is not None else text)
+    except (OSError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def triage_manifest(manifest: Manifest, repo_root: Path, profile_name: str) -> TriageOutcome:
+    """Run every manifest row through `grind_triage.triage` then `cluster_rows`; no row is closed here.
+
+    A test row that passes in isolation (FLAKE) and a non-test row whose cited path is gone at HEAD
+    (NOT_REPRODUCED) leave the manifest; survivors keep it, in order, with a cluster rank per row_id
+    (cluster order = first appearance). The manifest digest is kept: it names the admitted manifest the
+    emit receipt records. An unreadable row survives. A triage exception fails open: every row survives
+    and `error` says why."""
+    from coordinator_core.backlog_grind_assemble.readers_blitz import triage_row
+    from coordinator_core.grind_triage.cluster import cluster_rows
+    from coordinator_core.grind_triage.contract import Verdict
+    from coordinator_core.grind_triage.triage import triage
+
+    rows = []
+    for entry in manifest.entries:
+        fields = _read_row_fields(entry, repo_root)
+        if fields is not None:
+            rows.append(triage_row(entry.row_id, fields, profile_name))
+    if not rows:
+        return TriageOutcome(manifest=manifest)
+    try:
+        results = triage(rows, repo_root)
+    except Exception as exc:  # noqa: BLE001 - a triage defect must not refuse an emit
+        return TriageOutcome(manifest=manifest, error=f"{type(exc).__name__}: {exc}")
+    dropped = {r.key: r for r in results if r.verdict is not Verdict.SURVIVOR}
+    kept_rows = [r for r in rows if r.key not in dropped]
+    rank_of_row = {
+        key: rank for rank, cluster in enumerate(cluster_rows(kept_rows)) for key in cluster.row_keys
+    }
+    first_seen: dict[int, int] = {}
+    clusters: dict[str, int] = {}
+    for entry in manifest.entries:
+        if entry.row_id in rank_of_row:
+            clusters[entry.row_id] = first_seen.setdefault(rank_of_row[entry.row_id], len(first_seen))
+    closed = tuple(
+        {"row_id": e.row_id, "path": e.path, "verdict": dropped[e.row_id].verdict.value,
+         "evidence": dropped[e.row_id].evidence, "closed": False}
+        for e in manifest.entries
+        if e.row_id in dropped
+    )
+    survivors = tuple(e for e in manifest.entries if e.row_id not in dropped)
+    return TriageOutcome(
+        manifest=dataclasses.replace(manifest, entries=survivors), closed=closed, clusters=clusters
+    )
+
+
+def close_triaged_rows(
+    outcome: TriageOutcome,
+    manifest: Manifest,
+    profile: Profile,
+    repo_root: Path,
+    *,
+    run_key: str,
+    run_stamp: Optional[str] = None,
+) -> tuple[dict[str, Any], ...]:
+    """Close each row `outcome` dropped through `grind-row close` with `closed_by` per `TRIAGE_CLOSED_BY`; return `outcome.closed`
+    with `closed` set and, for a row that stayed open, `error` naming why.
+
+    The stamp is `run_stamp`, else the `YYYYMMDDTHHMMSS[Z]` run id inside `run_key`; with neither no row is closed
+    (each reply says so) and the rows simply miss this run. Evidence is one file per row under the profile's
+    evidence tree. A refused close leaves the row open: triage never forces a write."""
+    from coordinator_core.backlog_grind_assemble import grind_rows
+
+    match = _RUN_STAMP_RE.search(run_key)
+    stamp = run_stamp or (match.group(0) if match else "")
+    by_id = {e.row_id: e for e in manifest.entries}
+    out: list[dict[str, Any]] = []
+    for item in outcome.closed:
+        entry = by_id.get(item["row_id"])
+        if entry is None or not stamp:
+            out.append({**item, "error": "no run stamp to close under" if not stamp else "row not in manifest"})
+            continue
+        evidence_rel = grind_rows.evidence_rel(profile.name, run_key, entry.row_id, "verify")
+        evidence_path = Path(repo_root) / evidence_rel
+        try:
+            evidence_path.parent.mkdir(parents=True, exist_ok=True)
+            evidence_path.write_text(f"triage {item['verdict']}: {item['evidence']}\n", encoding="utf-8", newline="\n")
+        except OSError as exc:
+            out.append({**item, "error": f"evidence write failed: {exc}"})
+            continue
+        sink, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(err):
+            code = grind_rows.cmd_close([
+                "--profile-dir", str(profile.source_path.parent), "--profile", profile.name,
+                "--row", entry.path, "--digest", entry.digest, "--verdict", "refute-close",
+                "--evidence-file", str(evidence_path), "--closed-by", TRIAGE_CLOSED_BY[item["verdict"]],
+                "--run-stamp", stamp, "--repo-root", str(repo_root),
+            ])
+        out.append({**item, "closed": True} if code == 0 else {**item, "error": err.getvalue().strip()[-300:] or f"exit {code}"})
+    return tuple(out)
 
 
 PREVET_CLASSES = ("keep", "discard-candidate", "dedupe-candidate")
@@ -1875,6 +2040,7 @@ _TERMINAL_COMMIT_JS = (
     "  _pendingCommit.push({ row_id: rowId, outcome: row.lastOutcome || 'settled', paths, deleted_paths: deleted });\n"
     "  paths.concat(deleted).forEach((p) => _runDirty.add(p));\n"
     "  _settled.push({ row: rowId, outcome: 'committed', sha: '' });\n"
+    "  _checkpoint();\n"
     "}\n"
     "function _unsettle(rowId) {\n"
     "  const j = _settled.findIndex((s) => s.row === rowId && s.outcome === 'committed');\n"
@@ -1912,7 +2078,7 @@ _TERMINAL_COMMIT_JS = (
     "  if (!RUN_TOKEN) { _failAll('no run token in the fire args: the terminal commit cannot run' + SETTLE_HINT); return; }\n"
     "  const _halted = _haltReason();\n"
     "  const _params = { script_path: SCRIPT_PATH, run_id: RUN_ID, run_token: RUN_TOKEN, "
-    "grind: { profile: PROFILE_NAME, rows: queued, halted: _halted } };\n"
+    "grind: { profile: PROFILE_NAME, rows: queued, halted: _halted, per_row: true } };\n"
     "  const _size = JSON.stringify(JSON.stringify(_params)).length;\n"
     "  if (_size > PARAMS_BUDGET) { _failAll(`terminal commit params are ${_size} bytes escaped, over the ${PARAMS_BUDGET} the spawn transcript can carry; the rows stay on disk` + SETTLE_HINT); return; }\n"
     "  let reply;\n"
@@ -1951,7 +2117,12 @@ _TERMINAL_COMMIT_JS = (
 )
 
 
-def _manifest_const(manifest: Manifest, not_admitted: Sequence[Mapping[str, str]] = ()) -> str:
+def _manifest_const(
+    manifest: Manifest,
+    not_admitted: Sequence[Mapping[str, str]] = (),
+    triaged: Sequence[Mapping[str, Any]] = (),
+    triage_error: str = "",
+) -> str:
     entries = [
         {"row_id": e.row_id, "path": e.path, "digest": e.digest, "batch_key": e.batch_key,
          **({"pm_ruling": e.pm_ruling} if e.pm_ruling else {})}
@@ -1968,6 +2139,8 @@ def _manifest_const(manifest: Manifest, not_admitted: Sequence[Mapping[str, str]
                 "digest": manifest.digest,
                 "declined": declined,
                 "not_admitted": [dict(n) for n in not_admitted],
+                **({"triaged": [dict(t) for t in triaged]} if triaged else {}),
+                **({"triage_error": triage_error} if triage_error else {}),
             },
             sort_keys=True,
         )
@@ -2225,6 +2398,7 @@ def compose_grind_script(
     targeted_runner: bool = False,
     not_admitted: Sequence[Mapping[str, str]] = (),
     repo_root: Optional[Path] = None,
+    run_stamp: Optional[str] = None,
 ) -> str:
     """Compose one top-level `.mjs` Workflow script implementing § Design §
     Composer over ``manifest``/``profile``/``knobs``. Pure function of its
@@ -2264,6 +2438,11 @@ def compose_grind_script(
     `failed|refused|no-runner` force `fail`, with the failing ids as feedback.
     Off, every prompt and the verify tail are unchanged.
 
+    With ``repo_root`` the manifest first passes ``triage_manifest``: rows that pass in isolation or no
+    longer reproduce at HEAD are closed ``closed_by: flake`` / ``already-green`` (``run_stamp``, else the stamp in the run dir's
+    name) and leave the manifest, and survivors batch by failure-signature cluster. The one disk write
+    this function makes is that close. The ``triaged`` rows ride the manifest const and the hand-back.
+
     ``preamble`` (optional) is a run-wide posture block declared
     ONCE as a ``const PREAMBLE`` and prepended, at RUN time via a bare
     ``PREAMBLE +`` expression, to every general-purpose (executor-tier)
@@ -2296,7 +2475,16 @@ def compose_grind_script(
     review_phase_titles = [title for title, _ in review_blocks]
     run_dir_s = Path(run_dir).as_posix()
     run_key = Path(run_dir).name
-    grouped = _group_into_batches(manifest, knobs, profile, repo_root=repo_root)
+    triaged: tuple[dict[str, Any], ...] = ()
+    triage_error = ""
+    clusters: Mapping[str, int] = {}
+    if repo_root is not None:
+        outcome = triage_manifest(manifest, repo_root, profile.name)
+        triaged = close_triaged_rows(
+            outcome, manifest, profile, repo_root, run_key=run_key, run_stamp=run_stamp
+        )
+        manifest, clusters, triage_error = outcome.manifest, outcome.clusters, outcome.error
+    grouped = _group_into_batches(manifest, knobs, profile, repo_root=repo_root, clusters=clusters)
     window = int(knobs.get("window", 6))
     batch_size_knob = knobs.get("batch_size", 4)
     reserve_batch_size = max(batch_size_knob.values()) if isinstance(batch_size_knob, Mapping) else batch_size_knob
@@ -2352,7 +2540,7 @@ def compose_grind_script(
     meta_index = len(lines)
     lines.append(meta_text)
     once_per_run_legs: list[str] = []
-    lines.append(_manifest_const(manifest, not_admitted))
+    lines.append(_manifest_const(manifest, not_admitted, triaged, triage_error))
     lines.append(
         "const BATCHES = " + json.dumps(batches_const, sort_keys=True) + ";"
     )
@@ -2436,6 +2624,7 @@ def compose_grind_script(
     lines.append("let _exhausted = false;")
     lines.append("const _handedBack = [];")
     lines.append("const _settled = [];")
+    lines.append(stages.compose_checkpoint_js())
     lines.append(
         "const _pendingCommit = [];\n"
         "const _runDirty = new Set();\n"
@@ -2476,6 +2665,7 @@ def compose_grind_script(
         "  const _entry = tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason };\n"
         "  if (ruling) { _entry.pm_ruling = ruling; }\n"
         "  _handedBack.push(_entry);\n"
+        "  _checkpoint();\n"
         "}\n"
         "function _normalizeRowRef(items, ref) {\n"
         "  const hit = items.find((it) => it.path === ref);\n"
@@ -3238,6 +3428,8 @@ def compose_grind_script(
         "  handed_back: _handedBack,\n"
         "  declined: QUEUE_GRIND_MANIFEST.declined,\n"
         "  not_admitted: QUEUE_GRIND_MANIFEST.not_admitted,\n"
+        "  triaged: QUEUE_GRIND_MANIFEST.triaged || [],\n"
+        "  checkpoints: _checkpointsReported,\n"
         "  settled: _settled,\n"
         "  counts: _counts(),\n"
         "  spend: _spend(),\n"

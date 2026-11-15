@@ -267,8 +267,50 @@ def test_stable_remote_falls_back_to_dot_local_with_the_resolved_user():
         return Sock()
 
     got = roster.stable_remote("box", reachable=lambda a: False, fields=lambda a: {"user": "kim", "port": "22"},
-                               connect=connect)
+                               connect=connect, read_key=lambda k: "")
     assert got == "kim@box.local" and dialled == [("box.local", 22)]
+
+
+def test_stable_remote_returns_the_first_verified_listed_address_before_dot_local():
+    roster = load("roster")
+    keys, tried = [], []
+
+    def read_key(k):
+        keys.append(k)
+        return "192.0.2.7, 192.0.2.8"
+
+    def verify(target):
+        tried.append(target)
+        return ("ok", "") if target.endswith("192.0.2.8") else ("not-this-box", "")
+
+    got = roster.stable_remote("kim@box", reachable=lambda a: False, fields=lambda a: {"port": "22"},
+                               connect=lambda *a, **k: pytest.fail("dialled .local before the list"),
+                               read_key=read_key, verify=verify, tcp=lambda a: True)
+    assert got == "kim@192.0.2.8"
+    assert tried == ["kim@192.0.2.7", "kim@192.0.2.8"] and keys and "box" in keys[0]
+
+
+def test_stable_remote_falls_through_to_dot_local_when_no_listed_address_verifies():
+    roster = load("roster")
+    dialled = []
+
+    class Sock:
+        def close(self):
+            pass
+
+    def connect(ep, timeout):
+        dialled.append(ep)
+        return Sock()
+
+    got = roster.stable_remote("box", reachable=lambda a: False, fields=lambda a: {"user": "kim", "port": "22"},
+                               connect=connect, read_key=lambda k: "192.0.2.7",
+                               verify=lambda t: ("not-this-box", ""), tcp=lambda a: True)
+    assert got == "kim@box.local" and dialled == [("box.local", 22)]
+    dialled.clear()
+    got = roster.stable_remote("box", reachable=lambda a: False, fields=lambda a: {"user": "kim", "port": "22"},
+                               connect=connect, read_key=lambda k: "192.0.2.7",
+                               verify=lambda t: pytest.fail("verified an unreachable address"), tcp=lambda a: False)
+    assert got == "kim@box.local"
 
 
 def test_stable_remote_is_none_when_nothing_answers_or_the_port_is_custom():
@@ -277,11 +319,14 @@ def test_stable_remote_is_none_when_nothing_answers_or_the_port_is_custom():
     def refuse(ep, timeout):
         raise OSError("no mDNS")
 
-    assert roster.stable_remote("box", reachable=lambda a: False, fields=lambda a: {"port": "22"}, connect=refuse) is None
+    nokeys = lambda k: ""
+    assert roster.stable_remote("box", reachable=lambda a: False, fields=lambda a: {"port": "22"}, connect=refuse,
+                                read_key=nokeys) is None
     assert roster.stable_remote("box", reachable=lambda a: False, fields=lambda a: {"port": "2222"},
-                                connect=lambda *a, **k: pytest.fail("dialled a custom port")) is None
+                                connect=lambda *a, **k: pytest.fail("dialled a custom port"),
+                                read_key=lambda k: pytest.fail("read the list on a custom port")) is None
     assert roster.stable_remote("box-lan", reachable=lambda a: pytest.fail("probed -lan-lan"),
-                                fields=lambda a: {}, connect=refuse) is None
+                                fields=lambda a: {}, connect=refuse, read_key=nokeys) is None
 
 
 def test_stable_remote_spends_one_ssh_g_across_both_legs():
@@ -302,10 +347,11 @@ def test_stable_remote_spends_one_ssh_g_across_both_legs():
 
         return Sock()
 
-    assert roster.stable_remote("box", fields=fields, connect=connect) == "kim@box.local"
+    nokeys = lambda k: ""
+    assert roster.stable_remote("box", fields=fields, connect=connect, read_key=nokeys) == "kim@box.local"
     assert asked == ["box-lan"]
     asked.clear()
-    assert roster.stable_remote("me@box", fields=fields, connect=connect) == "me@box.local"
+    assert roster.stable_remote("me@box", fields=fields, connect=connect, read_key=nokeys) == "me@box.local"
     assert asked == ["me@box-lan"]
 
 
@@ -1410,3 +1456,47 @@ def test_remote_ip_retries_a_failed_lookup_and_refreshes_a_stale_hit(monkeypatch
         assert roster.remote_ip("u@flaky") == "10.9.0.8"
     finally:
         FAKE_DNS.pop("flaky", None)
+
+
+def test_stable_remote_tries_at_most_the_capped_addresses_then_dot_local():
+    roster = load("roster")
+    tried = []
+
+    class Sock:
+        def close(self):
+            pass
+
+    listed = ", ".join(f"192.0.2.{i}" for i in range(1, 9))
+    got = roster.stable_remote("box", reachable=lambda a: False, fields=lambda a: {"user": "kim", "port": "22"},
+                               connect=lambda ep, timeout: Sock(), read_key=lambda k: listed,
+                               verify=lambda t: tried.append(t) or ("unreachable", ""), tcp=lambda a: True)
+    assert got == "kim@box.local"
+    assert len(tried) == roster.FAR_ADDRESSES_TRIED
+
+
+def test_alias_identity_takes_a_pinned_per_box_key_and_refuses_stock_or_missing(tmp_path):
+    roster = load("roster")
+    pinned = tmp_path / "unimatrix-zero-box"
+    pinned.write_text("k")
+    stock = tmp_path / "id_ed25519"
+    stock.write_text("k")
+    assert roster.alias_identity("kim@box", lambda a: {"identityfile": str(pinned)}) == str(pinned)
+    assert roster.alias_identity("kim@box", lambda a: {"identityfile": str(stock)}) is None
+    assert roster.alias_identity("kim@box", lambda a: {"identityfile": str(tmp_path / "absent")}) is None
+    assert roster.alias_identity("kim@box", lambda a: {}) is None
+
+
+def test_stable_remote_verifies_listed_addresses_with_the_alias_key_not_the_shared_default(tmp_path, monkeypatch):
+    roster = load("roster")
+    pinned = tmp_path / "unimatrix-zero-box"
+    pinned.write_text("k")
+    monkeypatch.setattr(roster, "default_key", lambda: pytest.fail("shared default key used"))
+
+    class Sock:
+        def close(self):
+            pass
+
+    got = roster.stable_remote(
+        "kim@box", reachable=lambda a: False, fields=lambda a: {"port": "22", "identityfile": str(pinned)},
+        connect=lambda ep, timeout: Sock(), read_key=lambda k: "192.0.2.7", tcp=lambda a: False)
+    assert got == "kim@box.local"

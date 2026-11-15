@@ -87,6 +87,7 @@ from coordinator_core.ops.dispatch_emit.grind_commit_contract import (
     SWEEP_FLAG,
     UNLANDED_KEY,
 )
+from coordinator_core.ops.dispatch_emit.land_run_grind import CLOSE_REFUSED_KEY
 from coordinator_core.ops.dispatch_emit.emit import (
     _AGENT_MODELS,
     _COMMIT_AGENT_TYPE,
@@ -97,6 +98,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
     resolve_agent_model,
 )
 from coordinator_core.backlog_grind_assemble.grind_rows import evidence_rel
+from coordinator_core.grind_triage.contract import CHECKPOINT_PERCENTS
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME, RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.agent_sidecar import sidecar_clause, sidecar_dir
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -1639,6 +1641,16 @@ _TERMINAL_COMMIT_SCHEMA = {
                 },
             },
         },
+        CLOSE_REFUSED_KEY: {
+            "type": ["array", "null"],
+            "items": {
+                "type": "object",
+                "properties": {
+                    "row_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+            },
+        },
     },
 }
 
@@ -1690,7 +1702,7 @@ def compose_grind_terminal_commit_call(
         (
             "lit",
             "\n\nReturn from command 2's JSON reply committed, sha, rows, dropped, error, refused, "
-            f"{ALREADY_LANDED_KEY} and {UNLANDED_KEY}, verbatim (null where absent). "
+            f"{ALREADY_LANDED_KEY}, {UNLANDED_KEY} and {CLOSE_REFUSED_KEY}, verbatim (null where absent). "
             + RECONCILE_CLAUSE
             + " Run nothing else.",
         ),
@@ -1927,3 +1939,34 @@ def _undo_fold_clause(
         ),
     ])
     return ("expr", f"({final_js}) ? {clause} : ''")
+
+
+def compose_checkpoint_js() -> str:
+    """Top-level JS defining ``_checkpoint()``: logs one report per 25/50/75% mark, fired by whichever of rows
+    settled (handed back or queued to commit) or budget spent crosses it first, and records it in
+    ``_checkpointsReported``.
+
+    Marks come from ``grind_triage.contract.CHECKPOINT_PERCENTS``; each fires once. A report carries rows
+    closed by script (``by_script``, from ``QUEUE_GRIND_MANIFEST.triaged``), rows sent to agents (``total``,
+    the survivors), rows committed, rows handed back and spend so far. It is a ``log`` line plus the hand-back's ``checkpoints`` list, never a session
+    wake and never a ``progress.jsonl`` write: the composed script has no engine channel but its agents.
+    Needs ``QUEUE_GRIND_MANIFEST``, ``RUN_ID``, ``_handedBack`` and ``_settled`` in scope when called;
+    ``budget``, ``_startSpent`` and ``BUDGET_TOKENS`` too."""
+    return (
+        f"const CHECKPOINT_PERCENTS = {json.dumps(list(CHECKPOINT_PERCENTS))};\n"
+        "const _checkpointsReported = [];\n"
+        "function _checkpoint() {\n"
+        "  const total = QUEUE_GRIND_MANIFEST.entries.length;\n"
+        "  const settled = _handedBack.length + _settled.length;\n"
+        "  const spent = budget.spent() - _startSpent;\n"
+        "  for (const [i, percent] of CHECKPOINT_PERCENTS.entries()) {\n"
+        "    const byRows = settled * 100 >= percent * total;\n"
+        "    if (!byRows && !(BUDGET_TOKENS > 0 && spent * 100 >= percent * BUDGET_TOKENS)) continue;\n"
+        "    if (_checkpointsReported.length > i) continue;\n"
+        "    const r = { percent, trigger: byRows ? 'rows' : 'budget', settled, total,\n"
+        "      by_script: (QUEUE_GRIND_MANIFEST.triaged || []).filter((t) => t.closed).length, committed: _settled.length, handed_back: _handedBack.length, spent };\n"
+        "    _checkpointsReported.push(r);\n"
+        "    log('grind checkpoint ' + JSON.stringify(r));\n"
+        "  }\n"
+        "}"
+    )

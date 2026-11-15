@@ -7632,6 +7632,13 @@ def match_schema(repo_rel_path: str, frontmatter: dict | None, schemas: dict) ->
     kind-classified schema too (much bigger blast radius than the one
     archived-handoff defect this fixes) — so the archive-path check below
     is scoped to exactly the `handoff-archived` glob and nothing else.
+    Third narrow amendment: a file whose frontmatter declares a `kind:` that
+    `_schema_name_for_kind` does not resolve (and no declared `type:` resolves)
+    gets no schema rather than the path-glob fallback, so e.g. a
+    `docs/research/spikes/*/verdict.md` carrying `kind: spike-inconclusive` is
+    not validated as a verdict. Files with no kind, or a registered kind,
+    resolve as before; this mirrors lint_tree's `declares_unregistered_kind` skip.
+
     Everything else keeps the original kind-first, glob-fallback order.
 
     Path-vs-kind precedence for non-handoff content under archive/handoffs/
@@ -7710,7 +7717,14 @@ def match_schema(repo_rel_path: str, frontmatter: dict | None, schemas: dict) ->
     if declared_type is not None:
         return {'schemaName': declared_type, 'schema': schemas[declared_type]}
 
+    # The kind lookup above found no schema: a declared kind that no schema registers
+    # opts the file out of path-glob routing (same skip as lint_tree). Memo schemas are
+    # exempt: memo kinds (ask/fyi/...) are deliberately unregistered and memos route by glob.
+    kind_opts_out_of_glob = frontmatter is not None and frontmatter.get('kind') is not None
+
     for entry in schemas['_byGlob']:
+        if kind_opts_out_of_glob and entry['schemaName'] not in ('cross-repo-memo', 'archived-memo'):
+            continue
         if match_glob(entry['glob'], normalised):
             return {'schemaName': entry['schemaName'], 'schema': schemas[entry['schemaName']]}
     # A memo corpus lives at `state/cross-repo/` or legacy `cross-repo/`; the memo schemas'

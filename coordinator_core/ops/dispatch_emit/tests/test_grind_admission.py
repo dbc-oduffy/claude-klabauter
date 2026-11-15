@@ -2,7 +2,13 @@
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit.grind_admission import admit, receipt_block, run_agent_calls
+from coordinator_core.grind_triage.contract import default_budget
+from coordinator_core.ops.dispatch_emit.grind_admission import (
+    admit,
+    not_admitted_entries,
+    receipt_block,
+    run_agent_calls,
+)
 
 IDS = tuple(f"r{i}" for i in range(61))
 
@@ -38,6 +44,28 @@ def test_token_bound_and_min_of_bounds():
     a = admit(IDS, max_agent_calls=None, budget_tokens=1_000_000)
     assert len(a.admitted) == 7 == a.arithmetic["bound_by_tokens"]
     assert len(admit(IDS, max_agent_calls=500, budget_tokens=1_000_000, batch_size=40).admitted) == 7
+
+
+def test_none_budget_substitutes_row_scaled_default():
+    a = admit(IDS, max_agent_calls=None, budget_tokens=None)
+    assert a.arithmetic["budget_source"] == "default"
+    assert a.arithmetic["budget_tokens"] == default_budget(len(IDS))
+    assert a.arithmetic["bound_by_tokens"] >= len(IDS) and a.admitted == IDS
+
+
+def test_explicit_budget_overrides_default_and_is_recorded():
+    a = admit(IDS, max_agent_calls=None, budget_tokens=1_000_000)
+    assert a.arithmetic["budget_source"] == "explicit" and a.arithmetic["budget_tokens"] == 1_000_000
+    assert len(a.admitted) == 7
+
+
+def test_default_budget_is_not_named_as_the_cut_cap():
+    a = admit(IDS, max_agent_calls=32, budget_tokens=None, batch_size=40)
+    assert a.not_admitted
+    reason = not_admitted_entries(a)[0]["reason"]
+    assert "max_agent_calls=32" in reason and "budget_tokens" not in reason
+    b = admit(IDS, max_agent_calls=None, budget_tokens=1_000_000)
+    assert "budget_tokens=1000000" in not_admitted_entries(b)[0]["reason"]
 
 
 def test_order_preserved_no_loss():

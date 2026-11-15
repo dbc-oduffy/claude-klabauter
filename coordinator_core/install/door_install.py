@@ -202,6 +202,24 @@ _PREBUILT_PROVENANCE = _DOOR_DIR / (
     "door.exe.provenance.json" if sys.platform == "win32" else "door.provenance.json"
 )
 
+#: Names whose Windows slot links the GUI-subsystem `door-w.exe` instead of
+#: the door, so a hook fire allocates no conhost.exe. Every other name keeps
+#: the console door.
+WINDOWLESS_NAMES = frozenset({"hook-run"})
+WINDOWLESS_IMAGE_NAME = door_build.WINDOWLESS_EXE_NAME
+_PREBUILT_WINDOWLESS_EXE = _DOOR_DIR / WINDOWLESS_IMAGE_NAME
+_WINDOWLESS_PREBUILT_PROVENANCE = _DOOR_DIR / (WINDOWLESS_IMAGE_NAME + ".provenance.json")
+
+
+def name_gets_windowless_image(name: str) -> bool:
+    """True iff `name`'s Windows slot is the windowless image. Always False off win32."""
+    return sys.platform == "win32" and name in WINDOWLESS_NAMES
+
+
+def windowless_image_path(bin_dst: Path) -> Path:
+    """Where the windowless twin lives beside the installed door."""
+    return Path(bin_dst) / WINDOWLESS_IMAGE_NAME
+
 
 class DoorInstallError(RuntimeError):
     """Raised by `install_door()` on a fatal precondition -- an invalid
@@ -386,24 +404,36 @@ def committed_prebuilt_source_drift(
 
     Raises `DoorInstallError` when the sidecar is unreadable or records no
     sources -- same convention as `_prebuilt_image_bytes`."""
-    provenance_path = Path(provenance_path) if provenance_path is not None else _WINDOWS_PREBUILT_PROVENANCE
+    if provenance_path is not None:
+        provenance_path = Path(provenance_path)
+        windowless_provenance = provenance_path.parent / (WINDOWLESS_IMAGE_NAME + ".provenance.json")
+    else:
+        provenance_path = _WINDOWS_PREBUILT_PROVENANCE
+        windowless_provenance = _WINDOWLESS_PREBUILT_PROVENANCE
     source_paths = tuple(sources) if sources is not None else door_build.SOURCES
-    try:
-        record = json.loads(provenance_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise DoorInstallError(
-            f"door_install: no readable prebuilt provenance at {provenance_path}: {exc}"
-        ) from exc
-    recorded = record.get("sources") if isinstance(record, dict) else None
-    if not isinstance(recorded, dict) or not recorded:
-        raise DoorInstallError(
-            f"door_install: {provenance_path} records no source fingerprint"
-        )
-    return sorted(
-        path.name
-        for path in source_paths
-        if not _source_matches_recorded(path, recorded.get(path.name))
-    )
+
+    def _drift(path_to_record: Path) -> "set[str]":
+        try:
+            record = json.loads(path_to_record.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise DoorInstallError(
+                f"door_install: no readable prebuilt provenance at {path_to_record}: {exc}"
+            ) from exc
+        recorded = record.get("sources") if isinstance(record, dict) else None
+        if not isinstance(recorded, dict) or not recorded:
+            raise DoorInstallError(
+                f"door_install: {path_to_record} records no source fingerprint"
+            )
+        return {
+            path.name
+            for path in source_paths
+            if not _source_matches_recorded(path, recorded.get(path.name))
+        }
+
+    drifted = _drift(provenance_path)
+    if windowless_provenance.exists():
+        drifted |= _drift(windowless_provenance)
+    return sorted(drifted)
 
 
 def _recorded_sources_current(record: object) -> bool:
@@ -490,6 +520,13 @@ def rebuild_door_for_mirror(
             built.parent / (built.name + mirror_build._PROVENANCE_SUFFIX),
             door_dir / "door.exe.provenance.json",
         )
+        built_windowless = built.parent / WINDOWLESS_IMAGE_NAME
+        if built_windowless.exists():
+            shutil.copyfile(built_windowless, door_dir / WINDOWLESS_IMAGE_NAME)
+            shutil.copyfile(
+                built_windowless.parent / (WINDOWLESS_IMAGE_NAME + mirror_build._PROVENANCE_SUFFIX),
+                door_dir / (WINDOWLESS_IMAGE_NAME + ".provenance.json"),
+            )
 
     drift = committed_prebuilt_source_drift(
         provenance_path=door_dir / "door.exe.provenance.json",
@@ -784,14 +821,32 @@ def audit_installed_image_currency(
     one image read.
     """
     bin_dst = Path(bin_dst)
-    prebuilt_bytes = _reference_image_bytes(bin_dst)
-    prebuilt_size = len(prebuilt_bytes)
+    door_bytes = _reference_image_bytes(bin_dst)
+    # A windowless slot is audited against the installed `door-w.exe`; absent,
+    # it has no reference to match, so it reads `stale` (re-run the install).
+    windowless_bytes: "Optional[bytes]" = None
+    windowless_read = False
 
     current: "list[str]" = []
     stale: "list[str]" = []
     seen: "dict[tuple, bool]" = {}
 
     for name in sorted(set(names)):
+        if name_gets_windowless_image(name):
+            if not windowless_read:
+                windowless_read = True
+                try:
+                    windowless_bytes = windowless_image_path(bin_dst).read_bytes()
+                except OSError:
+                    windowless_bytes = None
+            prebuilt_bytes = windowless_bytes
+        else:
+            prebuilt_bytes = door_bytes
+        if prebuilt_bytes is None:
+            if is_native_image(named_forwarder_path(bin_dst, name)):
+                stale.append(name)
+            continue
+        prebuilt_size = len(prebuilt_bytes)
         dest = named_forwarder_path(bin_dst, name)
         try:
             st = dest.stat()
@@ -811,7 +866,7 @@ def audit_installed_image_currency(
         if st.st_size != prebuilt_size:
             stale.append(name)
             continue
-        key = (st.st_dev, st.st_ino)
+        key = (st.st_dev, st.st_ino, prebuilt_bytes is windowless_bytes)
         if key not in seen:
             try:
                 seen[key] = dest.read_bytes() == prebuilt_bytes
@@ -888,6 +943,22 @@ def _remove_shadowing_forwarder_siblings(bin_dst: Path) -> "list[Path]":
     return removed
 
 
+def _install_windowless_image(bin_dst: Path, image: Path, provenance: Path) -> None:
+    """Lands the windowless twin and its provenance beside the door. A source
+    that does not exist is skipped with a warning: the `hook-run` slot then
+    falls back to the door image and audits `stale` until a build supplies it."""
+    if not image.exists():
+        print(
+            f"[door-install] WARNING: no windowless image at {image} -- hook-run keeps the console door",
+            file=sys.stderr,
+        )
+        return
+    dest = windowless_image_path(bin_dst)
+    _replace_possibly_running_image(image, dest)
+    if provenance.exists():
+        shutil.copy2(provenance, bin_dst / (WINDOWLESS_IMAGE_NAME + ".provenance.json"))
+
+
 def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) -> Path:
     """Installs the door at `bin_dst / DOOR_INSTALLED_NAME` plus its
     engine-root sidecar. Prefers the committed prebuilt binary (see
@@ -947,6 +1018,8 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
 
     dest_provenance = installed_provenance_path(bin_dst)
     prior_identity = _file_identity(dest_exe)
+    windowless_dest = windowless_image_path(bin_dst)
+    prior_windowless_identity = _file_identity(windowless_dest)
 
     # ROUTE ON PLATFORM FIRST, NOT ON PREBUILT PRESENCE (C2, dispatch brief
     # F-013, part a). This used to branch solely on `_PREBUILT_DOOR_EXE.
@@ -998,6 +1071,7 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
                 _replace_possibly_running_image(_PREBUILT_DOOR_EXE, dest_exe)
                 print(f"[door-install] copied prebuilt {_PREBUILT_DOOR_EXE} -> {dest_exe}")
                 shutil.copy2(_PREBUILT_PROVENANCE, dest_provenance)
+                _install_windowless_image(bin_dst, _PREBUILT_WINDOWLESS_EXE, _WINDOWLESS_PREBUILT_PROVENANCE)
             else:
                 from coordinator_core.temp_layout import managed_temp_dir
 
@@ -1006,6 +1080,11 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
                     door_build.build(engine_root, output=fresh)
                     _replace_possibly_running_image(fresh, dest_exe)
                     shutil.copy2(fresh.parent / (fresh.name + ".provenance.json"), dest_provenance)
+                    _install_windowless_image(
+                        bin_dst,
+                        fresh.parent / WINDOWLESS_IMAGE_NAME,
+                        fresh.parent / (WINDOWLESS_IMAGE_NAME + ".provenance.json"),
+                    )
                 print(
                     f"[door-install] committed prebuilt was behind its sources "
                     f"({', '.join(drifted)}) -- compiled fresh at {dest_exe} instead"
@@ -1013,6 +1092,7 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
         elif _PREBUILT_DOOR_EXE.exists():
             _replace_possibly_running_image(_PREBUILT_DOOR_EXE, dest_exe)
             print(f"[door-install] copied prebuilt {_PREBUILT_DOOR_EXE} -> {dest_exe}")
+            _install_windowless_image(bin_dst, _PREBUILT_WINDOWLESS_EXE, _WINDOWLESS_PREBUILT_PROVENANCE)
             if _PREBUILT_PROVENANCE.exists():
                 shutil.copy2(_PREBUILT_PROVENANCE, dest_provenance)
             else:
@@ -1102,6 +1182,8 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
     door_build.write_sidecar(dest_exe, engine_root)
 
     relinked = _relink_names_stranded_on(bin_dst, dest_exe, prior_identity)
+    if sys.platform == "win32" and windowless_dest.exists():
+        relinked += _relink_names_stranded_on(bin_dst, windowless_dest, prior_windowless_identity)
     if relinked:
         print(f"[door-install] re-linked {relinked} name(s) from the replaced image to {dest_exe}")
 
@@ -1189,8 +1271,12 @@ def _relink_names_stranded_on(
         return found
 
     stranded = _stranded()
+    windowless = windowless_image_path(bin_dst)
     for entry in stranded:
-        _link_over(dest_exe, entry)
+        windowless_slot = (
+            name_gets_windowless_image(entry.stem) and entry.suffix.lower() == ".exe" and windowless.exists()
+        )
+        _link_over(windowless if windowless_slot else dest_exe, entry)
 
     left = _stranded()
     if left:
@@ -1303,6 +1389,8 @@ def install_named_forwarder(
     _refuse_live_bin_under_test(bin_dst)
     if source is None:
         source = install_door(bin_dst, engine_root, check_only=False)
+    if name_gets_windowless_image(name) and windowless_image_path(bin_dst).exists():
+        source = windowless_image_path(bin_dst)
 
     # SELF-COLLISION GUARD. `coordinator-invoke` is itself a member of the
     # door-eligible population, and for that one name `named_forwarder_path`

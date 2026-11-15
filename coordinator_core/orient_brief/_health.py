@@ -158,8 +158,8 @@ def _state_root(flat: Mapping[str, Any]) -> Optional[str]:
     if not git_root:
         return None
     if cws._same_path(git_root, cws._claude_home()):
-        claude_klabauter = str(flat.get("repos.claude_klabauter") or "").strip()
-        return str(Path(claude_klabauter) / "state") if claude_klabauter else None
+        engine_tree = str(flat.get("repos.claude_klabauter") or "").strip()
+        return str(Path(engine_tree) / "state") if engine_tree else None
     return os.path.join(git_root, "state")
 
 

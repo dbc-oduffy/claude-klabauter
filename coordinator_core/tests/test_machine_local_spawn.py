@@ -657,7 +657,7 @@ _STORE_TOML = '[stores.alpha]\npath = "{root}"\nowner = "me"\npurpose = "keeps  
 
 STORE_STUB = '''\
 import os, sys
-sys.stdout.write(os.environ["STUB_OUT"])
+sys.stdout.write(os.environ.get("STUB_OUT", ""))  # Windows drops a var set to ""
 sys.exit(int(os.environ["STUB_RC"]))
 '''
 

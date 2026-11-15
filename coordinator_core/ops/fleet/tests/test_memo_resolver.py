@@ -757,9 +757,9 @@ class TestPublishMirrorReroute:
 
     def test_owned_klabauter_mirror_and_its_owner_both_resolve_to_claude_klabauter(self, tmp_path, monkeypatch):
         mirror = tmp_path / "claude-klabauter"
-        claude_klabauter = tmp_path / "gadget-owner"
+        engine_tree = tmp_path / "gadget-owner"
         claude_home = _make_claude_home(
-            tmp_path, {"claude_klabauter": mirror, "gadget_owner": claude_klabauter},
+            tmp_path, {"claude_klabauter": mirror, "gadget_owner": engine_tree},
         )
         _add_mirrors(claude_home, {
             "claude_klabauter": {"owner": "gadget-owner-em", "path": str(mirror)},
@@ -769,7 +769,7 @@ class TestPublishMirrorReroute:
         for receiver in ("claude-klabauter-em", "gadget-owner-em"):
             inbox, repo, _all = resolve_receiver_inbox(receiver)
             assert inbox is not None, receiver
-            assert same_repo_path(repo, claude_klabauter), receiver
+            assert same_repo_path(repo, engine_tree), receiver
 
     def test_redirect_alias_routes_to_the_central_receiver(self, tmp_path, monkeypatch):
         doe = tmp_path / _DOE_REPO

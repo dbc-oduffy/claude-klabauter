@@ -392,7 +392,8 @@ def test_terminal_commit_call_is_the_haiku_committer_and_returns_the_reply_shape
 def test_terminal_commit_call_returns_already_landed_and_unlanded_verbatim():
     call_text = _terminal_call()
     assert '"already_landed"' in call_text and '"unlanded"' in call_text
-    assert "already_landed and unlanded, verbatim (null where absent)" in call_text
+    assert "already_landed, unlanded and close_refused, verbatim (null where absent)" in call_text
+    assert set(grind_stages._TERMINAL_COMMIT_SCHEMA["properties"]["close_refused"]["items"]["properties"]) == {"row_id", "reason"}
     props = grind_stages._TERMINAL_COMMIT_SCHEMA["properties"]
     assert props["already_landed"]["type"] == ["boolean", "null"]
     assert set(props["unlanded"]["items"]["properties"]) == {"row_id", "reason"}
@@ -1516,3 +1517,61 @@ def test_routing_batch_retire_rerun_is_committed_head_and_returns_runner_fields_
     item = _batch_schema(call)["properties"]["verdicts"]["items"]
     assert {"tests_record", "tests_outcome"} <= set(item["required"])
     assert "Run no tests" in _batch_call(targeted_runner=True), "a routing batch never reruns tests"
+
+
+def test_checkpoint_js_renders_the_contract_thresholds_and_logs_without_waking_anyone(monkeypatch):
+    from coordinator_core.grind_triage import contract
+    from coordinator_core.ops.dispatch_emit import grind_stages
+
+    js = grind_stages.compose_checkpoint_js()
+    assert "const CHECKPOINT_PERCENTS = [25, 50, 75];" in js
+    assert "settled * 100 >= percent * total" in js
+    assert "spent * 100 >= percent * BUDGET_TOKENS" in js
+    assert "log('grind checkpoint '" in js
+    monkeypatch.setattr(grind_stages, "CHECKPOINT_PERCENTS", (10, 90))
+    assert "const CHECKPOINT_PERCENTS = [10, 90];" in grind_stages.compose_checkpoint_js()
+    assert contract.CHECKPOINT_PERCENTS == (25, 50, 75)
+
+
+def test_checkpoint_js_runs_once_per_threshold_under_node():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    from coordinator_core.ops.dispatch_emit import grind_stages
+
+    harness = (
+        "const logs = []; const log = (m) => logs.push(m);\n"
+        "const RUN_ID = 'r1'; const QUEUE_GRIND_MANIFEST = { entries: [1,2,3,4] };\n"
+        "const BUDGET_TOKENS = null; const budget = { spent: () => 0 }; const _startSpent = 0;\n"
+        "const _handedBack = []; const _settled = [];\n"
+        + grind_stages.compose_checkpoint_js()
+        + "\n_handedBack.push(1); _checkpoint(); _checkpoint();\n"
+        "_settled.push(2); _settled.push(3); _checkpoint(); _checkpoint();\n"
+        "console.log(JSON.stringify(_checkpointsReported.map((c) => c.percent)));\n"
+    )
+    out = subprocess.run([node, "-e", harness], capture_output=True, text=True, check=True).stdout
+    assert json.loads(out.strip().splitlines()[-1]) == [25, 50, 75]
+
+
+def test_checkpoint_js_fires_on_budget_spent_before_rows_and_reports_the_run_counts():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    from coordinator_core.ops.dispatch_emit import grind_stages
+
+    harness = (
+        "const logs = []; const log = (m) => logs.push(m);\n"
+        "const RUN_ID = 'r1'; const BUDGET_TOKENS = 1000; let _spendNow = 0;\n"
+        "const budget = { spent: () => _spendNow }; const _startSpent = 0;\n"
+        "const QUEUE_GRIND_MANIFEST = { entries: [1,2,3,4], triaged: [{ closed: true }, { closed: false }] };\n"
+        "const _handedBack = []; const _settled = [];\n"
+        + grind_stages.compose_checkpoint_js()
+        + "\n_checkpoint(); _spendNow = 260; _checkpoint();\n"
+        "_settled.push({ outcome: 'committed' }); _checkpoint();\n"
+        "console.log(JSON.stringify(_checkpointsReported));\n"
+    )
+    out = subprocess.run([node, "-e", harness], capture_output=True, text=True, check=True).stdout
+    reported = json.loads(out.strip().splitlines()[-1])
+    assert [(c["percent"], c["trigger"]) for c in reported] == [(25, "budget")]
+    assert reported[0]["by_script"] == 1 and reported[0]["total"] == 4
+    assert reported[0]["spent"] == 260 and reported[0]["handed_back"] == 0 and reported[0]["committed"] == 0

@@ -98,7 +98,7 @@ def _verify(reply: dict, receipts: dict) -> dict:
         f"const RECEIPTS = {json.dumps(receipts)};\n"
         "const asked = [];\n"
         "const agent = async (prompt) => {\n"
-        "  const cand = /sha256sum \"([^\"]+)\"/.exec(prompt)[1];\n"
+        "  const cand = /hexdigest\\(\\)\\)\" \"([^\"]+)\"/.exec(prompt)[1];\n"
         "  asked.push(cand);\n"
         "  const r = RECEIPTS[cand];\n"
         "  return r ? { found: true, receipt_sha256: r[0], script_sha256: r[1] } : { found: false, error: 'No such file' };\n"
@@ -166,3 +166,25 @@ def test_receipt_failure_never_fails_the_emit(tmp_path, monkeypatch):
     script = des.write_deferred_script(tmp_path, {"ask_brief": "x"})
     assert script.is_file()
     assert not script.with_name(script.name + ".emitted.json").exists()
+
+
+def test_the_receipt_check_command_reads_the_top_level_sha_not_em_brief(tmp_path):
+    """The relay copies what the command prints, so the key path must live in the command: a receipt whose
+    em_brief.sha256 precedes the top-level sha256 once made a haiku relay report the brief's digest."""
+    import hashlib
+    import re
+    import subprocess
+    import sys
+
+    script = tmp_path / "ask-r1.workflow.mjs"
+    script.write_bytes(b"export const meta = {}\n")
+    digest = hashlib.sha256(script.read_bytes()).hexdigest()
+    (tmp_path / "ask-r1.workflow.mjs.emitted.json").write_text(
+        json.dumps({"em_brief": {"sha256": "7b" * 32}, "sha256": digest}), encoding="utf-8")
+    cmd = re.search(r"Run `(python3 -c .+?)` \(", des._RECEIPT_PATH_JS).group(1)
+    # The JS literal escapes its single quotes; the relay's shell sees them unescaped.
+    argv_code = re.match(r'python3 -c "(.+)" "', cmd).group(1).replace("\\'", "'")
+    out = subprocess.run([sys.executable, "-c", argv_code, str(script)], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.split() == [digest, digest]

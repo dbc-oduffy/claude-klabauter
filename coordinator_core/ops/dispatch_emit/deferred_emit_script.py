@@ -82,8 +82,9 @@ async function _verifiedScriptPath(reply) {
       if (attempt > 1) await new Promise((res) => setTimeout(res, RECEIPT_RETRY_WAIT_MS));
       const r = await agent(
         __AUTHORITY__
-        + ' Run `sha256sum "' + cand + '"` (`shasum -a 256` where sha256sum is absent) and read the file `' + cand + '.emitted.json`. Do not delete or modify any file. Then '
-        + 'return found true with receipt_sha256 (the "sha256" field of that JSON) and script_sha256 (the digest the command printed), both verbatim. '
+        // Trap: the receipt also carries em_brief.sha256 ahead of the top-level key, so the key path is read by the command, never chosen by the relay.
+        + ' Run `python3 -c "import hashlib,json,sys; p=sys.argv[1]; print(json.load(open(p + \'.emitted.json\', encoding=\'utf-8\'))[\'sha256\']); print(hashlib.sha256(open(p, \'rb\').read()).hexdigest())" "' + cand + '"` (`python` in place of `python3` on Windows). Do not delete or modify any file. Then '
+        + 'return found true with receipt_sha256 (the first line it printed) and script_sha256 (the second line it printed), both verbatim. '
         + 'When either file is missing or unreadable, return found false and the error text verbatim in the error field.',
         { label: 'receipt-check', phase: 'emit', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: RECEIPT_SCHEMA },
       );

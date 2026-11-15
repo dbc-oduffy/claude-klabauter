@@ -723,7 +723,7 @@ _COMMIT_FROM_IMPORT_RE = re.compile(r"^\s*from\s+" + PACKAGE_NAME + r"[\w.]*\s+i
 _TEST_DIR_NAMES = frozenset({"tests", "test"})
 
 
-_CAT_FILE_CHUNK = 400
+_CAT_FILE_CHUNK = 100
 """Blobs per `cat-file --batch` spawn in `_read_commit_py_blobs`."""
 
 
@@ -776,7 +776,8 @@ def _read_commit_py_blobs(repo: Path, commit: str, roots: tuple[str, ...]) -> tu
     sources: dict[str, str] = {}
     # Trap: one cat-file over every blob (~2400 at 2026-11) measured 1.6-1.8s alone and timed out
     # at 19s under publish load against run_git's 2s local budget, refusing the engine row.
-    # Chunks keep each spawn inside that budget; the budget is never widened.
+    # Chunks keep each spawn inside that budget; the budget is never widened. 400 (0.66s idle) timed out
+    # twice at 100% box CPU on 11-15, refusing the engine row; 100 keeps a 4x margin.
     for start in range(0, len(wanted), _CAT_FILE_CHUNK):
         chunk = wanted[start : start + _CAT_FILE_CHUNK]
         stream = _git_bytes(repo, ["cat-file", "--batch"], "".join(f"{s}\n" for _, s in chunk).encode("ascii"))

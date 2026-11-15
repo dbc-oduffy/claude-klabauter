@@ -1,0 +1,40 @@
+{
+  "builder": "a7c4697f-945a-4fff-9d5c-ee4f41cc945a",
+  "built_at": "2026-11-15T13:16:14+00:00",
+  "command": [
+    "python.exe",
+    "-m",
+    "coordinator_core.warm.door.build",
+    "<engine_root>"
+  ],
+  "compile_flags": [
+    "-O2",
+    "-Wall",
+    "-Wextra",
+    "-I",
+    "<door_dir>",
+    "-ladvapi32",
+    "-lshell32",
+    "-Xlinker",
+    "/Brepro",
+    "-Xlinker",
+    "/SUBSYSTEM:WINDOWS",
+    "-Xlinker",
+    "/ENTRY:mainCRTStartup"
+  ],
+  "compiler": "clang",
+  "compiler_version": "clang version 22.1.2 (https://github.com/llvm/llvm-project 1ab49a973e210e97d61e5db6557180dcb92c3e98)",
+  "door_c_sha256": "d8ae2b3d64eaff7d1e685b4c295c1c037e0340ba3c9b252eb13e25ad355a0ccd",
+  "engine_root": "E:\\claude-klabauter",
+  "engine_stamp": "sha:77bba4db2b3ad610dccc6fbdd627b645aa205fee",
+  "image_sha256": "ef126eee7c00aa45ced592de342a8e432be597738dd9f575f6fada16a0b39539",
+  "python_bin": "~/AppData/Local/Programs/Python/Python313/python.exe",
+  "rendered_source_sha256": "af3a3ee684bbd7c2be0c5b309e640ac3ab300faef88943b97c57ce681098586e",
+  "require_warm": false,
+  "sources": {
+    "door.c": "d8ae2b3d64eaff7d1e685b4c295c1c037e0340ba3c9b252eb13e25ad355a0ccd",
+    "door_core.c": "469b99d75e28827f35264f6d527b2ad9254a4ed8e758901c202d911495737fb0",
+    "door_core.h": "803b65ae99cc342f5354192383b918557b3cde038dbaf5d66fbe6fdd95b7f782",
+    "door_env_set.h": "accf51bb1b0dc7547c4da02dba9a5e9f5b20333cb9acfd0875832f2dcea3fcee"
+  }
+}

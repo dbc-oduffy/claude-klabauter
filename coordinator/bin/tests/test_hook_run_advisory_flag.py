@@ -106,6 +106,43 @@ def test_advisory_success_passes_through_unchanged(hook_run, monkeypatch):
     assert body["hookSpecificOutput"]["additionalContext"] == "steer"
 
 
+@pytest.mark.parametrize(
+    "flags", [["--stdin-hook", "--advisory"], ["--advisory", "--stdin-hook"]]
+)
+def test_stdin_hook_with_advisory_in_any_order_stays_silent(hook_run, monkeypatch, flags):
+    import coordinator_core.ipc as ipc
+
+    def _raise(op, params, origin_worktree=None):
+        raise ipc.HookDispatchError(op, ipc.METHOD_NOT_FOUND, "Method not found")
+
+    monkeypatch.setattr(ipc, "dispatch_from_hook", _raise)
+
+    code, stdout = _run(
+        hook_run, monkeypatch, dict(_EVENT),
+        ["hook-run", *flags, "hooks.preuse_search_dispatch"],
+    )
+
+    assert code == 0
+    assert stdout == ""
+
+
+def test_stdin_hook_without_advisory_keeps_the_loud_envelope(hook_run, monkeypatch):
+    import coordinator_core.ipc as ipc
+
+    def _raise(op, params, origin_worktree=None):
+        raise ipc.HookDispatchError(op, ipc.METHOD_NOT_FOUND, "Method not found")
+
+    monkeypatch.setattr(ipc, "dispatch_from_hook", _raise)
+
+    code, stdout = _run(
+        hook_run, monkeypatch, dict(_EVENT),
+        ["hook-run", "--stdin-hook", "hooks.preuse_bash_dispatch"],
+    )
+
+    assert code == 0
+    assert "guard did not run" in json.loads(stdout)["systemMessage"]
+
+
 def test_guard_without_the_flag_stays_loud_on_method_not_found(hook_run, monkeypatch):
     import coordinator_core.ipc as ipc
 

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import NamedTuple, Optional, Sequence
 
+from coordinator_core.grind_triage.contract import default_budget
+
 ROW_AGENT_CALLS_CENTI = 90
 BATCH_AGENT_CALLS = 7
 RUN_FIXED_AGENT_CALLS = 2
@@ -34,7 +36,8 @@ def admit(
     budget_tokens: Optional[int],
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> Admission:
-    """Admit the longest run-order prefix both bounds cover; a None bound is unbounded.
+    """Admit the longest run-order prefix both bounds cover; a None max_agent_calls is
+    unbounded; a None budget_tokens is `default_budget(len(rows))`, recorded as budget_source=default.
 
     Raises ValueError on a non-positive bound rather than admitting zero rows silently.
     """
@@ -45,7 +48,10 @@ def admit(
     if batch_size <= 0:
         raise ValueError(f"batch_size must be positive, got {batch_size}")
     by_calls = None if max_agent_calls is None else _rows_within(max_agent_calls, batch_size, len(rows))
-    by_tokens = None if budget_tokens is None else budget_tokens // ROW_OUTPUT_TOKENS
+    budget_source = "explicit" if budget_tokens is not None else "default"
+    if budget_tokens is None:
+        budget_tokens = default_budget(len(rows))
+    by_tokens = budget_tokens // ROW_OUTPUT_TOKENS
     count = len(rows)
     for bound in (by_calls, by_tokens):
         if bound is not None:
@@ -56,6 +62,7 @@ def admit(
         arithmetic={
             "max_agent_calls": max_agent_calls,
             "budget_tokens": budget_tokens,
+            "budget_source": budget_source,
             "row_agent_calls_centi": ROW_AGENT_CALLS_CENTI,
             "run_fixed_agent_calls": RUN_FIXED_AGENT_CALLS,
             "batch_agent_calls": BATCH_AGENT_CALLS,
@@ -98,7 +105,7 @@ def not_admitted_entries(admission: Admission) -> list[dict]:
     caps = []
     if admission.arithmetic.get("bound_by_calls") is not None:
         caps.append(f"max_agent_calls={admission.arithmetic['max_agent_calls']}")
-    if admission.arithmetic.get("bound_by_tokens") is not None:
+    if admission.arithmetic.get("budget_source") == "explicit":
         caps.append(f"budget_tokens={admission.arithmetic['budget_tokens']}")
     count = admission.arithmetic["admitted_count"]
     reason = f"not-admitted: run budget cap ({', '.join(caps)}) covers {count} rows"

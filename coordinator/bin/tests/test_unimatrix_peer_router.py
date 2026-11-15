@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import threading
 from pathlib import Path
 
@@ -842,7 +843,8 @@ def _frames_sent_to(dirs, monkeypatch, row, sender):
     """The frames a send from `sender` to the session `em` writes, delivery captured (no sockets)."""
     sent = []
     (dirs / "sessions" / "em.json").write_text(json.dumps(
-        {"name": "em", "pid": os.getpid(), "messagingSocketPath": str(dirs / "em.sock"), "startedAt": 1, **row}))
+        {"name": "em", "pid": os.getpid(), "messagingSocketPath": str(dirs / "em.sock"), "startedAt": 1,
+         **({"unimatrixFarSeen": int(time.time() * 1000)} if row else {}), **row}))
     r = pr.Router([{"name": "codex-a", "vendor": "agy", "target": "conv-1"}], sessions_dir=dirs / "sessions",
                   state_dir=dirs / "state", endpoint_dir=dirs / "eps", adapters={})
 
@@ -963,7 +965,8 @@ def test_hop_count_counts_only_leading_relay_markers():
 @portable
 def test_send_receipt_names_the_session_reached_and_its_box(dirs, monkeypatch):
     (dirs / "sessions" / "em.json").write_text(json.dumps(
-        {"name": "em", "pid": os.getpid(), "messagingSocketPath": str(dirs / "em.sock"), "startedAt": 1, **FAR_ROW}))
+        {"name": "em", "pid": os.getpid(), "messagingSocketPath": str(dirs / "em.sock"), "startedAt": 1,
+         "unimatrixFarSeen": int(time.time() * 1000), **FAR_ROW}))
     r = pr.Router([{"name": "codex-a", "vendor": "agy", "target": "conv-1"}], sessions_dir=dirs / "sessions",
                   state_dir=dirs / "state", endpoint_dir=dirs / "eps", adapters={})
 
@@ -1881,3 +1884,18 @@ def test_router_exits_when_the_control_socket_cannot_be_rebound(box, monkeypatch
         finally:
             await r.stop()
     asyncio.run(go())
+
+
+@portable
+def test_send_to_an_unbacked_mirror_row_is_refused_before_any_bridge_write(dirs, monkeypatch):
+    (dirs / "sessions" / "em.json").write_text(json.dumps(
+        {"name": "em", "pid": os.getpid(), "messagingSocketPath": str(dirs / "em.sock"), "startedAt": 1, **FAR_ROW}))
+    r = pr.Router([], sessions_dir=dirs / "sessions", state_dir=dirs / "state", endpoint_dir=dirs / "eps", adapters={})
+    sent = []
+
+    async def capture(peer, endpoint, frame):
+        sent.append(frame)
+    monkeypatch.setattr(r, "_deliver_as_peer", capture)
+    monkeypatch.setattr(r, "_transport_face", lambda source, destination: asyncio.sleep(0, "transport-x"))
+    resp = run(r._dispatch({"op": "send", "as": "cli", "to": "em", "text": "hello"}))
+    assert resp["ok"] is False and "em" in resp["error"] and not sent

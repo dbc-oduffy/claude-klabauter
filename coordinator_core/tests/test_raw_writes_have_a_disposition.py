@@ -386,6 +386,8 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/git/store_hygiene.py': ('git-internal', 'daily-tier claim file created exclusively under <git-common-dir>/coordinator/store-hygiene.claim: _claim'),
     'coordinator_core/install/runtime_ignore_apply.py': ('in-repo-non-state', 'runtime-ignore rule block appended to the repo .gitignore, never state/: _append_rules'),
     'coordinator_core/ops/dispatch_emit/ask_stage_receipt.py': ('in-repo-non-state', 'stage claim exclusive-create and stage-receipt.json under the tracked record dir state/warp/<run_id>/: claim, write'),
+    'coordinator_core/grind_triage/checkpoint.py': ('in-repo-non-state', 'grind checkpoint lines appended via atomic_append under <run_dir>/progress.jsonl, the run record home: emit_checkpoints'),
+    'coordinator_core/ops/dispatch_emit/grind_compose.py': ('in-repo-non-state', 'one triage verify-evidence file per closed row under state/queue-grind/<profile>/evidence/<run_id>/, the grind record home: close_triaged_rows'),
     'coordinator_core/ops/dispatch_emit/run_artifacts.py': ('in-repo-non-state', 'one outcome.json per run via tmp + os.replace under the tracked state/run-evidence/<run_id>/: write_tracked_outcome'),
     'coordinator_core/ops/dispatch_emit/clean_overlay_verify.py': ('in-repo-non-state', 'overlay-verdict.json beside measured-rev.json under the run record dir state/warp/<run_id>/, one derived verdict per run: write_verdict'),
     'coordinator_core/ops/dispatch_emit/ask_stage_blocks.py':('in-repo-non-state', 'ask-stage block text written under the run scratch/record dir by _write'),

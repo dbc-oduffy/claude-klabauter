@@ -161,6 +161,49 @@ def test_child_env_chokepoint_caps_blas_pools_unless_set():
     assert all(pytest_child_env()[k] for k in spawn_depth.BLAS_THREAD_KEYS)
 
 
+BACKGROUND_ADOPTERS = (
+    *REQUIRED_ADOPTERS,
+    "coordinator_core/ops/dispatch_emit/clean_overlay_verify.py",
+    "coordinator_core/bug_blitz/targeted_run.py",
+)
+
+
+def _foreground_capped_calls(tree: ast.AST) -> list[int]:
+    """Line numbers of `spawn_in_capped_job` calls that pass no `background=` keyword."""
+    lines = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else None
+        if name == "spawn_in_capped_job" and not any(k.arg == "background" for k in node.keywords):
+            lines.append(node.lineno)
+    return lines
+
+
+@pytest.mark.parametrize("module", BACKGROUND_ADOPTERS)
+def test_test_leg_spawners_opt_into_background(module):
+    tree = _parse(REPO_ROOT / module)
+    assert tree is not None, f"{module} unreadable"
+    assert _calls_adoption(tree) and not _foreground_capped_calls(tree), (
+        f"{module}: every spawn_in_capped_job call must pass background= (BelowNormal, cores/3, BLAS caps)"
+    )
+
+
+def test_every_scanned_spawner_passes_background(census):
+    bad = {
+        m: _foreground_capped_calls(tree)
+        for m in census
+        if (tree := _parse(REPO_ROOT / m)) is not None and _foreground_capped_calls(tree)
+    }
+    assert not bad, f"pytest spawner(s) call spawn_in_capped_job without background=: {bad}"
+
+
+def test_fixture_foreground_capped_call_is_flagged():
+    assert _foreground_capped_calls(ast.parse("spawn_in_capped_job(['python'])\n")) == [1]
+    assert _foreground_capped_calls(ast.parse("m.spawn_in_capped_job(['python'], background=True)\n")) == []
+
+
 def _write(root: Path, rel: str, body: str) -> None:
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)

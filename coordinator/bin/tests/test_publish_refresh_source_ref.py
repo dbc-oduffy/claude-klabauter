@@ -20,23 +20,23 @@ def _load_publish_module():
 
 publish = _load_publish_module()
 
-CLAUDE_KLABAUTER = str(Path("/repos/claude-klabauter"))
+ENGINE_TREE = str(Path("/repos/claude-klabauter"))
 DOE = str(Path("/repos/doe"))
 
 
 @pytest.fixture
 def toplevels(monkeypatch):
     monkeypatch.setattr(publish, "_resolve_show_toplevel", lambda root: root)
-    monkeypatch.setattr(publish, "_engine_toplevel_key", lambda: CLAUDE_KLABAUTER)
+    monkeypatch.setattr(publish, "_engine_toplevel_key", lambda: ENGINE_TREE)
     monkeypatch.setattr(publish, "_source_ref_override", "m" * 40)
 
 
 def test_a_foreign_source_root_gets_its_own_round_pin(toplevels):
-    assert publish._refresh_source_ref(Path(DOE), {DOE: "d" * 40, CLAUDE_KLABAUTER: "m" * 40}) == "d" * 40
+    assert publish._refresh_source_ref(Path(DOE), {DOE: "d" * 40, ENGINE_TREE: "m" * 40}) == "d" * 40
 
 
 def test_the_claude_klabauter_root_gets_the_commit_override(toplevels):
-    assert publish._refresh_source_ref(Path(CLAUDE_KLABAUTER), {}) == "m" * 40
+    assert publish._refresh_source_ref(Path(ENGINE_TREE), {}) == "m" * 40
 
 
 def test_an_unpinned_foreign_root_falls_back_to_head_never_the_claude_klabauter_commit(toplevels):

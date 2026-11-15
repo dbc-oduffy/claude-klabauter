@@ -299,6 +299,56 @@ def test_healthy_honors_now(tmp_path):
     assert not lv.healthy(sdir, now=time.time() + 25 * 3600)
 
 
+def test_healthy_probe_answered_for_every_alias_is_healthy(tmp_path):
+    seen = []
+    assert lv.healthy(_setup(tmp_path, ["a@h", "b"]), probe=lambda a: seen.append(a))
+    assert seen == ["a@h", "b"]
+
+
+def test_healthy_probe_reason_on_any_alias_is_unhealthy(tmp_path):
+    sdir = _setup(tmp_path, ["a@h", "b"])
+    assert not lv.healthy(sdir, probe=lambda a: "no echo" if a == "b" else None)
+
+
+def test_healthy_probe_reaches_every_dead_alias(tmp_path):
+    seen = []
+
+    def probe(a):
+        seen.append(a)
+        return "no echo"
+
+    assert not lv.healthy(_setup(tmp_path, ["a@h", "b"]), probe=probe)
+    assert sorted(seen) == ["a@h", "b"]
+
+
+def test_healthy_probes_run_concurrently(tmp_path):
+    import threading
+
+    barrier = threading.Barrier(2, timeout=5)
+
+    def probe(a):
+        barrier.wait()
+        return None
+
+    assert lv.healthy(_setup(tmp_path, ["a@h", "b"]), probe=probe)
+
+
+def test_healthy_probe_not_called_when_a_local_supervisor_is_dead(tmp_path):
+    calls = []
+    assert not lv.healthy(_setup(tmp_path, ["a"], live=False), probe=lambda a: calls.append(a))
+    assert calls == []
+
+
+def test_healthy_probe_not_called_for_stale_cache(tmp_path):
+    calls = []
+    assert not lv.healthy(_setup(tmp_path, ["a"], age=24 * 3600 + 5), probe=lambda a: calls.append(a))
+    assert calls == []
+
+
+def test_healthy_without_probe_is_unchanged_for_live_records(tmp_path):
+    assert lv.healthy(_setup(tmp_path, ["a"]), probe=None)
+
+
 def test_healthy_false_for_malformed_cache(tmp_path):
     sdir = _setup(tmp_path, [])
     (sdir / "autolink-boxes.json").write_text(json.dumps({"aliases": "a"}))
@@ -392,3 +442,21 @@ def test_codex_face_check_never_claims_what_it_cannot_prove(tmp_path):
     assert lv.codex_face_unbacked(dict(_codex_face(), unimatrixRemote="me@box"), home) is False
     assert lv.codex_face_unbacked(dict(_codex_face(), vendor="claude"), home) is False
     assert lv.codex_face_unbacked(_codex_face(), tmp_path / "no-peers-file") is False
+
+
+def _far_codex(**extra):
+    return {"vendor": "codex", "macSocketPath": "/tmp/f.sock", "unimatrixRemote": "me@box",
+            "startedAt": int(time.time() * 1000) - 2 * lv.CODEX_FACE_GRACE_SECONDS * 1000, **extra}
+
+
+@pytest.mark.parametrize("extra", [{}, {"codexHolder": "unknown"}, {"codexHolder": "dead"}, {"codexHolder": 7}])
+def test_far_codex_row_without_a_live_holder_is_unbacked_past_grace(extra):
+    assert lv.far_codex_row_unbacked(_far_codex(**extra)) is True
+
+
+def test_far_codex_row_is_backed_while_live_fresh_unstamped_or_not_codex():
+    assert lv.far_codex_row_unbacked(_far_codex(codexHolder="live")) is False
+    assert lv.far_codex_row_unbacked(_far_codex(startedAt=int(time.time() * 1000))) is False
+    assert lv.far_codex_row_unbacked({k: v for k, v in _far_codex().items() if k != "startedAt"}) is False
+    assert lv.far_codex_row_unbacked(_far_codex(vendor="claude")) is False
+    assert lv.far_codex_row_unbacked(None) is False

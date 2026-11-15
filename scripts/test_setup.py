@@ -4631,31 +4631,31 @@ def test_content_root_naming_a_coordinator_dir_is_not_stripped(setup_mod, monkey
 
 
 def _discovery_box(setup_mod, monkeypatch, tmp_path, merged):
-    claude_klabauter = tmp_path / "claude-klabauter"
-    claude_klabauter.mkdir()
+    engine_tree = tmp_path / "claude-klabauter"
+    engine_tree.mkdir()
     monkeypatch.setattr("coordinator_core.machine_resolver.merged_flat_registry", lambda: dict(merged))
     monkeypatch.setattr(setup_mod, "resolve_repo_identity", lambda _r: setup_mod.IDENTITY_AUTHORING)
     writes = {}
-    return claude_klabauter, writes
+    return engine_tree, writes
 
 
 def test_install_repo_discovery_seeds_unset_claude_klabauter_source_path(setup_mod, monkeypatch, tmp_path):
-    claude_klabauter, writes = _discovery_box(setup_mod, monkeypatch, tmp_path, {})
-    setup_mod.install_repo_discovery(claude_klabauter, claude_klabauter, setup_mod.Args(), write=writes.__setitem__)
-    assert writes.get("plugin.mirrors.project-makima.source_path") == str(claude_klabauter)
+    engine_tree, writes = _discovery_box(setup_mod, monkeypatch, tmp_path, {})
+    setup_mod.install_repo_discovery(engine_tree, engine_tree, setup_mod.Args(), write=writes.__setitem__)
+    assert writes.get("plugin.mirrors.project-makima.source_path") == str(engine_tree)
 
 
 def test_install_repo_discovery_never_overwrites_set_claude_klabauter_source_path(setup_mod, monkeypatch, tmp_path):
-    claude_klabauter, writes = _discovery_box(
+    engine_tree, writes = _discovery_box(
         setup_mod, monkeypatch, tmp_path,
         {"plugin.mirrors.project-makima.source_path": str(tmp_path / "elsewhere")},
     )
-    setup_mod.install_repo_discovery(claude_klabauter, claude_klabauter, setup_mod.Args(), write=writes.__setitem__)
+    setup_mod.install_repo_discovery(engine_tree, engine_tree, setup_mod.Args(), write=writes.__setitem__)
     assert "plugin.mirrors.project-makima.source_path" not in writes
 
 
 def test_install_repo_discovery_does_not_seed_claude_klabauter_source_path_from_a_mirror_clone(setup_mod, monkeypatch, tmp_path):
-    claude_klabauter, writes = _discovery_box(setup_mod, monkeypatch, tmp_path, {})
+    engine_tree, writes = _discovery_box(setup_mod, monkeypatch, tmp_path, {})
     monkeypatch.setattr(setup_mod, "resolve_repo_identity", lambda _r: setup_mod.IDENTITY_MIRROR)
-    setup_mod.install_repo_discovery(claude_klabauter, claude_klabauter, setup_mod.Args(), write=writes.__setitem__)
+    setup_mod.install_repo_discovery(engine_tree, engine_tree, setup_mod.Args(), write=writes.__setitem__)
     assert "plugin.mirrors.project-makima.source_path" not in writes

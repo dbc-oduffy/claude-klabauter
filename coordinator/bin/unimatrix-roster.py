@@ -38,6 +38,8 @@ FAR_SOCKET_FIELD = "macSocketPath"
 STILL_ACTIVE = 259
 POLL_SECONDS = 30
 PROBE_SECONDS = 3
+FAR_ADDRESS_BUDGET_SECONDS = 8
+FAR_ADDRESSES_TRIED = 2
 # Names the far box's off-network (tunnel) ssh alias; the --remote alias is always tried first.
 TUNNEL_ENV = "UNIMATRIX_TUNNEL_REMOTE"
 
@@ -259,8 +261,36 @@ def entry_listed(d):
 
 def far_codex_unbacked(entry):
     """True for a far Codex peer row whose box reported no live holder (`codexHolder`, stamped by
-    `session_identity` on the far box); a row from a box that does not report it is listed."""
-    return _liveness().codex_holder_unbacked(entry.get("codexHolder"), entry)
+    `session_identity` on the far box), or reported none, once it is past the face grace."""
+    return _liveness().far_codex_row_unbacked(entry)
+
+
+def transport_row(d):
+    """True for a Unimatrix transport face: infrastructure, never a peer."""
+    return isinstance(d, dict) and (d.get("vendor") == "transport" or bool(d.get("unimatrixTransport")))
+
+
+def far_duplicate(d, rows):
+    """True when a lower alias of this mirror's box lists the same far session among `rows`."""
+    remote, sock = d.get("unimatrixRemote"), d.get(FAR_SOCKET_FIELD)
+    if not remote or not sock:
+        return False
+    scan = [(None, mirror_scan_key(r.get("unimatrixRemote"), r.get(FAR_SOCKET_FIELD)))
+            for r in rows if r is not d and isinstance(r, dict) and entry_listed(r)]
+    return alias_duplicate(remote, sock, scan)
+
+
+def mirror_ghost(d, rows):
+    """True for a mirror the listing never shows: a transport face (bar a reply inbox, which must stay
+    mirrored), a far Codex row without a live holder, or the higher alias of one far session mirrored
+    under two aliases of one box."""
+    return bool(d.get(FAR_SOCKET_FIELD) or d.get("unimatrixRemote")) and (
+        (transport_row(d) and not d.get("unimatrixReplyInbox")) or far_codex_unbacked(d) or far_duplicate(d, rows))
+
+
+def listed_row(d, rows=()):
+    """The one listing predicate: a live peer shown once. `rows` is every session entry the listing covers."""
+    return entry_listed(d) and not transport_row(d) and not mirror_ghost(d, rows)
 
 
 def far_seen_fields():
@@ -511,13 +541,26 @@ def link_probe(remote, tunnel_remote=None, resolve=None, connect=None):
     return False, "; ".join(reasons)
 
 
-def stable_remote(alias, reachable=None, fields=None, connect=None):
-    """First stable name of this far box that answers now, else None: `<box>-lan` alias, then `<box>.local`.
+def alias_identity(alias, read_fields):
+    """The alias's own `ssh -G` IdentityFile when it exists on disk and is not a stock id_* key, else None:
+    the relay key a per-box alias pins (the shared default key is refused by such a box)."""
+    try:
+        path = Path(os.path.expanduser(read_fields(alias).get("identityfile", "")))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return str(path) if path.name and not path.name.startswith("id_") and path.is_file() else None
+
+
+def stable_remote(alias, reachable=None, fields=None, connect=None, read_key=None, verify=None, tcp=None, key=None):
+    """First stable name of this far box that answers now, else None: `<box>-lan` alias, then the
+    first host-key-verified address in the box's machine-local far-address list, then `<box>.local`.
 
     For when the alias's own pinned HostName has gone stale. Costs one `ssh -G` (on the `-lan`
-    alias, shared by both legs) plus a TCP wait per leg, so call it only after the alias itself
-    failed. `.local` is dialled on the default port as `<user>@<box>.local`, the only shape a
-    single ssh host token can carry; the user is the alias's own, else the one ssh resolves."""
+    alias, shared by all legs) plus a TCP wait per leg, so call it only after the alias itself
+    failed. At most FAR_ADDRESSES_TRIED listed addresses are tried within FAR_ADDRESS_BUDGET_SECONDS in all
+    (the verify ssh timeout shrinks to the time left). Listed addresses and `.local` are dialled on the default port as `<user>@<name>`, the only
+    shape a single ssh host token can carry; the user is the alias's own, else the one ssh resolves.
+    An address that answers returns `user@<address>`; the caller keeps the box id for HostKeyAlias."""
     user, at, host = alias.rpartition("@")
     lan = f"{user}{at}{host}-lan"
     base = alias if host.endswith("-lan") else lan
@@ -542,10 +585,30 @@ def stable_remote(alias, reachable=None, fields=None, connect=None):
         name = f"{host}.local"
         if port != 22:
             return None
+        who = user or f.get("user")
+        mux = _box_mux()
+        far = mux._far_addresses()
+        box = mux.box_of(host)
+        addresses = far.box_addresses(box, read_key or mux.machine_local_value)
+        if addresses:
+            deadline = time.monotonic() + FAR_ADDRESS_BUDGET_SECONDS
+            dial = tcp or far.tcp_connect
+            vkey = key or alias_identity(alias, fields or ssh_fields) or default_key()
+
+            def within(address):
+                return time.monotonic() < deadline and dial(address)
+
+            def bounded(target):
+                left = max(1, int(deadline - time.monotonic()))
+                return far.make_verify(box, vkey, timeout=left)(target)
+
+            address, _skipped = far.first_answering(
+                box, who, addresses[:FAR_ADDRESSES_TRIED], connect=within, verify=verify or bounded)
+            if address:
+                return far.target_for(who, address)
         (connect or socket.create_connection)((name, port), timeout=PROBE_SECONDS).close()
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
-    who = user or f.get("user")
     return f"{who}@{name}" if who else name
 
 
@@ -643,12 +706,19 @@ def same_scan_target(left, right):
 
 def live_sessions():
     """(bare name, box-qualified far socket or None) for every live local or mirrored session."""
-    out = []
+    rows = session_entries()
+    return [(bare_name(d["name"]), mirror_scan_key(d.get("unimatrixRemote"), d.get(FAR_SOCKET_FIELD)))
+            for d in rows if isinstance(d.get("name"), str) and listed_row(d, rows)]
+
+
+def session_entries():
+    """Every readable session entry on this box: the scan set `listed_row` collapses duplicates over."""
     sess = sessions_dir()
     try:
         files = os.listdir(sess)
     except OSError:
-        return out
+        return []
+    rows = []
     for f in files:
         if not f.endswith(".json"):
             continue
@@ -657,9 +727,9 @@ def live_sessions():
                 d = json.load(fh)
         except (OSError, ValueError):
             continue
-        if isinstance(d, dict) and isinstance(d.get("name"), str) and entry_listed(d):
-            out.append((bare_name(d["name"]), mirror_scan_key(d.get("unimatrixRemote"), d.get(FAR_SOCKET_FIELD))))
-    return out
+        if isinstance(d, dict):
+            rows.append(d)
+    return rows
 
 
 def live_bare_names(except_far_sock=None, scan=None):
@@ -700,19 +770,8 @@ def inbound_names():
 
     The far box's inbox relay already gives such a session a local socket, so mirroring it again
     from here would list the one far session twice under one name."""
-    names = set()
-    sess = sessions_dir()
-    for f in os.listdir(sess):
-        if not f.endswith(".json"):
-            continue
-        try:
-            with open(os.path.join(sess, f), encoding="utf-8") as fh:
-                d = json.load(fh)
-        except (OSError, ValueError):
-            continue
-        if isinstance(d, dict) and d.get("unimatrixMirror") and entry_listed(d):
-            names.add(bare_name(d.get("name")))
-    return names
+    rows = session_entries()
+    return {bare_name(d.get("name")) for d in rows if d.get("unimatrixMirror") and listed_row(d, rows)}
 
 
 def mirrorable(rows, skip, inbound):
@@ -850,8 +909,9 @@ def unmirror(pid):
 def reap_orphaned_mirrors(remote, say, unbacked=False, keep=()):
     """Remove this far box's mirrors whose roster supervisor is gone, stopping a bridge that is still its process.
 
-    With `unbacked`, a mirror whose far row went unconfirmed (`mirror_unbacked`) is reaped too: the
-    session registry lists a file by its live bridge pid, so an unlisted-but-present mirror still shows.
+    With `unbacked`, a mirror whose far row went unconfirmed (`mirror_unbacked`) or that the listing never
+    shows (`mirror_ghost`) is reaped too: the session registry lists a file by its live bridge pid, so an
+    unlisted-but-present mirror still shows.
     Pids in `keep` (the caller's own bridges) are never reaped: pass it only after a poll that refreshed
     their stamps. A failed poll passes none, so a link that stays down reaps the mirrors it can no longer vouch for.
     A bridge is killed only when its entry records a procStart it still matches: a recycled pid is never signalled."""
@@ -859,7 +919,7 @@ def reap_orphaned_mirrors(remote, say, unbacked=False, keep=()):
         files = os.listdir(sessions_dir())
     except OSError:
         return
-    reaped, to_kill, owners, readable = [], [], [], True
+    reaped, to_kill, owners, readable, entries = [], [], [], True, []
     for f in files:
         m = re.fullmatch(r"(\d+)\.json", f)
         if not m:
@@ -874,8 +934,10 @@ def reap_orphaned_mirrors(remote, say, unbacked=False, keep=()):
         pid = int(m.group(1))
         if isinstance(d, dict):
             owners.append((path, pid, d))
-        if (not isinstance(d, dict) or d.get("pid") != pid or pid in keep
-                or not (mirror_orphaned(d) or (unbacked and mirror_unbacked(d)))
+            entries.append(d)
+    for _, pid, d in owners:
+        if (d.get("pid") != pid or pid in keep
+                or not (mirror_orphaned(d) or (unbacked and (mirror_unbacked(d) or mirror_ghost(d, entries))))
                 or box_label(d.get("unimatrixRemote") or "") != box_label(remote)):
             continue
         if isinstance(d.get("procStart"), str) and d["procStart"] and entry_live(d):

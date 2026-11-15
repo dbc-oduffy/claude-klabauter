@@ -42,8 +42,9 @@ Reply fields:
      "held": [{stub_id, path, reason}] — stubs an APM hold (plan_blitz_hold_reason without a
        clearance) keeps out of every wave; each also carries held/hold_reason in "stubs",
      "waves": [{index, batons: [{id, path, title, sized, planPath, executionOpen, tshirt,
-       route, sizingObject}]}] — copied from the frozen plan_gate report in order, never
-       regrouped; empty when the gate report was deferred}
+       route, sizingObject}], budget_tokens, checkpoint_at: [{percent, settled}]}] — copied from
+       the frozen plan_gate report in order, never regrouped, each with its row-scaled default
+       token budget and the 25/50/75% checkpoint marks; empty when the gate report was deferred}
     The approval fields appear only when an approval was supplied. An approved call stamps
     OVERVIEW.md (status, approver, approval_utterance) and commits the roadmap directory's
     changed files with the stubs.
@@ -125,9 +126,38 @@ def _trail_dir(raw: object) -> str:
     return value
 
 
+def _with_wave_defaults(reply: dict) -> dict:
+    """`reply` with each wave carrying `budget_tokens` (``grind_triage.default_budget`` of its baton count)
+    and `checkpoint_at` (``[{percent, settled}]``: batons settled when each 25/50/75% report is due)."""
+    from coordinator_core.grind_triage.contract import CHECKPOINT_PERCENTS, default_budget
+
+    waves = reply.get("waves")
+    if not isinstance(waves, list):
+        return reply
+    out = []
+    for wave in waves:
+        count = len(wave.get("batons") or []) if isinstance(wave, dict) else 0
+        out.append(
+            {
+                **wave,
+                "budget_tokens": default_budget(count),
+                "checkpoint_at": [
+                    {"percent": p, "settled": -(-p * count // 100)} for p in CHECKPOINT_PERCENTS
+                ],
+            }
+            if isinstance(wave, dict)
+            else wave
+        )
+    return {**reply, "waves": out}
+
+
 @register_op("roadmap.blitz_stage")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "roadmap.blitz_stage" handler. See module docstring."""
+    return _with_wave_defaults(_dispatch(params, repo_root))
+
+
+def _dispatch(params: dict, repo_root: Optional[Path]) -> dict:
     if repo_root is None:
         raise ValueError("roadmap.blitz_stage requires a resolved repo_root")
     read_staged = params.get("read_staged")
