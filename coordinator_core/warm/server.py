@@ -236,6 +236,8 @@ from coordinator_core.warm.entry_seam import per_request_state
 from coordinator_core.warm.client import (
     MUTATION_READ_DEADLINE_SECS,
     WARM_DISPATCH_INDETERMINATE,
+    _machine_local_read_deadline,
+    _machine_local_timeout_response,
     _op_may_mutate,
     scrub_test_env,
 )
@@ -1135,6 +1137,26 @@ def _prune_dispatch_claims(claim_dir) -> None:
 #: this engine runs on, so the worker can subtract it from its own reading.
 _SUBMIT_STAMP_KEY = "_pool_submit_monotonic"
 
+#: Reserved `msg` key carrying the connection's enqueue instant as the accept process's
+#: `time.monotonic()`; popped by `_pool_dispatch_worker` into `_CONNECTION_ENQUEUE_MONOTONIC`, which
+#: the submit hook reads (never `land_deadline`'s queue wait, which re-bases the result window).
+_ENQUEUE_STAMP_KEY = "_pool_enqueue_monotonic"
+
+#: Monotonic instant the task being served in this pool worker was enqueued on its connection;
+#: None when unforwarded. One task at a time per worker process.
+_CONNECTION_ENQUEUE_MONOTONIC: Optional[float] = None
+
+
+def _enqueue_monotonic(stamp: Any) -> Optional[float]:
+    """The connection enqueue instant of a `_REQUEST_STAMP` value on the monotonic clock (its
+    wall-clock `enqueue_ts` aged by the elapsed time); None when there is no usable stamp."""
+    try:
+        if stamp is not None and isinstance(stamp[0], (int, float)):
+            return time.monotonic() - max(0.0, time.time() - float(stamp[0]))
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
 
 def _declare_queue_wait(stamp: Any, method: Optional[str] = None) -> None:
     """Hand bind-minus-submit seconds to `land_deadline`; resets to 0 with no stamp so a prior
@@ -1281,6 +1303,8 @@ def _pool_dispatch_worker(
     key (it won the same O_EXCL create at its deadline), the op does not run.
     """
     stamp = msg.pop(_SUBMIT_STAMP_KEY, None) if isinstance(msg, dict) else None
+    global _CONNECTION_ENQUEUE_MONOTONIC
+    _CONNECTION_ENQUEUE_MONOTONIC = msg.pop(_ENQUEUE_STAMP_KEY, None) if isinstance(msg, dict) else None
     claim = _claim_path(claim_dir, dispatch_key)
     if claim is not None and not _take_claim(claim, os.getpid()):
         return {_NOT_DISPATCHED_MARKER: True}
@@ -3274,12 +3298,40 @@ def _raise_engine_priority() -> bool:
         return False
 
 
-def _restore_worker_priority() -> None:
-    """POSIX nice is inherited; put a pool worker back at the recorded base. Never raises."""
+_WINDOWS_ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000
+_POSIX_WORKER_NICE = -2
+
+
+def _raise_worker_priority(posix_nice: int = _POSIX_WORKER_NICE) -> bool:
+    """Run a pool worker (or the supervisor) above batch work: ABOVE_NORMAL_PRIORITY_CLASS on
+    Windows, `min(base, posix_nice)` on POSIX where permitted. Workers default below the accept
+    process's -5; the base is the pre-boost nice recorded in `_BASE_NICE_ENV`, else the current
+    one. Never raises; True when raised."""
     try:
-        base = os.environ.get(_BASE_NICE_ENV)
-        if base is not None and sys.platform != "win32":
-            os.setpriority(os.PRIO_PROCESS, 0, int(base))
+        if sys.platform == "win32":
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+            kernel32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            return bool(
+                kernel32.SetPriorityClass(
+                    kernel32.GetCurrentProcess(), _WINDOWS_ABOVE_NORMAL_PRIORITY_CLASS
+                )
+            )
+        recorded = os.environ.get(_BASE_NICE_ENV)
+        base = int(recorded) if recorded is not None else os.getpriority(os.PRIO_PROCESS, 0)
+        os.setpriority(os.PRIO_PROCESS, 0, min(base, posix_nice))
+        os.environ.setdefault(_BASE_NICE_ENV, str(base))
+        return True
+    except Exception:  # noqa: BLE001 -- priority is best-effort
+        return False
+
+
+def _log_priority_boost(role: str, held: bool) -> None:
+    """One stderr line per process start, so a boost that did not hold is visible. Never raises."""
+    try:
+        print(f"[warm-priority] {role} boost held={held}", file=sys.stderr)
     except Exception:  # noqa: BLE001
         pass
 
@@ -3297,14 +3349,15 @@ def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None) ->
         forward_queue.cancel_join_thread()
         atomic_append.set_forwarder(lambda sink, encoded, retain: forward_queue.put_nowait((sink, encoded, retain)))
 
-    _restore_worker_priority()
     polite_io.lower_own_priority()
+    boosted = _raise_worker_priority()  # after the POSIX nice-19 drop, which it supersedes
     _bind_null_std_streams()
     # pythonw worker: without this every git/console child it spawns opens a visible console.
     from coordinator_core.win_portability import install_console_less_spawn_default
 
     install_console_less_spawn_default()
     _bind_worker_stderr_log(stderr_dir)
+    _log_priority_boost("worker", boosted)
     threading.Thread(
         target=_exit_with_parent,
         args=(os.getppid(),),
@@ -4794,7 +4847,13 @@ class _ServerContext:
             _t_submit = time.time()
             _stamp = time.monotonic()
             _wait_left = max(0.0, _deadline - _gate_wait)
+            _ml_secs = _machine_local_read_deadline(msg)
+            if _ml_secs is not None:
+                _wait_left = min(_wait_left, _ml_secs)
             _stamped_msg = {**msg, _SUBMIT_STAMP_KEY: _stamp}
+            _enqueue_mono = _enqueue_monotonic(getattr(_REQUEST_STAMP, "value", None))
+            if _enqueue_mono is not None:
+                _stamped_msg[_ENQUEUE_STAMP_KEY] = _enqueue_mono
             try:
                 if claim is None:
                     future = pool.submit(_pool_dispatch_worker, _stamped_msg, caller)
@@ -4871,6 +4930,13 @@ class _ServerContext:
                             "outstanding": self._pool_outstanding(),
                         },
                     )
+                if _ml_secs is not None:
+                    # A started machine-local read never mutates: the typed timeout is a
+                    # RESULT the door relays, never the -32004 that surfaces as exit 1.
+                    if not self._terminate_overdue_worker(pool, claim, dispatch_key, future):
+                        if dispatch_key is not None:
+                            _ack_store.mark_withdrawn(dispatch_key)
+                    return _machine_local_timeout_response(msg, _ml_secs)
                 # The task STARTED and is still running: genuinely
                 # indeterminate. `ipc._timeout_error_envelope` classifies via
                 # the same fail-closed `_op_may_mutate` the BrokenProcessPool
@@ -5875,7 +5941,7 @@ def _run_guarded() -> int:
     therefore not a second server that happens to resemble this one; it is
     this one with a different endpoint under it.
     """
-    _raise_engine_priority()
+    _log_priority_boost("accept", _raise_engine_priority())
     repo_root = _engine_clone_root()
     if idle.ladder_gone_tombstoned(Path(repo_root)):
         print(f"[warm-server] ladder gone for {repo_root}; not starting", file=sys.stderr)

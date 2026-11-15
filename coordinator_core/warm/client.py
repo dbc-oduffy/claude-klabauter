@@ -1066,6 +1066,55 @@ class _PendingRead:
         return self._result.get("line")
 
 
+#: Kernel verbs that only read (`coordinator/bin/machine-local.py :: _READ_VERBS`).
+_MACHINE_LOCAL_READ_VERBS = frozenset({"get", "require", "has", "path", "dir", "dump", "keys"})
+#: The kernel's own process-wide backstop (`_machine_local._BACKSTOP_S`), pinned by
+#: `test_client_machine_local_stall.py`; this module never imports the kernel.
+_MACHINE_LOCAL_BACKSTOP_S = 8.0
+
+
+def _machine_local_read_deadline(msg: dict) -> Optional[float]:
+    """The reply-wait bound for a `machine-local <read verb>` door frame, else None.
+
+    A stalled read must reach the caller as the kernel's typed timeout inside the
+    kernel's own deadline, not as the generic mutation wait's -32004.
+
+    Trap: `MACHINE_LOCAL_DEADLINE_S` is read from the caller's env here, while the worker reads
+    the warm server's env, so an override shortens only this wait; `0` means the backstop here
+    but "no in-process deadline" in `machine-local.py :: _deadline_seconds`.
+    """
+    params = msg.get("params")
+    if msg.get("method") != "invoke.from_argv" or not isinstance(params, dict):
+        return None
+    argv = params.get("argv")
+    if params.get("entrypoint") != "machine-local" or not isinstance(argv, list) or not argv:
+        return None
+    if argv[0] not in _MACHINE_LOCAL_READ_VERBS:
+        return None
+    try:
+        secs = float(os.environ.get("MACHINE_LOCAL_DEADLINE_S") or _MACHINE_LOCAL_BACKSTOP_S)
+    except ValueError:
+        secs = _MACHINE_LOCAL_BACKSTOP_S
+    return secs if secs > 0 else _MACHINE_LOCAL_BACKSTOP_S
+
+
+def _machine_local_timeout_response(msg: dict, secs: float) -> dict:
+    """The `invoke.from_argv` result for a stalled warm machine-local read: exit 4, typed stderr."""
+    verb = msg["params"]["argv"][0]
+    return {
+        "jsonrpc": "2.0",
+        "id": msg.get("id"),
+        "result": {
+            "stdout": "",
+            "stderr": (
+                f"machine-local-timeout: warm engine gave no reply to `{verb}` within {secs:g}s "
+                f"-- the answer is unknown, not unset\n"
+            ),
+            "exit_code": 4,
+        },
+    }
+
+
 def _op_may_mutate(method: Any) -> bool:
     """True unless the named op is affirmatively classified COMPUTE_ONLY.
 
@@ -1964,7 +2013,14 @@ def _try_warm_dispatch_inner(
             liveness_secs = READ_DEADLINE_SECS
             if read_deadline_secs is not None:
                 liveness_secs = max(0.0, min(READ_DEADLINE_SECS, read_deadline_secs))
-            line = pending.wait(liveness_secs)
+            ml_secs = _machine_local_read_deadline(msg)
+            if ml_secs is not None:
+                line = pending.wait(ml_secs)
+                if line is _TIMED_OUT:
+                    _note_unanswered(token)
+                    return _machine_local_timeout_response(msg, ml_secs)
+            else:
+                line = pending.wait(liveness_secs)
             if line is _TIMED_OUT:
                 # The liveness probe expired. For a compute-only op that is the
                 # table's own "wedged server -> go cold" row, unchanged. For a

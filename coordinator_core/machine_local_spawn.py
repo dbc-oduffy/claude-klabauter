@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+from enum import Enum
 from pathlib import Path
 
 # The single kill ceiling. Not a budget: the budget is the 500ms brightline (DR-344). No
@@ -106,6 +107,8 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 _DEFAULT_MAX_INFLIGHT = 16
 _SLOT_SWEEP_PAUSE_S = 0.02
 _CONTENDED = object()
+_TIMED_OUT = object()
+_EXIT_TIMEOUT = 4  # _machine_local.EXIT_TIMEOUT: the kernel's own watchdog fired
 _WIN_JOB = None
 
 
@@ -340,7 +343,7 @@ def _popen(argv, env=None):
 
 
 def _run(argv, timeout: float, env=None):
-    """CompletedProcess, None (unstartable or killed at the ceiling) or _CONTENDED (no slot)."""
+    """CompletedProcess, None (unstartable), _TIMED_OUT (killed at the ceiling) or _CONTENDED (no slot)."""
     with _box_slot() as slot:
         if slot == "contended":
             return _CONTENDED
@@ -353,7 +356,7 @@ def _run(argv, timeout: float, env=None):
                 stdout, stderr = proc.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
                 _reap(proc)
-                return None
+                return _TIMED_OUT
             except BaseException:
                 _reap(proc)
                 raise
@@ -375,7 +378,7 @@ def run_bounded(argv, *, timeout: float = ML_SPAWN_TIMEOUT_S, env=None):
     always closed.
     """
     cp = _run(argv, min(float(timeout), ML_SPAWN_TIMEOUT_S), env)
-    return None if cp is _CONTENDED else cp
+    return None if cp is _CONTENDED or cp is _TIMED_OUT else cp
 
 
 def _reap(proc: subprocess.Popen) -> None:
@@ -571,7 +574,7 @@ def _spawn_dump(impl: str, args: tuple):
     cp = _run(_argv(impl, "dump", *args), ML_SPAWN_TIMEOUT_S)
     if cp is _CONTENDED:
         return _CONTENDED
-    if cp is None or cp.returncode != 0:
+    if cp is None or cp is _TIMED_OUT or cp.returncode != 0:
         return None
     try:
         parsed = json.loads(cp.stdout or "{}")
@@ -749,7 +752,8 @@ def get(impl, key: str, *, in_process: bool = True):
     A set-but-empty key reads "", never None; None means unset.
 
     A dump that fails or times out falls through to one `get` spawn, so the worst case is two
-    bounded spawns (2 x ML_SPAWN_TIMEOUT_S); neither is retried.
+    bounded spawns (2 x ML_SPAWN_TIMEOUT_S), each preceded by at most ML_WAIT_TIMEOUT_S of
+    waiting for a box-wide slot; neither is retried. No slot in time reads (None, False).
     """
     impl = str(impl)
     payload = dump(impl, in_process=in_process)
@@ -773,11 +777,66 @@ def get(impl, key: str, *, in_process: bool = True):
     return result
 
 
+class GetStatus(str, Enum):
+    """Why a `get` answered as it did: OK (value read), UNSET (clean absence), TIMEOUT (read
+    stalled past a deadline), CONTENDED (no box slot freed), ERROR (any other failure)."""
+
+    OK = "ok"
+    UNSET = "unset"
+    TIMEOUT = "timeout"
+    CONTENDED = "contended"
+    ERROR = "error"
+
+
+def get_status(impl, key: str) -> GetStatus:
+    """The typed outcome of `get(impl, key)`, sharing its dump, in-process and cache path.
+
+    Consumers: callers that must tell "unset" from "could not read" (likeness/fifa adoption,
+    per the plan); none in this repo yet.
+
+    A failed spawn is cached like `get`'s; a contended one is not, so it reads CONTENDED again
+    on the next call rather than a remembered failure.
+    """
+    impl = str(impl)
+    payload = dump(impl)
+    if payload is not None and key in payload:
+        return GetStatus.OK if isinstance(payload[key], str) else GetStatus.UNSET
+    if impl.endswith(".py"):
+        answered = _get_in_process(impl, key)
+        if answered is not None:
+            return GetStatus.OK if answered[0] is not None else GetStatus.UNSET
+    ckey = _cache_key(impl, ("get-status", key))
+    hit = _cache_get(ckey)
+    if hit is not _MISS:
+        return hit
+    result = _get_spawned_status(impl, key)
+    if result is not GetStatus.CONTENDED:
+        _cache_put(ckey, result)
+    return result
+
+
+def _get_spawned_status(impl: str, key: str) -> GetStatus:
+    cp = _run(_argv(impl, "get", key), ML_SPAWN_TIMEOUT_S)
+    if cp is _CONTENDED:
+        return GetStatus.CONTENDED
+    if cp is _TIMED_OUT:
+        return GetStatus.TIMEOUT
+    if cp is None:
+        return GetStatus.ERROR
+    if cp.returncode == 0:
+        return GetStatus.OK
+    if cp.returncode == 1:
+        return GetStatus.UNSET
+    if cp.returncode == _EXIT_TIMEOUT:
+        return GetStatus.TIMEOUT
+    return GetStatus.ERROR
+
+
 def _get_spawned(impl: str, key: str):
     cp = _run(_argv(impl, "get", key), ML_SPAWN_TIMEOUT_S)
     if cp is _CONTENDED:
         return _CONTENDED
-    if cp is None:
+    if cp is None or cp is _TIMED_OUT:
         return None, False
     if cp.returncode == 0:
         return cp.stdout.rstrip("\r\n"), True

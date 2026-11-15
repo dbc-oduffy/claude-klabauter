@@ -354,7 +354,11 @@ def test_concurrent_threads_start_exactly_one_child(env, monkeypatch):
     for t in threads:
         t.join(30)
     assert len(_spawned(env["pidfile"])) == 1
-    assert results == [{"repos.a": "/x/a", "repos.b": None}] * 4
+    # Trap: a waiter gives up at ML_WAIT_TIMEOUT_S by design (pinned below), so a child start slower
+    # than that under a peer burst reads None for waiters; wall clock never decides this test.
+    payload = {"repos.a": "/x/a", "repos.b": None}
+    assert len(results) == 4 and payload in results
+    assert all(r in (payload, None) for r in results)
 
 
 def test_waiter_behind_slow_dump_gives_up_inside_wait_ceiling(env, monkeypatch):
@@ -656,6 +660,49 @@ def test_cached_get_reads_the_real_kernel_in_process(tmp_path, monkeypatch):
     assert mls.cached_get(str(KERNEL), "gamma.none") == (None, True)
 
 
+def _status_env(env, monkeypatch, cp):
+    """(get_status, get) past the dump and in-process legs, the spawned `get` answering `cp`."""
+    monkeypatch.setattr(mls, "dump", lambda impl, **kw: None)
+    monkeypatch.setattr(mls, "_run", lambda argv, timeout, env=None: cp)
+    return mls.get_status(env["stub"] + "x", "k"), mls.get(env["stub"] + "y", "k", in_process=False)
+
+
+def _cp(rc, out=""):
+    return subprocess.CompletedProcess([], rc, out, "")
+
+
+def test_get_status_types_each_spawned_outcome_and_get_keeps_its_tuple(env, monkeypatch):
+    cases = [
+        (_cp(0, "v\n"), mls.GetStatus.OK, ("v", True)),
+        (_cp(1), mls.GetStatus.UNSET, (None, True)),
+        (_cp(4), mls.GetStatus.TIMEOUT, (None, False)),
+        (_cp(2), mls.GetStatus.ERROR, (None, False)),
+        (mls._TIMED_OUT, mls.GetStatus.TIMEOUT, (None, False)),
+        (None, mls.GetStatus.ERROR, (None, False)),
+        (mls._CONTENDED, mls.GetStatus.CONTENDED, (None, False)),
+    ]
+    for cp, status, tup in cases:
+        mls._CACHE.clear()
+        assert _status_env(env, monkeypatch, cp) == (status, tup)
+
+
+def test_get_status_does_not_remember_contention(env, monkeypatch):
+    answers = iter([mls._CONTENDED, _cp(1)])
+    monkeypatch.setattr(mls, "dump", lambda impl, **kw: None)
+    monkeypatch.setattr(mls, "_run", lambda argv, timeout, env=None: next(answers))
+    assert mls.get_status(env["stub"] + "x", "k") is mls.GetStatus.CONTENDED
+    assert mls.get_status(env["stub"] + "x", "k") is mls.GetStatus.UNSET
+
+
+def test_get_status_reports_a_real_stalled_spawn_as_timeout(env, monkeypatch):
+    monkeypatch.setenv("STUB_SLEEP", "30")
+    monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 0.6)
+    assert mls.get_status(env["stub"], "repos.zzz") is mls.GetStatus.TIMEOUT
+
+
+def test_get_status_reads_a_dumped_key_and_a_dumped_null_without_spawning(env):
+    assert mls.get_status(env["stub"], "repos.a") is mls.GetStatus.OK
+    assert mls.get_status(env["stub"], "repos.b") is mls.GetStatus.UNSET
 _STORE_TOML = '[stores.alpha]\npath = "{root}"\nowner = "me"\npurpose = "keeps   the\\ttabs"\n'
 
 STORE_STUB = '''\

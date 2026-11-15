@@ -95,8 +95,49 @@ def test_stalled_git_cannot_push_get_past_deadline(reg, tmp_path, monkeypatch):
     rc, msg = _ml.resolve_one("repos.baz")
     elapsed = time.monotonic() - t0
     assert elapsed < 1.0
-    assert rc == _ml.EXIT_OPERATIONAL and "deadline exceeded" in msg and "machine-local set repos." in msg
+    assert rc == _ml.EXIT_TIMEOUT == 4
+    assert msg.startswith("machine-local-timeout:") and "deadline exceeded" in msg
+    assert "machine-local set repos." in msg
     assert max(calls) <= 0.4
+
+
+def test_in_process_get_deadline_is_typed_timeout_not_absence(reg, tmp_path, monkeypatch, capsys):
+    _search_root_with_candidates(tmp_path, reg, "qux", 2)
+    monkeypatch.setattr(_ml, "_deadline_at", time.monotonic() - 1)
+    monkeypatch.setattr(sys, "argv", ["machine-local", "get", "repos.qux", "--default", "fallback"])
+    rc = _ml.main()
+    cap = capsys.readouterr()
+    assert rc == _ml.EXIT_TIMEOUT
+    assert cap.err.startswith("machine-local-timeout:") and "fallback" not in cap.out
+
+
+def test_keys_set_only_timeout_is_typed_not_omitted(reg, tmp_path, monkeypatch, capsys):
+    target = tmp_path / "declared"
+    target.mkdir()
+    (reg / "registry.local.toml").write_text(
+        f'"repos.alpha" = "{_toml_path(target)}"\n"repos.beta" = "{_toml_path(target)}"\n'
+    )
+    monkeypatch.setattr(sys, "argv", ["machine-local", "keys", "--set-only"])
+    assert _ml.main() == 0
+    assert capsys.readouterr().out.split() == ["repos.alpha", "repos.beta"]
+
+    real = _ml.resolve_one
+
+    def stalled_beta(k, layers=None):
+        if k == "repos.beta":
+            return _ml.EXIT_TIMEOUT, "machine-local-timeout: deadline exceeded"
+        return real(k, layers)
+
+    monkeypatch.setattr(_ml, "resolve_one", stalled_beta)
+    assert _ml.main() == _ml.EXIT_TIMEOUT
+    cap = capsys.readouterr()
+    assert cap.err.startswith("machine-local-timeout:") and "repos.beta" not in cap.out
+
+
+def test_unset_key_stays_exit_1(reg, monkeypatch):
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", ""))
+    rc, _ = _ml.resolve_one("repos.nothere")
+    assert rc == _ml.EXIT_NOT_FOUND
 
 
 def test_watchdog_exits_with_named_error_when_a_read_blocks(tmp_path):
@@ -110,7 +151,8 @@ def test_watchdog_exits_with_named_error_when_a_read_blocks(tmp_path):
     t0 = time.monotonic()
     p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=20)
     assert time.monotonic() - t0 < 5
-    assert p.returncode == 2 and "deadline of 0.3s exceeded" in p.stderr
+    assert p.returncode == 4
+    assert p.stderr.startswith("machine-local-timeout:") and "deadline of 0.3s exceeded" in p.stderr
 
 
 def test_oversize_registry_file_is_refused(reg, monkeypatch):
