@@ -2507,8 +2507,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "0f01155e64ff23839b0edb31dc92aacdfa1a97a6",
-    "coordinator_core/_engine_stamp": "00234646a3d5cbc7f81caa3b5f2a2a4f79ac0b41",
+    "coordinator_core/_engine_published_at": "069065ec293e9a967294cea810d0a8ed1260ae9d",
+    "coordinator_core/_engine_stamp": "ca35dbcd6c689e64cac05e2d5c54185d9bdc957c",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -8664,7 +8664,7 @@
     "coordinator_core/ops/fold_execution_record.py": "cb2bf7624dfe1af67d09b912663fa1410d856041",
     "coordinator_core/ops/foreign_symbols.py": "14831734d8a7104488c85a73348a42d4700b6bee",
     "coordinator_core/ops/freshness_commit_delta.py": "6d7dd32d01529b8b27f72d06ff29ac9fb0705097",
-    "coordinator_core/ops/frontmatter_remint/__init__.py": "37a84b61ae74abed15a1e785474fd8942be03dfa",
+    "coordinator_core/ops/frontmatter_remint/__init__.py": "9a6ef74cb33cd682304afea369a07a095af522d1",
     "coordinator_core/ops/frontmatter_remint/_contract.py": "1164506ace963d2b23ff517419954310a5d8b327",
     "coordinator_core/ops/frontmatter_remint/exec_auth.py": "3b1aede357a623ffbd7f88ee2dc210f973b48988",
     "coordinator_core/ops/frontmatter_remint/handoff_id.py": "9cdaf6ffb246f2caaa0793626e3b2fe6d87aa967",
@@ -11414,6 +11414,7 @@
     "coordinator_core/tests/test_read_local_md_mapping.py": "7b615b746aa7b1e1dccb3e214b36aa95010e0aa0",
     "coordinator_core/tests/test_red_set_report.py": "7b7c69058708fd318ff6c2f70a5146fc391a29b3",
     "coordinator_core/tests/test_register_rows.py": "ee5cb456bc5a59efbfec208904a82043633b676d",
+    "coordinator_core/tests/test_registered_op_handler_signature.py": "f0a0ee6700a3c0d094d3439acd128ad6ae76c339",
     "coordinator_core/tests/test_registration_quad_complete.py": "812fcd8ce72d97a97485c4f1c725fd5c1aa8d706",
     "coordinator_core/tests/test_registry_fallback_counter.py": "0c5225e1b40aa5a8d8ad277fe091f8497f5a05e5",
     "coordinator_core/tests/test_registry_reads_are_share_delete.py": "d09584c88a1cba5e5aba580b0c0e5c72b57435f4",
@@ -12491,5 +12492,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "5e874c24b97cd28ca4020fbc4ebde6677cebe329"
+  "source_head": "a8600ce2eaf9b48a0ac992f02e671fee6b660e8c"
 }

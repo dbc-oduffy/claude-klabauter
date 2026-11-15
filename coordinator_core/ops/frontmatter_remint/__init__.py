@@ -204,7 +204,6 @@ def _remint_one(rel_raw: str, worktree: Path, wanted: Optional[list[str]], repo_
     return out
 
 
-@register_op("frontmatter.remint")
 def _old_handoff_ids(rels: list[str], worktree: Path) -> list[str]:
     ids = []
     for rel in rels:
@@ -234,6 +233,7 @@ def _remint_all(rels: list[str], worktree: Path, wanted: Optional[list[str]], re
         ctx.__exit__(None, None, None)
 
 
+@register_op("frontmatter.remint")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "frontmatter.remint" — re-mint engine-owned frontmatter fields.
 
