@@ -93,7 +93,8 @@ def test_sender_is_released_before_the_ssh_leg_runs(env, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", run)
     bridge.serve_one(Conn(events, deliveries))
-    assert events == [("close", 0), "ssh"]
+    # The second ssh is the `receipts` reconcile a reply-less exit 0 earns.
+    assert events == [("close", 0), "ssh", "ssh"]
 
 
 def test_ssh_argv_multiplexes_off_windows_only(env, monkeypatch):

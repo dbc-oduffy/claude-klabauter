@@ -191,6 +191,22 @@ def test_n_lines_go_in_one_ssh_and_each_gets_a_record(bridge, monkeypatch):
     assert endpoint == SENDER and "gone" in json.loads(frame)["message"]
 
 
+def test_a_reply_less_exit_0_is_acked_from_the_far_receipts(bridge, monkeypatch):
+    # macmini 2026-11-15: a pre-ack relay wrote every line and exited 0 with no reply; 24 sends it
+    # received were recorded FAILED and each sender got a false failure notice.
+    def far(cmd, data):
+        if cmd.startswith("receipts"):
+            rows = [{"digest": hashlib.sha256(l).hexdigest()} for l in sent[0].splitlines()]
+            return subprocess.CompletedProcess([], 0, json.dumps({"ok": True, "rows": rows}).encode() + b"\n", b"")
+        sent.append(data)
+        return subprocess.CompletedProcess([], 0, b"", b"")
+    sent = []
+    calls = record_ssh(monkeypatch, far)
+    send_many(bridge, 2)
+    assert [c[0].split()[0] for c in calls] == ["send-session", "receipts"]
+    assert [s.split()[0] for s in bridge.delivery_status()] == ["delivered", "delivered"] and bridge.written == []
+
+
 def test_old_relay_usage_error_is_a_recorded_failure_not_a_per_line_resend(bridge, monkeypatch):
     calls = record_ssh(monkeypatch, lambda cmd, data: subprocess.CompletedProcess(
         [], 1, b"", b"usage: roster | send <pid> | inbox <name>\n"))

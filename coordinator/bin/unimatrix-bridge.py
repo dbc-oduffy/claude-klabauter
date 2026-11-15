@@ -384,7 +384,8 @@ def relay_send(conn):
                 _record_outcome(line, target, ts, ms, skew, box, transport)
             return
     acks = _caps().ingest_acked(lines, replies)
-    if r.returncode and not all(ok for ok, _ in acks):
+    # A pre-ack far relay delivers and exits 0 with no reply at all; its `receipts` rows still prove the write.
+    if not all(ok for ok, _ in acks) and (r.returncode or not replies):
         acks = _reconcile_acks(lines, acks, far_sid, started_wall)
     for i, (line, (ok, unacked)) in enumerate(zip(lines, acks)):
         error = None

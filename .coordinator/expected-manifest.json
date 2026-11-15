@@ -1999,10 +1999,10 @@
     "coordinator/bin/tests/test_unimatrix_agy_plugin_gen.py": "fc8fea148303e87ffb64128d0024b77a08f540dc",
     "coordinator/bin/tests/test_unimatrix_autolink.py": "6a04b96ed184da7dacb917c47a12ec3d9816500a",
     "coordinator/bin/tests/test_unimatrix_box_mux.py": "e05d972c19d137988d444a4a43ee320f2ffec3c6",
-    "coordinator/bin/tests/test_unimatrix_bridge_delivery.py": "379eabce51d7a1dede0d1c5a1febee1baa2632ce",
+    "coordinator/bin/tests/test_unimatrix_bridge_delivery.py": "f795a36979a5f6a58fbc7667f3d825b461b19d44",
     "coordinator/bin/tests/test_unimatrix_bridge_ingest_ack.py": "989a77acd00bab38056702571d8ee4b93f0ab2d3",
     "coordinator/bin/tests/test_unimatrix_bridge_labelled_mirror.py": "83faeb69bedc4cf42ad72d8fbb0fe9e78936c37d",
-    "coordinator/bin/tests/test_unimatrix_bridge_send_result.py": "4dc85986f7c7c50d2d4a35e1a19318e92c76f178",
+    "coordinator/bin/tests/test_unimatrix_bridge_send_result.py": "2fae1075b44ce6bd9ce4bbceea6bcebd210372c5",
     "coordinator/bin/tests/test_unimatrix_capabilities.py": "0c925bd65c6e05b0315bb9114da6ea5c51c74364",
     "coordinator/bin/tests/test_unimatrix_cli_transport.py": "e9eff89bebecc509402872fad766fe3d9338107e",
     "coordinator/bin/tests/test_unimatrix_codex_collision_free_names.py": "53aee799253de697bc6c2f08a0398ac644f2893a",
@@ -2139,7 +2139,7 @@
     "coordinator/bin/unimatrix-agy-hook-sessionstart.py": "3795fcedb67bb1dcffe93a10cefb8e67106d14e3",
     "coordinator/bin/unimatrix-agy-leg.py": "d0194af82b4a575646cc436c4367310e902ff67a",
     "coordinator/bin/unimatrix-autolink.py": "2fcd5109abf90e7d7252526d5527e3416ca2a923",
-    "coordinator/bin/unimatrix-bridge.py": "eddf820ede53669e06a815971ee3910b342bad48",
+    "coordinator/bin/unimatrix-bridge.py": "6419d74b9271b339c19b46a1018e2f290ccc9cf9",
     "coordinator/bin/unimatrix-codex-hook-sessionstart.py": "457b16c450e58e92601ad56e98fa9d2534db0237",
     "coordinator/bin/unimatrix-codex-launch.py": "84ad5af49fb7995be21c1da277fe69ce0a3c4c79",
     "coordinator/bin/unimatrix-control.py": "f590a5224efd62f8a51d4ce2a05a40039862f2d3",
@@ -2507,8 +2507,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "896b6d968a4e19c0c862e7edebf70930ef0591be",
-    "coordinator_core/_engine_stamp": "a319c19f0725205506611c34baf372d4ed6a4969",
+    "coordinator_core/_engine_published_at": "dfbf1cffedc457df848b098315d53460f9e9175b",
+    "coordinator_core/_engine_stamp": "810c22e7e933b7ab4438c11a82bda7ed0e3905d3",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -12504,5 +12504,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "b8d47ac3595ca839e5324b3cd1df2c1c5e1ee2d2"
+  "source_head": "2e0c4aaa1147119652a54f7d3e51993184026db7"
 }
