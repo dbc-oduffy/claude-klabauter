@@ -654,7 +654,7 @@ def verify(
     pin = resolve_targeted_test_python(root)
     if pin.command and pin.defect is not None:
         return OverlayVerdict(
-            ENV_DEFECT, f"interpreter defect: the repo pins `{pin.command}` (from {pin.source}) but {pin.defect}", seeds,
+            ENV_DEFECT, f"interpreter defect: the repo pins `{SOURCE_KEY}: {pin.command}` (from {pin.source}) but {pin.defect}", seeds,
         )
     run_dirs: list = []
     in_seeds = False
@@ -711,7 +711,7 @@ def verify(
                 if absent:
                     return OverlayVerdict(
                         ENV_DEFECT,
-                        f"interpreter defect: {_gate_python(root)} lacks module(s) {', '.join(absent)}"
+                        f"interpreter defect: {pin.command or 'the undeclared gate interpreter'} lacks module(s) {', '.join(absent)}"
                         f"{' (the repo declares no resolvable pin)' if not pin.command else ''}: {tail}",
                         seeds,
                     )
@@ -1000,10 +1000,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 root, args.run_id, sha, seeds_for_landing(root, paths), base_sha=measured.get("base_sha"), touched=paths,
             ), measured,
         )
-        write_verdict(root, args.run_id, measured, outcome)
+        written = write_verdict(root, args.run_id, measured, outcome)
     finally:
         _release_inflight(root, args.run_id)
     print(f"overlay verdict: {outcome.verdict}")
+    if outcome.verdict != "green":
+        print(f"detail: {written}")
     if outcome.verdict == ENV_DEFECT:
         print(outcome.detail, file=sys.stderr)
     return {"green": 0, "pre_existing": 0, ENV_DEFECT: 0, "red": 1}.get(outcome.verdict, 2)

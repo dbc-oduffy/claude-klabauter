@@ -47,8 +47,9 @@ Wire params:
 
     wiki_names (list[str], optional) — top-level wiki page stems and folder names of the
         target repo, supplied by the caller (this op reads no disk). A bare tag sharing a stem
-        with one (see ``_wiki_home``) is kept rather than dropped ``bare-no-sibling``. Absent
-        or empty: verdicts are unchanged.
+        with one (see ``_wiki_home``) is kept, and a wiki-homed bare tag below the threshold
+        drops ``below-threshold``. Absent or empty: a bare tag is still kept (see the
+        discriminator section).
 
 Reply fields:
     {
@@ -56,12 +57,12 @@ Reply fields:
         {"tag": str, "verdict": "keep"|"normalize"|"merge"|"drop",
          "canonical_slug": str|None, "merge_target": str|None,
          "count": int, "reason": str,
-         "drop_cause": "placeholder"|"bare-no-sibling"|"below-threshold"|None},
+         "drop_cause": "placeholder"|"below-threshold"|None},
         ...
       ],  # sorted by tag, deterministic
       "counts": {
         "total": int, "keep": int, "normalize": int, "merge": int, "drop": int,
-        "drop_by_cause": {"placeholder": int, "bare-no-sibling": int, "below-threshold": int},
+        "drop_by_cause": {"placeholder": int, "below-threshold": int},
       },
       "threshold_applied": int,   # the keep_threshold actually used
       "threshold_auto": bool,     # True iff it was derived, not supplied
@@ -83,15 +84,14 @@ below, so they are a stability commitment, not an implementation detail):
     top-level array: one entry per raw input tag is the invariant that keeps
     the two views from ever disagreeing.
   - **Every drop carries a non-empty, machine-stable ``reason``** naming which
-    of the three drop paths fired (placeholder / bare-token-with-no-compound-
-    sibling / family-total-below-``keep_threshold``).
+    of the two drop paths fired (placeholder / family-total-below-``keep_threshold``).
   - **Every ``merge`` verdict carries a non-None ``merge_target``** — the
     canonical slug the tag folds INTO, which is what a clustering consumer
     needs; the merge verdict alone does not identify the destination.
     (``canonical_slug`` on a merge entry is that tag's OWN normalized slug, not
     the destination — the two fields are distinct and both populated.)
 
-Weakening any of the three is a breaking change to a named sibling consumer.
+Weakening any of the three guarantees is a breaking change to a named sibling consumer.
 Asserted by ``test_downstream_consumer_contract_drop_and_merge_fields``.
 
 The discriminator (why this closes the door the PM named, and why it is NOT
@@ -116,9 +116,10 @@ A bare tag is not automatically dropped, though: if the corpus separately
 contains a COMPOUND tag sharing its leading token (e.g. bare "coordination"
 alongside a hypothetical "coordination-ledger"), the bare tag folds into that
 family via MERGE — it turns out to have a home after all, discovered
-structurally (shared leading token), never declared by name. Only a bare tag
-with no such family — no compound sibling — is DROP-verdicted, and even then
-the closed, small, DOCUMENTED-AS-SECONDARY word list
+structurally (shared leading token), never declared by name. A bare tag
+with no such family — no compound sibling — is KEPT (a nugget is never
+discarded only for having no sibling; it homes downstream), and the
+closed, small, DOCUMENTED-AS-SECONDARY word list
 (_BARE_ABSTRACTION_VOCAB) is used ONLY to annotate the reason string with a
 confirming note; it never gates the verdict. Removing that list entirely
 changes zero verdicts — deleting it is a safe no-op check any reviewer can
@@ -161,8 +162,8 @@ Negative-spec:
     annotation-only and is asserted as such by a dedicated test.
   - Does NOT write any file, issue any git command, or mutate any coordinator
     substrate — pure compute, scope "none".
-  - Does NOT gate ``drop_cause`` on ``_BARE_ABSTRACTION_VOCAB`` — the three
-    causes ("placeholder", "bare-no-sibling", "below-threshold") are decided
+  - Does NOT gate ``drop_cause`` on ``_BARE_ABSTRACTION_VOCAB`` — the two
+    causes ("placeholder", "below-threshold") are decided
     structurally, exactly like ``verdict`` itself; the vocab list stays
     annotation-only (see the discriminator section and its dedicated test).
   - Does NOT consult wallclock time, randomness, or any I/O when deriving an
@@ -276,6 +277,12 @@ def _wiki_leads(wiki_names) -> dict:
     return leads
 
 
+def _vocab_note(slug: str) -> str:
+    if slug in _BARE_ABSTRACTION_VOCAB:
+        return " (also matches the closed bare-abstraction word list — secondary, non-gating confirmation)"
+    return ""
+
+
 def _degraded_reply() -> dict:
     return {
         "verdicts": [],
@@ -285,7 +292,7 @@ def _degraded_reply() -> dict:
             "normalize": 0,
             "merge": 0,
             "drop": 0,
-            "drop_by_cause": {"placeholder": 0, "bare-no-sibling": 0, "below-threshold": 0},
+            "drop_by_cause": {"placeholder": 0, "below-threshold": 0},
         },
         "threshold_applied": 0,
         "threshold_auto": False,
@@ -340,15 +347,12 @@ def _classify(tag_counts: dict, keep_threshold: int, wiki_names=()) -> list:
                             None,
                         )
                     continue
-                note = ""
-                if slug in _BARE_ABSTRACTION_VOCAB:
-                    note = " (also matches the closed bare-abstraction word list — secondary, non-gating confirmation)"
                 slug_disposition[slug] = (
-                    "drop",
+                    "keep",
                     None,
                     "bare token, no compound domain-qualifier sibling in the corpus"
-                    " (no merge target)" + note,
-                    "bare-no-sibling",
+                    " (kept; homes downstream)" + _vocab_note(slug),
+                    None,
                 )
             continue
 
@@ -404,11 +408,12 @@ def _classify(tag_counts: dict, keep_threshold: int, wiki_names=()) -> list:
                 )
             elif slug in bare_members:
                 slug_disposition[slug] = (
-                    "drop",
+                    "keep",
                     None,
                     "bare token not smaller than its top compound sibling"
-                    f" {primary!r} and shares no multi-token prefix (no merge target)",
-                    "bare-no-sibling",
+                    f" {primary!r} and shares no multi-token prefix (kept; homes downstream)"
+                    + _vocab_note(slug),
+                    None,
                 )
             else:
                 slug_disposition[slug] = (
@@ -536,7 +541,7 @@ def curate_clusters(
     verdicts = _classify(tag_counts, threshold, wiki_names)
 
     verdicts.sort(key=lambda v: v["tag"])
-    drop_by_cause = {"placeholder": 0, "bare-no-sibling": 0, "below-threshold": 0}
+    drop_by_cause = {"placeholder": 0, "below-threshold": 0}
     for v in verdicts:
         if v["verdict"] == "drop":
             drop_by_cause[v["drop_cause"]] += 1

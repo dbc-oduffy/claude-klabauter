@@ -475,3 +475,108 @@ def test_drain_ceiling_outlasts_every_deadline_a_waiting_caller_holds(monkeypatc
 
     assert ceiling > client._mutation_deadline_for("test.unclassified_mutation")
     assert ceiling > client.READ_DEADLINE_SECS
+
+
+class _AnsweringPipe:
+    def __init__(self) -> None:
+        self.written: list = []
+
+    def write(self, data: bytes) -> None:
+        self.written.append(data)
+
+    def flush(self) -> None:
+        pass
+
+    def readline(self) -> bytes:
+        return b'{"jsonrpc":"2.0","id":1,"result":{}}\n'
+
+    def close(self) -> None:
+        pass
+
+
+def _flipping_client(monkeypatch, tmp_path, tokens: list, served: set):
+    """Client whose token read yields `tokens` in order and whose pipe opens succeed only for `served`."""
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path))
+    monkeypatch.setattr(client, "is_warm_enabled", lambda: True)
+    monkeypatch.setattr(client, "_live_tree_cold", False)
+    monkeypatch.setattr(client, "_cold_reason", None)
+    monkeypatch.setattr(client, "_configured_root_is_foreign", lambda: False)
+    monkeypatch.setattr(client, "_await_stage_admission", lambda msg, hook_path: None)
+    monkeypatch.setattr(client, "_endpoint_name", lambda token: f"pipe-{token}")
+    monkeypatch.setattr(client, "_drain_publish_hold", lambda hook_path: None)
+    reads = iter(tokens)
+    monkeypatch.setattr(client, "engine_token", lambda: next(reads, tokens[-1]))
+    opened: list = []
+    pipes: list = []
+
+    def open_pipe(name):
+        opened.append(name)
+        if name not in served:
+            raise FileNotFoundError(2, "no pipe")
+        pipe = _AnsweringPipe()
+        pipes.append(pipe)
+        return pipe
+
+    monkeypatch.setattr(client, "_open_pipe", open_pipe)
+    return opened, pipes
+
+
+_PING = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
+
+
+def test_a_stamp_flip_between_token_read_and_open_is_answered_on_the_new_pipe(monkeypatch, tmp_path) -> None:
+    opened, pipes = _flipping_client(monkeypatch, tmp_path, ["old", "new"], served={"pipe-new"})
+    response = client.try_warm_dispatch(_PING)
+    assert response == {"jsonrpc": "2.0", "id": 1, "result": {}}
+    assert opened == ["pipe-old", "pipe-new"]
+    assert b'"_engine_token": "new"' in pipes[0].written[0]
+
+
+def test_a_missing_pipe_under_an_unchanged_token_is_not_retried_on_another_name(monkeypatch, tmp_path) -> None:
+    spawns: list = []
+    monkeypatch.setattr(client, "_spawn_once", lambda: spawns.append(1))
+    opened, _ = _flipping_client(monkeypatch, tmp_path, ["old"], served=set())
+    assert client.try_warm_dispatch(_PING) is None
+    assert opened == ["pipe-old"]
+
+
+class _ClosedPipe(_AnsweringPipe):
+    def readline(self) -> bytes:
+        return b""
+
+
+def _closing_old_generation(monkeypatch, tmp_path, tokens: list):
+    opened, pipes = _flipping_client(monkeypatch, tmp_path, tokens, served={"pipe-old", "pipe-new"})
+
+    def open_pipe(name):
+        opened.append(name)
+        pipe = _ClosedPipe() if name == "pipe-old" else _AnsweringPipe()
+        pipes.append(pipe)
+        return pipe
+
+    monkeypatch.setattr(client, "_open_pipe", open_pipe)
+    opened.clear()
+    return opened, pipes
+
+
+def test_a_compute_only_op_closed_unserviced_by_a_draining_generation_is_resent_on_the_new_token(
+    monkeypatch, tmp_path
+) -> None:
+    opened, _ = _closing_old_generation(monkeypatch, tmp_path, ["old", "new"])
+    monkeypatch.setattr(client, "_op_may_mutate", lambda name: False)
+    assert client.try_warm_dispatch(_PING) == {"jsonrpc": "2.0", "id": 1, "result": {}}
+    assert opened == ["pipe-old", "pipe-new"]
+
+
+def test_a_closed_unserviced_op_under_an_unchanged_token_goes_cold_without_a_resend(monkeypatch, tmp_path) -> None:
+    opened, _ = _closing_old_generation(monkeypatch, tmp_path, ["old"])
+    monkeypatch.setattr(client, "_op_may_mutate", lambda name: False)
+    assert client.try_warm_dispatch(_PING) is None
+    assert opened == ["pipe-old"]
+
+
+def test_a_mutating_op_closed_unserviced_is_resent_on_the_new_token_like_a_read(monkeypatch, tmp_path) -> None:
+    opened, _ = _closing_old_generation(monkeypatch, tmp_path, ["old", "new"])
+    monkeypatch.setattr(client, "_op_may_mutate", lambda name: True)
+    assert client.try_warm_dispatch(_PING) == {"jsonrpc": "2.0", "id": 1, "result": {}}
+    assert opened == ["pipe-old", "pipe-new"]

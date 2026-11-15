@@ -35,12 +35,12 @@
   "base_over_bar": false,
   "end": {
     "artifacts_cited": 306,
-    "artifacts_not_opened": 138,
+    "artifacts_not_opened": 139,
     "artifacts_opened": 143,
-    "artifacts_path_only": 25,
-    "digest_tokens": 13119,
-    "process_ms": 230.2,
-    "process_ms_warm": 59.1,
+    "artifacts_path_only": 24,
+    "digest_tokens": 13120,
+    "process_ms": 195.5,
+    "process_ms_warm": 97.6,
     "process_time_source": "invoke child cpu",
     "rag_gap_forms": [
       "changelog_resolve",
@@ -49,7 +49,7 @@
     "spawns": 0,
     "synthesis_overhead_per_topic": 1500,
     "topics": 109,
-    "total_tokens": 176619,
+    "total_tokens": 176620,
     "weeks_total": 33,
     "weeks_walked": 33
   },

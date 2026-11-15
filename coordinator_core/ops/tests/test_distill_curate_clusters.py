@@ -105,19 +105,21 @@ def test_empty_and_tbd_placeholders_drop() -> None:
         assert v["verdict"] == "drop"
 
 
-def test_bare_abstraction_catchalls_drop_structurally() -> None:
+def test_bare_abstraction_catchalls_are_kept_never_dropped_for_no_sibling() -> None:
     tags = {"meta": 5, "coordination": 3, "governance": 2, "ordering": 1}
     result = curate_clusters(tags)
     for v in result["verdicts"]:
-        assert v["verdict"] == "drop", v
+        assert v["verdict"] == "keep", v
+        assert v["drop_cause"] is None
         assert "no compound domain-qualifier sibling" in v["reason"]
+    assert result["counts"]["drop"] == 0
 
 
 def test_synonym_denylist_trap_is_closed() -> None:
     assert "stewardship" not in _BARE_ABSTRACTION_VOCAB
     result = curate_clusters({"stewardship": 40})
     v = result["verdicts"][0]
-    assert v["verdict"] == "drop"
+    assert v["verdict"] == "keep"
     assert "no compound domain-qualifier sibling" in v["reason"]
 
 
@@ -200,27 +202,21 @@ def test_removing_bare_abstraction_vocab_changes_no_verdict() -> None:
     shape (same verdict, same reason-substring) to one that IS in the list."""
     in_list = curate_clusters({"meta": 5})["verdicts"][0]
     not_in_list = curate_clusters({"stewardship": 5})["verdicts"][0]
-    assert in_list["verdict"] == not_in_list["verdict"] == "drop"
-    core_reason = "bare token, no compound domain-qualifier sibling in the corpus (no merge target)"
+    assert in_list["verdict"] == not_in_list["verdict"] == "keep"
+    core_reason = "bare token, no compound domain-qualifier sibling in the corpus (kept; homes downstream)"
     assert core_reason in in_list["reason"]
     assert core_reason in not_in_list["reason"]
 
 
-def test_misc_and_other_are_structurally_dropped_not_denylisted() -> None:
-    """"misc"/"other" used to be
-    listed in `_PLACEHOLDER_VALUES`, which pre-empted the structural test and
-    made this the module's ONE actual denylist-as-primary-mechanism spot,
-    contradicting its own Negative-spec. This pins that they now reach and
-    are caught by the structural bare-token test (verdict "drop",
-    drop_cause "bare-no-sibling", NOT "placeholder"), with the closed vocab
-    list only annotating the reason string — same shape as any other bare
-    abstraction noun (`test_removing_bare_abstraction_vocab_changes_no_verdict`
-    only exercised "meta"/"stewardship" and missed this)."""
+def test_misc_and_other_reach_the_bare_token_path_not_the_placeholder_drop() -> None:
+    """"misc"/"other" are not in `_PLACEHOLDER_VALUES`: they reach the structural
+    bare-token path (verdict "keep", no drop_cause), with the closed vocab list
+    only annotating the reason string."""
     result = curate_clusters({"misc": 5, "other": 3})
     verdicts = {v["tag"]: v for v in result["verdicts"]}
     for tag in ("misc", "other"):
-        assert verdicts[tag]["verdict"] == "drop"
-        assert verdicts[tag]["drop_cause"] == "bare-no-sibling"
+        assert verdicts[tag]["verdict"] == "keep"
+        assert verdicts[tag]["drop_cause"] is None
         assert "bare token, no compound domain-qualifier sibling" in verdicts[tag]["reason"]
         assert "also matches the closed bare-abstraction word list" in verdicts[tag]["reason"]
 
@@ -231,7 +227,7 @@ def test_downstream_consumer_contract_drop_and_merge_fields() -> None:
     nugget as EPHEMERAL-with-reason, and their clustering resolves a merged tag
     to its destination — so drop-set enumerability, drop `reason` presence, and
     `merge_target` presence are a stability commitment to a named sibling
-    consumer, not incidental output. Exercises all three drop paths at once."""
+    consumer, not incidental output. Exercises both drop paths and the merge path."""
     tag_counts = {
         "N/A": 1,
         "stewardship": 4,
@@ -246,7 +242,7 @@ def test_downstream_consumer_contract_drop_and_merge_fields() -> None:
     assert {v["tag"] for v in result["verdicts"]} == set(tag_counts)
 
     dropped = [v for v in result["verdicts"] if v["verdict"] == "drop"]
-    assert {v["tag"] for v in dropped} == {"N/A", "stewardship", "audit-trail"}
+    assert {v["tag"] for v in dropped} == {"N/A", "audit-trail"}
     for v in dropped:
         assert isinstance(v["reason"], str) and v["reason"].strip()
 
@@ -299,12 +295,13 @@ def test_two_token_prefix_tie_still_merges_without_claiming_larger() -> None:
     assert "multi-token prefix" in scope["reason"]
 
 
-def test_bare_token_tied_with_compound_sibling_has_no_home() -> None:
+def test_bare_token_tied_with_compound_sibling_is_kept_not_merged() -> None:
     result = curate_clusters({"coordination": 3, "coordination-ledger": 3}, keep_threshold=1)
     by_tag = {v["tag"]: v for v in result["verdicts"]}
     assert by_tag["coordination-ledger"]["verdict"] == "keep"
-    assert by_tag["coordination"]["verdict"] == "drop"
-    assert by_tag["coordination"]["drop_cause"] == "bare-no-sibling"
+    assert by_tag["coordination"]["verdict"] == "keep"
+    assert by_tag["coordination"]["merge_target"] is None
+    assert by_tag["coordination"]["drop_cause"] is None
 
 
 def test_handler_wire_contract() -> None:
@@ -349,14 +346,14 @@ def test_op_reachable_via_registry_and_jsonrpc_dispatch() -> None:
     by_tag = {v["tag"]: v for v in result["verdicts"]}
     assert by_tag["git-safety"]["verdict"] == "keep"
     assert by_tag["N/A"]["verdict"] == "drop"
-    assert by_tag["meta"]["verdict"] == "drop"
+    assert by_tag["meta"]["verdict"] == "keep"
     assert result["counts"] == {
         "total": 3,
-        "keep": 1,
+        "keep": 2,
         "normalize": 0,
         "merge": 0,
-        "drop": 2,
-        "drop_by_cause": {"placeholder": 1, "bare-no-sibling": 1, "below-threshold": 0},
+        "drop": 1,
+        "drop_by_cause": {"placeholder": 1, "below-threshold": 0},
     }
 
 
@@ -404,7 +401,7 @@ def test_mature_corpus_no_threshold_supplied_stays_at_2() -> None:
     assert result["nugget_drop_share"] == 0.0
 
 
-def test_drop_cause_correctness_across_all_three() -> None:
+def test_drop_cause_correctness_across_both_causes() -> None:
     tags = {
         "N/A": 2,
         "meta": 3,
@@ -413,13 +410,10 @@ def test_drop_cause_correctness_across_all_three() -> None:
     result = curate_clusters(tags, keep_threshold=2)
     by_tag = {v["tag"]: v for v in result["verdicts"]}
     assert by_tag["N/A"]["drop_cause"] == "placeholder"
-    assert by_tag["meta"]["drop_cause"] == "bare-no-sibling"
+    assert by_tag["meta"]["verdict"] == "keep"
+    assert by_tag["meta"]["drop_cause"] is None
     assert by_tag["distillation-log-schema"]["drop_cause"] == "below-threshold"
-    assert result["counts"]["drop_by_cause"] == {
-        "placeholder": 1,
-        "bare-no-sibling": 1,
-        "below-threshold": 1,
-    }
+    assert result["counts"]["drop_by_cause"] == {"placeholder": 1, "below-threshold": 1}
 
 
 def test_drop_cause_none_for_non_drop_verdicts() -> None:
@@ -462,11 +456,7 @@ def test_degraded_path_retains_shape_with_new_fields() -> None:
     assert result["degraded"] is True
     assert result["verdicts"] == []
     assert result["counts"]["total"] == 0
-    assert result["counts"]["drop_by_cause"] == {
-        "placeholder": 0,
-        "bare-no-sibling": 0,
-        "below-threshold": 0,
-    }
+    assert result["counts"]["drop_by_cause"] == {"placeholder": 0, "below-threshold": 0}
     assert result["threshold_applied"] == 0
     assert result["threshold_auto"] is False
     assert result["nugget_drop_share"] == 0.0
@@ -501,9 +491,9 @@ def test_bare_tag_with_wiki_home_is_kept_and_names_the_home() -> None:
     assert "installation" in v["reason"]
 
 
-def test_bare_tag_without_wiki_home_still_drops() -> None:
+def test_bare_tag_without_wiki_home_is_kept() -> None:
     v = _by_tag(curate_clusters({"installer": 2}, keep_threshold=2, wiki_names=["testing", "meta"]))["installer"]
-    assert (v["verdict"], v["drop_cause"]) == ("drop", "bare-no-sibling")
+    assert (v["verdict"], v["drop_cause"]) == ("keep", None)
 
 
 def test_wiki_names_absent_or_empty_changes_no_verdict() -> None:
@@ -515,7 +505,8 @@ def test_wiki_names_absent_or_empty_changes_no_verdict() -> None:
 
 def test_short_shared_prefix_is_not_a_stem_match() -> None:
     v = _by_tag(curate_clusters({"meta": 2}, keep_threshold=2, wiki_names=["metadata"]))["meta"]
-    assert (v["verdict"], v["drop_cause"]) == ("drop", "bare-no-sibling")
+    assert (v["verdict"], v["drop_cause"]) == ("keep", None)
+    assert "wiki home" not in v["reason"]
 
 
 def test_wiki_home_does_not_override_keep_threshold() -> None:

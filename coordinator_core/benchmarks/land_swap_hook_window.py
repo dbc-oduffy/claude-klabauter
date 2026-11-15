@@ -422,10 +422,15 @@ def production_handover(
     budget = ready_budget_secs if ready_budget_secs is not None else round_mod.NEW_PAIR_READY_BUDGET_SECS
     with breadcrumb.hold_publish_marker(engine_root, holder="land_swap_hook_window"):
         old_stamp = skew.read_engine_stamp_bytes(engine_root)
-        rewrite_tree(engine_root, copy_secs)
+        with round_mod.hold_stamp_through_copy(engine_root, old_stamp) as stamp_hold:
+            rewrite_tree(engine_root, copy_secs)
         marks["copy_done"] = time.monotonic()
         answered = round_mod.start_successor_pair_in_hold(
-            engine_root, err=io.StringIO(), ready_budget_secs=budget, old_stamp=old_stamp
+            engine_root,
+            err=io.StringIO(),
+            ready_budget_secs=budget,
+            old_stamp=old_stamp,
+            new_stamp=stamp_hold.new_stamp,
         )
         marks["successor_returned"] = time.monotonic()
     marks["released"] = time.monotonic()

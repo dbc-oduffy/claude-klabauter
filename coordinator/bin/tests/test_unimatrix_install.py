@@ -3515,3 +3515,16 @@ def test_install_widens_an_older_run_command_only_entry(monkeypatch, tmp_path):
     assert rc == 0 and "updated" in out
     entry = json.loads(hp.read_text(encoding="utf-8"))[ui.AGY_HOOK_KEY]["PreToolUse"][0]
     assert entry["matcher"] == ui.AGY_TOOL_MATCHER
+
+
+def test_grok_present_survives_an_unreadable_path_entry(tmp_path, monkeypatch):
+    """An EACCES PATH directory (the Mini's /usr/local/bin/grok) must read absent, never abort the install."""
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0)
+    monkeypatch.setenv("PATH", str(locked))
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "no-grok-home"))
+    try:
+        assert ui.grok_present() is False
+    finally:
+        locked.chmod(0o755)

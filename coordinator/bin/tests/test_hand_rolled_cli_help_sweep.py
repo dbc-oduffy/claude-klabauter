@@ -118,6 +118,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
     "unimatrix-agy-leg.py",
     "unimatrix-autolink.py",
     "unimatrix-codex-launch.py",
+    "unimatrix-codex-em-proof.py",
     "unimatrix-control.py",
     "unimatrix-doctor.py",
     "unimatrix-file-relay.py",

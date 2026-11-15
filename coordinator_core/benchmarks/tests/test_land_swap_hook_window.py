@@ -260,7 +260,7 @@ def test_production_handover_runs_the_publish_order_with_the_marker_held_around_
     def _stop(_root, **_k):
         events.append(f"stop held={breadcrumb.publish_marker_held(marker_dir)}")
 
-    def _start(_root, *, err, ready_budget_secs, old_stamp):
+    def _start(_root, *, err, ready_budget_secs, old_stamp, new_stamp=None):
         events.append(f"start held={breadcrumb.publish_marker_held(marker_dir)} pinned={old_stamp is not None}")
         return True
 
@@ -275,6 +275,29 @@ def test_production_handover_runs_the_publish_order_with_the_marker_held_around_
     assert not breadcrumb.publish_marker_held(marker_dir)
     assert list(marks) == ["copy_done", "successor_returned", "released"]
     assert marks["released"] >= marks["successor_returned"] >= marks["copy_done"]
+
+
+def test_the_harness_copy_never_leaves_the_new_stamp_visible_to_the_first_enumeration(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from coordinator_core.warm import client, supervisor
+
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
+    root = _engine_root(tmp_path)
+    (root / client.SERVER_ENTRY_SCRIPT).parent.mkdir(parents=True, exist_ok=True)
+    (root / client.SERVER_ENTRY_SCRIPT).write_text("", encoding="utf-8")
+    stamp = root / "coordinator_core" / lw.skew.ENGINE_STAMP_FILENAME
+    old_bytes = stamp.read_bytes()
+    seen: list = []
+    monkeypatch.setattr(lw.pair_stop, "find_pair_processes", lambda r, **k: (seen.append(stamp.read_bytes()), [])[1])
+    monkeypatch.setattr(lw.pair_stop, "stop_warm_pair", lambda *a, **k: lw.pair_stop.PairStopResult(stopped=(), survivors=()))
+    monkeypatch.setattr(client, "spawn_detached", lambda *a, **k: True)
+    monkeypatch.setattr(breadcrumb, "wait_for_successor_answer", lambda *a, **k: {"pid": 1, "pipe": "p"})
+    monkeypatch.setattr(supervisor, "ensure_listener", lambda *a, **k: None)
+
+    assert lw.production_handover(root, copy_secs=0.0) is True
+    assert seen == [old_bytes]
+    assert stamp.read_bytes().strip() == b"sha:swapped"
 
 
 MARKS = {"round_begin": 100.0, "copy_begin": 130.0, "exit_done": 135.0, "publisher_exit": 136.0}

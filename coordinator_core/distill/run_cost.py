@@ -7,7 +7,8 @@ names; no LLM, no git, no network. Phases:
   input carries ``argsInlined`` (engine-inlined Workflow args, no relay agent).
 - scan: one agent per batch.
 - synthesis: post-scan clusters, DR-minting, writer batches and curated load relays, priced by
-  the modelled per-run fixed term plus the per-scanned-file rate (``distill_scope.synthesis_cost``);
+  the modelled fixed relay term plus a per-topic rate (``distill_scope.synthesis_cost``); topics
+  are the count of batches carrying a ``topic`` key, else ``projected_topics`` of the scoped file count;
   tokens and minutes are modelled, not read bytes, so it adds no ``input_bytes_by_phase`` entry.
 
 Scan input bytes per agent = each batch file's bytes (its digest's bytes when the batch carries
@@ -25,7 +26,7 @@ from typing import Any
 from coordinator_core.distill.launch_args import INLINED_KEY, unchunk
 from coordinator_core.distill import manifest_schema as _schema
 from coordinator_core.distill.prompt_tier import estimate_tokens
-from coordinator_core.ops.distill_scope import synthesis_cost
+from coordinator_core.ops.distill_scope import projected_cost, projected_topics, run_fixed_cost, synthesis_cost
 from coordinator_core.ops.distill_workflow_input import _compact, guide_paths, shard_workflow_input
 
 __all__ = ["project_run_cost", "scoped_files_sha256", "scoped_files"]
@@ -52,8 +53,9 @@ def _size(root: Path, rel: str, missing: list[str]) -> int:
 def project_run_cost(workflow_input: dict[str, Any], worktree_root: Path) -> dict[str, Any]:
     """Project dispatches and agent-read input bytes per phase for one run over `workflow_input`.
 
-    Returns ``dispatches_by_phase`` {load, scan, synthesis}, ``synthesis_tokens`` and
-    ``synthesis_minutes`` (fixed curated relays plus per-file synthesis of the scoped files),
+    Returns ``projected`` {agents, tokens, minutes}: the one run projection ``distill_scope.projected_cost``
+    prices, which the ``distill.scope`` fit and budget block also read; ``dispatches_by_phase`` {load, scan, synthesis}, ``synthesis_tokens`` and
+    ``synthesis_minutes`` (fixed relay plus per-topic synthesis),
     ``input_bytes_by_phase`` {load, scan}, ``scan_bytes_split`` {files, guides}, ``scan_prompt_tokens_by_batch`` (bytes/4 per scan agent,
     in batch order), ``max_scan_prompt_tokens``, ``scoped_files_sha256``, and ``unreadable_files`` (paths that did not stat, counted as 0 bytes).
     """
@@ -86,9 +88,19 @@ def project_run_cost(workflow_input: dict[str, Any], worktree_root: Path) -> dic
         guide_bytes += batch_guide_bytes
         prompt_tokens.append(estimate_tokens(batch_file_bytes + batch_guide_bytes))
     scan_bytes = file_bytes + guide_bytes
-    synth = synthesis_cost(len(scoped_files(workflow_input)))
+    topics = sum(1 for b in workflow_input["batches"] if "topic" in b) or projected_topics(
+        len(scoped_files(workflow_input))
+    )
+    synth = synthesis_cost(topics)
+    projected = projected_cost(
+        run_fixed_cost(workflow_input["wikiSlugs"]),
+        topics=topics,
+        batches=len(workflow_input["batches"]),
+        scan_bytes=scan_bytes,
+    )
 
     return {
+        "projected": {"agents": projected.agents, "tokens": projected.tokens, "minutes": projected.minutes},
         "dispatches_by_phase": {
             "load": 0 if inlined else 1 + len(batch_files) + len(shard_files),
             "scan": len(workflow_input["batches"]),

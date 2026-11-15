@@ -48,6 +48,7 @@ SSH_DEFAULT_IDENTITIES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ecdsa_sk", "id_ed2
 SUPERVISORS = (("bridge", "unimatrix-roster.py"), ("inbox", "unimatrix-mirror-all.py"))
 ROUTER_SCRIPT = "unimatrix-peer-router.py"
 NO_ROUTER_ENV = "UNIMATRIX_AUTOLINK_NO_ROUTER"
+LOGIN_AGENT_LABEL = "com.unimatrix.autolink"  # mirrors unimatrix-install.py; autolink does not import it
 
 
 PYTHON_KEY = "unimatrix.python"
@@ -556,8 +557,63 @@ def router_pid_candidates(roster, sdir):
     return uniq
 
 
-def restart_router(roster, sdir, say, spawn=detached, request=None, kill=None, lock_held_fn=None, wait_seconds=10):
+def run_launchctl(*args):
+    """Run launchctl; None when it cannot launch."""
+    try:
+        return subprocess.run(["launchctl", *args], capture_output=True, text=True, timeout=30,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def launchd_agent_target(launchctl=None, platform=None, uid=None):
+    """`gui/<uid>/<label>` when this is darwin and the login agent is loaded, else None.
+
+    A router launchd starts runs at the agent's niceness; a child of the caller inherits the caller's."""
+    if (platform or sys.platform) != "darwin":
+        return None
+    target = f"gui/{uid if uid is not None else os.getuid()}/{LOGIN_AGENT_LABEL}"
+    loaded = (launchctl or run_launchctl)("print", target)
+    return target if loaded is not None and loaded.returncode == 0 else None
+
+
+def niced_router_warning(pid, agent_label=None, nice_fn=None):
+    """A loud line when a directly spawned router inherited this caller's positive nice, else None.
+    Trap: an unprivileged child cannot lower its nice, so only a launchd start (or a nice-0 caller) clears it."""
+    try:
+        nice = (nice_fn or (lambda: os.getpriority(os.PRIO_PROCESS, 0)))()
+    except (AttributeError, OSError):
+        return None
+    if nice <= 0:
+        return None
+    fix = (f"stop it, then `launchctl kickstart gui/{os.getuid()}/{agent_label}`" if agent_label
+           else "stop it and restart from a nice-0 shell")
+    return f"WARNING: peer router pid {pid} runs at nice {nice}, inherited from this caller; {fix}"
+
+
+def _kickstart_and_wait(target, rec_path, launchctl, say, wait_seconds):
+    """Kickstart the agent so launchd starts the router; False when launchctl refuses or no router record
+    appears within wait_seconds (a kickstart is a no-op while the agent job is mid-run); caller falls back."""
+    started = launchctl("kickstart", target)
+    if started is None or started.returncode != 0:
+        say(f"launchctl kickstart {target} failed; starting the router directly")
+        return False
+    deadline = time.monotonic() + wait_seconds
+    while not isinstance(read_record(rec_path).get("pid"), int):
+        if time.monotonic() >= deadline:
+            say(f"launchd agent {target} wrote no router record in {wait_seconds}s; starting the router directly")
+            return False
+        time.sleep(0.05)
+    say(f"peer router started by launchd agent {target}")
+    return True
+
+
+def restart_router(roster, sdir, say, spawn=detached, request=None, kill=None, lock_held_fn=None, wait_seconds=10,
+                   launchctl=None, platform=None, uid=None):
     """Replace the box's peer router with the installed one: {"stopped", "old_pid", "new_pid"}.
+
+    On darwin with the login agent loaded the new router is started by `launchctl kickstart` of that agent,
+    not as a child of the caller; otherwise it is a detached spawn.
 
     A live router is asked to `shutdown` over its control endpoint; one that predates the op, or does not
     answer, is tree-killed by a recorded pid whose process start still matches (that takes its faces with it).
@@ -602,15 +658,24 @@ def restart_router(roster, sdir, say, spawn=detached, request=None, kill=None, l
             os.remove(rec_path)
         except OSError:
             pass
-    saved = os.environ.pop(NO_ROUTER_ENV, None)
-    try:
-        supervise_router(roster, sdir, say, spawn=spawn, lock_held_fn=lock_held_fn)
-    finally:
-        if saved is not None:
-            os.environ[NO_ROUTER_ENV] = saved
+    target = None
+    if not supervisor_live(roster, read_record(rec_path)) and not lock_held_fn(sdir):
+        target = launchd_agent_target(launchctl, platform, uid)
+    started_by_launchd = bool(target and _kickstart_and_wait(target, rec_path, launchctl or run_launchctl, say, wait_seconds))
+    if not started_by_launchd:
+        saved = os.environ.pop(NO_ROUTER_ENV, None)
+        try:
+            supervise_router(roster, sdir, say, spawn=spawn, lock_held_fn=lock_held_fn)
+        finally:
+            if saved is not None:
+                os.environ[NO_ROUTER_ENV] = saved
     new_pid = read_record(rec_path).get("pid")
     if not isinstance(new_pid, int):
         raise RouterRestartError(f"no router was started: {rec_path} was not written")
+    if not started_by_launchd:
+        warning = niced_router_warning(new_pid, LOGIN_AGENT_LABEL if target else None)
+        if warning:
+            say(warning)
     return {"stopped": stopped, "old_pid": old_pid, "new_pid": new_pid}
 
 

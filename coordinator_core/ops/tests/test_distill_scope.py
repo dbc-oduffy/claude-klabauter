@@ -1647,55 +1647,193 @@ def test_byte_packing_overflow_holds_the_cursor_before_the_first_deferred_file(t
 # ---------------------------------------------------------------------------
 
 
-def test_default_admission_narrows_to_the_run_budget_and_defers_the_rest(tmp_path, monkeypatch):
+def _slice_cost(topics: int, batches: int = 1, file_bytes: int = 0):
+    """``projected_cost`` of a run of ``topics`` topics in ``batches`` batches over ``file_bytes`` of files."""
+    return ds.projected_cost(
+        ds.run_fixed_cost({}),
+        topics=topics,
+        batches=batches,
+        scan_bytes=ds.scan_bytes_bound(file_bytes, batches),
+    )
+
+
+def _fit_tokens_for_topics(topics: int) -> int:
+    """Token cap that admits exactly ``topics`` topics of one batch (slack covers the fixture's few file bytes)."""
+    return _slice_cost(topics).tokens + 1_000
+
+
+def _narrow_to_topics(monkeypatch, topics: int, agents: int = 1000, minutes: int = 10_000) -> None:
+    from coordinator_core.contract.run_budget import RunBudget
+
+    cap = RunBudget(agents, _fit_tokens_for_topics(topics), minutes)
+    monkeypatch.setattr(ds._run_budget, "load", lambda _c, path=None: cap)
+
+
+def test_default_admission_fits_the_fixture_backlog_and_defers_nothing(tmp_path, monkeypatch):
     from coordinator_core.contract import run_budget
 
     root = _watermarked_repo(tmp_path, monkeypatch)
-    scope = _admit_scope(root, batch_size=1)
+    scope = _admit_scope(root)
     cap = run_budget.load("distill")
     block = scope.manifest["budget"]
-    assert len(scope.manifest["batches"]) == 1 and scope.counts["deferred"] == len(_LOG_DAYS) - 1
+    assert len(_batched(scope)) == len(_LOG_DAYS) and scope.counts["deferred"] == 0
     assert block["cap"]["agents"] == cap.agents
-    # no synthesis relays: one batch plus one file's synthesis fits the agent cap
-    assert block["within"]["agents"] is True
+    assert block["within"] == {"agents": True, "tokens": True, "minutes": True}
 
 
-def test_budget_block_projection_includes_synthesis_agents_and_tokens():
+def _files_for_topics(topics: int) -> int:
+    """Most files whose projected synthesis is still ``topics`` topics."""
+    return topics * ds._schema.SYNTHESIS_CORPUS_FILES // ds._schema.SYNTHESIS_CORPUS_TOPICS
+
+
+def test_synthesis_is_priced_per_topic_and_files_open_topics_at_the_corpus_ratio():
+    one = ds.synthesis_cost(1)
+    assert (one.agents, one.tokens, one.minutes) == (
+        ds._schema.SYNTHESIS_PER_TOPIC_AGENTS,
+        ds._schema.SYNTHESIS_PER_TOPIC_TOKENS,
+        ds._schema.SYNTHESIS_PER_TOPIC_MINUTES,
+    )
+    assert ds.synthesis_cost(7).tokens == 7 * one.tokens
+    assert ds.projected_topics(0) == 0 and ds.projected_topics(1) == 1
+    for topics in (1, 3, 4, 10):
+        fits = _files_for_topics(topics)
+        assert ds.projected_topics(fits) == topics and ds.projected_topics(fits + 1) == topics + 1
+    assert _files_for_topics(4) > 4
+
+
+def test_budget_block_projection_is_the_one_shared_projection():
     fixed = ds.run_fixed_cost({})
-    scan_only = ds.budget_block(fixed, 1, 0)["projected"]
-    with_synth = ds.budget_block(fixed, 1, 44)["projected"]
-    synth = ds.synthesis_cost(44)
-    assert synth.agents == 30 and synth.tokens == 818_611 and synth.minutes == 15
-    assert with_synth["agents"] == scan_only["agents"] + synth.agents
-    assert with_synth["tokens"] == scan_only["tokens"] + synth.tokens > scan_only["tokens"]
-    assert ds._schema.SYNTHESIS_FIXED_AGENTS == 0 and ds._schema.SYNTHESIS_FIXED_TOKENS == 0
-    assert fixed.agents == ds._schema.LOAD_RELAY_AGENTS
-    assert fixed.tokens == ds._schema.LOAD_RELAY_TOKENS
+    base = ds.budget_block(fixed, files=0, batches=0, scan_bytes=0)["projected"]
+    full = ds.budget_block(fixed, files=44, batches=2, scan_bytes=8_000)["projected"]
+    synth = ds.synthesis_cost(ds.projected_topics(44))
+    shared = ds.projected_cost(fixed, topics=ds.projected_topics(44), batches=2, scan_bytes=8_000)
+    assert base == {"agents": fixed.agents, "tokens": fixed.tokens, "minutes": fixed.minutes}
+    assert full == {"agents": shared.agents, "tokens": shared.tokens, "minutes": shared.minutes}
+    assert full["agents"] == fixed.agents + 2 * ds._schema.SCAN_BATCH_AGENTS + synth.agents
+    assert full["minutes"] == fixed.minutes + 2 * ds._schema.SCAN_BATCH_MINUTES + synth.minutes
+    assert full["tokens"] > fixed.tokens + synth.tokens + ds._prompt_tier.estimate_tokens(8_000)
+    assert fixed.agents >= ds._schema.LOAD_RELAY_AGENTS + ds._schema.SYNTHESIS_FIXED_AGENTS
+    assert fixed.tokens == ds._schema.LOAD_RELAY_TOKENS + ds._schema.SYNTHESIS_FIXED_TOKENS
 
 
-def test_synthesis_for_a_44_file_slice_is_over_the_default_distill_budget():
+def test_a_slice_whose_topics_exceed_the_token_cap_is_over_budget():
     from coordinator_core.contract import run_budget
 
     fixed = ds.run_fixed_cost({})
-    block = ds.budget_block(fixed, 1, 44)
-    assert block["within"] == {"agents": False, "tokens": False, "minutes": False}
-    assert block["projected"]["tokens"] > run_budget.load("distill").tokens
+    cap = run_budget.load("distill")
+    over = ds.fit_files(fixed, _paths(1000), lambda _p: 0) + ds._schema.SYNTHESIS_CORPUS_FILES
+    block = ds.budget_block(fixed, files=over, batches=1, scan_bytes=0)
+    assert not all(block["within"].values())
+    assert block["projected"]["agents"] > cap.agents or block["projected"]["tokens"] > cap.tokens
+
+
+def _paths(n: int) -> list[str]:
+    return [f"archive/daily-summaries/f{i:04d}.md" for i in range(n)]
+
+
+def _meets_every_axis(cost, cap) -> bool:
+    return cost.agents <= cap.agents and cost.tokens <= cap.tokens and cost.minutes <= cap.minutes
+
+
+def _plain_log_repo(tmp_path: Path, days: int) -> Path:
+    root = tmp_path / "plain-repo"
+    _write(root / "state" / "distillation-log.md", "## Run seed\n")
+    for i in range(days):
+        _log(root, f"2026-10-{i + 1:02d}")
+    return root
 
 
 def test_default_admission_narrows_files_when_synthesis_exceeds_the_token_cap(tmp_path, monkeypatch):
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    _narrow_to_topics(monkeypatch, 2)
+    scope = _admit_scope(root, batch_size=100)
+    block = scope.manifest["budget"]
+    admitted = _files_for_topics(2)
+    assert len(_batched(scope)) == admitted < len(_LOG_DAYS)
+    assert scope.counts["deferred"] == len(_LOG_DAYS) - admitted
+    assert len(scope.manifest["deferred"]) == len(_LOG_DAYS) - admitted
+    assert all(block["within"].values())
+    assert block["projected"]["tokens"] <= _fit_tokens_for_topics(2)
+
+
+def test_default_admission_narrows_on_the_agents_axis_and_still_meets_the_bar(tmp_path, monkeypatch):
     from coordinator_core.contract.run_budget import RunBudget
 
     root = _watermarked_repo(tmp_path, monkeypatch)
-    fixed, scan, one = ds.run_fixed_cost({}), ds.scan_batch_cost(), ds.synthesis_cost(1)
-    tokens_cap = fixed.tokens + scan.tokens + 2 * one.tokens
-    monkeypatch.setattr(ds._run_budget, "load", lambda _c, path=None: RunBudget(1, tokens_cap, 1000))
+    cap = RunBudget(_slice_cost(2).agents, 100_000_000, 10_000)
+    monkeypatch.setattr(ds._run_budget, "load", lambda _c, path=None: cap)
     scope = _admit_scope(root, batch_size=100)
     block = scope.manifest["budget"]
-    assert len(_batched(scope)) == 2 < len(_LOG_DAYS)
-    assert scope.counts["deferred"] == len(_LOG_DAYS) - 2
-    assert len(scope.manifest["deferred"]) == len(_LOG_DAYS) - 2
-    assert block["within"] == {"agents": False, "tokens": True, "minutes": True}
-    assert block["projected"]["tokens"] <= tokens_cap
+    assert len(_batched(scope)) == _files_for_topics(2) < len(_LOG_DAYS)
+    assert all(block["within"].values()) and block["projected"]["agents"] == cap.agents
+
+
+def test_default_admission_at_default_args_meets_every_bar_axis_on_a_large_backlog(tmp_path, monkeypatch):
+    from coordinator_core.contract import run_budget
+
+    monkeypatch.setattr(ds, "registry_get", lambda _key: None)
+    root = _plain_log_repo(tmp_path, 28)
+    cap = run_budget.load("distill")
+    scope = _admit_scope(root)
+    block = scope.manifest["budget"]
+    admitted = len(_batched(scope))
+    assert 0 < admitted < 28 and scope.counts["deferred"] == 28 - admitted
+    assert all(block["within"].values()) and block["cap"]["agents"] == cap.agents
+    # the largest slice the shared projection allows: one more file breaks an axis
+    more = ds.projected_cost(
+        ds.run_fixed_cost({}),
+        topics=ds.projected_topics(admitted + 1),
+        batches=len(scope.manifest["batches"]),
+        scan_bytes=ds.scan_bytes_bound(10_000, len(scope.manifest["batches"])),
+    )
+    assert not _meets_every_axis(more, cap)
+
+
+def test_default_admission_covers_a_backlog_under_the_whole_backlog_bar(tmp_path, monkeypatch):
+    from coordinator_core.contract import run_budget
+    from coordinator_core.contract.run_budget import RunBudget
+
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    fixed = ds.run_fixed_cost({})
+    cap = RunBudget(1000, 200_000, 10_000)
+    monkeypatch.setattr(ds._run_budget, "load", lambda _c, path=None: cap)
+    size = 1_000
+
+    def slice_cost(n: int):
+        paths = _paths(n)
+        batches = len(ds.pack_batches(paths, size_of=lambda _p: size, byte_budget=ds.SCAN_BATCH_BYTE_BUDGET, max_files=100))
+        return ds.projected_cost(
+            fixed,
+            topics=ds.projected_topics(n),
+            batches=batches,
+            scan_bytes=ds.scan_bytes_bound(n * size, batches),
+        )
+
+    # a backlog whose projection fits the slice cap is admitted whole
+    assert _meets_every_axis(slice_cost(len(_LOG_DAYS)), cap)
+    assert _admit_scope(root, batch_size=1).counts["deferred"] == 0
+    assert ds.fit_files(fixed, _paths(7), lambda _p: size) == 7
+    # a larger backlog is cut to the largest slice meeting every axis, and the covering slices,
+    # each repaying the fixed relay, sum under the 1M whole-backlog bar
+    big = 40
+    admitted = ds.fit_files(fixed, _paths(big), lambda _p: size)
+    assert 0 < admitted < big
+    assert _meets_every_axis(slice_cost(admitted), cap) and not _meets_every_axis(slice_cost(admitted + 1), cap)
+    bar = json.loads((Path(run_budget.__file__).parent / "ceremony-budget.json").read_text())["whole_backlog_token_bar"]
+    covering = [min(admitted, big - done) for done in range(0, big, admitted)]
+    assert sum(slice_cost(n).tokens for n in covering) <= bar
+
+
+def test_the_topic_file_cap_holds_when_no_watermark_resolves(tmp_path, monkeypatch):
+    root = tmp_path / "plain-repo"
+    _write(root / "state" / "distillation-log.md", "## Run seed\n")
+    for day in _LOG_DAYS:
+        _log(root, day)
+    _narrow_to_topics(monkeypatch, 2)
+    scope = _admit_scope(root, batch_size=100)
+    cap = _files_for_topics(2)
+    assert len(_batched(scope)) == cap
+    assert scope.counts["deferred"] == len(_LOG_DAYS) - cap
 
 
 def test_default_admission_with_room_for_every_file_defers_nothing(tmp_path, monkeypatch, wide_budget):
@@ -1709,6 +1847,7 @@ def test_a_larger_budget_admits_more_batches_than_the_default(tmp_path, monkeypa
     from coordinator_core.contract.run_budget import RunBudget
 
     root = _watermarked_repo(tmp_path, monkeypatch)
+    _narrow_to_topics(monkeypatch, 1)
     narrow = len(_admit_scope(root, batch_size=1).manifest["batches"])
     monkeypatch.setattr(ds._run_budget, "load", lambda _c, path=None: RunBudget(1000, 100_000_000, 10_000))
     wide = _admit_scope(root, batch_size=1)
@@ -1728,6 +1867,7 @@ def test_a_budget_the_fixed_cost_alone_exceeds_still_admits_one_batch(tmp_path, 
 
 def test_a_run_narrowed_by_the_budget_is_followed_by_the_files_it_deferred(tmp_path, monkeypatch):
     root = _watermarked_repo(tmp_path, monkeypatch)
+    _narrow_to_topics(monkeypatch, 1)
     seen: list[str] = []
     for _ in _LOG_DAYS:
         scope = _admit_scope(root, batch_size=1)
@@ -1741,6 +1881,7 @@ def test_the_handler_reports_the_budget_and_records_the_run_in_the_backlog_pass_
     from coordinator_core.ops import backlog_pass_ledger
 
     root = _watermarked_repo(tmp_path, monkeypatch)
+    _narrow_to_topics(monkeypatch, 1, agents=10)
     result = _handler({"run_id": "r", "batch_size": 1}, repo_root=root / ".git")
     assert result["budget"]["within"]["agents"] is True and result["counts"]["deferred"] == len(_LOG_DAYS) - 1
     ledger = backlog_pass_ledger.summary(str(root), "distill")
@@ -1767,3 +1908,39 @@ def test_files_a_tier_split_drops_are_deferred_and_the_watermark_holds_before_th
     assert dropped not in [p for batch in manifest["batches"] for p in batch]
     pending = root / "state" / "scratch" / "artifact-distillation" / "r" / "watermark.pending.json"
     assert json.loads(pending.read_text(encoding="utf-8"))["pass_complete"] is False
+
+
+def test_an_explicit_scan_cap_is_the_fitted_batch_count_and_defers_the_rest(tmp_path, monkeypatch, wide_budget):
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    scope = _admit_scope(root, batch_size=1, max_scan_batches=2)
+    assert scope.fitted_batches == 2 and len(scope.manifest["batches"]) == 2
+    assert scope.counts["deferred"] == len(_LOG_DAYS) - 2
+
+
+def test_handler_passes_measurement_overrides_through_and_records_them(fixture_repo, monkeypatch):
+    from coordinator_core.ops import distill_scope as ds
+
+    seen = {}
+    real = ds.compute_scope
+
+    def spy(*a, **k):
+        seen.update({key: k.get(key) for key in ("max_scan_batches", "byte_budget")})
+        return real(*a, **k)
+
+    monkeypatch.setattr(ds, "compute_scope", spy)
+    out = _handler(
+        {"run_id": "2026-11-15-22h00", "max_scan_batches": 7, "byte_budget": 900_000}, repo_root=fixture_repo / ".git"
+    )
+    assert seen == {"max_scan_batches": 7, "byte_budget": 900_000}
+    assert out["measurement_override"] == {"max_scan_batches": 7, "byte_budget": 900_000}
+
+
+def test_handler_default_slice_carries_no_measurement_override(fixture_repo):
+    out = _handler({"run_id": "2026-11-15-22h01"}, repo_root=fixture_repo / ".git")
+    assert out["measurement_override"] is None
+
+
+@pytest.mark.parametrize("bad", [0, -1, "5", True, 2.5])
+def test_handler_refuses_a_non_positive_or_non_int_override(fixture_repo, bad):
+    with pytest.raises(ValueError, match="positive integer"):
+        _handler({"run_id": "2026-11-15-22h02", "max_scan_batches": bad}, repo_root=fixture_repo / ".git")

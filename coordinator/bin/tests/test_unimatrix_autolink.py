@@ -1137,6 +1137,7 @@ def restartable(router_on, tmp_path, monkeypatch):
     sessions = tmp_path / "sessions"
     sessions.mkdir()
     monkeypatch.setattr(e.roster, "sessions_dir", lambda: str(sessions))
+    monkeypatch.setattr(e.al, "run_launchctl", lambda *a: None)  # never reach the real launchd
     (e.sdir / "router").mkdir(parents=True)
     e.sessions = sessions
     e.say_lines = []
@@ -1264,6 +1265,75 @@ def test_restart_raises_when_no_router_record_is_written(restartable):
         e.al.restart_router(e.roster, e.sdir, e.say, spawn=Spawner(), lock_held_fn=Lease(held=False))
 
 
+class Launchctl:
+    """launchctl runner double: `print` answers `loaded`; `kickstart` runs `on_kickstart` (writes the record)."""
+
+    def __init__(self, loaded=True, kick_rc=0, on_kickstart=None):
+        self.loaded, self.kick_rc, self.on_kickstart, self.calls = loaded, kick_rc, on_kickstart, []
+
+    def __call__(self, *args):
+        self.calls.append(args)
+        if args[0] == "print":
+            return types.SimpleNamespace(returncode=0 if self.loaded else 113)
+        if args[0] == "kickstart" and self.on_kickstart and self.kick_rc == 0:
+            self.on_kickstart()
+        return types.SimpleNamespace(returncode=self.kick_rc)
+
+
+def _agent_writes_record(e, pid=5001):
+    def write():
+        e.live.add(pid)
+        (e.sdir / "autolink-router.json").write_text(json.dumps({"pid": pid, "procStart": f"start-{pid}"}))
+    return write
+
+
+def test_restart_on_darwin_with_the_agent_loaded_kickstarts_it_and_never_spawns(restartable):
+    e, sp = restartable, Spawner()
+    lc = Launchctl(on_kickstart=_agent_writes_record(e))
+    res = e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp, lock_held_fn=Lease(held=False),
+                              launchctl=lc, platform="darwin", uid=501)
+    target = "gui/501/com.unimatrix.autolink"
+    assert lc.calls == [("print", target), ("kickstart", target)]
+    assert sp.cmds == [] and res == {"stopped": "none", "old_pid": None, "new_pid": 5001}
+
+
+def test_login_agent_label_matches_the_installer_label():
+    assert load("unimatrix-autolink").LOGIN_AGENT_LABEL == load("unimatrix-install").LOGIN_AGENT_LABEL
+
+
+def test_restart_on_darwin_with_the_agent_unloaded_keeps_the_detached_spawn(restartable):
+    e, sp = restartable, Spawner()
+    lc = Launchctl(loaded=False)
+    res = e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp, lock_held_fn=Lease(held=False),
+                              launchctl=lc, platform="darwin", uid=501)
+    assert [c[0] for c in lc.calls] == ["print"] and len(router_cmds(sp)) == 1 and res["new_pid"] == 1001
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_restart_off_darwin_never_asks_launchctl_and_spawns_detached(restartable, platform):
+    e, sp = restartable, Spawner()
+    lc = Launchctl()
+    res = e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp, lock_held_fn=Lease(held=False),
+                              launchctl=lc, platform=platform, uid=501)
+    assert lc.calls == [] and len(router_cmds(sp)) == 1 and res["new_pid"] == 1001
+
+
+def test_restart_falls_back_to_the_detached_spawn_when_the_kickstarted_agent_writes_no_record(restartable):
+    e, sp = restartable, Spawner()
+    lc = Launchctl()
+    res = e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp, lock_held_fn=Lease(held=False),
+                              launchctl=lc, platform="darwin", uid=501, wait_seconds=0.2)
+    assert [c[0] for c in lc.calls] == ["print", "kickstart"] and len(router_cmds(sp)) == 1 and res["new_pid"] == 1001
+
+
+def test_restart_falls_back_to_the_detached_spawn_when_kickstart_is_refused(restartable):
+    e, sp = restartable, Spawner()
+    lc = Launchctl(kick_rc=1)
+    res = e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp, lock_held_fn=Lease(held=False),
+                              launchctl=lc, platform="darwin", uid=501)
+    assert len(router_cmds(sp)) == 1 and res["new_pid"] == 1001
+
+
 def test_main_restart_prints_the_result_and_exits_zero_and_one_on_refusal(restartable, monkeypatch, capsys):
     e = restartable
     monkeypatch.setattr(e.al, "_roster", lambda: e.roster)
@@ -1302,3 +1372,15 @@ def test_probe_and_pull_dial_ipv4_only(env):
     env.al.probe(env.roster, "machine-a", "/k/relay", run=fake_run)
     env.al.pull_membership(env.roster, "kim@x", "/k/relay", run=fake_run)
     assert len(seen) == 2 and all("AddressFamily=inet" in c for c in seen)
+
+
+def test_a_niced_fallback_router_is_named_loudly_with_the_launchd_fix():
+    al = load("unimatrix-autolink")
+    line = al.niced_router_warning(4242, al.LOGIN_AGENT_LABEL, nice_fn=lambda: 10)
+    assert "4242" in line and "nice 10" in line and "launchctl kickstart" in line and al.LOGIN_AGENT_LABEL in line
+    assert "launchctl" not in al.niced_router_warning(4242, None, nice_fn=lambda: 20)
+
+
+def test_a_nice_zero_fallback_router_draws_no_warning():
+    al = load("unimatrix-autolink")
+    assert al.niced_router_warning(4242, al.LOGIN_AGENT_LABEL, nice_fn=lambda: 0) is None

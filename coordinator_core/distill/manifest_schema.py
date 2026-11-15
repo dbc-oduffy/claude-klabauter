@@ -60,10 +60,11 @@ __all__ = [
     "SYNTHESIS_FIXED_AGENTS",
     "SYNTHESIS_FIXED_TOKENS",
     "SYNTHESIS_FIXED_MINUTES",
-    "SYNTHESIS_PER_FILE_DENOMINATOR",
-    "SYNTHESIS_PER_FILE_AGENTS",
-    "SYNTHESIS_PER_FILE_TOKENS",
-    "SYNTHESIS_PER_FILE_MINUTES",
+    "SYNTHESIS_PER_TOPIC_AGENTS",
+    "SYNTHESIS_PER_TOPIC_TOKENS",
+    "SYNTHESIS_PER_TOPIC_MINUTES",
+    "SYNTHESIS_CORPUS_FILES",
+    "SYNTHESIS_CORPUS_TOPICS",
     "PLAN_ADMISSION_MIN_BYTES",
     "GUIDE_BYTE_BUDGET",
     "ManifestSchemaError",
@@ -117,24 +118,25 @@ SCAN_BATCH_AGENTS: int = 2
 SCAN_BATCH_TOKENS: int = 115_000
 SCAN_BATCH_MINUTES: int = 3
 
-#: Post-scan synthesis (cluster, DR-mint, writer batches, curated load relays), priced from the one
-#: measured run 2026-11-14-22h12 (44 files, wf_8365cdb4-93b): 42 agents / 1_219_209 subagent tokens,
-#: of which scan was 1 agent / 209_589. Measured actuals only; the pre-fire projection (5 agents /
-#: 105_865) is never an input. Synthesis tokens = 1_219_209 - 209_589 = 1_009_620 (the load phase's own
-#: tokens were not journaled separately and are counted as zero, so this is an upper bound). Synthesis
-#: agents = 37 = 42 less 5 load/scan agents. The measured run paid 7 curated load relays (191_009
-#: tokens by agent share, 3 minutes); distill.launch_args now inlines the curated verdicts as
-#: args.curatedTags, so SYNTHESIS_FIXED is 0 and SYNTHESIS_PER_FILE is the remainder after those
-#: relays, over the 44 calibration files, held as integer numerators over
-#: SYNTHESIS_PER_FILE_DENOMINATOR (agents 30/44 ~ 0.68 per file); the cost function applies
-#: ceil(files * numerator / denominator).
-SYNTHESIS_FIXED_AGENTS: int = 0
-SYNTHESIS_FIXED_TOKENS: int = 0
-SYNTHESIS_FIXED_MINUTES: int = 0
-SYNTHESIS_PER_FILE_DENOMINATOR: int = 44
-SYNTHESIS_PER_FILE_AGENTS: int = 30
-SYNTHESIS_PER_FILE_TOKENS: int = 818_611
-SYNTHESIS_PER_FILE_MINUTES: int = 15
+#: Post-scan synthesis, priced as one fixed harvest relay over the whole slice plus one synth per
+#: topic. PROVISIONAL (recalibrate from the first measured run of the rebuilt harvest, plan row C5):
+#: SYNTHESIS_FIXED_TOKENS is the relayed ~25_000 (R1 of the 2026-11-15 scope-fit sizing), not a
+#: measurement. SYNTHESIS_PER_TOPIC_TOKENS 18_604 = 818_611 // 44, the per-file synth average of the
+#: 44-file run 2026-11-14-22h12; a topic is priced no cheaper than that. Topics exist only after
+#: clustering, so scope projects them as ceil(files * SYNTHESIS_CORPUS_TOPICS / SYNTHESIS_CORPUS_FILES).
+#: The corpus ratio is 109 topics per 143 artifacts opened, kept as the pair (never floored to 1, which
+#: priced every file as its own topic) from the
+#: model-free `backlog.cluster` run of benchmarks/backlog_first_pass_tokens.py over the DoE corpus
+#: (plan row C0 evidence). Per-topic minutes keep the minutes axis from binding before tokens.
+#: Not `backlog_first_pass_tokens.SYNTHESIS_OVERHEAD_TOKENS_PER_TOPIC` (1_500), a digest-only pass.
+SYNTHESIS_FIXED_AGENTS: int = 1
+SYNTHESIS_FIXED_TOKENS: int = 25_000
+SYNTHESIS_FIXED_MINUTES: int = 2
+SYNTHESIS_PER_TOPIC_AGENTS: int = 1
+SYNTHESIS_PER_TOPIC_TOKENS: int = 18_604
+SYNTHESIS_PER_TOPIC_MINUTES: int = 1
+SYNTHESIS_CORPUS_FILES: int = 143
+SYNTHESIS_CORPUS_TOPICS: int = 109
 
 #: A plan/spec smaller than this is not admitted as a distill target.
 PLAN_ADMISSION_MIN_BYTES: int = 12_000

@@ -1145,8 +1145,36 @@ def wait_for_new_pair_ready(
 SUCCESSOR_PROBE_DEADLINE_SECS = 2.0
 
 
-def endpoint_answers_request(endpoint: str, token: str, *, deadline_secs: float = SUCCESSOR_PROBE_DEADLINE_SECS) -> bool:
-    """True iff a real `ping` sent to `endpoint` under `token` comes back with a result.
+#: Reply bar for the warm-op successor probe: an attempt that answers later does not count, and the
+#: gate polls again, so a successor whose pool is cold never passes.
+WARM_OP_PROBE_DEADLINE_SECS = 0.5
+
+#: The hook-lane op the handover gate sends: the guard evaluation every hook frame runs, so the
+#: successor's guard worker has imported the guard stack before clients are flipped onto it.
+WARM_OP_PROBE_METHOD = "warm_guard.evaluate"
+
+#: A benign `PreToolUse` frame body for `WARM_OP_PROBE_METHOD`.
+WARM_OP_PROBE_PARAMS = {
+    "payload": {
+        "hook_event_name": "PreToolUse",
+        "session_id": "handover-probe",
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo ok"},
+        "cwd": "",
+    }
+}
+
+
+def endpoint_answers_request(
+    endpoint: str,
+    token: str,
+    *,
+    deadline_secs: float = SUCCESSOR_PROBE_DEADLINE_SECS,
+    method: str = "ping",
+    params: Optional[dict] = None,
+) -> bool:
+    """True iff a real `method` request (default `ping`, which no pool worker evaluates) sent to
+    `endpoint` under `token` comes back with a result.
 
     Unlike `_breadcrumb_pair_answers` this proves the server can EVALUATE a request, not that its
     listener accepts. TRAP: `token` must be the generation the endpoint was bound with; a wrong
@@ -1165,7 +1193,7 @@ def endpoint_answers_request(endpoint: str, token: str, *, deadline_secs: float 
 
     def _exchange() -> None:
         try:
-            request = {"jsonrpc": "2.0", "id": "successor-probe", "method": "ping", "params": {}, "_engine_token": token}
+            request = {"jsonrpc": "2.0", "id": "successor-probe", "method": method, "params": dict(params or {}), "_engine_token": token}
             fh.write(json.dumps(request).encode("utf-8") + b"\n")
             fh.flush()
             result["line"] = fh.readline()
@@ -1190,18 +1218,27 @@ def endpoint_answers_request(endpoint: str, token: str, *, deadline_secs: float 
     return isinstance(reply, dict) and "result" in reply and "error" not in reply
 
 
+def endpoint_answers_warm_op(endpoint: str, token: str, *, deadline_secs: float = WARM_OP_PROBE_DEADLINE_SECS) -> bool:
+    """True iff `WARM_OP_PROBE_METHOD`, the hook-lane guard evaluation a guard-pool worker runs, comes
+    back with a result inside `deadline_secs`. Proves the successor serves the hook path, not a ping.
+    Never raises."""
+    return endpoint_answers_request(
+        endpoint, token, deadline_secs=deadline_secs, method=WARM_OP_PROBE_METHOD, params=WARM_OP_PROBE_PARAMS
+    )
+
+
 def wait_for_successor_answer(
     engine_root: Optional[Path],
     *,
     token: str,
     superseded_pid: Optional[int],
     max_secs: float,
-    request_probe: Callable[[str, str], bool] = endpoint_answers_request,
+    request_probe: Callable[[str, str], bool] = endpoint_answers_warm_op,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> Optional[dict]:
     """Make-before-break gate: poll up to `max_secs` for a breadcrumb that names a live server
-    other than `superseded_pid` whose endpoint answers a real request under `token`. Returns that
+    other than `superseded_pid` whose endpoint answers a warm op (`endpoint_answers_warm_op`) under `token`. Returns that
     breadcrumb record, or None when no successor answers by the deadline (the superseded pair
     must then be left running).
 

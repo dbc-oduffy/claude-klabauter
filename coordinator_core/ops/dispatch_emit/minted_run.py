@@ -5,7 +5,9 @@ Reply: ``{ok, run_id, action, fire_args | null, landed_sha | null, refusal | nul
 carries ``ok: false`` and a one-line ``refusal`` naming the cause. ``start`` returns ``script_path``, a
 stage-loop start script under ``scratch/warp``: fire that path with no args (it carries
 ``repoRoot``/``runToken`` and follows ``stage_pending`` into the staged twin); ``fire_args`` is null and
-``run_script`` names the run's own script, which is never fired directly. ``abandon`` writes the halt
+``run_script`` names the run's own script, which is never fired directly. A run script that holds its own
+``workflow()`` reader is the exception: ``script_path`` is that script and ``fire_args`` its args, fired
+top-level so the reader is the only nesting level. ``abandon`` writes the halt
 marker, discards the run token and lands the record through ``abandoned_runs`` (``run_ids=[run_id]``).
 The reap holds a run younger than its quiet window, so a fresh abandon replies ``landed_sha: null`` and
 ``note`` names the reap's skip reason; the halt marker still blocks any start.
@@ -100,14 +102,29 @@ def start_args(repo_root: Path, run_id: str) -> dict:
     return reply(run_id, ACTION_START, fire_args=fire_args, script_path=script_rel)
 
 
+def holds_workflow_reader(repo_root: Path, script_rel: str) -> bool:
+    """True when the run script calls ``workflow()`` itself (an emit without ``launcher_child``: its stage reader).
+    Trap: a launcher child holds no ``workflow(`` bytes, so only a script that does must be started top-level;
+    a wrapper starting it as a child would put that call at a second nesting level."""
+    try:
+        return "workflow(" in (repo_root / script_rel).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
 def _start(repo_root: Path, run_id: str) -> dict:
     """The stage-loop start script for the run: ``script_path`` is that script, ``run_script`` the run's own.
-    Trap: firing ``run_script`` directly ends at ``stage_pending`` with nothing starting the staged twin."""
+    A run script holding its own ``workflow()`` reader is the start script itself, fired with ``fire_args``.
+    Trap: firing a launcher-child ``run_script`` directly ends at ``stage_pending`` with nothing starting the staged twin."""
     from coordinator_core.hooks.submit_engine_ask import write_direct_start_script
 
     args = start_args(repo_root, run_id)
     if not args["ok"]:
         return args
+    if holds_workflow_reader(repo_root, args["script_path"]):
+        out = reply(run_id, ACTION_START, fire_args=args["fire_args"], script_path=args["script_path"])
+        out["run_script"] = args["script_path"]
+        return out
     script = write_direct_start_script(repo_root, run_id, args["script_path"], args["fire_args"])
     start_rel = Path(script).resolve().relative_to(Path(repo_root).resolve()).as_posix()
     out = reply(run_id, ACTION_START, script_path=start_rel)

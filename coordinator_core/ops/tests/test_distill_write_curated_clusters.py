@@ -34,7 +34,7 @@ def test_writes_curated_tags_object_with_threshold_fields(tmp_path) -> None:
     }
     by_tag = {v["tag"]: v for v in body["verdicts"]}
     assert set(by_tag) == set(_COUNTS)
-    assert by_tag["meta"]["verdict"] == "drop"
+    assert by_tag["meta"]["verdict"] == "keep"
     assert body["counts"]["total"] == reply["curated_verdict_count"] == 3
     assert body["contradictionClusterCount"] == len(body["contradictionClusters"])
 
@@ -144,14 +144,27 @@ def test_wiki_folder_name_keeps_bare_tag(tmp_path) -> None:
     assert _installer_verdict(tmp_path)["verdict"] == "keep"
 
 
-def test_unmatched_bare_tag_still_dropped_bare_no_sibling(tmp_path) -> None:
+def test_unmatched_bare_tag_is_kept_without_wiki_home(tmp_path) -> None:
     (tmp_path / "docs" / "wiki").mkdir(parents=True)
     (tmp_path / "docs" / "wiki" / "testing.md").write_text("x", encoding="utf-8")
     v = _installer_verdict(tmp_path)
-    assert (v["verdict"], v["drop_cause"]) == ("drop", "bare-no-sibling")
+    assert (v["verdict"], v["drop_cause"]) == ("keep", None)
+    assert "wiki home" not in v["reason"]
 
 
 def test_nested_wiki_entries_are_not_walked(tmp_path) -> None:
     (tmp_path / "docs" / "wiki" / "other").mkdir(parents=True)
     (tmp_path / "docs" / "wiki" / "other" / "installation.md").write_text("x", encoding="utf-8")
-    assert _installer_verdict(tmp_path)["verdict"] == "drop"
+    v = _installer_verdict(tmp_path)
+    assert v["verdict"] == "keep" and "wiki home" not in v["reason"]
+
+
+def test_bare_tags_with_no_sibling_and_no_wiki_home_are_all_kept_at_defaults(tmp_path) -> None:
+    counts = {"uncategorized": 3, "core": 2, "decisions": 1, "git-safety": 3, "git-hooks": 2}
+    reply = _handler({"tag_counts": counts, "run_id": "w2"}, repo_root=_common_dir(tmp_path))
+    body = json.loads((tmp_path / reply["output_path"]).read_text(encoding="utf-8"))
+    by_tag = {v["tag"]: v for v in body["verdicts"]}
+    for tag in ("uncategorized", "core", "decisions"):
+        assert by_tag[tag]["verdict"] == "keep" and by_tag[tag]["drop_cause"] is None
+    assert all(v["drop_cause"] != "bare-no-sibling" for v in body["verdicts"])
+    assert "bare-no-sibling" not in body["counts"]["drop_by_cause"]

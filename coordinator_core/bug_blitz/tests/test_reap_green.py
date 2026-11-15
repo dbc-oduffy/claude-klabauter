@@ -188,6 +188,111 @@ def test_closed_rows_are_not_reaped_again(repo, spawns):
     assert record.green == record.red == () and not spawns
 
 
+def _two_good_rows(repo):
+    (repo / "tests" / "test_g2.py").write_text("def test_ok():\n    assert True\n")
+    a = _row(repo, "a", "Failing tests:\n- tests/test_good.py::test_ok")
+    b = _row(repo, "b", "Failing tests:\n- tests/test_g2.py::test_ok")
+    return a, b  # sorted files: test_g2.py (b) runs in chunk 1, test_good.py (a) in chunk 2
+
+
+def _on_disk(repo) -> ReapRecord:
+    return ReapRecord.from_json(json.loads((repo / reap_record_rel()).read_text()))
+
+
+def test_kill_after_first_chunk_keeps_the_finished_row(repo, monkeypatch):
+    a, b = _two_good_rows(repo)
+    real = reap_green._run_chunk
+    calls = []
+
+    def kill_on_second(files, root, timeout, verdicts, deadline=None):
+        calls.append(files)
+        if len(calls) == 2:
+            raise KeyboardInterrupt
+        real(files, root, timeout, verdicts, deadline)
+
+    monkeypatch.setattr(reap_green, "_run_chunk", kill_on_second)
+    with pytest.raises(KeyboardInterrupt):
+        reap_green.reap(repo, chunk_files=1)
+
+    record = _on_disk(repo)
+    assert record.green == (b,) and record.head_sha == SHA
+    assert _fm(repo, b)["status"] == "closed" and _fm(repo, a)["status"] == "open"
+    assert not (repo / (reap_record_rel() + ".tmp")).exists()
+
+
+def test_rerun_at_same_head_skips_verdicted_rows_and_other_head_reruns(repo, spawns):
+    green, red = (
+        _row(repo, "good", "Failing tests:\n- tests/test_good.py::test_ok"),
+        _row(repo, "bad", "Failing tests:\n- tests/test_bad.py::test_nope"),
+    )
+    reap_green.reap(repo)
+    assert len(spawns) == 1
+
+    again = reap_green.reap(repo)
+    assert len(spawns) == 1  # nothing re-run
+    assert again.green == (green,) and again.red == (red,)
+
+    (repo / ".git" / "refs" / "heads" / "main").write_text("b" * 40 + "\n")
+    other = reap_green.reap(repo)
+    assert len(spawns) == 2  # the still-open red row re-runs at a new head
+    assert other.head_sha == "b" * 40 and other.red == (red,) and other.green == ()
+
+
+def test_resume_after_kill_runs_only_the_unfinished_chunk(repo, monkeypatch):
+    a, b = _two_good_rows(repo)
+    real = reap_green._run_chunk
+    ran: list[list[str]] = []
+
+    def killing(files, root, timeout, verdicts, deadline=None):
+        if ran:
+            raise KeyboardInterrupt
+        ran.append(files)
+        real(files, root, timeout, verdicts, deadline)
+
+    monkeypatch.setattr(reap_green, "_run_chunk", killing)
+    with pytest.raises(KeyboardInterrupt):
+        reap_green.reap(repo, chunk_files=1)
+
+    resumed: list[list[str]] = []
+
+    def recording(files, root, timeout, verdicts, deadline=None):
+        resumed.append(files)
+        real(files, root, timeout, verdicts, deadline)
+
+    monkeypatch.setattr(reap_green, "_run_chunk", recording)
+    record = reap_green.reap(repo, chunk_files=1)
+    assert resumed == [["tests/test_good.py"]]
+    assert record.green == (a, b)
+
+
+def test_budget_exhausted_stops_between_chunks_and_records_budget_unrun(repo, spawns):
+    a, b = _two_good_rows(repo)
+    record = reap_green.reap(repo, chunk_files=1, budget=0)
+    assert len(spawns) == 1  # the first chunk always runs
+    assert record.green == (b,) and record.unrun == {a: "budget"}
+    assert _on_disk(repo) == record and _fm(repo, a)["status"] == "open"
+
+    resumed = reap_green.reap(repo, chunk_files=1, budget=None)
+    assert resumed.green == (a, b) and not resumed.unrun
+
+
+def test_default_budget_is_finite_and_bounded():
+    assert 0 < reap_green.DEFAULT_BUDGET_S < 900
+
+
+def test_main_passes_budget_to_reap(monkeypatch, capsys):
+    seen = {}
+
+    def fake(root, *, budget):
+        seen.update(root=root, budget=budget)
+        return ReapRecord(head_sha=SHA, ran_at="t")
+
+    monkeypatch.setattr(reap_green, "reap", fake)
+    assert reap_green.main(["R", "--budget", "12"]) == 0
+    assert seen == {"root": Path("R"), "budget": 12.0}
+    assert reap_green.main(["R"]) == 0 and seen["budget"] == reap_green.DEFAULT_BUDGET_S
+
+
 def _load_cli():
     import importlib.util
 
@@ -204,6 +309,14 @@ def test_cli_help_exits_zero_and_missing_repo_is_usage_error(capsys):
     assert "bug-backlog-reap" in capsys.readouterr().out
     assert cli.main([]) == 2
     assert cli.main(["--bogus", "x"]) == 2
+    assert cli.main(["--repo", "R", "--budget", "soon"]) == 2
+
+
+def test_cli_passes_budget_through(monkeypatch):
+    cli = _load_cli()
+    seen = []
+    monkeypatch.setattr(cli, "_import_reap", lambda: lambda a: seen.append(a) or 0)
+    assert cli.main(["--repo", "R", "--budget=30"]) == 0 and seen == [["R", "--budget", "30"]]
 
 
 @pytest.mark.parametrize("argv", [["--repo", "R"], ["--repo=R"]])
@@ -228,3 +341,29 @@ def test_cli_failure_is_exit_one_and_engine_unavailable_is_exit_one(monkeypatch)
 
     monkeypatch.setattr(cli, "_import_reap", unavailable)
     assert cli.main(["--repo", "R"]) == 1
+
+
+def test_a_spent_deadline_inside_a_chunk_records_budget_and_spawns_nothing(tmp_path, monkeypatch):
+    """The budget binds inside a chunk's halving retries, not only between chunks."""
+    import time as _time
+
+    from coordinator_core.bug_blitz import reap_green, targeted_run
+
+    monkeypatch.setattr(targeted_run, "_spawn_pytest_capped", lambda *a, **k: pytest.fail("no spawn past the deadline"))
+    verdicts: dict = {}
+    reap_green._run_chunk(["t/test_a.py", "t/test_b.py"], tmp_path, 300, verdicts, _time.monotonic() - 1)
+    assert verdicts == {"t/test_a.py": {"unrun": "budget"}, "t/test_b.py": {"unrun": "budget"}}
+
+
+def test_a_chunk_timeout_is_capped_at_the_budget_left(tmp_path, monkeypatch):
+    import time as _time
+
+    from coordinator_core.bug_blitz import reap_green, targeted_run
+
+    seen = []
+    monkeypatch.setattr(targeted_run, "head_for", lambda root, files: ("x", ["python3", "-m", "pytest"]))
+    monkeypatch.setattr(targeted_run, "_pytest_spawn_refusal", lambda argv, root: None)
+    monkeypatch.setattr(targeted_run, "admit", lambda argv, root: True)
+    monkeypatch.setattr(targeted_run, "_spawn_pytest_capped", lambda argv, root, timeout: seen.append(timeout) or (0, ""))
+    reap_green._run_chunk(["t/test_a.py"], tmp_path, 300, {}, _time.monotonic() + 30)
+    assert seen and seen[0] <= 30

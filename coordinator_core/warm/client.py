@@ -1919,31 +1919,56 @@ def _try_warm_dispatch_inner(
     # "BrokenPipeError mid-request -> one re-open" retry. Anything else
     # returns (cold) without looping.
     drained = False
+    retokened = False
     for attempt in range(2):
+        if attempt:
+            fresh = engine_token()
+            if fresh != token:
+                token = fresh
+                pipe = _endpoint_name(token)
+                request["_engine_token"] = token
+                payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
         try:
             fh = _open_pipe(pipe)
         except (FileNotFoundError, ConnectionRefusedError):
-            # ECONNREFUSED joins ENOENT because on POSIX the two are one
-            # outcome wearing two shapes: "no server". A unix socket's path
-            # OUTLIVES the process that bound it, so a hard-killed server
-            # leaves a corpse file that exists and refuses -- the same
-            # condition a missing named pipe reports as ENOENT on Windows.
-            # Reclaiming that corpse is the ELECTION's job under its flock
-            # (`election.reclaim_stale_socket`), never this client's: a
-            # client that unlinked on refusal would race a peer's live
-            # socket. Spawning is the correct and sufficient response, and
-            # `should_spawn` still rate-limits it.
-            if not drained:
-                drained = True
-                outcome = _drain_publish_hold(hook_path)
-                if outcome is True and attempt == 0:
-                    continue
-                if outcome is False:
-                    _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
-                    return None
-            _spawn_wanted = True
-            _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
-            return None
+            # The engine stamp can flip between this call's token read and its open (a publish
+            # handover): the pipe named for the old token is gone and the successor serves the new
+            # one. One re-resolved open, ahead of the drain wait, reaches it.
+            fh = None
+            if not retokened and token != "unversioned":
+                retokened = True
+                fresh = engine_token()
+                if fresh != token:
+                    token = fresh
+                    pipe = _endpoint_name(token)
+                    request["_engine_token"] = token
+                    payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
+                    try:
+                        fh = _open_pipe(pipe)
+                    except (FileNotFoundError, ConnectionRefusedError):
+                        fh = None
+            if fh is None:
+                # ECONNREFUSED joins ENOENT because on POSIX the two are one
+                # outcome wearing two shapes: "no server". A unix socket's path
+                # OUTLIVES the process that bound it, so a hard-killed server
+                # leaves a corpse file that exists and refuses -- the same
+                # condition a missing named pipe reports as ENOENT on Windows.
+                # Reclaiming that corpse is the ELECTION's job under its flock
+                # (`election.reclaim_stale_socket`), never this client's: a
+                # client that unlinked on refusal would race a peer's live
+                # socket. Spawning is the correct and sufficient response, and
+                # `should_spawn` still rate-limits it.
+                if not drained:
+                    drained = True
+                    outcome = _drain_publish_hold(hook_path)
+                    if outcome is True and attempt == 0:
+                        continue
+                    if outcome is False:
+                        _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
+                        return None
+                _spawn_wanted = True
+                _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
+                return None
         except PermissionError as exc:
             _record_restricted_token_denial(exc)
             _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
@@ -2121,6 +2146,18 @@ def _try_warm_dispatch_inner(
             # hole this change opens. The defect this change exists to close
             # (a WORKING server outrunning a 2s liveness probe) lands on the
             # deadline branch above, which stays strict.
+            #
+            # An op whose engine token moved while it was in flight reached the
+            # generation that was draining; the successor answers under the new token, so it is
+            # re-sent once there, ahead of the cold fallback.
+            # Mutation frames are never re-sent: a draining generation that read and dispatched
+            # before closing would run the op twice. They keep the cold fallback below.
+            if (
+                attempt == 0
+                and not _op_may_mutate(_classified_op_name(msg))
+                and engine_token() != token
+            ):
+                continue
             _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
             return None
 

@@ -89,8 +89,9 @@ import tempfile
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
+from coordinator_core.distill import prompt_tier as _prompt_tier
 from coordinator_core.distill import _common as _distill_common
 from coordinator_core.distill import guide_index as _guide_index
 from coordinator_core.contract import run_budget as _run_budget
@@ -463,10 +464,14 @@ class ScopeResult:
     #: ``settle(extra_deferred)`` re-proposes the watermark with files a later stage also deferred;
     #: None whenever ``watermark`` is.
     settle: Callable[[list[str]], _run_watermark.Watermark] | None = None
+    #: Batches the budget fit packs the admitted candidates into; the handler lets a tier split grow
+    #: the batch count up to it.
+    fitted_batches: int = 0
 
 
 def run_fixed_cost(wiki_slugs: dict[str, str]) -> _run_budget.UnitCost:
-    """Cost of a run before any scan batch: the manifest relay agent plus one per slug shard."""
+    """Cost of a run before any topic synthesis: the manifest relay agent, one per slug shard, and the
+    one harvest relay that walks the whole slice."""
     # Deferred: distill_workflow_input imports this module.
     from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES, _slug_shards
 
@@ -478,60 +483,107 @@ def run_fixed_cost(wiki_slugs: dict[str, str]) -> _run_budget.UnitCost:
     )
 
 
-def _per_file(rate: int, files: int) -> int:
-    return -(-files * rate // _schema.SYNTHESIS_PER_FILE_DENOMINATOR)
+def projected_topics(files: int) -> int:
+    """Topics the synthesis stage opens for ``files`` admitted files, at the corpus ratio of
+    ``SYNTHESIS_CORPUS_TOPICS`` topics per ``SYNTHESIS_CORPUS_FILES`` files, rounded up."""
+    return -(-files * _schema.SYNTHESIS_CORPUS_TOPICS // _schema.SYNTHESIS_CORPUS_FILES)
 
 
-def synthesis_cost(files: int) -> _run_budget.UnitCost:
-    """Per-file post-scan synthesis cost of ``files`` scanned files (the per-run curated load relays
-    are in ``run_fixed_cost``): ceil(files * measured rate) on each axis."""
+def synthesis_cost(topics: int) -> _run_budget.UnitCost:
+    """Post-scan synthesis cost of ``topics`` topics (the one harvest relay is in ``run_fixed_cost``)."""
     return _run_budget.UnitCost(
-        agents=_per_file(_schema.SYNTHESIS_PER_FILE_AGENTS, files),
-        tokens=_per_file(_schema.SYNTHESIS_PER_FILE_TOKENS, files),
-        minutes=_per_file(_schema.SYNTHESIS_PER_FILE_MINUTES, files),
+        agents=topics * _schema.SYNTHESIS_PER_TOPIC_AGENTS,
+        tokens=topics * _schema.SYNTHESIS_PER_TOPIC_TOKENS,
+        minutes=topics * _schema.SYNTHESIS_PER_TOPIC_MINUTES,
     )
 
 
-def _synthesis_file_unit() -> _run_budget.UnitCost:
-    """One file's synthesis as the integer unit ``fit_units`` takes. Agents stay 0: the per-file agent
-    rate is fractional and the agent cap is already spent by ``run_fixed_cost``, so an agents axis
-    here would collapse every slice to one file; agents are priced and reported by ``synthesis_cost``."""
-    one = synthesis_cost(1)
-    return _run_budget.UnitCost(agents=0, tokens=one.tokens, minutes=one.minutes)
+def scan_bytes_bound(file_bytes: int, batches: int) -> int:
+    """Scan input bytes of ``batches`` batches over ``file_bytes`` of files when the guides a batch
+    lists are not yet known: each batch lists at most ``GUIDE_BYTE_BUDGET`` bytes of them."""
+    return file_bytes + batches * _schema.GUIDE_BYTE_BUDGET
 
 
-def fit_files(fixed: _run_budget.UnitCost, batches: int, wanted: int) -> int:
-    """Largest file count whose scan batches plus synthesis fit the ``distill`` run budget (at least
-    one, ``fit_units``' floor, when ``wanted`` >= 1)."""
-    return _run_budget.fit_units(
-        _run_budget.load("distill"), projected_cost(fixed, batches, 0), _synthesis_file_unit(), wanted
-    )
+def projected_cost(
+    fixed: _run_budget.UnitCost, *, topics: int, batches: int, scan_bytes: int
+) -> _run_budget.UnitCost:
+    """The one run projection (``run_cost.project_run_cost`` and the fit both call it): ``fixed`` plus
+    per batch its relay shard (at the relay cap) and ``SCAN_BATCH_AGENTS``/``SCAN_BATCH_MINUTES``, plus
+    ``scan_bytes`` as tokens, plus ``topics`` topics' synthesis."""
+    # Deferred: distill_workflow_input imports this module.
+    from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES
 
-
-def scan_batch_cost() -> _run_budget.UnitCost:
-    """Cost of one scan batch: its relay agent and its scan agent."""
+    synth = synthesis_cost(topics)
     return _run_budget.UnitCost(
-        agents=_schema.SCAN_BATCH_AGENTS, tokens=_schema.SCAN_BATCH_TOKENS, minutes=_schema.SCAN_BATCH_MINUTES
+        agents=fixed.agents + batches * _schema.SCAN_BATCH_AGENTS + synth.agents,
+        tokens=fixed.tokens
+        + batches * (SLUG_SHARD_MAX_BYTES // 4)
+        + _prompt_tier.estimate_tokens(scan_bytes)
+        + synth.tokens,
+        minutes=fixed.minutes + batches * _schema.SCAN_BATCH_MINUTES + synth.minutes,
     )
 
 
-def projected_cost(fixed: _run_budget.UnitCost, batches: int, files: int) -> _run_budget.UnitCost:
-    """``fixed`` plus ``batches`` scan batches plus the synthesis of ``files`` admitted files."""
-    unit = scan_batch_cost()
-    synth = synthesis_cost(files)
-    return _run_budget.UnitCost(
-        agents=fixed.agents + batches * unit.agents + synth.agents,
-        tokens=fixed.tokens + batches * unit.tokens + synth.tokens,
-        minutes=fixed.minutes + batches * unit.minutes + synth.minutes,
-    )
+def _within(budget: _run_budget.RunBudget, cost: _run_budget.UnitCost) -> bool:
+    return cost.agents <= budget.agents and cost.tokens <= budget.tokens and cost.minutes <= budget.minutes
 
 
-def budget_block(fixed: _run_budget.UnitCost, batches: int, files: int) -> dict[str, Any]:
-    """The manifest's ``budget``: cap and projected cost per axis for a run of ``batches`` scan batches
-    over ``files`` admitted files, synthesis included."""
+def fit_files(
+    fixed: _run_budget.UnitCost,
+    paths: Sequence[str],
+    size_of: Callable[[str], int],
+    *,
+    batch_size: int = DEFAULT_BATCH_MAX_FILES,
+    byte_budget: int = SCAN_BATCH_BYTE_BUDGET,
+    entry_cost_of: Callable[[str], int] | None = None,
+) -> int:
+    """Largest prefix of ``paths`` (ranked, packed as ``pack_batches`` packs) whose ``projected_cost``
+    meets every axis of the ``distill`` run budget; at least one, the floor ``fit_units`` also keeps,
+    when ``paths`` is non-empty. Greedy packing is prefix-stable, so one pass prices every prefix and
+    a bisection finds the cut."""
+    if not paths:
+        return 0
+    budget = _run_budget.load("distill")
+    batch_of: list[int] = []
+    bytes_to: list[int] = []
+    batches = 0
+    for batch in pack_batches(
+        list(paths), size_of=size_of, byte_budget=byte_budget, max_files=batch_size, entry_cost_of=entry_cost_of
+    ):
+        batches += 1
+        for rel in batch:
+            bytes_to.append((bytes_to[-1] if bytes_to else 0) + max(0, size_of(rel)))
+            batch_of.append(batches)
+
+    def fits(n: int) -> bool:
+        return _within(
+            budget,
+            projected_cost(
+                fixed,
+                topics=projected_topics(n),
+                batches=batch_of[n - 1],
+                scan_bytes=scan_bytes_bound(bytes_to[n - 1], batch_of[n - 1]),
+            ),
+        )
+
+    low, high = 1, len(paths)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if fits(mid):
+            low = mid
+        else:
+            high = mid - 1
+    return low
+
+
+def budget_block(fixed: _run_budget.UnitCost, *, files: int, batches: int, scan_bytes: int) -> dict[str, Any]:
+    """The manifest's ``budget``: cap and ``projected_cost`` per axis for a run over ``files`` admitted
+    files in ``batches`` batches reading ``scan_bytes``."""
     budget = _run_budget.load("distill")
     return _run_budget.budget_report(
-        budget, projected_cost(fixed, batches, files), _run_budget.over_cap_fixed(budget, fixed)
+        budget,
+        projected_cost(fixed, topics=projected_topics(files), batches=batches, scan_bytes=scan_bytes),
+        _run_budget.over_cap_fixed(budget, fixed),
     )
 
 
@@ -1427,8 +1479,8 @@ def compute_scope(
     PM-ruling set), a spec, plan or completed file is admitted only when an unharvested log cites it
     and it clears PLAN_ADMISSION_MIN_BYTES, a file a guide or decision already cites is captured,
     and batches past ``max_scan_batches`` are deferred. ``max_scan_batches`` omitted is the count of
-    batches that fit the ``distill`` run budget (``run_budget.fit_units``, at least one): an
-    over-budget backlog narrows and defers, never refuses or shards. Each file settles into exactly one of
+    batches the topic-fitted file cap packs into (``fit_files``: fixed relay plus per-topic synthesis
+    against the ``distill`` run budget, at least one): an over-budget backlog narrows and defers, never refuses or shards. Each file settles into exactly one of
     batches, ``mechanical``, ``not_admitted`` or ``deferred``; the manifest carries the last two and
     ``counts["scannable"]`` is the scanned count. Off (the library default), scope is unadmitted.
     Admitting also applies the ``distill`` run watermark (``run_watermark``): only files changed
@@ -1506,6 +1558,7 @@ def compute_scope(
     wm_plan: _WatermarkPlan | None = None
     out_of_scope: list[str] = []
     fixed = run_fixed_cost(wiki_slugs_map)
+    fitted_batches = max_scan_batches or 0
     if admit:
         admitted = _admit(
             cache, gathered, scannable_set, cohort_of, _captured_keys(cache, worktree_root, resolved_wiki_dirs)
@@ -1513,16 +1566,43 @@ def compute_scope(
         scannable = admitted.ranked
         file_cap = None
         if max_scan_batches is None:
-            max_scan_batches = _run_budget.fit_units(
-                _run_budget.load("distill"), fixed, scan_batch_cost(), len(scannable)
+            fit_sizes: dict[str, int] = {}
+            for rel in scannable:
+                key = _stat_key(gathered.entries[rel])
+                fit_sizes[rel] = key[1] if key is not None else 0
+            fit_size_of = size_of if size_of is not None else fit_sizes.__getitem__
+            digest_dir = f"{RUN_DIR_REL}/{run_id}/{_scan_digest.DIGEST_DIRNAME}"
+            def fit_entry_cost(rel: str) -> int:
+                digest = len(rel) + len(digest_dir) + len(_scan_digest.digest_name(rel)) + 9 if write_digests else 0
+                return len(rel) + 4 + digest
+
+            file_cap = fit_files(
+                fixed,
+                scannable,
+                fit_size_of,
+                batch_size=batch_size,
+                byte_budget=byte_budget,
+                entry_cost_of=fit_entry_cost,
             )
-            file_cap = fit_files(fixed, min(max_scan_batches, -(-len(scannable) // batch_size)), len(scannable))
+            max_scan_batches = file_cap
+            fitted_batches = len(
+                pack_batches(
+                    scannable[:file_cap],
+                    size_of=fit_size_of,
+                    byte_budget=byte_budget,
+                    max_files=batch_size,
+                    entry_cost_of=fit_entry_cost,
+                )
+            )
         wm_plan = _plan_watermark(
-            worktree_root, scannable, max_scan_batches * batch_size if file_cap is None else min(file_cap, max_scan_batches * batch_size)
+            worktree_root, scannable, max_scan_batches * batch_size if file_cap is None else file_cap
         )
         if wm_plan is not None:
             out_of_scope = [rel for rel in scannable if rel not in wm_plan.scoped]
             scannable = wm_plan.pack_order([rel for rel in scannable if rel in wm_plan.scoped])
+        elif file_cap is not None and len(scannable) > file_cap:
+            out_of_scope = scannable[file_cap:]
+            scannable = scannable[:file_cap]
     else:
         scannable = sorted(scannable_set, key=_date_sort_key)
     keys: dict[str, tuple[int, int]] = {}
@@ -1590,7 +1670,14 @@ def compute_scope(
     # re-deriving it from cohort_specs itself.
     manifest["cohort_modes"] = cohort_modes
     if admitted is not None:
-        manifest["budget"] = budget_block(fixed, len(batches), len(scannable))
+        manifest["budget"] = budget_block(
+            fixed,
+            files=len(scannable),
+            batches=len(batches),
+            scan_bytes=scan_bytes_bound(
+                sum(digest_bytes.get(rel, keys[rel][1] if rel in keys else 0) for rel in scannable), len(batches)
+            ),
+        )
 
     counts = {
         "harvest": len(harvest_cohort),
@@ -1613,7 +1700,10 @@ def compute_scope(
 
     proposed = _settle_watermark(wm_plan, overflow) if wm_plan is not None else None
     settle = (lambda extra: _settle_watermark(wm_plan, overflow + extra)) if wm_plan is not None else None
-    return ScopeResult(manifest=manifest, counts=counts, digests=digests, keys=keys, watermark=proposed, settle=settle)
+    return ScopeResult(
+        manifest=manifest, counts=counts, digests=digests, keys=keys, watermark=proposed, settle=settle,
+        fitted_batches=fitted_batches,
+    )
 
 
 def wiki_slugs_as_dict(manifest: dict[str, Any]) -> dict[str, str]:
@@ -1703,6 +1793,14 @@ def workflow_input(manifest: dict[str, Any], worktree_root: Path) -> dict[str, A
     from coordinator_core.ops.distill_workflow_input import translate_to_workflow_input
 
     return translate_to_workflow_input(manifest, repo_root=worktree_root.as_posix())
+
+
+def _file_bytes(root: Path, rel: str) -> int:
+    """Size of ``rel`` under ``root``; 0 when it cannot be stat-ed."""
+    try:
+        return (root / rel).stat().st_size
+    except OSError:
+        return 0
 
 
 def attach_digests(payload: dict[str, Any], digests: dict[str, str]) -> None:
@@ -1949,6 +2047,9 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
             row dicts instead. Omitted — the default — reproduces the
             pre-ruling hardcoded handoffs+memos behavior (see
             compute_scope/_default_cohort_specs).
+        max_scan_batches, byte_budget (int > 0, optional) — measurement-run overrides of the
+            slice fit and the per-batch byte budget; recorded as ``measurement_override`` in the
+            manifest and the result.
 
     repo_root (injected by ipc.dispatch_message): git_common_dir of the originating
     worktree (_OP_KEY_SCOPE="common_dir"). Derives main_worktree_root(repo_root) — a
@@ -1980,6 +2081,15 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
     for key in ("specs_dir", "plans_dir", "handoffs_dir", "memos_dir", "log_path", "wiki_dirs", "batch_size"):
         if key in params:
             kwargs[key] = params[key]
+    # A measurement run sizes past the slice fit; the override is recorded in the manifest so such a
+    # scope is never read as a default slice.
+    override: dict[str, int] = {}
+    for key in ("max_scan_batches", "byte_budget"):
+        if params.get(key) is not None:
+            value = params[key]
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"distill.scope {key} must be a positive integer; got {value!r}")
+            kwargs[key] = override[key] = value
 
     if "cohort_specs" in params:
         raw_specs = params["cohort_specs"]
@@ -2020,7 +2130,7 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
     manifest = result.manifest
     slugs = wiki_slugs_as_dict(manifest)
     fixed = run_fixed_cost(slugs)
-    fitted = _run_budget.fit_units(_run_budget.load("distill"), fixed, scan_batch_cost(), 10**6)
+    fitted = result.fitted_batches
     # Shards first, manifest last: a manifest on disk names only shards already written.
     payload = workflow_input(manifest, worktree_root)
     attach_digests(payload, result.digests)
@@ -2044,7 +2154,16 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
         if result.settle is not None:
             watermark = result.settle(dropped)
     result.counts["batches"] = len(payload["batches"])
-    manifest["budget"] = budget_block(fixed, len(payload["batches"]), len(kept))
+    manifest["budget"] = budget_block(
+        fixed,
+        files=len(kept),
+        batches=len(payload["batches"]),
+        scan_bytes=scan_bytes_bound(
+            sum(_file_bytes(worktree_root, result.digests.get(rel, rel)) for rel in kept), len(payload["batches"])
+        ),
+    )
+    if override:
+        manifest["measurement_override"] = override
     written_path = write_scope_manifest(worktree_root, manifest)
     shard_manifest, shards = shard_workflow_input(payload)
     for shard_name, shard_body in shards.items():
@@ -2068,6 +2187,7 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
         "workflow_input_path": rel_id(workflow_path, worktree_root),
         "counts": result.counts,
         "budget": manifest["budget"],
+        "measurement_override": override or None,
         "summary": render_summary(manifest, result.counts),
     }
     warning = empty_wiki_warning(worktree_root, result.manifest)

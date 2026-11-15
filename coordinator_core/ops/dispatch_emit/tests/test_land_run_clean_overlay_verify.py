@@ -173,8 +173,8 @@ def test_a_declared_pin_that_does_not_resolve_is_reported_and_pytest_is_not_run(
 
     out = cov.verify(root, "run1", head, [READER])
 
-    assert out.verdict == "inconclusive" and not ran
-    assert "targeted_test_python" in out.detail and "python3.99" in out.detail and "does not resolve" in out.detail
+    assert out.verdict == cov.ENV_DEFECT and not ran
+    assert "targeted_test_python" in out.detail and "python3.99" in out.detail and "not an executable file" in out.detail
 
 
 def test_an_absent_machine_local_pin_key_is_reported_naming_the_key(tmp_path, monkeypatch):
@@ -186,7 +186,7 @@ def test_an_absent_machine_local_pin_key_is_reported_naming_the_key(tmp_path, mo
 
     out = cov.verify(root, "run1", head, [READER])
 
-    assert out.verdict == "inconclusive" and "no.such.key" in out.detail
+    assert out.verdict == cov.ENV_DEFECT and "no.such.key" in out.detail
 
 
 def _missing_module_repo(tmp_path):

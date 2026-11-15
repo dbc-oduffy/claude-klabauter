@@ -82,6 +82,7 @@ class _Env:
         self.moving = False
         self.refused: set = set()
         self.hold_calls: list = []
+        self.span: list = []
 
     def held(self) -> bool:
         return self.bc.publish_marker_held(self.bc.svc_dir(self.repo))
@@ -175,13 +176,28 @@ def _setup(tmp_path, monkeypatch, engine_root: bool, rows: tuple = ("row-a",)) -
             lambda *a, _n=gate, **k: (env.events.append((_n, env.held())), True)[1],
         )
 
-    real_land = diff_commit.land_diff
+    real_stage = diff_commit._staged.stage_tree
+    real_swap = diff_commit._staged.swap_root
 
-    def land(*a, **k):
+    def stage_tree(*a, **k):
+        env.span.append(("stage_tree", env.held(), env.bc.handover_pending_held(env.repo)))
+        return real_stage(*a, **k)
+
+    def swap_root(*a, **k):
+        env.span.append(("land_diff", env.held(), env.bc.handover_pending_held(env.repo)))
         env.events.append(("land_diff", env.held()))
-        return real_land(*a, **k)
+        return real_swap(*a, **k)
 
-    monkeypatch.setattr(diff_commit, "land_diff", land)
+    monkeypatch.setattr(diff_commit._staged, "stage_tree", stage_tree)
+    monkeypatch.setattr(diff_commit._staged, "swap_root", swap_root)
+
+    real_commit_paths = diff_commit._gcommit.commit_paths
+
+    def commit_paths(*a, **k):
+        env.span.append(("commit", env.held(), env.bc.handover_pending_held(env.repo)))
+        return real_commit_paths(*a, **k)
+
+    monkeypatch.setattr(diff_commit._gcommit, "commit_paths", commit_paths)
 
     def process_target(target, setup_dir, totals, **kwargs):
         if target.name in env.refused:
@@ -352,6 +368,64 @@ def test_handover_pending_is_held_across_the_drain_and_the_successor(tmp_path, m
     assert successor_pending and all(successor_pending)
     drains = env.names("engine_legs_in_flight")
     assert drains and all(held for _, held in drains)
+
+
+def test_successor_start_gets_the_stamp_read_before_the_body_wrote_the_new_one(tmp_path, monkeypatch):
+    from coordinator_core.percolate import round as round_mod
+    from coordinator_core.warm import skew
+
+    env = _setup(tmp_path, monkeypatch, True)
+    stamp = env.repo / "coordinator_core" / skew.ENGINE_STAMP_FILENAME
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_bytes(b"sha:old\n")
+    handed: list = []
+    monkeypatch.setattr(
+        round_mod, "start_successor_pair_in_hold", lambda root, **k: handed.append(k.get("old_stamp")) or True
+    )
+    with env.publish_mod._quiesced_engine_roots([env.repo]):
+        stamp.write_bytes(b"sha:new\n")
+    assert handed == [b"sha:old\n"]
+
+
+def test_the_copys_stamp_write_is_pinned_back_until_the_successor_start(tmp_path, monkeypatch):
+    import time
+
+    from coordinator_core.percolate import round as round_mod
+    from coordinator_core.warm import skew
+
+    env = _setup(tmp_path, monkeypatch, True)
+    stamp = env.repo / "coordinator_core" / skew.ENGINE_STAMP_FILENAME
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_bytes(b"sha:old\n")
+    handed: list = []
+    monkeypatch.setattr(
+        round_mod,
+        "start_successor_pair_in_hold",
+        lambda root, **k: handed.append((stamp.read_bytes(), k.get("new_stamp"))) or True,
+    )
+    with env.publish_mod._quiesced_engine_roots([env.repo]):
+        stamp.write_bytes(b"sha:new\n")
+        time.sleep(0.2)
+        assert stamp.read_bytes() == b"sha:old\n"
+    assert handed == [(b"sha:old\n", b"sha:new\n")]
+
+
+def test_a_raising_body_never_starts_the_successor_or_hands_a_stamp(tmp_path, monkeypatch):
+    from coordinator_core.percolate import round as round_mod
+    from coordinator_core.warm import skew
+
+    env = _setup(tmp_path, monkeypatch, True)
+    stamp = env.repo / "coordinator_core" / skew.ENGINE_STAMP_FILENAME
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_bytes(b"sha:old\n")
+    handed: list = []
+    monkeypatch.setattr(
+        round_mod, "start_successor_pair_in_hold", lambda root, **k: handed.append(k.get("old_stamp")) or True
+    )
+    with pytest.raises(RuntimeError):
+        with env.publish_mod._quiesced_engine_roots([env.repo]):
+            raise RuntimeError("copy failed")
+    assert handed == []
 
 
 def test_a_leg_that_starts_after_the_drain_refuses_before_the_marked_stop(tmp_path, monkeypatch):
@@ -579,4 +653,17 @@ def test_successor_timeout_leaves_the_old_pair_running_and_publish_lands(tmp_pat
     assert spawned == [1]
     assert env.names("stop") == []
     assert "old pair was not stopped" in err
+    assert not env.held()
+
+
+def test_marker_and_handover_pending_span_the_swap_only_not_staging_or_commit(tmp_path, monkeypatch):
+    env = _setup(tmp_path, monkeypatch, True)
+    rc, err = _run(env)
+    assert rc == 0, err
+    assert env.span == [
+        ("stage_tree", False, False),
+        ("land_diff", True, True),
+        ("commit", False, False),
+    ]
+    assert env.names("successor") == [("successor", True)]
     assert not env.held()

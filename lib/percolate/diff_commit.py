@@ -7,6 +7,7 @@ first write restores every touched path from its HEAD blob.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import sys
@@ -14,7 +15,7 @@ import time
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Sequence, Tuple
+from typing import Callable, ContextManager, Dict, Mapping, Optional, Sequence, Tuple
 
 from coordinator_core import _engine_landing as _landing
 from coordinator_core.git import commit as _gcommit
@@ -279,12 +280,14 @@ def land_diff(
     *,
     commit: bool,
     derived: frozenset = frozenset(),
+    hold: Optional[Callable[[], ContextManager]] = None,
 ) -> LandOutcome:
     """Write `writes`, remove `deletions`, and (if `commit`) commit exactly those paths.
 
     Raises `DestDirtyError` before any write when a surviving path's worktree bytes differ
     from HEAD -- except a path in `derived`, which only the publish writes: its worktree
-    drift is a prior round's uncommitted output, never a hand edit. A lost CAS race or any failure after the first write restores the worktree
+    drift is a prior round's uncommitted output, never a hand edit. `hold()`, when given, is entered after
+    every write is staged and spans only the swap into the worktree (publish's engine quiesce window). A lost CAS race or any failure after the first write restores the worktree
     and re-raises. Returns `commit_sha=None` when nothing differs from HEAD or `commit` is False.
     """
     root = Path(dest_repo_root)
@@ -322,25 +325,26 @@ def land_diff(
     try:
         for rel in order + ([_STAMP] if _STAMP in todo else []):
             staged[rel] = _stage(root / rel, todo[rel].data, todo[rel].mode)
-        raised = guarded and _raise_marker(root)
-        try:
-            for rel in order:
-                touched.append(rel)
-                _swap(staged[rel], root / rel)
-            for rel in dels:
-                touched.append(rel)
-                (root / rel).unlink(missing_ok=True)
-                _prune_empty_parents(root, root / rel)
-            remoded = _converge_unchanged(root, by_rel, unchanged, head)
-            if _STAMP in todo:
-                touched.append(_STAMP)
-                _swap(staged[_STAMP], root / _STAMP)
-        except BaseException:
-            _restore(root, common, touched, head)
-            raise
-        finally:
-            if raised:
-                _landing.end_swap(root)
+        with (hold() if hold is not None else contextlib.nullcontext()):
+            raised = guarded and _raise_marker(root)
+            try:
+                for rel in order:
+                    touched.append(rel)
+                    _swap(staged[rel], root / rel)
+                for rel in dels:
+                    touched.append(rel)
+                    (root / rel).unlink(missing_ok=True)
+                    _prune_empty_parents(root, root / rel)
+                remoded = _converge_unchanged(root, by_rel, unchanged, head)
+                if _STAMP in todo:
+                    touched.append(_STAMP)
+                    _swap(staged[_STAMP], root / _STAMP)
+            except BaseException:
+                _restore(root, common, touched, head)
+                raise
+            finally:
+                if raised:
+                    _landing.end_swap(root)
         if commit:
             try:
                 sha = _gcommit.commit_paths(

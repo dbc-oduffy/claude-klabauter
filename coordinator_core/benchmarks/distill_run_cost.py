@@ -6,8 +6,8 @@ prices it with `project_run_cost`. Also writes a fates fixture (one synthetic fa
 file) and the disposal manifest computed from it, so before/after runs can compare the
 manifest sha and the scoped-file-set sha. Exit 0 always: this measures, it does not gate.
 
-Token proxy is bytes/4 for load and scan; synthesis tokens, agents and minutes are modelled per run
-and per scanned file. The guide term is an upper bound (every listed guide is opened).
+Token proxy is bytes/4 for load and scan; synthesis tokens, agents and minutes are modelled as a
+fixed relay term plus a per-topic rate. The guide term is an upper bound (every listed guide is opened).
 
 Usage: python coordinator_core/benchmarks/distill_run_cost.py [--repo PATH] [--out-dir PATH] [--keep]
 """

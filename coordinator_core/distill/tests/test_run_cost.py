@@ -103,19 +103,39 @@ def test_slug_shards_add_load_dispatches(tmp_path):
     assert shards > 1
 
 
-def test_synthesis_phase_is_priced_from_the_scoped_file_count(tmp_path):
-    from coordinator_core.ops.distill_scope import synthesis_cost
+def test_synthesis_phase_is_priced_from_topics(tmp_path):
+    from coordinator_core.ops.distill_scope import projected_topics, synthesis_cost
 
     one = project_run_cost(_payload([["a.md"]], {}), tmp_path)
     many = project_run_cost(_payload([[f"f{i}.md" for i in range(44)]], {}), tmp_path)
-    per = synthesis_cost(44)
+    per = synthesis_cost(projected_topics(44))
 
-    assert one["dispatches_by_phase"]["synthesis"] == synthesis_cost(1).agents > 0
+    assert one["dispatches_by_phase"]["synthesis"] == schema.SYNTHESIS_FIXED_AGENTS + synthesis_cost(1).agents
     assert many["dispatches_by_phase"]["synthesis"] == schema.SYNTHESIS_FIXED_AGENTS + per.agents
     assert many["synthesis_tokens"] == schema.SYNTHESIS_FIXED_TOKENS + per.tokens
     assert many["synthesis_minutes"] == schema.SYNTHESIS_FIXED_MINUTES + per.minutes
-    assert many["synthesis_tokens"] > one["synthesis_tokens"]
     assert "synthesis" not in many["input_bytes_by_phase"]
+
+    topical = project_run_cost(
+        _payload([[f"f{i}.md" for i in range(44)]], {}, {1: {"topic": "t1"}}), tmp_path
+    )
+    assert topical["synthesis_tokens"] == schema.SYNTHESIS_FIXED_TOKENS + synthesis_cost(1).tokens
+
+
+def test_projection_is_the_shared_scope_projection_over_the_measured_shape(tmp_path):
+    from coordinator_core.ops.distill_scope import projected_cost, projected_topics, run_fixed_cost
+
+    guides = {"g1": "docs/wiki/g1.md"}
+    _write(tmp_path, "a.md", 4_000)
+    _write(tmp_path, "b.md", 8_000)
+    _write(tmp_path, "docs/wiki/g1.md", 2_000)
+    cost = project_run_cost(_payload([["a.md"], ["b.md"]], guides), tmp_path)
+
+    shared = projected_cost(
+        run_fixed_cost(guides), topics=projected_topics(2), batches=2, scan_bytes=12_000 + 2 * 2_000
+    )
+    assert cost["projected"] == {"agents": shared.agents, "tokens": shared.tokens, "minutes": shared.minutes}
+    assert cost["projected"]["agents"] >= sum(cost["dispatches_by_phase"].values())
 
 
 def test_bench_bar_counts_synthesis_tokens_and_minutes(tmp_path, monkeypatch):

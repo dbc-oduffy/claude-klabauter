@@ -1349,9 +1349,17 @@ def grok_rules_path():
 
 def grok_present():
     """True when grok is on PATH or its home directory ($GROK_HOME, default ~/.grok) exists."""
-    on_path = any((Path(d) / n).is_file() for d in os.environ.get("PATH", "").split(os.pathsep) if d
+    # Trap: Path.is_file() swallows only not-found errors; an unreadable PATH entry (EACCES on /usr/local/bin/grok
+    # on the Mini) raises and aborted the install, so every probe reads an OSError as absent.
+    def _is(probe):
+        try:
+            return probe()
+        except OSError:
+            return False
+
+    on_path = any(_is((Path(d) / n).is_file) for d in os.environ.get("PATH", "").split(os.pathsep) if d
                   for n in ("grok", "grok.exe", "grok.cmd"))
-    return on_path or grok_config_path().parent.is_dir()
+    return on_path or _is(grok_config_path().parent.is_dir)
 
 
 def grok_hooks_path():
