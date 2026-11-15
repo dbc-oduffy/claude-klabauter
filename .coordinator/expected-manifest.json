@@ -2507,8 +2507,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "e3e04d948a09d0010d3e8266d37354c12677cb2d",
-    "coordinator_core/_engine_stamp": "3b2e0a6a87b871326140dc2b224aef5967a3b3e5",
+    "coordinator_core/_engine_published_at": "f4c414450b39f8789cf981ccb44429ac0d644791",
+    "coordinator_core/_engine_stamp": "638a3193ae65e4cd3dca51211eb16165be70b772",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -7251,7 +7251,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_landing_test_gate_tests_run.py": "11f76e4df0abe2a9a59cf9e8ae82bf18df4bcf62",
     "coordinator_core/ops/dispatch_emit/tests/test_landing_withholds_live_sibling_declared_hunks.py": "f5814bea2470a45e364bec608af945ca02038ef3",
     "coordinator_core/ops/dispatch_emit/tests/test_lanes.py": "656f2aaa56ff395b174b8f4d14560d2910352d85",
-    "coordinator_core/ops/dispatch_emit/tests/test_late_revise_row_judged_e2e.py": "a725ade939f4d1f5d98bf9d48e42fe15568b2693",
+    "coordinator_core/ops/dispatch_emit/tests/test_late_revise_row_judged_e2e.py": "82d5015cf889c1329a0399aad1477d22eb44e906",
     "coordinator_core/ops/dispatch_emit/tests/test_late_rows.py": "bfba488a53c73d13a74ee055983374924292297a",
     "coordinator_core/ops/dispatch_emit/tests/test_launcher_child_chain_carries_path.py": "33db0a13a6ee93480fd4f3cdd57429d15cecd384",
     "coordinator_core/ops/dispatch_emit/tests/test_launcher_child_m_plus_chains_incident.py": "e77fa39c8a8f0bc5168111e01060e4cd47560f58",
@@ -12492,5 +12492,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "8823a7359666c7258c853bbfd19d90ccbcd3ad89"
+  "source_head": "227a14c69e1948d59f779e868553700d696db229"
 }

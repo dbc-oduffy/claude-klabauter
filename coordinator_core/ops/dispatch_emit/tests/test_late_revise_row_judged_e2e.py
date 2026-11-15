@@ -21,6 +21,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put
+from coordinator_core.ops.dispatch_emit import live_run_index
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import repo as _bare_repo
 from coordinator_core.ops.dispatch_emit.tests.test_plain_resume_refire_stages_current_rows import (
     PLAN_REL,
@@ -196,6 +197,9 @@ def test_a_row_revised_after_verify_lands_on_refire_and_the_refire_stages_both_r
     assert "next stage claims" not in json.dumps(out)
     assert r2 not in manifest["ledger_item_ids"] and r3 not in manifest["ledger_item_ids"]
 
+    # The refire follows the first run's end, which drops its staged footprint; while it lived,
+    # the refire would rightly park behind it at stage-wait.
+    live_run_index.remove(repo, RUN)
     refire = ask_gate._handler({"sizing_path": REL, "run_id": "refire1", "writes": ["pkg/C1.py"]}, repo)
     assert refire["halt"] is None, refire
     (repo / "scratch" / "warp" / "refire1.workflow.mjs").write_text("// run script without an inline slot\n", encoding="utf-8")
