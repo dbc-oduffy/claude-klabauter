@@ -246,7 +246,7 @@ def channel(box, *, key, host, home=None, extra=(), direct=False, mux_options=No
     key the C1 guard calls real."""
     if direct or not (IS_WIN if win is None else win):
         if mux_options is None:
-            mux_options = lambda h: _roster().mux_options(h)
+            mux_options = lambda h: _roster().mux_options(h, key)
         return DirectChannel(box, key, host, extra, mux_options)
     return BrokerChannel(box, key, host, home or _roster().settings_home(), extra, spawn_broker)
 

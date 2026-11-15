@@ -365,7 +365,7 @@ def test_fetch_roster_dials_the_lan_alias_by_default_and_the_tunnel_when_the_lan
 
     monkeypatch.setattr(roster.subprocess, "run", run)
     monkeypatch.setattr(roster, "_is_win", lambda platform=None: False)
-    monkeypatch.setattr(roster, "mux_options", lambda remote: [])
+    monkeypatch.setattr(roster, "mux_options", lambda remote, key=None: [])
     monkeypatch.setattr(roster, "lan_reachable", lambda alias: True)
     roster.fetch_roster("lan", "k", "wg")
     assert "lan" in argvs[-1] and "wg" not in argvs[-1]
@@ -1223,7 +1223,7 @@ def test_publish_targets_ship_every_unimatrix_script_and_test():
 def test_roster_failure_names_the_ssh_reason(monkeypatch):
     roster = load("roster")
     monkeypatch.setattr(roster, "_is_win", lambda platform=None: False)
-    monkeypatch.setattr(roster, "mux_options", lambda remote: [])
+    monkeypatch.setattr(roster, "mux_options", lambda remote, key=None: [])
     monkeypatch.setattr(roster, "lan_reachable", lambda alias: True)
     monkeypatch.setattr(roster.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(
         argv, 255, b"", b"debug\nssh: connect to host lan port 22: Operation timed out\n"))
@@ -1258,7 +1258,7 @@ def test_a_sigterm_stop_is_logged_and_exits_nonzero(tmp_path, name):
 def test_fetch_roster_retries_one_transient_stall_but_not_a_persistent_failure(monkeypatch):
     roster = load("roster")
     monkeypatch.setattr(roster, "_is_win", lambda platform=None: False)
-    monkeypatch.setattr(roster, "mux_options", lambda remote: [])
+    monkeypatch.setattr(roster, "mux_options", lambda remote, key=None: [])
     monkeypatch.setattr(roster, "lan_reachable", lambda alias: True)
     calls = []
 

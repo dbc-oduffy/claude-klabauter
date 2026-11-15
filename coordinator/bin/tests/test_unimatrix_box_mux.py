@@ -243,9 +243,20 @@ def test_the_roster_poll_dials_by_name_with_the_host_key_alias(monkeypatch):
     monkeypatch.setattr(roster.subprocess, "run", lambda a, **kw: seen.append(a) or subprocess.CompletedProcess(a, 0, b"", b""))
     monkeypatch.setattr(roster, "ensure_key_loaded", lambda *a, **k: None)
     monkeypatch.setattr(roster, "_is_win", lambda platform=None: False)
-    monkeypatch.setattr(roster, "mux_options", lambda remote: [])
+    monkeypatch.setattr(roster, "mux_options", lambda remote, key=None: [])
     roster._roster_once("example-fleet-pro", "k", None)
     assert "HostKeyAlias=example-fleet-pro" in seen[0] and seen[0][-2:] == ["example-fleet-pro", "roster"]
+
+
+def test_each_identity_key_gets_its_own_control_master(tmp_path, monkeypatch):
+    # Machine-b 2026-11-15: the roster poll's master (roster key) carried every bridge send-session,
+    # so the far relay answered with a roster dump and no cross-box message landed.
+    roster = _load(BIN / "unimatrix-roster.py", "unimatrix_roster_ctl_test")
+    monkeypatch.setattr(roster, "_is_win", lambda platform=None: False)
+    monkeypatch.setattr(roster, "settings_home", lambda: tmp_path)
+    poll, send = roster.mux_options("machine-a-lan", "roster-key"), roster.mux_options("machine-a-lan", "send-key")
+    assert [o for o in poll if o.startswith("ControlPath=")] != [o for o in send if o.startswith("ControlPath=")]
+    assert roster.control_path("machine-a-lan", key="send-key") == roster.control_path("machine-a-lan", key="send-key")
 
 
 def _inbox_client():

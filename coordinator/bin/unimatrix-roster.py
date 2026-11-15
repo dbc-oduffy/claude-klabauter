@@ -822,17 +822,22 @@ def _now():
     return time.monotonic()
 
 
-def control_path(remote, home=None):
-    """Mux socket path for far `remote`, under <settings home>/unimatrix/ctl; short, since unix socket paths cap near 104 bytes."""
-    tag = hashlib.sha1(remote.encode("utf-8")).hexdigest()[:10]
+def control_path(remote, home=None, key=None):
+    """Mux socket path for far `remote` and identity `key`, under <settings home>/unimatrix/ctl; short, since
+    unix socket paths cap near 104 bytes.
+
+    Trap: ssh ignores `-i` when a master already exists at ControlPath, so a path shared across keys sends
+    every caller through the first caller's key, and the far authorized_keys line for that key picks the
+    command (a roster key answered `send-session` with a roster dump)."""
+    tag = hashlib.sha1(f"{remote}\0{key or ''}".encode("utf-8")).hexdigest()[:10]
     return (Path(home) if home else settings_home()) / "unimatrix" / "ctl" / f"r-{tag}"
 
 
-def mux_options(remote):
+def mux_options(remote, key=None):
     """ssh options that reuse one master connection across poll ticks; empty off POSIX or when the socket dir cannot be made."""
     if _is_win():
         return []
-    path = control_path(remote)
+    path = control_path(remote, key=key)
     try:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     except OSError:
@@ -854,7 +859,7 @@ def _roster_once(remote, key, tunnel_remote):
     ensure_key_loaded(key)
     remote = pick_remote(remote, tunnel_remote)
     # Direct: the poll keeps its own Windows redial cap (`_capped_fetch`); POSIX shares the box's ControlMaster.
-    r = _box_mux().for_remote(remote, key=key, direct=True, mux_options=lambda h: mux_options(h),
+    r = _box_mux().for_remote(remote, key=key, direct=True, mux_options=lambda h: mux_options(h, key),
                               extra=["-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5",
                                      "-o", "ServerAliveCountMax=2"]).run("roster", timeout=20)
     if r.returncode:
