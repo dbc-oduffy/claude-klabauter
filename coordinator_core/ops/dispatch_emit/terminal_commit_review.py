@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Sequence, Optional
+from typing import Optional, Sequence
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.ask_contract import RESUMED_RUN_ID_KEY
 from coordinator_core.ops.dispatch_emit.commit_request import CommitRequest
@@ -526,15 +526,114 @@ def _unverifiable_standing(worktree_root: Path, inline_review: object) -> list:
     return out
 
 
-def review_owed_refusal(worktree_root: Path, inline_review: object) -> Optional[str]:
+def _prep_judged_shas(worktree_root: Path, inline_review: object) -> dict:
+    """``judged_sha256`` of the ``review.prep`` sidecar the run's ``inline_review`` names
+    (``prep_sidecar``): the sha of every slice file as the reviewers read it. Empty when unnamed,
+    unreadable, or written before the prep recorded pins."""
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+    from coordinator_core.ops.review_prep import VERDICT_JUDGED_KEY
+
+    rel = inline_review.get("prep_sidecar") if isinstance(inline_review, dict) else None
+    if not (isinstance(rel, str) and rel):
+        return {}
+    try:
+        split = split_frontmatter((worktree_root / rel).read_text(encoding="utf-8"))
+        fm = _yaml_load(split.fm_text) if split else None
+    except Exception:  # noqa: BLE001 -- an unreadable prep sidecar pins nothing
+        return {}
+    got = fm.get(VERDICT_JUDGED_KEY) if isinstance(fm, dict) else None
+    return {k.replace("\\", "/"): v for k, v in got.items() if isinstance(k, str) and isinstance(v, str) and v} if isinstance(got, dict) else {}
+
+
+def verdict_judged_shas(worktree_root: Path, inline_review: object) -> dict:
+    """``{path: [sha256, ...]}`` the review wave pinned: the prep's ``judged_sha256`` of every slice
+    file (the producer: ``review_prep.slice_pins``), less the files a wave sidecar's applied ledger
+    rows rewrote, plus each sidecar's own frontmatter ``judged_sha256`` (a reviewer's post-fix bytes).
+    Empty when no wave sidecar is readable or nothing pins, so an unpinned verdict is never refused."""
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+    from coordinator_core.ops.review_prep import VERDICT_JUDGED_KEY
+
+    listed = inline_review.get("wave_sidecar_paths") if isinstance(inline_review, dict) else None
+    out: dict = {}
+    fixed: set = set()
+    read_any = False
+    for w in listed if isinstance(listed, list) else []:
+        if not (isinstance(w, str) and w):
+            continue
+        try:
+            text = (worktree_root / w).read_text(encoding="utf-8")
+            split = split_frontmatter(text)
+            fm = _yaml_load(split.fm_text) if split else None
+        except Exception:  # noqa: BLE001 -- an unreadable or malformed sidecar pins nothing
+            continue
+        read_any = True
+        fixed.update(f.replace("\\", "/") for f, _ in _applied_fix_rows(text))
+        own = fm.get(VERDICT_JUDGED_KEY) if isinstance(fm, dict) else None
+        for p, sha in (own.items() if isinstance(own, dict) else ()):
+            if isinstance(p, str) and isinstance(sha, str) and sha:
+                out.setdefault(p.replace("\\", "/"), []).append(sha)
+    if read_any:
+        for p, sha in _prep_judged_shas(worktree_root, inline_review).items():
+            if p not in fixed:
+                out.setdefault(p, []).append(sha)
+    return out
+
+
+def verdict_pin_mismatches(worktree_root: Path, inline_review: object, within: Optional[Sequence[str]] = None) -> list:
+    """Sorted paths (of ``within``, else every pinned path) whose bytes match no sha the verdict
+    pinned: the files that owe re-review. Empty when the verdict pins nothing."""
+    from coordinator_core.ops.review_prep import judged_mismatches
+
+    judged = verdict_judged_shas(worktree_root, inline_review)
+    return judged_mismatches(worktree_root, judged, list(judged) if within is None else [q for q in (str(p).replace("\\", "/") for p in within) if q in judged])
+
+
+def verdict_pin_refusal(mismatched: Sequence[str]) -> str:
+    """The refusal text for ``mismatched`` paths: one fact, then the files owed."""
+    names = ", ".join(mismatched[:8]) + (" ..." if len(mismatched) > 8 else "")
+    return f"review verdict judged other bytes than the tree carries for {len(mismatched)} file(s); re-review only: {names}"
+
+
+def _real_pin_mismatches(worktree_root: Path, inline_review: object, within: Optional[Sequence[str]]) -> list:
+    """``verdict_pin_mismatches`` less the comment-only edits the land arm tolerates: a path whose
+    pre-review snapshot proves the drift comment-only is no different reviewed product."""
+    stale = verdict_pin_mismatches(worktree_root, inline_review, within)
+    if not stale or not isinstance(inline_review, dict):
+        return stale
+    from coordinator_core.ops.dispatch_emit.comment_only_drift import tolerated_drift
+    from coordinator_core.session import touch_record
+
+    judged = verdict_judged_shas(worktree_root, inline_review)
+    pending = [
+        {"path": p, "basis": "content-sha256", "expected": judged[p][0],
+         "actual": touch_record.compute_content_hash(worktree_root / p)}
+        for p in stale
+        if judged.get(p) and len(judged[p]) == 1
+    ]
+    if not pending:
+        return stale
+    _, real = tolerated_drift(
+        worktree_root, inline_review.get("prep_sidecar"), pending,
+        untrusted_paths=list(within) if within is not None else [],
+    )
+    covered = {d["path"] for d in pending}
+    return [p for p in stale if p in real or p not in covered]
+
+
+def review_owed_refusal(
+    worktree_root: Path, inline_review: object, within: Optional[Sequence[str]] = None,
+) -> Optional[str]:
     """The refusal reason when a ``REQUIRES_CHANGES`` verdict is unresolved, else ``None``: a
     reviewer's findings not all in the landed tree, or a standing verdict no ledger can resolve
-    (``_unverifiable_standing``). Names what is owed."""
+    (``_unverifiable_standing``). Names what is owed. With nothing owed, a verdict whose pinned
+    ``judged_sha256`` no longer matches the tree refuses, naming only the changed files (of
+    ``within`` when given: the paths this commit carries)."""
     derived = review_applied_in_tree(worktree_root, inline_review)
     owed = list(derived[1]) if derived is not None else []
     owed.extend(_unverifiable_standing(worktree_root, inline_review))
     if not owed:
-        return None
+        stale = _real_pin_mismatches(worktree_root, inline_review, within)
+        return verdict_pin_refusal(stale) if stale else None
     applied = derived[0] if derived is not None else 0
     return (
         f"review verdict {REQUIRES_CHANGES} stands with {len(owed)} finding(s) not in the landed tree "

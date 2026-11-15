@@ -4759,6 +4759,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "research.verify_scout_inventory_completeness": OpClass.COMPUTE_ONLY,
     "session.resolve_chain_terminal_disposition": OpClass.COMPUTE_ONLY,
     "update_docs.probe_fresh_repo_noop": OpClass.COMPUTE_ONLY,
+    "update_docs.atlas_mechanical_report": OpClass.COMPUTE_ONLY,
     "workday.surface_auto_push_failure_stats": OpClass.COMPUTE_ONLY,
     "ci.run_pip_audit": OpClass.COMPUTE_ONLY,
     "ci.run_semgrep_scan": OpClass.COMPUTE_ONLY,

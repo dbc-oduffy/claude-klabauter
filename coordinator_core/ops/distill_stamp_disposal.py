@@ -131,8 +131,8 @@ def load_disposal_manifest(manifest_path: Path) -> dict[str, Any]:
     if not manifest_path.is_file():
         raise DisposalStampError(
             f"disposal-manifest not found on disk: {manifest_path} — "
-            "distill.stamp_disposal stamps an EXISTING distill.assemble_disposal_manifest "
-            "output only; it never creates one."
+            "run distill.assemble_disposal_manifest for this run_id first; "
+            "distill.stamp_disposal and distill.apply_disposal read its output and never create one."
         )
     try:
         text = manifest_path.read_text(encoding="utf-8")
@@ -315,7 +315,10 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
 
     run_id = params.get("run_id")
     if not run_id:
-        raise ValueError("distill.stamp_disposal requires an explicit run_id param.")
+        raise ValueError(
+            "distill.stamp_disposal requires a 'run_id' param: the run_id of the "
+            "distill.assemble_disposal_manifest result (the run distill.scope opened)"
+        )
 
     by = params.get("by")
     at = params.get("at")

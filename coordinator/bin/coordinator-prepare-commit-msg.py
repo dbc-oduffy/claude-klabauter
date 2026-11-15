@@ -426,7 +426,7 @@ def _resolve_deliverable_id_at(git_dir: str, session_id: str) -> str:
 
 def _resolve_staged_paths(timeout: float = 10.0) -> "list | None":
     """Staged paths via ``commit_resolution.names`` (one shared
-    ``git diff --cached`` per commit across every hook; no git dir means no
+    ``git diff-index --cached`` per commit across every hook; no git dir means no
     repo, so ``[]``). Derived here because this hook, unlike
     ``git_native.commit_scoped()``'s callers, receives no pathspec argument
     of its own (git invokes ``prepare-commit-msg`` with only the
@@ -436,9 +436,8 @@ def _resolve_staged_paths(timeout: float = 10.0) -> "list | None":
 
     Never raises. A genuinely empty stage returns ``[]``; a derivation
     failure (unresolvable claude-klabauter checkout, git unavailable, spawn error,
-    timeout, non-zero exit) returns ``None``, so the caller can tell "nothing
-    staged" from "could not tell" and refuse a commit whose trailer would
-    otherwise be lost silently.
+    timeout, non-zero exit) returns ``None`` after one stderr advisory; the
+    commit proceeds without a tier-0 Deliverable-Id.
 
     This function does not itself import ``coordinator_core`` — see
     ``_no_console_creationflags()``'s docstring for why the console-
@@ -451,8 +450,7 @@ def _resolve_staged_paths(timeout: float = 10.0) -> "list | None":
     off a bare ``sys.path`` in a real hook invocation, and a resolution
     failure here is reported once rather than surfacing separately at each
     downstream tier that would otherwise re-attempt the same bootstrap. A
-    resolution failure returns ``None`` (the caller refuses the commit when no
-    other tier supplies a Deliverable-Id) and is noted on stderr,
+    resolution failure returns ``None`` and is noted on stderr,
     matching the visible-not-silent convention this file already uses for
     tier-0 ambiguity (``_resolve_deliverable_id``) — a silently empty tier-0
     lookup here previously masqueraded as "nothing staged" indefinitely.
@@ -476,32 +474,10 @@ def _resolve_staged_paths(timeout: float = 10.0) -> "list | None":
     except Exception as exc:
         sys.stderr.write(
             "coordinator-prepare-commit-msg: staged-path derivation failed "
-            f"({exc}); tier-0 Deliverable-Id resolution skipped for this "
-            "commit.\n"
+            f"({exc}); commit proceeds without a path-derived Deliverable-Id. "
+            "Add a `Deliverable-Id:` trailer to set one.\n"
         )
         return None
-
-
-class _StagedPathsLost(Exception):
-    """Staged-path derivation failed and no later tier resolved a
-    Deliverable-Id: the commit would land trailerless without anyone knowing
-    whether tier 0 would have found one."""
-
-
-_STAGED_PATHS_LOST_MESSAGE = (
-    "coordinator-prepare-commit-msg: REFUSING this commit -- the staged-path "
-    "derivation failed (see above), so no Deliverable-Id could be resolved and "
-    "the commit would land without one. Remedy: add a `Deliverable-Id: <id>` "
-    "trailer to the commit message by hand (the hook then skips the "
-    "derivation) and re-run the commit.\n"
-)
-
-
-def _raise_if_trailer_lost(paths: "list | None", trailer_args: list) -> None:
-    if paths is None and not any(
-        str(arg).startswith("Deliverable-Id:") for arg in trailer_args
-    ):
-        raise _StagedPathsLost()
 
 
 def _ensure_claude_klabauter_on_syspath() -> str:
@@ -1016,13 +992,9 @@ def main(argv: list) -> int:
     if not _UUID_RE.fullmatch(session_id or ""):
         session_id = ""
 
-    try:
-        trailer_args = _engine_trailer_args(commit_msg_file, git_dir)
-        if trailer_args is None:
-            trailer_args = _mirrored_trailer_args(commit_msg_file, git_dir, session_id)
-    except _StagedPathsLost:
-        sys.stderr.write(_STAGED_PATHS_LOST_MESSAGE)
-        return 1
+    trailer_args = _engine_trailer_args(commit_msg_file, git_dir)
+    if trailer_args is None:
+        trailer_args = _mirrored_trailer_args(commit_msg_file, git_dir, session_id)
     if not trailer_args:
         return 0
 
@@ -1051,10 +1023,6 @@ def _engine_trailer_args(commit_msg_file: str, git_dir: str) -> "list | None":
         has_deliverable = _has_trailer_line(commit_msg_file, "Deliverable-Id:")
         paths = None if has_deliverable else _resolve_staged_paths()
         trailer_args = compute_missing_trailer_args(commit_msg_file, os.getcwd(), paths)
-        if not has_deliverable:
-            _raise_if_trailer_lost(paths, trailer_args)
-    except _StagedPathsLost:
-        raise
     except Exception:
         return None
     return trailer_args + _operator_trailer_args(commit_msg_file, git_dir)
@@ -1088,8 +1056,6 @@ def _mirrored_trailer_args(commit_msg_file: str, git_dir: str, session_id: str) 
         deliverable_id = _resolve_deliverable_id(git_dir, session_id, staged_paths)
         if deliverable_id:
             trailer_args += ["--trailer", f"Deliverable-Id: {deliverable_id}"]
-        elif staged_paths is None:
-            raise _StagedPathsLost()
     provider = (os.environ.get("COORDINATOR_AGENT_PROVIDER") or os.environ.get("COORDINATOR_AGENT_VENDOR") or "").strip().lower()
     if not provider:
         provider = "codex" if os.environ.get("CODEX_THREAD_ID") else "claude"

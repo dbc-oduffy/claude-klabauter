@@ -572,9 +572,12 @@ def _agent(
 #: `model: opus`, so `block_ungranted_opus_subagent` admits it and `enforce_agent_model_pin`
 #: sees an equal model and a cheaper-or-equal effort.
 _MECHANICAL_EFFORT = "low"
-#: The gate legs: general-purpose at haiku, until a type that admits their multi-act prompt exists.
+#: Types only the rulings alias (`_RULINGS_AGENT_TYPE`); no gate leg uses it.
 _MECHANICAL_AGENT_TYPE = "general-purpose"
 _MECHANICAL_MODEL = "haiku"
+#: Invariant: the gate leg must hold a shell (Bash in the definition's pinned `tools:`); general-purpose pins none.
+#: Its model must equal `emit._AGENT_MODELS` for this type (haiku).
+_GATE_AGENT_TYPE = _emit._TEST_AGENT_TYPE
 #: A floor leg whose whole prompt is one shell command and a relay: a Bash-only type with no Read or Write.
 _OP_RELAY_AGENT_TYPE = "coordinator:op-relay"
 _PLAN_AUTHOR_AGENT_TYPE = "coordinator:plan-author"
@@ -4249,6 +4252,7 @@ def compose_ask_script(
     judged = judge_brief is not None
 
     b: list[str] = []
+    b.append("  if (typeof log === 'undefined') globalThis.log = () => {};")
     b.append(f"  const REPO_ROOT = {_lit(repo_root)};")
     b.append(f"  const _runId = {_lit(run_id)};")
     b.append(f"  const _SESSION_ID = {_lit(session_id or '')};")
@@ -4412,7 +4416,7 @@ def compose_ask_script(
             *(_chain_emit_act(_chain_emit_params("_sizingRel")) if stage_act else ()),
         )
         return _agent(
-            gate_prompt, label=label, phase=phase_title, agent_type=_MECHANICAL_AGENT_TYPE,
+            gate_prompt, label=label, phase=phase_title, agent_type=_GATE_AGENT_TYPE,
             agent_model=_MECHANICAL_MODEL,
             schema=_GATE_STAGED_SCHEMA if stage_act and fold_stage else _GATE_SCHEMA,
             effort=_MECHANICAL_EFFORT, run_id=run_id,
@@ -5817,9 +5821,10 @@ def compose_ask_script(
         f"  if (_parked && !_halted) _halted = _parked ==={_lit(_STAGE_WAIT_PARKED)} ? {{ halted: {_lit(HALT_PARKED)}, "
         "reason: 'parked: stage-wait: writes overlap live run ' + (_parkedWaiting?.blockers ?? []).join(', ') "
         "+ '; parked until it lands', "
-        "plan: _planRel, sizing: _sizingRel, run_id: _runId, next_action: 'Refire engine-ask with resume_run_id ' + _runId "
-        "+ ' once ' + ((_parkedWaiting?.blockers ?? []).join(', ') || 'the blocking run') + ' lands'"
-        f" + (_parkedWaiting?.deadline ? ' (deadline ' + _parkedWaiting.deadline + ')' : '') + '; the stage re-runs then.' "
+        "plan: _planRel, sizing: _sizingRel, run_id: _runId, next_action: 'Once ' "
+        "+ ((_parkedWaiting?.blockers ?? []).join(', ') || 'the blocking run') + ' lands'"
+        f" + (_parkedWaiting?.deadline ? ' (deadline ' + _parkedWaiting.deadline + ')' : '') + ', call ' + {_refire_js(sizing_rel)} "
+        "+ ' once: this run is retired and its token is not resumable.' "
         "+ ((_parkedWaiting?.blockers ?? []).length ? ' A blocker known dead: ' + (_parkedWaiting.blockers).slice().sort()"
         ".map(function (b) { return 'dispatch.release_run_token {\"run_id\": \"' + b + '\"}'; }).join('; ') + '.' : '') "
         f"}} : {{ halted: {_lit(HALT_PARKED)}, "
@@ -6120,11 +6125,12 @@ def compose_ask_script(
             diff_docs_prompt = _cat(
                 f"{head}\n\n{anchor}\n\n",
                 "Docs-check this run's diff: verify every Unreal Engine API, class, module and behavior claim in "
-                f"the changes since {run_base_sha or 'the run base'} to ",
-                "js:_reviewPaths.join(', ')",
-                ", against the engine docs and source (example-retrieval-repo engine tools), and apply each correction IN PLACE "
+                f"the changes since {run_base_sha or 'the run base'} to the review paths listed after this brief, "
+                "against the engine docs and source (example-retrieval-repo engine tools), and apply each correction IN PLACE "
                 "with Edit. Return `verdict` ok or corrected."
                 " If example-retrieval-repo answered but some results were degraded, return `verdict` degraded with `degraded_bands` naming them; return rag_down only when example-retrieval-repo did not answer at all.",
+                # Parenthesised so the stager keeps the runtime paths out of the staged static run.
+                "js:('\\n\\nReview paths: ' + _reviewPaths.join(', ') + '.')",
                 *_docs_gate_clause(docs_label, repo_root),
             )
             return _agent(
@@ -7719,7 +7725,7 @@ def _append_docs_and_commit(
         "already_landed: _commit?.already_landed ?? null, "
         "error: _commit?.error ?? null, blob_drift: _commit?.blob_drift ?? null, "
         "reason: " + _COMMIT_HALT_REASON_JS + ", "
-        "plan: _planRel ?? null, sizing: _sizingRel ?? null }; " + _NO_CHANGE_HALT_JS + _hijack_halt_js("_commit") +
+        "plan: _planRel ?? null, sizing: _sizingRel ?? null, run_id: _runId }; " + _NO_CHANGE_HALT_JS + _hijack_halt_js("_commit") +
         "if (_incompleteChunks.length === 0) { _nextAction.params.halted = _halted; _reviseAndRefire = null; } "
         f"else {{ _nextAction = {REVISE_NEXT_ACTION_JS}; _reviseAndRefire = _mkRevise(); }} }}"
     )
@@ -7756,7 +7762,8 @@ def roadmap_commit_lines(
         "    if (!_halted && !(_commit && _commit.committed === true)) { _halted = { halted: 'commit', "
         "refused: _commit?.refused ?? null, error: _commit?.error ?? null, "
         "reason: " + _COMMIT_HALT_REASON_JS + ", "
-        "blob_drift: _commit?.blob_drift ?? null, sizing: _sizingRel, run_id: _runId }; " + _NO_CHANGE_HALT_JS + _hijack_halt_js("_commit") + "}",
+        "blob_drift: _commit?.blob_drift ?? null, plan: (typeof _planRel === 'undefined' ? null : _planRel) ?? null, "
+        "sizing: _sizingRel, run_id: _runId }; " + _NO_CHANGE_HALT_JS + _hijack_halt_js("_commit") + "}",
         "  }",
         f"  else if (!_halted && {_NO_RUN_TOKEN_COMMIT_SKIPPED_JS}",
     ]

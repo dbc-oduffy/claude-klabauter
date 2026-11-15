@@ -282,7 +282,7 @@ def release_scope():
         return
     from coordinator_core.git import call_io_scope
 
-    token = _SCOPE.set({"memo": {}, "blobs": None, "specs": set(), "prefetched": False, "seen_root": None, "seen": {}, "scope_seen": {}, "interest": None})
+    token = _SCOPE.set({"memo": {}, "blobs": None, "specs": set(), "prefetched": False, "seen_root": None, "seen": {}, "scope_seen": {}, "interest": None, "stats": {}})
     try:
         if call_io_scope.scope_open():
             yield _SCOPE.get()
@@ -291,6 +291,20 @@ def release_scope():
                 yield _SCOPE.get()
     finally:
         _SCOPE.reset(token)
+
+
+def record_literal_stat(root: Path, rel: str, st) -> None:
+    """Remember ``os.stat(root/rel)`` (None when it failed) in this release scope; no-op outside one.
+    The landing's dirty scan is the writer and refreshes every literal it scans."""
+    state = _SCOPE.get()
+    if state is not None:
+        state["stats"][(str(root), rel)] = st
+
+
+def literal_known_absent(root: Path, rel: str) -> bool:
+    """True only when this scope's dirty scan stat'd ``rel`` and it was not there; an unscanned literal is unknown."""
+    state = _SCOPE.get()
+    return state is not None and state["stats"].get((str(root), rel), True) is None
 
 
 @contextlib.contextmanager
@@ -801,7 +815,7 @@ def _foreign_dirty(root: Path, record: Path, dirty: frozenset) -> frozenset:
     foreign = set()
     for path in dirty:
         want = prints.get(idx._norm(path))
-        if want is None:
+        if want is None or literal_known_absent(root, path):
             continue
         current = fingerprint(root, path)
         if current is not None and current != want:
@@ -810,15 +824,20 @@ def _foreign_dirty(root: Path, record: Path, dirty: frozenset) -> frozenset:
 
 
 def _staged_among(root: Path, paths: frozenset) -> frozenset:
-    """The subset of `paths` whose index entry differs from HEAD (staged, uncommitted): clean in the worktree
-    yet still unlanded work. One batched `git diff --cached`; a failed read holds them all."""
-    from coordinator_core.git.run import run_git
+    """The subset of `paths` whose index entry (mode or blob) differs from HEAD (staged, uncommitted): clean in the worktree
+    yet still unlanded work. In process (index parse against HEAD's tree, no git spawn); an unreadable
+    index holds them all."""
+    from coordinator_core.git import git_state
 
-    proc = run_git(["diff", "--cached", "--name-only", "-z", "--", *sorted(paths)], cwd=str(root))
-    if proc.returncode != 0:
+    try:
+        index = git_state.read_index(root)
+        head = git_state.head_blobs(root, sorted(paths))
+    except Exception:  # noqa: BLE001 -- unreadable: the hold stands
         return paths
-    staged = {x for x in proc.stdout.split(chr(0)) if x}
-    return frozenset(p for p in paths if p in staged)
+    return frozenset(
+        p for p in paths
+        if ((index[p].mode, index[p].sha) if p in index else None) != (head[p] if p in head else None)
+    )
 
 
 def _dirty_among(root: Path, held: frozenset) -> Optional[frozenset]:

@@ -126,7 +126,7 @@ def _system_gitconfig_paths_uncached() -> Tuple[Path, ...]:
         candidates.append(prefix / "etc" / "gitconfig")
         candidates.append(prefix / "mingw64" / "etc" / "gitconfig")
         candidates.append(prefix.parent / "etc" / "gitconfig")
-    candidates.append(Path("/etc/gitconfig"))
+    candidates.append(Path(Path.home().anchor) / "etc" / "gitconfig")
     seen: Set[str] = set()
     ordered: List[Path] = []
     for path in candidates:

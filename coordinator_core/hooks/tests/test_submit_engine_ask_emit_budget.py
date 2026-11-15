@@ -230,7 +230,7 @@ def test_deferred_emit_adopts_the_minted_run_id_and_refuses_another_shape(repo):
     result = mod._default_emit(params, repo)
     assert result["run_id"] == rid and Path(result["path"]).name == f"{rid}.workflow.mjs"
     with pytest.raises(ValueError, match="preminted_run_id"):
-        mod._default_emit({**params, "preminted_run_id": "ask-../escape"}, repo)
+        mod._default_emit({**params, "ask": "build another thing", "preminted_run_id": "ask-../escape"}, repo)
 
 
 def test_ask_with_a_brief_file_keeps_its_synchronous_emit(repo):
@@ -386,7 +386,13 @@ const fs = require('fs');
 const src = fs.readFileSync(process.argv[2], 'utf8').replace(/^export const meta[^\\n]*\\n/, '');
 const cfg = JSON.parse(process.argv[3]);
 const calls = [];
-const agent = async (prompt) => { calls.push({ agent: prompt }); return cfg.replies.shift(); };
+const RECEIPT_SHA = 'ab'.repeat(32);
+// The receipt-check relay answers like the real emit's `<script>.emitted.json` beside a script of the same digest.
+const agent = async (prompt) => {
+  if (/sha256sum "/.test(prompt)) return { found: true, receipt_sha256: RECEIPT_SHA, script_sha256: RECEIPT_SHA };
+  calls.push({ agent: prompt });
+  return cfg.replies.shift();
+};
 const workflow = async (o) => { calls.push({ workflow: o }); return cfg.results.shift(); };
 const run = new (Object.getPrototypeOf(async function () {}).constructor)('agent', 'workflow', src);
 run(agent, workflow).then((out) => console.log(JSON.stringify({ out, calls })));

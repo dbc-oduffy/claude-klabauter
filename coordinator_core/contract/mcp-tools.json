@@ -220,10 +220,14 @@
       "name": "baton_assemble__brief"
     },
     {
-      "description": "Measure box memory and decide whether `key` may spawn at `default_peak_gib`, reserving `register_pid` on admit.\n\nRuns `_admit_local` in the unsandboxed engine: same arithmetic, lock and reservation as an in-process\nadmit. Never waits for a slot (a held engine thread is the load the brightline forbids); a HOLD\nis returned as `admitted: false`. A host error propagates as a JSON-RPC error envelope.",
+      "description": "Measure box memory and decide whether `key` may spawn at `default_peak_gib`, reserving `register_pid` on admit.\n\nRuns `_admit_local` in the unsandboxed engine: same arithmetic, lock and reservation as an in-process\nadmit. Never waits for a slot (a held engine thread is the load the brightline forbids); a HOLD\nis returned as `admitted: false`. Optional `cores` (default 1) is the leg's declared core count;\na HOLD reading `HOLD <key>: cpu:` is the CPU axis refusing. A host error propagates as a JSON-RPC error envelope.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "cores": {
+            "minimum": 1,
+            "type": "integer"
+          },
           "default_peak_gib": {
             "exclusiveMinimum": 0,
             "type": "number"
@@ -588,7 +592,7 @@
       "name": "ceremony__update_docs_bookkeeping"
     },
     {
-      "description": "JSON-RPC \"ceremony.update_docs_worklist\" handler.\n\nParams: `ack` (bool, default false) advances the cached baseline to HEAD at the cost\nof one more git spawn; a default call never advances it, so an agent run that dies\nloses nothing. The one exception: a first call, or a cached sha git no longer knows,\nre-seeds the baseline to HEAD and reports no drift.\n\nrepo_root (injected by ipc.dispatch_message): git_common_dir of the originating\nworktree; the handler scans the main worktree.\n\nReturns {schema_version, ack_head, cache{state, entries, reread, complete},\nchanged_since_ack, decided_by_op, agent_worklist, phase_verdicts}. Writes only its own\ncache file. `decided_by_op.archived_handoffs` holds the uncapped prune/keep/indeterminate\ncounts (summing to `total`); `prune.archived_handoffs` lists the prune rows, capped.",
+      "description": "JSON-RPC \"ceremony.update_docs_worklist\" handler.\n\nParams: `ack` (bool, default false) advances the cached baseline to HEAD at the cost\nof one more git spawn; a default call never advances it, so an agent run that dies\nloses nothing. The one exception: a first call, or a cached sha git no longer knows,\nre-seeds the baseline to HEAD and reports no drift.\n\nrepo_root (injected by ipc.dispatch_message): git_common_dir of the originating\nworktree; the handler scans the main worktree.\n\nReturns {schema_version, ack_head, cache{state, entries, reread, complete},\nchanged_since_ack, decided_by_op, agent_worklist, phase_verdicts}. Writes only its own\ncache file. `decided_by_op.archived_handoffs` holds the uncapped prune/keep/indeterminate\ncounts (summing to `total`); `prune.archived_handoffs` lists the prune rows, capped;\n`archived_handoffs_pass` says whether the corpus pass ran and how many candidates it\nanswered. `decided_by_op.changelog_backfill` is the R4 daily/weekly verdict: `noop`, or\n`op` naming `changelog_ops.backfill_gaps` with the missing days and weeks; commit days\ncome from one extra `git log` spawn taken only when source drift is non-empty.",
       "inputSchema": {
         "type": "object"
       },
@@ -1749,7 +1753,7 @@
       "name": "dispatch__reemit"
     },
     {
-      "description": "JSON-RPC \"dispatch.release_halted_path\": release one path of one halted run, with a reason.\n\n``dispatch.release_halted_path``: the sanctioned per-path release of one halted run's hold.\n\nParams: ``{\"run_id\": str, \"path\": str, \"reason\": str, \"session_id\"?: str}``; ``reason`` is required\nand non-blank. Reply on success: ``{ok, run_id, path, released, reason}``; a repeat release is\n``released: false`` and echoes the FIRST recorded reason. The path moves out of the marker's\n``run_artifacts.withheld`` into ``released_paths[path] = {reason, session, at}``; ``status`` stays\n``halted`` and every other withheld path keeps holding. A path is accepted when the run withholds it or\nits ``manifest.json`` declares it in a row's ``writes``. Reads one run's marker and manifest, writes the\nmarker through the halted_run writer; no spawn, no git call.",
+      "description": "JSON-RPC \"dispatch.release_halted_path\": release one path of one halted run, with a reason.\n\n``dispatch.release_halted_path``: the sanctioned per-path release of one halted run's hold.\n\nParams: ``{\"run_id\": str, \"path\": str, \"reason\": str, \"session_id\"?: str}``; ``reason`` is required\nand non-blank. Reply on success: ``{ok, run_id, path, released, reason}``; a repeat release is\n``released: false`` and echoes the FIRST recorded reason. The path moves out of the marker's\n``run_artifacts.withheld`` into ``released_paths[path] = {reason, session, at}``; ``status`` stays\n``halted`` and every other withheld path keeps holding. A path is accepted when the run withholds it or\nits ``manifest.json`` declares it in a row's ``writes``. A landed run holds nothing: the reply is\n``{ok: true, released: false, reason: \"recorded-landed\"}`` and nothing is written; a run that is neither\nhalted nor landed is refused. Reads one run's marker and manifest, writes the\nmarker through the halted_run writer; no spawn, no git call.",
       "inputSchema": {
         "type": "object"
       },
@@ -2148,7 +2152,7 @@
       "name": "freshness__commit_delta"
     },
     {
-      "description": "JSON-RPC \"frontmatter.remint\" — re-mint engine-owned frontmatter fields.\n\nParams:\n    paths (list[str], required) — repo-relative record paths.\n    fields (list[str], optional) — subset of families (handoff_id,\n        execution_authorized, review_stamp, review_stamp.register); default\n        is every family the validator reports failing for each path. A named\n        family that is not failing reports `already-valid`; an unknown one\n        refuses `resolver-unbuilt`.\n\nReturns:\n    exit_code (int) — 0 ok (refusals are per-field outcomes, not errors);\n        2 usage error.\n    results (list) — per path: `path`, `error` (path-level failure or null),\n        `fields`: [{field, outcome: written|refused|already-valid, reason,\n        detail}]; every `refused` reason is a `_contract.REASONS` member.",
+      "description": "coordinator_core.ops.frontmatter_remint — \"frontmatter.remint\" op.\n\nPurpose: re-mint engine-owned frontmatter fields on existing records from\nrecorded provenance, refusing (never fabricating) where provenance is absent.\n\nOne op, four field families. Each family's resolver is a sibling module\nimported lazily from `_RESOLVERS`; a family whose module is not built refuses\n`resolver-unbuilt`. The contract (`resolve` / optional `write`, `Resolved` /\n`Refused`, `REASONS`) lives in `_contract.py`.\n\nA field whose resolver refused leaves the file byte-identical: value writes go\nthrough a single `locked_rmw` per file that is only entered when at least one\nfamily resolved, and `locked_rmw` skips an unchanged write.",
       "inputSchema": {
         "type": "object"
       },
@@ -4843,6 +4847,13 @@
         "type": "object"
       },
       "name": "tracker__render_status"
+    },
+    {
+      "description": "coordinator_core.ops.atlas_mechanical_report — JSON-RPC \"update_docs.atlas_mechanical_report\".\n\nPurpose: the single engine entry for /update-docs atlas Step 0. Runs\n`architecture_survey.mechanical_report.produce` in the warm engine, which writes the\natlas-mechanical-layer report, and replies with where it landed and how big it is.\n\nNEGATIVE-SPEC:\n  - The report is assembled by `produce`; this op never rebuilds or edits it.\n  - No shell-out and no hardcoded output root: the default target is `produce`'s\n    repo-relative `scratch/atlas-mechanical/<date>-report.json`.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "update_docs__atlas_mechanical_report"
     },
     {
       "description": "JSON-RPC 'update_docs.probe_fresh_repo_noop' handler.\n\nParams: {} (no inputs consumed).\n\nrepo_root (injected by ipc.dispatch_message): git_common_dir of the\noriginating worktree. Derives the main-worktree root via\nmain_worktree_root(repo_root) before probing — a linked worktree's .git is a\nfile, so probing repo_root directly would look in the wrong place. Fails\nloud when repo_root is None (no silent fallback to claude-klabauter's own tree).",

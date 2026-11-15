@@ -616,6 +616,70 @@ def reserved_bytes(
     return sum(r["bytes"] for r in rows)
 
 
+CONTROL_PLANE_CORE_RESERVE = 2
+_CORE_RESERVE_ENV = "COORDINATOR_ADMISSION_CORE_RESERVE"
+
+
+def _line_cores(line: dict) -> int:
+    """Declared cores of a START row; a missing, non-integer or sub-1 value counts as 1."""
+    value = line.get("declared_cores")
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else 1
+
+
+def physical_cores() -> int:
+    """Physical core count (psutil), falling back to the logical count, then 1."""
+    try:
+        import psutil
+
+        cores = psutil.cpu_count(logical=False)
+        if cores:
+            return int(cores)
+    except ImportError:
+        pass
+    import os
+
+    return os.cpu_count() or 1
+
+
+def default_cpu_budget() -> int:
+    """Box CPU budget in cores: physical cores minus the control-plane reserve, at least 1.
+
+    The reserve is ``CONTROL_PLANE_CORE_RESERVE`` unless ``COORDINATOR_ADMISSION_CORE_RESERVE``
+    holds a non-negative integer.
+    """
+    import os
+
+    raw = os.environ.get(_CORE_RESERVE_ENV, "")
+    reserve = int(raw) if raw.isascii() and raw.isdigit() else CONTROL_PLANE_CORE_RESERVE
+    return max(1, physical_cores() - reserve)
+
+
+def reserved_cores(
+    path, alive_fn=pid_alive, create_time_fn=pid_create_time, image_fn=pid_image, now_fn=None,
+    *, exclude_key=None,
+) -> int:
+    """Sum of declared cores (absent = 1) over START rows with no END that still hold a pid.
+
+    A row counts on the same terms as ``reserved_bytes`` (positive ``declared_peak_mb``, a holding
+    pid); one row counts once however many pids it names. ``exclude_key`` is a (session_id, run) to
+    leave out, for a caller re-checking its own row. Slot grants name no cores and count 0.
+    """
+    import time
+
+    now_fn = now_fn or time.time
+    starts, _ = _ledger_starts(path)
+    total = 0
+    for key, line in starts.items():
+        if key == exclude_key:
+            continue
+        peak = line.get("declared_peak_mb")
+        if isinstance(peak, bool) or not isinstance(peak, (int, float)) or peak <= 0:
+            continue
+        if any(_safe_holds(line, pid, alive_fn, create_time_fn, image_fn, now_fn) for pid in line.get("pids") or []):
+            total += _line_cores(line)
+    return total
+
+
 def top_holders(
     path, limit: int = 5, rss_fn=tree_rss_mb, alive_fn=pid_alive, create_time_fn=pid_create_time,
     image_fn=pid_image, now_fn=None,
@@ -730,16 +794,19 @@ def record_peak(admission_path, key: str, peak_gib: float) -> float:
 def register_command(
     admission_path, key: str, pid: int, peak_gib: float, create_time_fn=pid_create_time,
     *, reservation_session_id=None, reservation_run=None, pool_session_id=None, pool_run=None,
+    cores: int = 1,
 ) -> None:
     """Append a START line stamped with ``ts`` and the pid's ``create_time`` (omitted when unreadable).
 
-    The headroom is reserved until END, pid death, or the pid's create_time changing.
+    The headroom is reserved until END, pid death, or the pid's create_time changing. ``cores`` is
+    the declared core count the CPU axis sums (``reserved_cores``).
     """
     import time
 
     line = {
         "phase": "START", "session_id": "box-memory-snapshot", "run": f"{key}:{pid}",
-        "pids": [pid], "declared_peak_mb": peak_gib * 1024, "ts": time.time(),
+        "pids": [pid], "declared_peak_mb": peak_gib * 1024, "declared_cores": max(1, int(cores)),
+        "ts": time.time(),
     }
     created = create_time_fn(pid)
     if created is not None:
@@ -771,12 +838,53 @@ def _append_admission(admission_path, line: dict) -> None:
 
 @dataclass(frozen=True)
 class AdmitVerdict:
-    """Admission decision with both clauses exposed."""
+    """Admission decision with the memory clauses and the CPU axis exposed.
+
+    ``admit`` is false when any axis fails; ``cpu_ok`` is true for a pure memory check.
+    """
 
     admit: bool
     need_avail: float
     avail_ok: bool
     commit_ok: bool
+    cpu_ok: bool = True
+    declared_cores: int = 1
+    reserved_cores: int = 0
+    cpu_budget: int | None = None
+
+    @property
+    def hold_reason(self) -> str:
+        """Empty when admitted; otherwise one clause per failed axis, the CPU axis starting ``cpu:``."""
+        if self.admit:
+            return ""
+        parts = []
+        if not self.avail_ok:
+            parts.append("memory: available below need")
+        if not self.commit_ok:
+            parts.append("commit: over limit")
+        if not self.cpu_ok:
+            parts.append(
+                f"cpu: declared {self.declared_cores} + reserved {self.reserved_cores} cores"
+                f" > budget {self.cpu_budget}"
+            )
+        return "HOLD " + "; ".join(parts)
+
+
+def _with_cpu_axis(verdict: AdmitVerdict, declared: int, reserved: int, budget: int | None) -> AdmitVerdict:
+    """Fold the CPU axis into a memory verdict.
+
+    Answers "do these legs' summed cores fit the box?". A leg alone on the box (nothing else
+    reserved) always fits, so an over-wide declaration never refuses legitimate work forever.
+    """
+    import dataclasses
+
+    declared = max(1, int(declared))
+    budget = default_cpu_budget() if budget is None else budget
+    cpu_ok = reserved == 0 or declared + reserved <= budget
+    return dataclasses.replace(
+        verdict, admit=verdict.admit and cpu_ok, cpu_ok=cpu_ok,
+        declared_cores=declared, reserved_cores=reserved, cpu_budget=budget,
+    )
 
 
 @contextlib.contextmanager
@@ -819,11 +927,15 @@ def admit_and_register(
     *,
     cushion_pct: float = 25.0,
     commit_limit: int | None = None,
+    cores: int = 1,
+    cpu_budget: int | None = None,
     **reserved_kwargs,
 ) -> tuple[AdmitVerdict, int]:
     """Read reservations, decide and write the START line under one lock; returns (verdict, reserved bytes).
 
-    Two concurrent callers serialize, so the second sees the first's reservation.
+    Two concurrent callers serialize, so the second sees the first's reservation. ``cores`` is the
+    leg's declared cores (undeclared = 1) and ``cpu_budget`` the box budget (None = ``default_cpu_budget()``);
+    the verdict holds when declared plus already-reserved cores exceed it.
     """
     import dataclasses
 
@@ -837,8 +949,10 @@ def admit_and_register(
             commit_used=status.commit_used + reserved,
         )
         verdict = admit(int(peak_gib * GIB), adjusted, cushion_pct=cushion_pct, commit_limit=commit_limit)
+        verdict = _with_cpu_axis(verdict, cores, reserved_cores(admission_path, **liveness), cpu_budget)
         if verdict.admit:
-            register_command(admission_path, key, pid, peak_gib, **{k: v for k, v in liveness.items() if k == "create_time_fn"})
+            register_command(admission_path, key, pid, peak_gib, cores=cores,
+                             **{k: v for k, v in liveness.items() if k == "create_time_fn"})
     return verdict, reserved
 
 
@@ -905,7 +1019,7 @@ def _parent_pool_credit(admission_path, rows, selection, peak_mb, pid, reserved_
 def admit_selected_reservation(
     admission_path, peak_gib: float, status: MemoryStatus, selector,
     *, key: str | None = None, pid: int | None = None, cushion_pct: float = 25.0,
-    commit_limit: int | None = None, **reserved_kwargs,
+    commit_limit: int | None = None, cores: int = 1, cpu_budget: int | None = None, **reserved_kwargs,
 ) -> tuple[AdmitVerdict, int, dict]:
     """Credit one validated caller grant or parent pool during atomic check-and-register.
 
@@ -944,13 +1058,15 @@ def admit_selected_reservation(
         adjusted = dataclasses.replace(status, avail_phys=max(0, status.avail_phys - reserved),
                                        commit_used=status.commit_used + reserved)
         verdict = admit(int(peak_gib * GIB), adjusted, cushion_pct=cushion_pct, commit_limit=commit_limit)
+        cpu_live = {k: v for k, v in reserved_kwargs.items() if k in ("alive_fn", "create_time_fn", "image_fn", "now_fn")}
+        verdict = _with_cpu_axis(verdict, cores, reserved_cores(admission_path, exclude_key=(sid, run), **cpu_live), cpu_budget)
         if verdict.admit and pid is not None:
             birth = reserved_kwargs.get("create_time_fn", pid_create_time)(pid)
             import math
             if not isinstance(birth, (float, int)) or isinstance(birth, bool) or not math.isfinite(birth) or birth <= 0:
                 raise ValueError("selected reservation requires reliable PID birth evidence")
             register_command(admission_path, key, pid, peak_gib,
-                create_time_fn=lambda value: birth, reservation_session_id=sid, reservation_run=run,
+                create_time_fn=lambda value: birth, reservation_session_id=sid, reservation_run=run, cores=cores,
                 **{k: extra[k] for k in ("pool_session_id", "pool_run") if k in extra})
     return verdict, reserved, {"kind": selection["kind"], "session_id": sid, "run": run, "credited_bytes": credit, **extra}
 

@@ -123,3 +123,31 @@ def test_drift_probe_makes_both_literal_gates_false_and_the_clean_tree_passes(pu
     probe = prof.drift_probe(publish, ctx, [(target, _SECTION)], prof._Meter())
     assert probe.caught == {"repo_key_literal": True, "live_identifier": True}
     assert probe.passed
+
+
+def test_isolated_gate_cache_is_per_work_dir_and_the_cap_override_decides_whether_a_round_hits(tmp_path, monkeypatch):
+    from coordinator_core.percolate import gate_result_cache as grc
+
+    monkeypatch.setattr(grc, "_IDENTITIES_KEEP", grc._IDENTITIES_KEEP)
+    gate_module = SimpleNamespace(__file__=str(tmp_path / "gate.py"))
+    (tmp_path / "gate.py").write_text("x = 1\n", encoding="utf-8")
+
+    def round_hits(keep, cache_dir):
+        pub = SimpleNamespace()
+        prof.isolate_gate_cache(pub, cache_dir, keep)
+        hits = 0
+        for _ in range(2):
+            hits = 0
+            for row in range(10):
+                c = pub._gate_cache_for(None, gate_module, "g")
+                k = c.key("a.py", b"x", f"P{row}")
+                if c.get(k) is None:
+                    c.put(k, row)
+                else:
+                    hits += 1
+                c.flush()
+        return hits
+
+    assert round_hits(8, tmp_path / "small") == 0
+    assert round_hits(64, tmp_path / "big") == 10
+    assert not list((tmp_path / "small").glob("*.tmp"))

@@ -1633,13 +1633,17 @@ async def _handler(params: dict, repo_root: Path | None = None) -> dict:
 
     run_id = params.get("run_id")
     if not run_id:
-        raise ValueError("distill.apply_disposal requires an explicit run_id param.")
+        raise ValueError(
+            "distill.apply_disposal requires a 'run_id' param: the run_id of the "
+            "distill.assemble_disposal_manifest result (the run distill.scope opened)"
+        )
 
     harvest_committed_sha = params.get("harvest_committed_sha")
     if not harvest_committed_sha:
         raise ValueError(
             "distill.apply_disposal requires an explicit harvest_committed_sha "
-            "param (drain-ordering gate, DR-228 § D2b(vii))."
+            "param: the sha of the harvest commit that landed this run's wiki/log writes "
+            "(drain-ordering gate, DR-228 § D2b(vii))."
         )
 
     worktree_root = main_worktree_root(repo_root)

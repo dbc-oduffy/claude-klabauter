@@ -1,4 +1,4 @@
-"""The scout's research clause steers survey asks to `corpus` and reserves `deep` for the unblock team."""
+"""The scout's research clause steers survey asks to `corpus` and reserves `unblock` for the stuck-delivery team."""
 
 from __future__ import annotations
 
@@ -16,11 +16,11 @@ def test_clause_names_corpus_for_survey_compare_rank() -> None:
         assert word in m.group(0)
 
 
-def test_clause_ties_deep_to_stuck_unblock() -> None:
-    m = re.search(r"`deep`[^.]*", ac.RESEARCH_CLASSIFY_CLAUSE)
+def test_clause_ties_unblock_to_stuck_and_deep_to_depth() -> None:
+    m = re.search(r"`unblock`[^.]*", ac.RESEARCH_CLASSIFY_CLAUSE)
     assert m is not None
     assert "stuck" in m.group(0)
-    assert "unblock" in m.group(0)
+    assert "depth: deep" in ac.RESEARCH_CLASSIFY_CLAUSE
 
 
 def test_every_backticked_class_is_a_value_class() -> None:

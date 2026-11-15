@@ -57,4 +57,5 @@ def test_peer_dirty_portable_is_regenerated_from_head_and_lands_index_only(repo)
     landed = _git(repo, "show", "HEAD:setup/publish-targets.portable").stdout
     assert "new-tool.py" in landed
     assert "# peer edit" not in landed
-    assert (repo / "setup" / "publish-targets.portable").read_text(encoding="utf-8") == peer
+    # Landing syncs the worktree 3-way: the landed field 7 plus the peer's dirt, never the peer's bytes lost.
+    assert (repo / "setup" / "publish-targets.portable").read_text(encoding="utf-8") == landed + "# peer edit\n"

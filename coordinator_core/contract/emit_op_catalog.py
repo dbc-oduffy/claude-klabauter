@@ -49,7 +49,11 @@ def _md_cell(text: str) -> str:
 
 def render_all() -> Dict[str, str]:
     """Return {output key: file text} for the three generated files."""
-    contracts = _contracts()
+    return render_contracts(_contracts())
+
+
+def render_contracts(contracts: List[dict]) -> Dict[str, str]:
+    """Pure: render {output key: file text} from contract dicts, in the order given."""
     tools = []
     seen: Dict[str, str] = {}
     for c in contracts:

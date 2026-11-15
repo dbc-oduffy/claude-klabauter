@@ -107,3 +107,18 @@ def test_codex_unrestricted_still_reaches_the_spawn(rig, tmp_path, monkeypatch):
     monkeypatch.setattr(sandboxed_spawn, "caller_is_sandboxed", lambda: False)
     with pytest.raises(_Spawned):
         agents.run_agent("x", {}, repo_root=rig["repo"], artifact_dir=tmp_path / "agent")
+
+
+@pytest.mark.parametrize("inherited", [None, "0", "1"])
+def test_child_env_keeps_warmth_on_and_pins_both_autostarts_off(monkeypatch, inherited):
+    if inherited is None:
+        monkeypatch.delenv("COORDINATOR_WARM", raising=False)
+    else:
+        monkeypatch.setenv("COORDINATOR_WARM", inherited)
+    from coordinator_core.warm.engine_root import current_engine_clone
+
+    env = agents._environment()
+    assert "COORDINATOR_WARM" not in env
+    assert env["COORDINATOR_WARM_LISTENER_AUTOSTART"] == "0"
+    assert env["COORDINATOR_WARM_SERVER_AUTOSTART"] == "0"
+    assert env["COORDINATOR_ENGINE_ROOT"] == str(current_engine_clone())

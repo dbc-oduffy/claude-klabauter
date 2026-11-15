@@ -1969,8 +1969,8 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
     run_id = params.get("run_id")
     if not run_id:
         raise ValueError(
-            "distill.scope requires an explicit run_id param — never minted from "
-            "wallclock inside the handler (AC1 determinism; DEC-6/plan Execution notes)."
+            "distill.scope requires a 'run_id' param (str, e.g. '2026-11-14-10h00' = YYYY-MM-DD-HHhMM); "
+            "the caller supplies it; the handler never mints one from wallclock."
         )
 
     worktree_root = main_worktree_root(repo_root)

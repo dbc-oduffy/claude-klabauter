@@ -724,7 +724,7 @@ def _engine_call(method: str, params: dict) -> Optional[dict]:
 
 
 def _admit_via_engine(
-    key: str, peak_gib: float, register_pid: Optional[int], session_id: str,
+    key: str, peak_gib: float, register_pid: Optional[int], session_id: str, cores: int = 1,
 ) -> SpawnAdmission:
     """The sandbox PermissionError arm of `admit_before_spawn`: the engine, which runs outside the
     sandbox, measures and reserves. A served error refuses; an unreachable engine admits with an
@@ -734,6 +734,8 @@ def _admit_via_engine(
         params["register_pid"] = register_pid
     if session_id:
         params["session_id"] = session_id
+    if cores != 1:
+        params["cores"] = cores
     reply = None if _IN_ENGINE.get() else _engine_call("box_memory.admit", params)
     if reply is None:
         _record_advisory(key, register_pid)
@@ -756,6 +758,7 @@ def admit_before_spawn(
     register_pid: Optional[int] = None,
     wait_kw: Optional[dict] = None,
     session_id: str = "",
+    cores: int = 1,
 ) -> SpawnAdmission:
     """The one admit-before-spawn chokepoint for a heavy subprocess an engine op or ceremony launches.
 
@@ -774,11 +777,14 @@ def admit_before_spawn(
     A HOLD on the available-memory clause first fires the host's file-cache trim (once, never
     looped) and re-measures: active system file cache is not counted as available on Windows, and
     a 40 GiB cache once refused every launch on a box a trim restored at once. Only the breach
-    path pays the trim; an admit never does."""
+    path pays the trim; an admit never does.
+
+    `cores` is the leg's declared core count (undeclared = 1); a HOLD names the `cpu:` axis when
+    declared plus already-reserved cores exceed the box budget."""
     try:
-        return _admit_local(key, default_peak_gib, host, register_pid, wait_kw, session_id)
+        return _admit_local(key, default_peak_gib, host, register_pid, wait_kw, session_id, cores)
     except PermissionError:
-        return _admit_via_engine(key, float(default_peak_gib), register_pid, session_id)
+        return _admit_via_engine(key, float(default_peak_gib), register_pid, session_id, cores)
 
 
 def _admit_local(
@@ -788,6 +794,7 @@ def _admit_local(
     register_pid: Optional[int] = None,
     wait_kw: Optional[dict] = None,
     session_id: str = "",
+    cores: int = 1,
 ) -> SpawnAdmission:
     """`admit_before_spawn`'s local body, also the body of the engine op `box_memory.admit`.
     A PermissionError propagates: the caller owns the engine fallback, so there is no recursion."""
@@ -812,8 +819,13 @@ def _admit_local(
                     commit_used=status.commit_used + reserved,
                 )
                 verdict = host.admit(int(peak_gib * host.GIB), status)
+                # A host without the CPU axis (older box_memory_host) degrades to memory-only.
+                with_cpu = getattr(host, "_with_cpu_axis", None)
+                reserved_cores = getattr(host, "reserved_cores", None)
+                if with_cpu is not None and reserved_cores is not None:
+                    verdict = with_cpu(verdict, cores, reserved_cores(adm_path), None)
                 if verdict.admit and register_pid is not None:
-                    if not _register_for_admit(key, peak_gib, register_pid, host):
+                    if not _register_for_admit(key, peak_gib, register_pid, host, cores):
                         return None, status
             return verdict, status
 
@@ -831,14 +843,21 @@ def _admit_local(
         return SpawnAdmission(False, "memory unreadable (%s)" % type(exc).__name__, key, peak_gib)
     gib = lambda n: round(n / host.GIB, 1)
     if not verdict.admit:
-        hold = "HOLD %s: need %sGiB avail, %sGiB free after reservations" % (
-            key, gib(verdict.need_avail), gib(status.avail_phys)) + _holders_suffix(host, adm_path)
-        granted = _wait_for_slot(key, peak_gib, session_id, wait_kw) if wait_kw is not None else None
+        cpu_hold = getattr(verdict, "cpu_ok", True) is False
+        cpu_only = cpu_hold and getattr(verdict, "avail_ok", None) is True and getattr(verdict, "commit_ok", True)
+        hold = "" if cpu_only else "HOLD %s: need %sGiB avail, %sGiB free after reservations" % (
+            key, gib(verdict.need_avail), gib(status.avail_phys))
+        if cpu_hold:
+            clause = verdict.hold_reason.split("cpu:", 1)[-1].strip()
+            hold = "HOLD %s: cpu: %s" % (key, clause) if cpu_only else "%s; cpu: %s" % (hold, clause)
+        hold += _holders_suffix(host, adm_path)
+        # A slot grant answers memory headroom, never cores: a HOLD with a failed CPU axis is not slot-waited.
+        granted = _wait_for_slot(key, peak_gib, session_id, wait_kw) if wait_kw is not None and not cpu_hold else None
         if not (granted and granted.get("admitted")):
             reason = hold if not granted else "%s; slot wait: %s" % (hold, granted.get("reason"))
             return SpawnAdmission(False, reason, key, peak_gib)
         if register_pid is not None:
-            if not _register_for_admit(key, peak_gib, register_pid, host):
+            if not _register_for_admit(key, peak_gib, register_pid, host, cores):
                 return SpawnAdmission(False, "memory reservation write failed", key, peak_gib)
         return SpawnAdmission(True, "ADMIT %s: slot %s" % (key, granted.get("reason")), key, peak_gib)
     return SpawnAdmission(True, "ADMIT %s: peak %sGiB" % (key, round(peak_gib, 1)), key, peak_gib)
@@ -855,28 +874,32 @@ def admit_before_spawn_in_process(key: str, default_peak_gib: float) -> SpawnAdm
             True, "ADMIT %s: advisory, memory unreadable under sandbox" % key, key, float(default_peak_gib))
 
 
-def _register_for_admit(key: str, peak_gib: float, pid: int, host: Any) -> bool:
+def _register_for_admit(key: str, peak_gib: float, pid: int, host: Any, cores: int = 1) -> bool:
     """`_admit_local`'s reservation write. Inside the engine a PermissionError is an advisory and a
     refusal; elsewhere it propagates, so `admit_before_spawn` dials `box_memory.admit` once with
     `register_pid` and the engine reserves."""
     try:
         host = host or _load_box_memory_host()
-        host.register_command(host.admission_file(), key, pid, peak_gib)
+        # `cores` rides only when declared, so a host whose register_command predates it still works.
+        extra = {"cores": cores} if cores != 1 else {}
+        host.register_command(host.admission_file(), key, pid, peak_gib, **extra)
         return True
     except PermissionError:
         if _IN_ENGINE.get():
             _record_advisory(key, pid)
-            return True
+            return False
         raise
     except Exception:
         return False
 
 
-def register_spawn(key: str, peak_gib: float, pid: int, host: Any = None) -> bool:
-    """Reserve headroom until exit; report write failure without raising."""
+def register_spawn(key: str, peak_gib: float, pid: int, host: Any = None, cores: int = 1) -> bool:
+    """Reserve headroom until exit; report write failure without raising. `cores` re-declares the
+    leg's cores on the child's row (the local arm only; the engine `box_memory.register` arm names none)."""
     try:
         host = host or _load_box_memory_host()
-        host.register_command(host.admission_file(), key, pid, peak_gib)
+        extra = {"cores": cores} if cores != 1 else {}
+        host.register_command(host.admission_file(), key, pid, peak_gib, **extra)
         return True
     except PermissionError:
         if _IN_ENGINE.get():

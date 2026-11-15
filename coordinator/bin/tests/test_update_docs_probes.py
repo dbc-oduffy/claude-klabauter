@@ -166,7 +166,7 @@ def test_repomap_gate_missing_generator_exits_2(tmp_path, capsys):
 def test_repomap_gate_unspawnable_generator_exits_2(tmp_path, capsys, monkeypatch):
     generator = tmp_path / "fake-generate-repomap.py"
     generator.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
-    monkeypatch.setattr(_mod._gates(), "_run", lambda *a, **k: None)
+    monkeypatch.setattr(_mod._gates(), "_run_reporting", lambda *a, **k: (None, "spawn error: exec format error"))
     args = _ns(
         repo_root=str(tmp_path),
         rag_state="absent",
@@ -175,7 +175,7 @@ def test_repomap_gate_unspawnable_generator_exits_2(tmp_path, capsys, monkeypatc
     )
     rc = _mod._cmd_repomap_gate(args)
     assert rc == 2
-    assert "could not be spawned" in capsys.readouterr().err
+    assert "spawn error: exec format error" in capsys.readouterr().err
 
 
 def test_repomap_gate_generator_failure_propagates(tmp_path):
@@ -356,13 +356,13 @@ def test_distill_threshold_dateless_log_count_20_fires(tmp_path):
     assert _mod._cmd_distill_threshold(args) == 1
 
 
-def test_distill_threshold_missing_log_reports_unavailable_and_does_not_fire(tmp_path, capsys):
+def test_distill_threshold_missing_log_counts_against_an_empty_baseline_and_fires(tmp_path, capsys):
+    """An absent log is distill.scope's empty baseline (dd57eaf5f8): a fresh repo's backlog fires."""
     _touch_md_files(tmp_path / "archive" / "daily-summaries", 60)
     args = _ns(repo_root=str(tmp_path), log_path=None)
-    assert _mod._cmd_distill_threshold(args) == 0
+    assert _mod._cmd_distill_threshold(args) == 1
     out = capsys.readouterr().out
-    assert "distill.scope cannot count" in out
-    assert "harvest threshold" not in out
+    assert "harvest threshold met" in out
 
 
 def test_distill_threshold_total_matches_distill_scope_scannable(tmp_path, capsys):

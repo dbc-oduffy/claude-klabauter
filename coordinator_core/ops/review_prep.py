@@ -459,11 +459,44 @@ def _stored_reply(
     if peer_bases is not None and (fm.get("peer_bases") or {}) != peer_bases():
         return None
     reply = {**{k: fm[k] for k in _STORED_KEYS}, "error": None}
-    if "reviewed_sha256" in fm:
-        reply["reviewed_sha256"] = fm["reviewed_sha256"]
+    for pinned in ("reviewed_sha256", VERDICT_JUDGED_KEY):
+        if pinned in fm:
+            reply[pinned] = fm[pinned]
     reply["peer_held"] = fm.get("peer_held") or []
     reply["undeclared_edits"] = fm.get("undeclared_edits") or []
     return reply
+
+
+VERDICT_JUDGED_KEY = "judged_sha256"
+
+
+def slice_pins(reviewed: Mapping, sliced: Sequence[str]) -> Dict[str, str]:
+    """``{path: sha256}`` of every file in the review slices, as hashed at review time: the producer
+    of the verdict pin. A sliced file the prep could not read has no entry (nothing to pin)."""
+    return {rel: reviewed[rel] for rel in dict.fromkeys(sliced) if isinstance(reviewed.get(rel), str)}
+
+
+def judged_mismatches(repo_root: Path, judged: Mapping, paths: Sequence[str]) -> List[str]:
+    """Sorted ``paths`` whose bytes now match none of the sha256 the verdicts recorded for them.
+
+    ``judged`` maps a repo-relative POSIX path to one sha256 or a collection of them (one per
+    verdict that judged it): the path stands when any recorded sha equals its current
+    ``compute_content_hash``. A path with no recorded sha, a path absent from the tree and a path
+    that cannot be read are no mismatch: nothing was pinned, or nothing can be compared.
+    A sidecar's own ``VERDICT_JUDGED_KEY`` map names the bytes judged (re-hashed after any fix);
+    otherwise the prep's own ``VERDICT_JUDGED_KEY`` (``slice_pins``) is the pin."""
+    out: List[str] = []
+    for rel in dict.fromkeys(paths):
+        recorded = judged.get(rel)
+        many = recorded if isinstance(recorded, (list, tuple, set, frozenset)) else ()
+        wanted = {recorded} if isinstance(recorded, str) else {s for s in many if isinstance(s, str)}
+        wanted.discard("")
+        if not wanted:
+            continue
+        now = compute_content_hash(repo_root / rel)
+        if now is not None and now not in wanted:
+            out.append(rel)
+    return sorted(out)
 
 
 _POINTER_SUFFIX = ".review-prep-ptr.json"
@@ -962,6 +995,7 @@ def _compute(
                 f"review prep sliced nothing from a non-empty frozen diff of {len(paths)} declared path(s); "
                 f"product delta with no ---/+++ lines: {', '.join(unsliced[:5])}"
             )
+    out[VERDICT_JUDGED_KEY] = slice_pins(out.get("reviewed_sha256") or {}, sliced)
     sliced_index = _cover_index(sliced)
     out["excluded"].extend(
         {"path": p, "reason": "no-delta"}
@@ -1054,6 +1088,20 @@ def _manifest_path(share: Path, slice_prefix: str) -> Path:
     return share / f"{slice_prefix}.pre-review" / "manifest.json"
 
 
+def _land_blob(blob: Path, data: bytes) -> bool:
+    """Write ``data`` to the content-addressed ``blob`` in place (no tempfile replace); True when written.
+
+    Trap: a crash mid-write leaves a short or torn file, so an existing blob counts only when its
+    bytes equal ``data``."""
+    try:
+        if blob.stat().st_size == len(data) and blob.read_bytes() == data:
+            return False
+    except OSError:
+        pass
+    blob.write_bytes(data)
+    return True
+
+
 def _write_pre_review_snapshot(
     share: Path,
     repo_root: Path,
@@ -1075,10 +1123,8 @@ def _write_pre_review_snapshot(
     snap.mkdir(parents=True, exist_ok=True)
     files = {rel: h for rel, h in hashes.items() if h is not None}
     for rel, digest in files.items():
-        blob = snap / digest
-        if not blob.exists():
-            atomic_write_bytes(blob, contents[rel])
-            declare_write(blob)
+        if _land_blob(snap / digest, contents[rel]):
+            declare_write(snap / digest)
     body = json.dumps(
         {
             "base": base,
@@ -1107,6 +1153,7 @@ def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], 
         "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         **{k: result[k] for k in _STORED_KEYS},
         "reviewed_sha256": result.get("reviewed_sha256", {}),
+        VERDICT_JUDGED_KEY: result.get(VERDICT_JUDGED_KEY, {}),
         **({"declared_sha256": result["declared_sha256"]} if "declared_sha256" in result else {}),
         "peer_bases": result.get("peer_bases", {}),
         "peer_held": result.get("peer_held", []),
@@ -1131,6 +1178,25 @@ def _read_json_object(path: Path) -> Optional[dict]:
     return bounded_json_object(path)
 
 
+MANIFEST_WAIT_S = 0.4
+MANIFEST_POLL_S = 0.02
+
+
+def _read_manifest(base: Path) -> Optional[dict]:
+    """`manifest.json` of the run record dir `base`. While a recompose claim stands there the read
+    retries, capped at `MANIFEST_WAIT_S`; with none it is a single read. The claim is sampled before
+    each read, so a None read with no claim standing is final."""
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import recompose_in_flight
+
+    deadline = time.monotonic() + MANIFEST_WAIT_S
+    while True:
+        in_flight = recompose_in_flight(base, time.time())
+        manifest = _read_json_object(base / "manifest.json")
+        if manifest is not None or not in_flight or time.monotonic() >= deadline:
+            return manifest
+        time.sleep(MANIFEST_POLL_S)
+
+
 def declared_paths_and_held(
     repo_root: Path, run_id: str, *, leg: bool = False, own_session: str = ""
 ) -> Tuple[List[str], Dict[str, List[str]]]:
@@ -1145,7 +1211,7 @@ def declared_paths_and_held(
     from coordinator_core.ops.dispatch_emit.run_write_set import run_write_set_full
 
     base = record_dir(repo_root, run_id)
-    manifest = _read_json_object(base / "manifest.json")
+    manifest = _read_manifest(base)
     if manifest is None:
         raise ValueError(f"no readable manifest for run {run_id!r}")
     declared = manifest.get("review_declared_paths")

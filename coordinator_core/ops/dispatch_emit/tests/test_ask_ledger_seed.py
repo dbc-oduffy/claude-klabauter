@@ -235,5 +235,5 @@ def test_stage_binds_a_ledger_bearing_run_only(repo):
     assert rr.read_register((repo / REL).read_text(encoding="utf-8")) is None
     run_dir = rl.start(repo, "ledgered")
     (run_dir / "ask.md").write_text("the raw ask", encoding="utf-8")
-    stage(repo, run_id="ledgered", sizing_rel=REL, writes=["pkg/a.py"])
+    stage(repo, run_id="ledgered", sizing_rel=REL, writes=["pkg/b.py"])
     assert [i.text for i in rl.read_ledger(repo, run_dir).items] == ["make the seed verbatim", "the raw ask"]

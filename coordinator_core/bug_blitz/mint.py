@@ -1,6 +1,6 @@
-"""Mint one open `tf` bug-backlog row per failing test file, idempotent per run. Implements `MintRows`.
+"""Mint one open `tf` bug-backlog row per failing target (node id), idempotent per run. Implements `MintRows`.
 
-A row is identified by its file stem under `state/bug-backlog/`. An open `tf` row on the same surface
+A row is identified by its file stem under `state/bug-backlog/`. An open `tf` row with the same title
 is reused in place: the run tag is appended to the row's block-list `tags`, the id and every other
 byte stay, and nothing is deleted; a reused row still loads through `load_family_records`. Every
 reuse is validated before any write, so a row the edit cannot handle aborts the mint with nothing
@@ -14,6 +14,7 @@ from pathlib import Path
 
 import yaml
 
+from coordinator_core.bug_blitz.accounting import _nodeid, distinct_targets
 from coordinator_core.bug_blitz.contract import FailingTest, run_tag
 from coordinator_core.ops.queue_append import _slug_from_title, append_queue_entry
 from coordinator_core.ops.queue_family import load_family_records
@@ -50,51 +51,50 @@ def _first_line(message: str) -> str:
     return ""
 
 
-def _group_by_file(tests: tuple[FailingTest, ...]) -> dict[str, list[FailingTest]]:
-    grouped: dict[str, list[FailingTest]] = {}
-    for test in tests:
-        grouped.setdefault(test.file, []).append(test)
-    return grouped
+def _title(test: FailingTest) -> str:
+    return f"TF: {_nodeid(test)}"
 
 
-def _body(file: str, group: list[FailingTest]) -> str:
-    lines = ["Failing tests and first message line:"]
-    for test in group:
-        text = f"- {file}::{test.name}" if test.name else f"- {file}"
-        first = _first_line(test.message)
-        if first:
-            text += f" :: {first}"
-        lines.append(text)
+def _body(test: FailingTest) -> str:
+    text = f"- {_nodeid(test)}"
+    first = _first_line(test.message)
+    if first:
+        text += f" :: {first}"
     # The appender expands a literal backslash-n into a newline.
-    return "\n".join(lines).replace("\\n", " ")
+    return "\n".join(["Failing test and first message line:", text]).replace("\\n", " ")
 
 
-def _open_tf_rows_by_surface(repo_root: Path) -> dict[str, dict]:
+def _open_tf_rows_by_title(repo_root: Path) -> dict[str, dict]:
     rows: dict[str, dict] = {}
     for rec in load_family_records(SCHEMA, repo_root, where="status=open"):
         fm = rec.get("frontmatter") or {}
         if TF_TAG not in (fm.get("tags") or []):
             continue
-        surface = fm.get("surface")
-        if surface:
-            rows.setdefault(str(surface), rec)
+        title = fm.get("title")
+        if title:
+            rows.setdefault(str(title), rec)
     return rows
 
 
-def _archived_tf_row_id(repo_root: Path, surface: str) -> str | None:
-    """Id of an archived `tf` row on `surface`, or None.
+def _archived_tf_row_id(repo_root: Path, title: str, surface: str) -> str | None:
+    """Id of an archived `tf` row with this exact `title` on `surface`, or None.
 
-    A row file is `<date>-<slug of title>-<digest>.yaml` and a TF title starts `TF: <surface>`, so the
-    name narrows the candidates before any file is read; each candidate is then checked on its own
-    `surface` and `tf` tag. Trap: the slug is capped, so a prefix match alone is not an identity.
+    A row file is `<date>-<slug of title>-<digest>.yaml`, so the slug narrows the candidates before
+    any file is read; each candidate is then checked on its own title, `surface` and `tf` tag. Trap:
+    the slug is capped, so a prefix match alone is not an identity.
     """
-    needle = _slug_from_title(f"TF: {surface}")
+    needle = _slug_from_title(title)
     for path in sorted((repo_root / ARCHIVE_DIR).glob(f"*/????-??-??-{needle}*.yaml")):
         try:
             fm = yaml.safe_load(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, yaml.YAMLError):
             continue
-        if isinstance(fm, dict) and fm.get("surface") == surface and TF_TAG in (fm.get("tags") or []):
+        if (
+            isinstance(fm, dict)
+            and fm.get("title") == title
+            and fm.get("surface") == surface
+            and TF_TAG in (fm.get("tags") or [])
+        ):
             return path.stem
     return None
 
@@ -174,12 +174,12 @@ def mint_tf_rows(
     target_ref: str,
     run_dir: Path | None = None,
 ) -> list[str]:
-    """Mint or reuse one open `tf` row per failing test file; returns row ids in first-seen file order.
+    """Mint or reuse one open `tf` row per failing target (node id); returns row ids in first-seen target order.
 
-    A surface with no open row but an archived `tf` row mints nothing: the archived id is returned and
-    no write or manifest entry is made.
+    `surface` stays the test file; the node id lives in the title. A target with no open row but an
+    archived `tf` row mints nothing: the archived id is returned and no write or manifest entry is made.
 
-    Reuse is keyed on `surface` plus the `tf` tag among open rows, so a second call for the same run
+    Reuse is keyed on the per-target title plus the `tf` tag among open rows, so a second call for the same run
     returns the same ids and writes nothing. With `run_dir`, each row is recorded in its
     `minted.jsonl` (`created: True` for a new row, False for a reused one): a reused row before its
     tag edit, a new row as it is written, so a crash mid-mint never leaves a modified row off the
@@ -187,46 +187,47 @@ def mint_tf_rows(
     """
     repo_root = Path(repo_root)
     tag = run_tag(run_id)
-    existing = _open_tf_rows_by_surface(repo_root)
-    grouped = _group_by_file(tuple(tests))
+    existing = _open_tf_rows_by_title(repo_root)
+    targets = distinct_targets(tuple(tests))
     planned: dict[str, str | None] = {}
     errors: list[str] = []
-    for file in grouped:
-        rec = existing.get(file)
+    for test in targets:
+        title = _title(test)
+        rec = existing.get(title)
         if rec is None:
             continue
         try:
-            planned[file] = _plan_reuse(repo_root, rec, tag)
+            planned[title] = _plan_reuse(repo_root, rec, tag)
         except ValueError as exc:
             errors.append(str(exc))
     if errors:
         raise ValueError("; ".join(errors))
     ids: list[str] = []
-    for file, group in grouped.items():
-        rec = existing.get(file)
+    for test in targets:
+        title = _title(test)
+        rec = existing.get(title)
         if rec is None:
-            archived = _archived_tf_row_id(repo_root, file)
+            archived = _archived_tf_row_id(repo_root, title, test.file)
             if archived is not None:
                 ids.append(archived)
                 continue
         if rec is not None:
-            updated = planned[file]
+            updated = planned[title]
             _record(run_dir, rec["path"], created=False)
             if updated is not None:
                 _write_reuse(repo_root, rec["path"], updated)
             ids.append(_row_id(rec["path"]))
             continue
-        severity = "P0" if any(is_crash_shaped(t.message) for t in group) else "P1"
         row_path = _append(
             repo_root,
-            title=f"TF: {file} ({len(group)} failing)",
-            body=_body(file, group),
+            title=title,
+            body=_body(test),
             status="open",
-            surface=file,
-            severity=severity,
+            surface=test.file,
+            severity="P0" if is_crash_shaped(test.message) else "P1",
             tags=[TF_TAG, tag],
             evidence=_evidence_ref(repo_root, target_ref),
-            repro_steps=f"targeted-test-run --row {file}",
+            repro_steps=f"targeted-test-run --row {test.file}",
         )
         _record(run_dir, row_path, created=True)
         ids.append(_row_id(row_path))

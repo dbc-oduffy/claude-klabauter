@@ -1,4 +1,5 @@
-"""The deferred ask script's chain hop reads the chained run id from the relayed script path, never from the relayed run_id."""
+"""The deferred ask script's chain hop reads the chained run id from the relayed script path, never from the relayed run_id;
+a hand-off naming the ask's own run mints one fresh chained run instead of ending the hop."""
 
 from __future__ import annotations
 
@@ -38,11 +39,15 @@ def test_a_relay_agent_reply_with_the_asks_own_run_id_and_a_fresh_path_starts_th
 
 
 @pytest.mark.spawns_process
-def test_a_chain_path_naming_the_asks_own_script_is_refused_even_when_the_relayed_run_id_is_wrong(tmp_path):
+def test_a_chain_path_naming_the_asks_own_script_mints_a_fresh_chained_run_even_when_the_relayed_run_id_is_wrong(tmp_path):
     handoff = {"chain": {"ask": "do it", "path": "scratch/warp/ask-1.workflow.mjs"}}
-    got = _run_deferred(tmp_path, _PARAMS, replies=[_reply(run_id="mis-copied")], results=[handoff])
-    assert got["out"]["status"] == "failed" and "not a fresh run id" in got["out"]["error"]
-    assert _starts(got) == ["ask-1.workflow.mjs"]
+    got = _run_deferred(
+        tmp_path, _PARAMS,
+        replies=[_reply(run_id="mis-copied"), _reply(_FRESH, "warp-chain-2")],
+        results=[handoff, {"done": True}],
+    )
+    assert _starts(got) == ["ask-1.workflow.mjs", Path(_FRESH).name]
+    assert got["out"]["done"] is True
 
 
 @pytest.mark.spawns_process
@@ -58,20 +63,31 @@ def test_a_chain_emit_yielding_an_empty_run_id_starts_nothing(tmp_path, chain_pa
 
 
 @pytest.mark.spawns_process
-def test_a_path_naming_the_ask_itself_is_still_refused(tmp_path):
+def test_the_asks_own_script_is_never_restarted_as_the_chained_run(tmp_path):
     handoff = {"chain": {"ask": "do it", "path": "scratch/warp/ask-1.workflow.mjs", "run_id": "fresh-looking-id"}}
+    got = _run_deferred(
+        tmp_path, _PARAMS,
+        replies=[_reply(), _reply("scratch/warp/ask-1.workflow.mjs", "ask-1")],
+        results=[handoff],
+    )
+    assert got["out"]["status"] == "failed" and "not a fresh run id" in got["out"]["error"]
+    assert _starts(got) == ["ask-1.workflow.mjs"]
+    assert len([c for c in got["calls"] if "agent" in c]) == 2
+
+
+@pytest.mark.spawns_process
+def test_a_path_naming_no_run_script_without_a_run_id_is_refused(tmp_path):
+    handoff = {"chain": {"ask": "do it", "path": "scratch/warp/not-a-run-script.mjs", "run_id": ""}}
     got = _run_deferred(tmp_path, _PARAMS, replies=[_reply()], results=[handoff])
     assert got["out"]["status"] == "failed" and "not a fresh run id" in got["out"]["error"]
     assert _starts(got) == ["ask-1.workflow.mjs"]
 
 
 @pytest.mark.spawns_process
-@pytest.mark.parametrize("run_id", ["", "ask-1"])
-def test_a_path_naming_no_run_script_without_a_fresh_minted_run_id_is_refused(tmp_path, run_id):
-    handoff = {"chain": {"ask": "do it", "path": "scratch/warp/not-a-run-script.mjs", "run_id": run_id}}
-    got = _run_deferred(tmp_path, _PARAMS, replies=[_reply()], results=[handoff])
-    assert got["out"]["status"] == "failed" and "not a fresh run id" in got["out"]["error"]
-    assert _starts(got) == ["ask-1.workflow.mjs"]
+def test_a_path_naming_no_run_script_with_the_asks_run_id_mints_a_fresh_chained_run(tmp_path):
+    handoff = {"chain": {"ask": "do it", "path": "scratch/warp/not-a-run-script.mjs", "run_id": "ask-1"}}
+    got = _run_deferred(tmp_path, _PARAMS, replies=[_reply(), _reply(_FRESH, "warp-chain-2")], results=[handoff, {"done": True}])
+    assert _starts(got) == ["ask-1.workflow.mjs", Path(_FRESH).name]
 
 
 @pytest.mark.spawns_process

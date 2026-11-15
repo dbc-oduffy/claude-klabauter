@@ -419,13 +419,7 @@ def _run(
     caller. See
     state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
     """
-    global _last_run_failure
-    proc, _last_run_failure = _run_reporting(cli_path, args, timeout=timeout)
-    return proc
-
-
-#: Reason the most recent `_run` produced no process; read by a gate right after `_run` returns None.
-_last_run_failure: Optional[str] = None
+    return _run_reporting(cli_path, args, timeout=timeout)[0]
 
 
 def _run_reporting(
@@ -582,10 +576,14 @@ def _gate_repomap(repo_root: Path, settings_home: Path, overrides: dict) -> Gate
             f"generate-repomap.py unresolvable at {generate_repomap_cli}",
         )
 
-    proc = _run(generate_repomap_cli, [])
-    failure = _last_run_failure
+    proc, failure = _run_reporting(generate_repomap_cli, [])
     if proc is None:
-        return GateResult("repomap-gate", GateVerdict.UNAVAILABLE, f"generate-repomap.py produced no result: {failure}" if failure else "generate-repomap.py could not be spawned")
+        summary = (
+            f"generate-repomap.py produced no result: {failure}"
+            if failure
+            else "generate-repomap.py could not be spawned"
+        )
+        return GateResult("repomap-gate", GateVerdict.UNAVAILABLE, summary)
     if proc.returncode != 0:
         return GateResult(
             "repomap-gate",
@@ -632,7 +630,7 @@ def _gate_distill_threshold(repo_root: Path, _settings: Path, overrides: dict) -
 
     log_path = Path(overrides["log_path"]) if overrides.get("log_path") else repo_root / "state" / "distillation-log.md"
     try:
-        # The count is distill.scope's scannable set, so a log distill.scope refuses is a log this gate cannot count against.
+        # The count is distill.scope's scannable set: an absent log is its empty baseline; an unparseable one it refuses, so this gate cannot count.
         total = scannable_count(repo_root, log_path=str(log_path), cap=_DISTILL_THRESHOLD_TOTAL)
     except (DistillationLogMissingError, DistillationLogUnparseableError) as exc:
         return GateResult("distill-threshold", GateVerdict.UNAVAILABLE, f"distill.scope cannot count: {exc}")

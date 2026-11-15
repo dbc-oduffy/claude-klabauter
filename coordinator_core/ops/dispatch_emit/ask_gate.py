@@ -962,8 +962,11 @@ def _resume_phases(repo_root: Path, sizing_rel: str, resume, resume_ledger: Opti
             marker = None
         kind = marker.get("halted") if marker else None
     landed = phase_ledger.derive(root, pred) if pred else {}
-    # An execute-phase halt passed its plan gate: readiness of a refused plan is not its question.
-    past_plan_gate = phase_ledger.HALT_PHASE.get(kind or "unknown") == "execute"
+    # A refusal that kept executed chunks halted past the plan gate, at the review leg onward.
+    if kind == "refusal" and landed.get("execute"):
+        kind = "refusal_after_execute"
+    # An execute-phase halt (or later) passed its plan gate: readiness of a refused plan is not its question.
+    past_plan_gate = kind == "refusal_after_execute" or phase_ledger.HALT_PHASE.get(kind or "unknown") == "execute"
     # A refusal that kept a plan gate record is a plan-gate halt; any other refusal stays unmapped.
     refusal_at_plan_gate = kind == "refusal" and bool(landed.get("plan"))
     ready = None
@@ -1596,7 +1599,11 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
                     spelling=functools.partial(tracked_spelling, root),
                     exclude=resume_out.get(RESUME_EXCLUDE_FIELD) or (),
                 )
-                from coordinator_core.ops.dispatch_emit.refire_noop import identical_rehalt_reason
+                from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import serving_rows
+                from coordinator_core.ops.dispatch_emit.refire_noop import (
+                    identical_rehalt_reason,
+                    unserved_blocking_reason,
+                )
 
                 leg = resume_out[RESUME_LEDGER_LEG_FIELD]
                 # A dispatch leg with no writes carries no work unless a note asks for the re-plan
@@ -1609,6 +1616,13 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
                         resume_out, manifest.rows, manifest.owed, manifest.gated,
                         derived if verdict.arm in (ARM_XS, ARM_S) else [],
                         leg if leg.get("writes") else None,
+                    ) or (
+                        None
+                        if manifest.rows
+                        else unserved_blocking_reason(
+                            resume_out,
+                            serving_rows(root / plan_rel, resume_out.get("blocking") or []),
+                        )
                     )
                 if rehalt is not None:
                     out["halt"] = {"kind": HALT_REFUSAL, "reason": rehalt}

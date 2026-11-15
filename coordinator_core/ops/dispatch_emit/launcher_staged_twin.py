@@ -85,9 +85,11 @@ def sweep_expired_twins(root: Path, now: float | None = None) -> int:
     """Unlink every staged twin in ``scratch/warp`` older than ``run_token.TTL_SECONDS``; return the count.
 
     Same exact twin-name shape as ``remove_twins``, any run id; age is file mtime. OSErrors are
-    swallowed after not counting. Zero spawns. Also sweeps expired token escrows (not counted): the
-    plaintext token outlives its run the same way the twin does, and this is the only periodic caller."""
+    swallowed after not counting. Zero spawns. Also sweeps expired token escrows and receipts past
+    ``run_token.RETENTION_SECONDS`` (neither counted): the plaintext token outlives its run the same way
+    the twin does, and this is the only periodic caller."""
     _run_token.sweep_expired_escrows(root, now)
+    _run_token.sweep_expired_receipts(root, now)
     cutoff = (time.time() if now is None else now) - _run_token.TTL_SECONDS
     directory = Path(root) / _RUN_DIR_ROOT
     try:

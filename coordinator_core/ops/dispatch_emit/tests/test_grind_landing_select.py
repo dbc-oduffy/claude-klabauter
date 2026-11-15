@@ -327,14 +327,14 @@ def test_refused_checkin_worktree_lands_the_lf_image_as_a_supplied_blob(tmp_path
     assert s.landed_text(PS1) == PS1_EDIT
 
 
-def test_refused_checkin_cr_image_drops_unattributed(tmp_path, monkeypatch):
+def test_refused_checkin_crlf_image_lands_the_lf_form(tmp_path, monkeypatch):
     root = _ps1_repo(tmp_path, monkeypatch)
     crlf = PS1_EDIT.replace("\n", "\r\n").encode()
     _ps1_images(root, PS1_BASE.encode(), crlf)
     (root / PS1).write_bytes(crlf)
     s = sel.select(root, RUN, {PS1: [ROW]})
-    assert s.dropped == {PS1: {ROW: contract.DROP_UNATTRIBUTED_SHARED}}
-    assert PS1 not in s.supplied_blobs
+    assert s.dropped == {}
+    assert _blob_text(root, s.supplied_blobs[PS1]) == PS1_EDIT.encode()
 
 
 def test_non_string_image_value_drops_fail_closed(tmp_path, monkeypatch):

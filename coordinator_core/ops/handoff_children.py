@@ -142,6 +142,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -152,6 +153,7 @@ from coordinator_core.dag import (
     _read_meta,
     build_reverse_edge_index,
 )
+from coordinator_core.frontmatter.primitives import unquote_yaml_scalar
 from coordinator_core.ipc import register_op
 from coordinator_core.liveness import resolve_live_session_ids
 from coordinator_core.ops._path_guard import contained_path
@@ -526,36 +528,117 @@ def blocked_by_dependents(
     return blocked_by_dependents_many([candidate_path], worktree_root, exclude)[key]
 
 
+_ID_KEY_LINE_RE = re.compile(rb"^(stub_id|id|handoff_id):[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+_SIMPLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/\-]*$")
+
+
+def _candidate_identifiers(candidate_abs: str, head: "Optional[bytes]" = None) -> List[str]:
+    """Candidate `stub_id`/`id`/`handoff_id` values: a head regex when every
+    value is a plain token, no head mention of `id:` is none, else the full
+    frontmatter parse (any quoting, comment or folding shape the regex cannot
+    vouch for). `head` is the already-read frontmatter head, when the sweep
+    saw this file."""
+    from coordinator_core.reconcile.handoff_corpus import _frontmatter_head_bytes
+
+    if head is None:
+        head = _frontmatter_head_bytes(Path(candidate_abs))
+    if head is not None and head.startswith(b"---"):
+        if b"id:" not in head:
+            return []
+        found: Set[str] = set()
+        simple = True
+        for match in _ID_KEY_LINE_RE.finditer(head):
+            raw = match.group(2).decode("utf-8", errors="replace").strip()
+            value = unquote_yaml_scalar(raw) or ""
+            if not value:
+                continue
+            if _SIMPLE_ID_RE.match(value):
+                found.add(value)
+            else:
+                simple = False
+        if simple and found:
+            return sorted(found)
+    meta = _read_meta(candidate_abs) or {}
+    return sorted(
+        {
+            v
+            for v in (meta.get("stub_id"), meta.get("id"), meta.get("handoff_id"))
+            if isinstance(v, str) and v
+        }
+    )
+
+
+def _collect_blocked_by_holders(
+    worktree_root: Path,
+    wanted: Set[str],
+    heads: "Dict[str, Optional[bytes]]",
+) -> "Tuple[List[Dict[str, Any]], List[str]]":
+    """One pass over live + archive/handoffs + archive/completed returning only
+    records that carry `blocked_by` (`_path`, `blocked_by`). A head read per
+    file; the full parse runs only where the head names `blocked_by` or is not
+    a plain `---` block. Heads of files in `wanted` land in `heads`. Raises
+    OSError for an unreadable live dir."""
+    from coordinator_core.ops.fleet._common import collect_live_handoff_paths
+    from coordinator_core.reconcile.handoff_corpus import (
+        _frontmatter_head_bytes,
+        _walk_archive_md_files,
+    )
+
+    def _holder(path: Path) -> "Optional[Dict[str, Any]]":
+        head = _frontmatter_head_bytes(path)
+        if str(path) in wanted:
+            heads[str(path)] = head
+        if head is None:
+            return None
+        if head.startswith(b"---") and b"blocked_by" not in head:
+            return None
+        meta = _read_meta(str(path))
+        if not meta or meta.get("blocked_by") is None:
+            return None
+        return {"_path": str(path), "blocked_by": meta["blocked_by"]}
+
+    holders: List[Dict[str, Any]] = []
+    for path in collect_live_handoff_paths(worktree_root):
+        item = _holder(path)
+        if item is not None:
+            holders.append(item)
+    scan_errors: List[str] = []
+    for archive_subdir in ("handoffs", "completed"):
+        archive_dir = worktree_root / "archive" / archive_subdir
+        items, errs = _walk_archive_md_files(
+            archive_dir, _holder, lambda exc: None
+        )
+        holders.extend(items)
+        scan_errors.extend(errs)
+    return holders, scan_errors
+
+
 def blocked_by_dependents_many(
     candidate_paths: "Sequence[str | Path]",
     worktree_root: Path,
     exclude: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    # Function-local imports — see module docstring's IMPORT DISCIPLINE note.
-    from coordinator_core.reconcile.handoff_corpus import _collect_all_handoffs_for_gate_index
-
     replies: Dict[str, Dict[str, Any]] = {}
     if not candidate_paths:
         return replies
 
     exclude_abs: Set[str] = {str(Path(p).resolve()) for p in (exclude or [])}
 
-    pending: List[Tuple[str, str, List[str]]] = []
-    for candidate_path in candidate_paths:
-        key = str(candidate_path)
-        candidate_abs = str(Path(candidate_path).resolve())
-        candidate_meta = _read_meta(candidate_abs) or {}
-        identifiers = sorted(
-            {
-                v
-                for v in (
-                    candidate_meta.get("stub_id"),
-                    candidate_meta.get("id"),
-                    candidate_meta.get("handoff_id"),
-                )
-                if isinstance(v, str) and v
-            }
+    resolved = [(str(p), str(Path(p).resolve())) for p in candidate_paths]
+    heads: Dict[str, Optional[bytes]] = {}
+    walk_exc: Optional[OSError] = None
+    all_handoffs: List[Dict[str, Any]] = []
+    scan_errors: List[str] = []
+    try:
+        all_handoffs, scan_errors = _collect_blocked_by_holders(
+            worktree_root, {abs_ for _k, abs_ in resolved}, heads
         )
+    except OSError as exc:
+        walk_exc = exc
+
+    pending: List[Tuple[str, str, List[str]]] = []
+    for key, candidate_abs in resolved:
+        identifiers = _candidate_identifiers(candidate_abs, heads.get(candidate_abs))
         if not identifiers:
             replies[key] = _blocked_by_indeterminate(
                 "candidate has no resolvable identifier (stub_id/id/handoff_id): "
@@ -567,10 +650,8 @@ def blocked_by_dependents_many(
     if not pending:
         return replies
 
-    try:
-        all_handoffs, scan_errors = _collect_all_handoffs_for_gate_index(worktree_root)
-    except OSError as exc:
-        detail = f"{getattr(exc, 'filename', worktree_root)}: {exc}"
+    if walk_exc is not None:
+        detail = f"{getattr(walk_exc, 'filename', worktree_root)}: {walk_exc}"
         for key, _candidate_abs, identifiers in pending:
             replies[key] = _blocked_by_indeterminate(
                 "enumeration incomplete — cannot rule out a live blocked_by dependent "

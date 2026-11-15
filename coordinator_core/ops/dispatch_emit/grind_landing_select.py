@@ -76,6 +76,18 @@ def _checkin(root: Path, path: str, raw: bytes) -> Optional[bytes]:
     return commit.checkin_form(root, path, raw)
 
 
+def _image_form(root: Path, path: str, raw: bytes, head_bytes: Optional[bytes]) -> Optional[bytes]:
+    """Checkin form of a recorded image. A CRLF image under a text pin is the row's own worktree bytes on a
+    CRLF box; git's checkin turns each CRLF into LF, so that is the form returned, unless the blob carries a
+    lone CR, a clean filter applies, or HEAD already stores CR for the path (git keeps those as they are)."""
+    out = _checkin(root, path, raw)
+    if out is not None or checkin_attrs.clean_filter_may_apply(root, path) is not None:
+        return out
+    if raw.count(b"\r") != raw.count(b"\r\n") or (head_bytes is not None and b"\r" in head_bytes):
+        return None
+    return raw.replace(b"\r\n", b"\n")
+
+
 def _live_peer_held(root: Path, paths: List[str]) -> set:
     if not paths:
         return set()
@@ -118,7 +130,7 @@ def select(main_root, run_id: str, owners: Mapping[str, Sequence[str]]) -> Selec
         raw = blob(sha) if sha is not None else b""
         if raw is None or sha is None:
             return raw
-        return _checkin(root, path, raw)
+        return _image_form(root, path, raw, head.head_bytes(path) if head.entry(path) is not None else None)
 
     def record(row_id: str):
         if row_id not in records:

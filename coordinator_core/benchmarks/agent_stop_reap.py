@@ -26,7 +26,6 @@ import secrets
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
@@ -35,6 +34,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from coordinator_core.benchmarks import fixture_settings_home
+from coordinator_core.temp_layout import mkdtemp_in
 
 BAR_MS = 500.0
 DEFAULT_RECORDS = (900, 5)
@@ -276,7 +276,7 @@ def run(records: Sequence[int], recorder_only: bool, stagger_s: float, scratch: 
     base.mkdir(parents=True, exist_ok=True)
     exit_code = 0
     for n in records:
-        root = Path(tempfile.mkdtemp(prefix="agent-stop-reap-", dir=str(base)))
+        root = mkdtemp_in("agent-stop-reap-", base)
         try:
             with fixture_settings_home(root):
                 seed_unrelated(n)

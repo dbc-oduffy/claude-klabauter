@@ -45,7 +45,7 @@ def test_fatal_refusal_for_a_mid_stage_run_leaves_no_handover_hold(tmp_path, mon
 
     monkeypatch.setattr(live_runs, "HOLD_BOUND_S", 0.0)
     env = _q._setup(tmp_path, monkeypatch, True)
-    env.live_runs[:] = [live_runs.LiveRun("example-game-repo", "ask-be779d", "implement", "2026-10-31T22:46:00Z")]
+    env.live_runs[:] = [live_runs.LiveRun("repo-a", "ask-be779d", "implement", "2026-10-31T22:46:00Z")]
     env.leg_in_flight = True
     rc, err = _q._run(env)
     assert rc == 1 and "not copying" in err, err
@@ -155,10 +155,10 @@ def test_a_mid_stage_run_still_refuses_before_anything_is_copied(tmp_path, monke
 
     monkeypatch.setattr(live_runs, "HOLD_BOUND_S", 0.0)
     env = _q._setup(tmp_path, monkeypatch, True)
-    env.live_runs[:] = [live_runs.LiveRun("example-game-repo", "ask-be779d", "implement", "2026-10-31T22:46:00Z")]
+    env.live_runs[:] = [live_runs.LiveRun("repo-a", "ask-be779d", "implement", "2026-10-31T22:46:00Z")]
     env.leg_in_flight = True
     rc, err = _q._run(env)
-    assert rc == 1 and "example-game-repo ask-be779d" in err
+    assert rc == 1 and "repo-a ask-be779d" in err
     assert env.names("land_diff", "stop") == []
     _assert_released(env)
 
@@ -186,7 +186,7 @@ def test_warm_handover_refusal_releases_the_publish_slot(tmp_path, monkeypatch):
     monkeypatch.setattr(live_runs, "HOLD_BOUND_S", 0.0)
     env = _q._setup(tmp_path, monkeypatch, True)
     taken = _spy_slot(env, monkeypatch)
-    env.live_runs[:] = [live_runs.LiveRun("example-game-repo", "ask-be779d", "implement", "2026-10-31T22:46:00Z")]
+    env.live_runs[:] = [live_runs.LiveRun("repo-a", "ask-be779d", "implement", "2026-10-31T22:46:00Z")]
     env.leg_in_flight = True
     rc, err = _q._run(env)
     assert rc == 1 and "not copying" in err, err

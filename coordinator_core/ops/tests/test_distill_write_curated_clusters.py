@@ -65,7 +65,7 @@ def test_refuses_missing_or_unsafe_run_id_without_output_path(tmp_path, bad) -> 
     params = {"tag_counts": _COUNTS}
     if bad is not None:
         params["run_id"] = bad
-    with pytest.raises(ValueError, match="run_id"):
+    with pytest.raises(ValueError, match=r"run_id.*distill\.scope"):
         _handler(params, repo_root=_common_dir(tmp_path))
     assert not (tmp_path / "state").exists()
 
@@ -121,6 +121,37 @@ def test_caller_tag_counts_win_over_invocation_a(tmp_path) -> None:
 
 
 def test_run_id_without_invocation_a_still_refuses_and_writes_nothing(tmp_path) -> None:
-    with pytest.raises(ValueError, match="tag_counts"):
+    with pytest.raises(ValueError, match=r"tag_counts.*distill\.launch_args"):
         _handler({"run_id": "r5"}, repo_root=_common_dir(tmp_path))
     assert not (tmp_path / "state").exists()
+
+
+def _installer_verdict(tmp_path):
+    reply = _handler({"tag_counts": {"installer": 2}, "run_id": "w1"}, repo_root=_common_dir(tmp_path))
+    body = json.loads((tmp_path / reply["output_path"]).read_text(encoding="utf-8"))
+    return body["verdicts"][0]
+
+
+def test_wiki_page_stem_keeps_bare_tag_at_default_arguments(tmp_path) -> None:
+    (tmp_path / "docs" / "wiki").mkdir(parents=True)
+    (tmp_path / "docs" / "wiki" / "installation.md").write_text("x", encoding="utf-8")
+    v = _installer_verdict(tmp_path)
+    assert v["verdict"] == "keep" and v["drop_cause"] is None
+
+
+def test_wiki_folder_name_keeps_bare_tag(tmp_path) -> None:
+    (tmp_path / "docs" / "wiki" / "installation").mkdir(parents=True)
+    assert _installer_verdict(tmp_path)["verdict"] == "keep"
+
+
+def test_unmatched_bare_tag_still_dropped_bare_no_sibling(tmp_path) -> None:
+    (tmp_path / "docs" / "wiki").mkdir(parents=True)
+    (tmp_path / "docs" / "wiki" / "testing.md").write_text("x", encoding="utf-8")
+    v = _installer_verdict(tmp_path)
+    assert (v["verdict"], v["drop_cause"]) == ("drop", "bare-no-sibling")
+
+
+def test_nested_wiki_entries_are_not_walked(tmp_path) -> None:
+    (tmp_path / "docs" / "wiki" / "other").mkdir(parents=True)
+    (tmp_path / "docs" / "wiki" / "other" / "installation.md").write_text("x", encoding="utf-8")
+    assert _installer_verdict(tmp_path)["verdict"] == "drop"

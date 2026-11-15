@@ -23,7 +23,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -31,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.temp_layout import mkdtemp_in
 from coordinator_core.warm import breadcrumb, client, election, lifecycle, pair_stop
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -173,7 +173,7 @@ def state(engine_root: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.Fi
     monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "2")
     # A test-marked client reaches no server unless it names a test-isolated runtime base.
     # Short on POSIX: a unix socket under the pytest tmp_path overflows the sun_path budget.
-    rt = Path(tempfile.mkdtemp(prefix="cm-", dir=None if os.name == "nt" else "/tmp"))
+    rt = mkdtemp_in("cm-", None if os.name == "nt" else "/tmp")
     request.addfinalizer(lambda: shutil.rmtree(rt, ignore_errors=True))
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(rt))
     monkeypatch.setattr(client, "_engine_clone_root", lambda: engine_root)

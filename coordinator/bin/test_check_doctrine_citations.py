@@ -45,30 +45,30 @@ class FixtureCorpus:
         self.tmp = tmp
         self.content_root = os.path.join(tmp, "content_root")
         self.doe_coordinator = os.path.join(tmp, "doe_coordinator")
-        self.claude_klabauter = os.path.join(tmp, "claude-klabauter")
+        self.engine_repo = os.path.join(tmp, "claude-klabauter")
         self.corpus = os.path.join(tmp, "corpus")
         os.makedirs(self.corpus, exist_ok=True)
 
         for name in DOE_VS_CLAUDE_KLABAUTER_COLLISIONS:
             _write(os.path.join(self.content_root, "docs", "wiki", name))
-            _write(os.path.join(self.claude_klabauter, "docs", "wiki", name))
+            _write(os.path.join(self.engine_repo, "docs", "wiki", name))
 
         _write(os.path.join(self.content_root, "docs", "plans", DOE_VS_CLAUDE_KLABAUTER_PLANS_COLLISION))
-        _write(os.path.join(self.claude_klabauter, "docs", "plans", DOE_VS_CLAUDE_KLABAUTER_PLANS_COLLISION))
+        _write(os.path.join(self.engine_repo, "docs", "plans", DOE_VS_CLAUDE_KLABAUTER_PLANS_COLLISION))
 
         for name in INTRA_DOE_COLLISIONS:
             _write(os.path.join(self.content_root, "docs", "wiki", name))
             _write(os.path.join(self.doe_coordinator, "docs", "wiki", name))
 
         _write(os.path.join(self.doe_coordinator, "docs", "wiki", "only-in-coordinator.md"))
-        _write(os.path.join(self.claude_klabauter, "docs", "wiki", "only-in-claude-klabauter.md"))
+        _write(os.path.join(self.engine_repo, "docs", "wiki", "only-in-claude-klabauter.md"))
 
     @property
     def tree_roots(self) -> dict[str, str]:
         return {
             "content_root": self.content_root,
             "doe_coordinator": self.doe_coordinator,
-            "claude-klabauter": self.claude_klabauter,
+            "claude-klabauter": self.engine_repo,
         }
 
     def write_corpus_file(self, name: str, content: str) -> str:
@@ -369,7 +369,7 @@ class ConsumerRootModeTests(unittest.TestCase):
             [self.fixture.corpus],
             self.fixture.tree_roots,
             use_default_trees=False,
-            consumer_root=self.fixture.claude_klabauter,
+            consumer_root=self.fixture.engine_repo,
         )
         self.assertEqual(code, 1)
         self.assertEqual(len(findings), 1)
@@ -383,7 +383,7 @@ class ConsumerRootModeTests(unittest.TestCase):
             [self.fixture.corpus],
             self.fixture.tree_roots,
             use_default_trees=False,
-            consumer_root=self.fixture.claude_klabauter,
+            consumer_root=self.fixture.engine_repo,
         )
         self.assertEqual(code, 0, msg=findings)
         self.assertEqual(findings, [])
@@ -396,7 +396,7 @@ class ConsumerRootModeTests(unittest.TestCase):
             [self.fixture.corpus],
             self.fixture.tree_roots,
             use_default_trees=False,
-            consumer_root=self.fixture.claude_klabauter,
+            consumer_root=self.fixture.engine_repo,
         )
         self.assertEqual(code, 0, msg=findings)
         self.assertEqual(findings, [])
@@ -407,7 +407,7 @@ class ConsumerRootModeTests(unittest.TestCase):
             [self.fixture.corpus],
             self.fixture.tree_roots,
             use_default_trees=False,
-            consumer_root=self.fixture.claude_klabauter,
+            consumer_root=self.fixture.engine_repo,
         )
         self.assertEqual(code, 0, msg=findings)
         self.assertEqual(excluded, 1)
@@ -416,7 +416,7 @@ class ConsumerRootModeTests(unittest.TestCase):
         # ${CLAUDE_PLUGIN_ROOT}/ is harness-expanded, cwd-independent by
         # construction -- the consumer-cwd question this mode asks does not
         # apply to it, even though its target exists only in a DoE tree and
-        # is absent under consumer_root (self.fixture.claude-klabauter) verbatim.
+        # is absent under consumer_root (self.fixture.engine_repo) verbatim.
         self.fixture.write_corpus_file(
             "doc.md", "See ${CLAUDE_PLUGIN_ROOT}/docs/wiki/only-in-coordinator.md.\n"
         )
@@ -426,7 +426,7 @@ class ConsumerRootModeTests(unittest.TestCase):
             [self.fixture.corpus],
             tree_roots,
             use_default_trees=False,
-            consumer_root=self.fixture.claude_klabauter,
+            consumer_root=self.fixture.engine_repo,
         )
         self.assertEqual(code, 0, msg=findings)
         self.assertEqual(findings, [])
@@ -443,7 +443,7 @@ class ConsumerRootModeTests(unittest.TestCase):
             [self.fixture.corpus],
             tree_roots,
             use_default_trees=False,
-            consumer_root=self.fixture.claude_klabauter,
+            consumer_root=self.fixture.engine_repo,
         )
         self.assertEqual(code, 1, msg=findings)
         self.assertEqual(len(findings), 1)
@@ -532,7 +532,7 @@ class ConfigErrorTests(unittest.TestCase):
             "--corpus",
             self.fixture.corpus,
             "--no-default-trees",
-            f"--tree=claude-klabauter={self.fixture.claude_klabauter}",
+            f"--tree=claude-klabauter={self.fixture.engine_repo}",
         ]
         code = _module.main(argv)
         self.assertNotEqual(code, 2)
@@ -546,7 +546,7 @@ class ConsumerModeDotDotTraversalTests(unittest.TestCase):
         self.fixture = FixtureCorpus(os.path.join(self._tmpdir.name, "fixture"))
 
     def test_dotdot_citation_does_not_silently_pass_via_traversal_outside_consumer_root(self):
-        decoy_root = os.path.dirname(os.path.dirname(self.fixture.claude_klabauter))
+        decoy_root = os.path.dirname(os.path.dirname(self.fixture.engine_repo))
         _write(os.path.join(decoy_root, "docs", "wiki", "only-in-coordinator.md"))
         self.fixture.write_corpus_file(
             "doc.md", "See ../../docs/wiki/only-in-coordinator.md.\n"
@@ -555,7 +555,7 @@ class ConsumerModeDotDotTraversalTests(unittest.TestCase):
             [self.fixture.corpus],
             self.fixture.tree_roots,
             use_default_trees=False,
-            consumer_root=self.fixture.claude_klabauter,
+            consumer_root=self.fixture.engine_repo,
         )
         self.assertEqual(code, 1, msg=findings)
         self.assertEqual(len(findings), 1)
@@ -570,7 +570,7 @@ class ConsumerModeDotDotTraversalTests(unittest.TestCase):
             [self.fixture.corpus],
             self.fixture.tree_roots,
             use_default_trees=False,
-            consumer_root=self.fixture.claude_klabauter,
+            consumer_root=self.fixture.engine_repo,
         )
         self.assertEqual(code, 1, msg=findings)
         self.assertIn("dead-from-consumer", findings[0])

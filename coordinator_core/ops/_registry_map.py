@@ -517,6 +517,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "cli.parse_date_flags":                   "coordinator_core.ops.parse_cli_args",
     "merge.quiet_activity_gate":              "coordinator_core.ops.merge_quiet_activity_gate",
     "update_docs.probe_fresh_repo_noop":      "coordinator_core.ops.probe_fresh_repo_noop",
+    "update_docs.atlas_mechanical_report":    "coordinator_core.ops.atlas_mechanical_report",
     "install.probe_skill_frontmatter_valid":  "coordinator_core.install.prereq_probe",
     "install.probe_windows_terminal_presence": "coordinator_core.install.prereq_probe",
     "mcp.resolve_server_cli_path":            "coordinator_core.ops.resolve_mcp_server_cli_path",

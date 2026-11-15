@@ -134,6 +134,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         f"{pipeline}: post-run finish for {run_id.strip()}",
         session_id=params.get("session_id") if isinstance(params.get("session_id"), str) else None,
     )
+    if commit.ok and commit.committed and commit.paths:
+        from coordinator_core.session.scope import release_committed_claims_or_retain
+
+        # Run agents wrote these paths through touch-recorded tools; unreleased, the claims hold them against peers.
+        release_committed_claims_or_retain(
+            scope.repo_root, commit.paths,
+            params.get("session_id") if isinstance(params.get("session_id"), str) else None, "post_run.finish",
+        )
     return {
         "exit_code": 0 if commit.ok else 1,
         "pipeline": pipeline,

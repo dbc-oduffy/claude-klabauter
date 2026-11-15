@@ -249,7 +249,13 @@ def mkdtemp_in(prefix: str, parent: Path | str | None) -> Path:
     """
     if parent is None:
         return make_managed_temp_dir(prefix)
-    return Path(tempfile.mkdtemp(prefix=prefix, dir=str(parent)))
+    while True:
+        path = Path(parent) / f"{prefix}{secrets.token_hex(4)}"
+        try:
+            path.mkdir(mode=0o700)
+        except FileExistsError:
+            continue
+        return path
 
 
 @contextlib.contextmanager

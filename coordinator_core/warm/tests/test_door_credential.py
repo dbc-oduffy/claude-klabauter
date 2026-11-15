@@ -109,3 +109,30 @@ def test_windows_boundary_names_only_system_admins_and_owner(isolated_base: Path
     assert ";;;wd)" not in lowered
     assert ";;;au)" not in lowered
     assert ";;;bu)" not in lowered
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DACL semantics are Windows-only")
+def test_secret_carries_one_logon_sid_read_ace_and_no_broad_grant(isolated_base: Path) -> None:
+    from coordinator_core.warm import cookie, election
+
+    logon = election.current_logon_sid()
+    assert logon is not None
+    door_credential.ensure_secret()
+    aces = [m.group(1).split(";") for m in cookie._ACE_RE.finditer(
+        cookie._directory_dacl_sddl(door_credential.secret_path()))]
+    assert [(a[0], a[2]) for a in aces if a[5] == logon] == [("A", "FR")]
+    for ace in aces:
+        assert ace[5] not in ("WD", "AU", "BU", "IU", "RC", "S-1-1-0"), ace
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DACL semantics are Windows-only")
+def test_existing_secret_gains_the_grant_and_a_restricted_token_reads_it(isolated_base: Path) -> None:
+    from coordinator_core.warm import election
+    from coordinator_core.warm.tests.test_cookie import read_file_as_restricted_token
+
+    logon = election.current_logon_sid()
+    assert logon is not None
+    door_credential.secret_path().write_text("a" * 64, encoding="utf-8")
+    assert read_file_as_restricted_token(door_credential.secret_path(), [logon, "S-1-1-0"]) is False
+    assert door_credential.ensure_secret() == "a" * 64
+    assert read_file_as_restricted_token(door_credential.secret_path(), [logon, "S-1-1-0"]) is True

@@ -73,6 +73,45 @@ def test_firing_sessions_includes_recorded_emitter_and_peer_claim_by_emitter_is_
     assert land_run._peer_held(tmp_path, ["a/x.py"], "driver", "r1", None, self_sessions=selves) == {"a/x.py": ["sib"]}
 
 
+LANDED_RUN = "ask-20260101T000000-aaaaaa"
+OWN_RUN = "ask-20260101T000000-bbbbbb"
+
+
+def _record(root, run_id, *, marker=None, stage=None):
+    import json
+
+    rdir = root / "state" / "warp" / run_id
+    rdir.mkdir(parents=True)
+    if marker is not None:
+        (rdir / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
+    if stage is not None:
+        (rdir / "run-stage.json").write_text(json.dumps({"stage": stage}), encoding="utf-8")
+
+
+def _held_by(root, holder):
+    return spl.sibling_held_product(
+        [("C1", "a/x.py", "peer-held")], {"a/x.py": [holder]}, root=root, own_run_id=OWN_RUN,
+    )
+
+
+def test_a_landed_marker_holder_is_dropped_from_sibling_held_product(tmp_path):
+    _record(tmp_path, LANDED_RUN, marker={"status": "landed"}, stage="landed")
+    assert spl.released_holder(tmp_path, LANDED_RUN, OWN_RUN)
+    assert not spl.holds_path(tmp_path, LANDED_RUN, "a/x.py", OWN_RUN)
+    assert _held_by(tmp_path, LANDED_RUN) == []
+
+
+def test_a_run_with_no_marker_whose_stage_reads_landed_is_dropped(tmp_path):
+    _record(tmp_path, LANDED_RUN, stage="landed")
+    assert _held_by(tmp_path, LANDED_RUN) == []
+
+
+def test_a_run_neither_halted_nor_landed_still_holds(tmp_path):
+    _record(tmp_path, LANDED_RUN, stage="staged")
+    assert _held_by(tmp_path, LANDED_RUN) == [("C1", "a/x.py", [LANDED_RUN])]
+    assert _held_by(tmp_path, "sess-1") == [("C1", "a/x.py", ["sess-1"])]
+
+
 def test_withheld_product_paths_all_reasons_unique_sorted():
     assert spl.withheld_product_paths(UNLANDED) == ["a/x.py", "b/y.py", "c/z.py"]
     assert spl.withheld_product_paths([]) == []

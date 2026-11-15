@@ -154,6 +154,14 @@ def test_no_fire_substring_and_no_clock_or_spawn_globals():
     assert "Date.now" not in script and "Math.random" not in script
 
 
+def test_log_guard_precedes_every_log_call_in_the_script():
+    script = _compose()
+    guard = "if (typeof log === 'undefined') globalThis.log = () => {};"
+    assert script.count(guard) == 1
+    first_call = re.search(r"(?<![\w.])log\(", script)
+    assert first_call is not None and script.index(guard) < first_call.start()
+
+
 def test_review_wave_declares_paths_from_the_manifest():
     script = _compose()
     assert "_manifest.review_declared_paths" in script

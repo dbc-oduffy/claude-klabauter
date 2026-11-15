@@ -90,10 +90,6 @@ class _Site(NamedTuple):
 # (relpath, sink) -> why this site is allowed to name its own destination.
 # Measured 2026-08-27: 19 explicit-destination calls across these 8 files.
 _SANCTIONED_SITES: dict[tuple[str, str], str] = {
-    ("coordinator_core/benchmarks/isolated_clone.py", "mkdtemp"): (
-        "THE sanctioned helper -- the one site that resolves a destination and "
-        "asserts a git root above it at runtime"
-    ),
     ("coordinator_core/bash_guards/tests/guard_message_corpus.py", "TemporaryDirectory"): (
         "guard-message corpus fixtures; destination is `_neutral_scratch_parent()`, "
         "a deliberately repo-neutral parent the corpus needs to exercise guard text"
@@ -109,87 +105,9 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
     ("coordinator_core/warm/tests/test_door_read_deadline_posix.py", "mkdtemp"): (
         "same sun_path budget constraint as the warm-door gate above"
     ),
-    ("coordinator_core/install/sandbox_check.py", "mkdtemp"): (
-        "install sandbox is a throwaway CLAUDE_HOME under the platform temp dir "
-        "by design -- it must NOT be inside any repo"
-    ),
-    ("coordinator_core/bash_guards/_alternative_liveness.py", "mkdtemp"): (
-        "probe scratch under `_probe_temp_root()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/bash_guards/_firing_shape.py", "mkdtemp"): (
-        "scratch under `managed_tempdir(repo_root)`, the managed temp root; not an engine clone"
-    ),
     ("coordinator_core/bash_guards/tests/guard_message_exemptions.py", "mkdtemp"): (
         "reuses the guard-message corpus's `_neutral_scratch_parent()` -- the same "
         "deliberately repo-neutral parent"
-    ),
-    ("coordinator_core/advisory_census.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/engine_stall_repro.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/submit_slow_disk_profile.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/warp_live_earlier_lines_budget.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/handoff_supersede_baseline.py", "mkdtemp"): (
-        "scratch under `managed_tempdir(REPO_ROOT)`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/measure_read_events.py", "mkdtemp"): (
-        "scratch under `managed_tempdir(repo)`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/measure_render_status.py", "mkdtemp"): (
-        "scratch under `managed_tempdir(repo)`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/op_fixtures.py", "mkdtemp"): (
-        "scratch under `managed_tempdir(repo)`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/probe_commit_pipeline.py", "mkdtemp"): (
-        "scratch under `managed_tempdir(repo)`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/probe_since_base_overlap.py", "mkdtemp"): (
-        "synthetic-repo fixtures under a caller-passed root that `main` takes from "
-        "`managed_tempdir()`; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/terminal_commit_ab.py", "mkdtemp"): (
-        "work dir under the operator's `--out-dir` (validated by `check_out_dir`), else the "
-        "default temp; a synthetic-repo work dir, not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/ask_stage_size_l_profile.py", "mkdtemp"): (
-        "profile scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/ask_stage_size_l_profile.py", "TemporaryDirectory"): (
-        "profile home under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/ask_spool_write_budget.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, plus a short POSIX `/tmp` socket base for the AF_UNIX "
-        "sun_path byte budget; neither is an engine clone"
-    ),
-    ("coordinator_core/benchmarks/baseline_export_cache_profile.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/liveness_record_scan_budget.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/commit_paths_pin_loop_budget.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/hunk_split_large_file_budget.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/land_swap_hook_window.py", "TemporaryDirectory"): (
-        "synthetic engine root under a caller-passed `work_dir`, else the default temp; "
-        "a fake-pair fixture, not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/release_claims_bulk_bench.py", "mkdtemp"): (
-        "synthetic-repo scratch under the operator's `--scratch-dir`, else the default temp; "
-        "not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/sizing_assemble_process_budget.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
     ),
     ("coordinator_core/warm/door/tests/test_replay_safe_post_delivery_goes_cold.py", "mkdtemp"): (
         "`runtime_base` picks `/tmp` before the managed temp root for the AF_UNIX sun_path "
@@ -198,12 +116,6 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
     ("coordinator_core/resource_lifecycle/tests/test_lease.py", "mkdtemp"): (
         "POSIX `/tmp` base keeps the lease socket path under the AF_UNIX sun_path byte budget; "
         "chosen for socket length, not repo placement"
-    ),
-    ("coordinator_core/benchmarks/submit_engine_ask_fan_profile.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/submit_engine_ask_fan_profile.py", "TemporaryDirectory"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
     ),
     ("coordinator_core/host_hooks/tests/test_shim_end_to_end.py", "mkdtemp"): (
         "POSIX `/tmp` base keeps the warm-socket path under the AF_UNIX sun_path byte budget; "
@@ -215,28 +127,6 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
     ("coordinator_core/benchmarks/tests/test_isolated_clone_destination.py", "mkdtemp"): (
         "exercises `mkdtemp_for_clone` itself, with destinations under `managed_tempdir()`"
     ),
-    ("coordinator_core/ceremony_common/run/runner.py", "mkdtemp"): (
-        "per-child stdout/stderr capture dir under the caller's `io_dir`, else the default "
-        "temp; run-owned and removed with the child, not an engine clone"
-    ),
-    ("coordinator_core/ops/new_project_scaffold.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/ops/percolate_preflight_scratch_publish.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/percolate/engine.py", "mkdtemp"): (
-        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/percolate/round.py", "mkdtemp"): (
-        "scratch under `managed_tempdir(dest_repo_root)`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/source_edit_gate/runner.py", "mkdtemp"): (
-        "scratch under `managed_tempdir(repo_root)`, the managed temp root; not an engine clone"
-    ),
-    ("coordinator_core/testing/symlink_capability.py", "mkdtemp"): (
-        "capability probe scratch under `managed_tempdir()`; not an engine clone"
-    ),
     ("coordinator_core/tests/git_seed.py", "mkdtemp"): (
         "seed-repo scratch under `managed_tempdir()`; not an engine clone"
     ),
@@ -245,18 +135,6 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
     ),
     ("coordinator_core/tests/_fixtures.py", "mkdtemp"): (
         "service fixtures pin a short base to stay inside path-length limits"
-    ),
-    ("coordinator_core/benchmarks/maintenance_tier_budget.py", "mkdtemp"): (
-        "NOT an engine clone -- `_make_throwaway_clone` does `git init` on an empty "
-        "repo and its own docstring says it never touches the live .git, so there "
-        "are no hardlinks and `mkdtemp_for_clone`'s same-volume requirement (the "
-        "whole reason that helper exists) does not apply. Placing it under the "
-        "source volume instead would put this benchmark's churn -- 200 commits per "
-        "sample -- on the working tree's disk to buy a constraint it does not have"
-    ),
-    ("coordinator_core/conftest.py", "mkdtemp"): (
-        "suite-wide warm runtime base under /tmp for the AF_UNIX sun_path byte "
-        "budget; not an engine clone"
     ),
     ("coordinator_core/warm/tests/test_client_fallback.py", "mkdtemp"): (
         "same sun_path byte budget as the warm-door gate above; not an engine clone"
@@ -275,36 +153,6 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
     ),
     ("coordinator_core/warm/tests/test_warm_telemetry.py", "mkdtemp"): (
         "same sun_path byte budget as the warm-door gate above; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/claim_release_scope_bench.py", "mkdtemp"): (
-        "synthetic claim fixture in a caller-supplied scratch_parent (else default temp), removed after measure; synthetic fixture, not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/distill_disposal_large_corpus.py", "mkdtemp"): (
-        "synthetic distill corpus under the repo's scratch/ (or caller base_dir), rmtree'd unless --keep; not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/land_gate_reach_profile.py", "mkdtemp"): (
-        "work dir under the operator's --dir, else the default temp; removed in finally; synthetic fixture, not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/land_run_leg_budget_profile.py", "mkdtemp"): (
-        "work dir under the operator's --dir, else the default temp; removed in finally; synthetic fixture, not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/land_run_slow_disk_profile.py", "mkdtemp"): (
-        "work dir under the operator's --dir, else the default temp; rmtree'd in finally; synthetic, not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/pack_lookup_scaling_profile.py", "mkdtemp"): (
-        "scratch under <repo>/scratch, removed per iteration; synthetic fixture, not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/prefire_launch_lookup_cost.py", "mkdtemp"): (
-        "fixture under <repo>/scratch (or operator --workdir); synthetic fixture, not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/submit_engine_ask_process_budget.py", "mkdtemp"): (
-        "scratch under _scratch_parent(), removed after measure; synthetic fixture, not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/submit_hook_resume_emit.py", "mkdtemp"): (
-        "scratch under _scratch_parent(), removed after measure; synthetic fixture, not an engine clone"
-    ),
-    ("coordinator_core/benchmarks/terminal_sizing_drain_budget.py", "mkdtemp"): (
-        "scratch under <repo>/scratch; synthetic fixture, not an engine clone"
     ),
     ("coordinator_core/warm/tests/test_door_refuses_foreign_engine_root.py", "mkdtemp"): (
         "same sun_path byte budget as the warm-door gate above; not an engine clone"

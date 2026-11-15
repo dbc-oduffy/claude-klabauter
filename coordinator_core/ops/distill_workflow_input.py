@@ -503,7 +503,13 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
     if not isinstance(manifest, dict):
         raise ValueError(
             "distill.workflow_input requires a 'manifest' param (a "
-            "distill.scope scope-manifest dict)"
+            "distill.scope scope-manifest dict: the input.json distill.scope writes)"
+        )
+    missing = [k for k in ("run_id", "batches", "wiki_dirs", "wiki_slugs") if k not in manifest]
+    if missing:
+        raise ValueError(
+            f"distill.workflow_input: manifest lacks {missing}; it must be the scope manifest "
+            "(input.json) that distill.scope writes"
         )
     repo_root_param = params.get("repo_root")
     if not repo_root_param:

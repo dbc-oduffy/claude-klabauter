@@ -61,6 +61,23 @@ _DATE_PREFIX = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 _STAMP = re.compile(r"\d{8}T\d{6}-[0-9a-f]{6}")
 
 
+def _latest_note_at(record_dir: Path) -> str:
+    """Newest `at` across the run's `notes.jsonl` (EM rulings, own or carried); "" when none or unreadable."""
+    latest = ""
+    try:
+        with open(Path(record_dir) / "notes.jsonl", encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    at = json.loads(line).get("at")
+                except (ValueError, AttributeError):
+                    continue
+                if isinstance(at, str) and at > latest:
+                    latest = at
+    except OSError:
+        return ""
+    return latest
+
+
 def _norm(sizing_rel: str) -> str:
     return PurePosixPath(sizing_rel.replace("\\", "/")).as_posix()
 
@@ -349,11 +366,18 @@ def halted_ask_run_for(repo_root: Path, sizing_rel: str, *, ignore_superseded: b
     undated name), and a `warp-<stem>-*` dir stamped later supersedes the ask run unless
     `ignore_superseded` (the notes-carrying lookup, which resumes nothing).
     """
+    found = _halted_asks(repo_root, sizing_rel, ignore_superseded=ignore_superseded, first_only=True)
+    return found[0] if found else None
+
+
+def _halted_asks(repo_root: Path, sizing_rel: str, *, ignore_superseded: bool = False, first_only: bool = False) -> list:
+    """Halted `ask-<stamp>` runs naming `sizing_rel`, newest first, under `halted_ask_run_for`'s date floor and
+    supersession rule; `first_only` stops at the first (the legacy single-answer read)."""
     norm = _norm(sizing_rel)
     stem = PurePosixPath(norm).stem
     dated = _DATE_PREFIX.match(stem)
     if dated is None:
-        return None
+        return []
     floor = "".join(dated.groups())
     root = Path(repo_root) / RECORD_DIR_ROOT
     asks = [
@@ -361,14 +385,19 @@ def halted_ask_run_for(repo_root: Path, sizing_rel: str, *, ignore_superseded: b
         if name.startswith("ask-") and _STAMP.fullmatch(name[4:]) and name[4:12] >= floor
     ]
     newest_warp = max(_warp_stamps(root, f"warp-{stem}-"), default="") if asks and not ignore_superseded else ""
+    found = []
     for stamp in sorted(asks, reverse=True):
         if stamp < newest_warp and not ignore_superseded:
-            return None
+            break
         name = f"ask-{stamp}"
         marker = _read(root / name)
         if marker and marker.get("status") == STATUS_HALTED and marker.get("sizing_rel") == norm:
-            return name if safe_id(name) else None
-    return None
+            if not safe_id(name):
+                break
+            found.append(name)
+            if first_only:
+                break
+    return found
 
 
 def notes_predecessor(repo_root: Path, sizing_rel: str, *, exclude: Optional[str] = None) -> Optional[str]:
@@ -472,9 +501,65 @@ def halted_run_named(repo_root: Path, run_id: object, sizing_rel: str) -> Option
     return run_id
 
 
-def halted_run_to_resume(repo_root: Path, sizing_rel: str, *, build: bool = True, run_id: object = None):
+class AmbiguousHaltedRuns(ValueError):
+    """Several halted runs of one sizing and none is the caller's: `candidates` names every one."""
+
+    caller_facing_validation = True  # ipc renders the message as INVALID_PARAMS, not a bare Internal error
+
+    def __init__(self, sizing_rel: str, candidates):
+        self.candidates = tuple(candidates)
+        self.reason = f"ambiguous-halted-runs:{','.join(self.candidates)}"
+        super().__init__(
+            f"{len(self.candidates)} halted runs of {sizing_rel}, none owned by this session: "
+            f"{', '.join(self.candidates)}. Instead: pass `run_id` naming the one to resume."
+        )
+
+
+def _run_stamp(run_id: str) -> str:
+    """The `<%Y%m%dT%H%M%S>-<hex6>` tail of a `warp-` or `ask-` run id (comparable across both prefixes)."""
+    return run_id[-22:]
+
+
+def _halted_candidates(repo_root: Path, sizing_rel: str) -> list:
+    """Every halted run a refire of `sizing_rel` could resume: the newest `warp-<stem>-*` halt plus each
+    unsuperseded halted `ask-*` run. One warp listing and the sizing's indexed ask markers, no scan."""
+    warp = halted_run_for(repo_root, sizing_rel)
+    return ([warp] if warp else []) + _halted_asks(repo_root, sizing_rel)
+
+
+def _prefer(repo_root: Path, sizing_rel: str, candidates: list, caller_session: Optional[str]) -> str:
+    """The candidate to resume among two or more: the caller's own newest run; else the latest `revised_at`
+    stamp; else the newest. `AmbiguousHaltedRuns` when the caller owns none, no stamp breaks the tie and the
+    candidates' emission receipts name different sessions. Receipt reads only, no spawn."""
+    ordered = sorted(candidates, key=_run_stamp, reverse=True)
+    owners = {name: recorded_emitter(repo_root, name) for name in ordered}
+    if caller_session:
+        for name in ordered:
+            if owners[name] == caller_session:
+                return name
+    root = Path(repo_root) / RECORD_DIR_ROOT
+    stamps = [(at, name) for name in ordered if (at := revised_halt(root / name))]
+    if stamps:
+        return max(stamps)[1]
+    if caller_session and len({o for o in owners.values() if o}) > 1:
+        raise AmbiguousHaltedRuns(_norm(sizing_rel), ordered)
+    return ordered[0]
+
+
+def preferred_halted_run(repo_root: Path, sizing_rel: str, *, caller_session: Optional[str] = None) -> Optional[str]:
+    """`_prefer`'s answer when the sizing has two or more halted candidates, else None (the legacy
+    single-halt lookups stand). For callers that resolve a warp halt and an ask halt separately."""
+    candidates = _halted_candidates(repo_root, sizing_rel)
+    return _prefer(repo_root, sizing_rel, candidates, caller_session) if len(candidates) > 1 else None
+
+
+def halted_run_to_resume(
+    repo_root: Path, sizing_rel: str, *, build: bool = True, run_id: object = None, caller_session: Optional[str] = None
+):
     """The halted run a refire of `sizing_rel` resumes, a `warp-<stem>-*` run or else an `ask-<stamp>`
     one. The submit hook and the emit body both resolve through here so their lookups cannot drift.
+    With several halted runs the caller's own newest wins (`_prefer`); a `caller_session` that owns none
+    and cannot be told from the rest refuses with `AmbiguousHaltedRuns`.
     A refire's `run_id` (`halted_run_named`) is tried first, so a sizing path change cannot lose the run.
     A sizing the lookup index holds no run for answers None after one directory listing.
     The hook passes `build=False`: on a checkout whose index is unbuilt it answers the `warp-<stem>-*` halt
@@ -489,7 +574,10 @@ def halted_run_to_resume(repo_root: Path, sizing_rel: str, *, build: bool = True
         return halted_run_for(repo_root, sizing_rel) or STALLED
     if not runs:
         return None
-    picked = halted_run_for(repo_root, sizing_rel) or halted_ask_run_for(repo_root, sizing_rel)
+    candidates = _halted_candidates(repo_root, sizing_rel)
+    if len(candidates) > 1:
+        return _prefer(repo_root, sizing_rel, candidates, caller_session)
+    picked = candidates[0] if candidates else None
     return _latest_revised(repo_root, sizing_rel, runs, picked) if picked else picked
 
 
@@ -506,6 +594,10 @@ def _latest_revised(repo_root: Path, sizing_rel: str, runs: set, picked: str) ->
         if at and at >= best_at:
             best_at, best = at, name
     if best is None or best_at <= (revised_halt(root / picked) or ""):
+        return picked
+    # Trap: a later ruling posted on another run of this sizing (`notes.jsonl`) supersedes `best`'s;
+    # without this the OLDEST halt of a lineage won (example-game-repo 06ca65: cc36f8 over 0845c4).
+    if any(_latest_note_at(root / name) > best_at for name in runs if name != best and safe_id(name)):
         return picked
     return halted_run_named(repo_root, best, sizing_rel) or picked
 

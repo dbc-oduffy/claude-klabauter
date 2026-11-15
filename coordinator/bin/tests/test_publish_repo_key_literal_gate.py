@@ -100,6 +100,27 @@ def test_clean_export_reports_zero_residuals_and_passes(tmp_path, capsys):
     assert "codename residuals for claude-klabauter-row: 0 (baseline 0 at 268caaf9c2)" in capsys.readouterr().out
 
 
+def _forbid_transform(monkeypatch) -> None:
+    """Make any content transform raise while `_transform_identity` still hashes the real
+    transform body (patching the function would otherwise change the identity and miss)."""
+    from coordinator_core.percolate import engine as pct_engine
+
+    real_apply, real_identity = pct_engine._apply_content_transforms, pct_engine._transform_identity
+
+    def boom(*args, **kwargs):
+        raise AssertionError("content transform ran on a cached, unchanged tree")
+
+    def identity(params):
+        pct_engine._apply_content_transforms = real_apply
+        try:
+            return real_identity(params)
+        finally:
+            pct_engine._apply_content_transforms = boom
+
+    monkeypatch.setattr(pct_engine, "_apply_content_transforms", boom)
+    monkeypatch.setattr(pct_engine, "_transform_identity", identity)
+
+
 def test_gate_second_run_is_served_from_the_destination_git_dir_and_still_fails_a_rename(tmp_path, monkeypatch):
     src, dest = tmp_path / "src", tmp_path / "dest"
     (dest / ".git").mkdir(parents=True)
@@ -111,16 +132,44 @@ def test_gate_second_run_is_served_from_the_destination_git_dir_and_still_fails_
     assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, [(target, section)]) is True
     assert list((dest / ".git" / "claude-klabauter-gate-result").glob("gate-result-repo-key-literal-*.json"))
 
-    from coordinator_core.percolate import engine as pct_engine
-
-    def boom(*args, **kwargs):
-        raise AssertionError("content transform ran on a cached, unchanged tree")
-
-    monkeypatch.setattr(pct_engine, "_apply_content_transforms", boom)
+    _forbid_transform(monkeypatch)
     assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, [(target, section)]) is True
     monkeypatch.undo()
     renaming = {"hooks": ["substitute"], "substitute": [{"key": "repos.x", "value": "repos.y"}]}
     assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, [(target, renaming)]) is False
+
+
+def test_commit_module_attr_gate_second_run_is_served_from_the_destination_git_dir(tmp_path, monkeypatch):
+    dest = tmp_path / "dest"
+    (dest / ".git").mkdir(parents=True)
+    target = SimpleNamespace(name="row", source_dir=tmp_path / "src", dest_dir=dest)
+    judged: list = []
+    progress_seen: list = []
+
+    def fake_gate(root, sha, *, cache=None, progress=None):
+        progress_seen.append(callable(progress))
+        key = cache.key("a.py", b"x", "P")
+        if cache.get(key) is None:
+            judged.append(key)
+            cache.put(key, [])
+        return 1, []
+
+    class _ReadError(Exception):
+        pass
+
+    monkeypatch.setattr(publish, "_bootstrap_engine", lambda: None)
+    monkeypatch.setattr(publish, "find_commit_module_attr_violations", fake_gate)
+    monkeypatch.setattr(publish, "CommitReadError", _ReadError)
+    assert publish._commit_module_attr_gate(target, "abc123") is True
+    assert list((dest / ".git" / "claude-klabauter-gate-result").glob("gate-result-commit-module-attr-*.json"))
+    assert publish._commit_module_attr_gate(target, "abc123") is True
+    assert len(judged) == 1
+    assert progress_seen == [True, True]
+
+    bare = SimpleNamespace(name="row", source_dir=tmp_path / "src")
+    monkeypatch.setattr(publish, "_gate_cache_for", lambda *a: None)
+    monkeypatch.setattr(publish, "find_commit_module_attr_violations", lambda *a, cache=None, progress=None: (1, [("f.py", "m.x")]))
+    assert publish._commit_module_attr_gate(bare, "abc123") is False
 
 
 def test_identity_row_passes(tmp_path):
@@ -238,3 +287,50 @@ def test_tracked_allowlisted_drift_still_fails(tmp_path, capsys):
 def test_tracked_file_the_allowlist_withholds_is_not_scanned(tmp_path):
     src = _git_source(tmp_path, {"INSTALL.md": "hello\n", "held.py": _SOURCE})
     assert _install_md_run(src) is True
+
+
+def _many_rows(tmp_path: Path, count: int) -> "tuple[list, SimpleNamespace]":
+    """`count` rows sharing one destination repo, each under its own transform identity;
+    row 0 holds a repo-key literal its transform renames, the rest hold one it keeps."""
+    dest = tmp_path / "dest"
+    (dest / ".git").mkdir(parents=True)
+    rows = []
+    for i in range(count):
+        src = tmp_path / f"src{i}"
+        src.mkdir()
+        (src / "mod.py").write_text(_SOURCE if i == 0 else f'KEY = "repos.k{i}"\n', encoding="utf-8")
+        section = {"hooks": ["substitute"], "substitute": [{"key": f"unused{i}", "value": f"other{i}"}]}
+        if i == 0:
+            section["substitute"].append({"key": "repos.x", "value": "repos.y"})
+        rows.append((SimpleNamespace(name=f"row{i}", source_dir=src, dest_dir=dest), section))
+    return rows, SimpleNamespace(engine_claude_klabauter=object())
+
+
+def test_a_round_of_many_rows_is_served_from_cache_with_identical_verdicts(tmp_path, monkeypatch):
+    rows, ctx = _many_rows(tmp_path, 14)
+    clean = rows[1:]
+    assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, clean) is True
+    assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, rows) is False
+
+    _forbid_transform(monkeypatch)
+    assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, clean) is True
+    assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, rows) is False
+
+
+def test_allowlist_denial_matches_path_covers_for_every_shape(tmp_path):
+    allowlist = "docs/,pub.py,lib/keep,!docs/secret,!lib/keep/old.py"
+    target = SimpleNamespace(allowlist=allowlist)
+    rels = [
+        "pub.py", "pub.py.bak", "docs/a.md", "docs/secret/k.md", "docs/secretive.md", "docs",
+        "lib/keep/x.py", "lib/keep/old.py", "lib/keepers.py", "lib/other.py", "top.py",
+    ]
+    entries, exclusions = publish.split_inclusion_exclusion(publish.parse_allowlist_csv(allowlist))
+    want = {
+        r
+        for r in rels
+        if any(publish._path_covers(x, r) for x in exclusions)
+        or not any(publish._path_covers(e, r) for e in entries)
+    }
+    assert publish._paths_the_row_allowlist_denies(target, rels) == want
+    assert {"pub.py", "docs/a.md", "lib/keep/x.py"}.isdisjoint(want)
+    assert {"pub.py.bak", "docs/secret/k.md", "lib/keep/old.py", "lib/other.py", "top.py"} <= want

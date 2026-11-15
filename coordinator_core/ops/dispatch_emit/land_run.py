@@ -2570,6 +2570,44 @@ def _bounded_claim_lookup(claim_index, paths: list, cwd: str) -> dict:
     return box[0]
 
 
+def _without_landed_claimants(root: Path, held: dict) -> dict:
+    """``held`` (``{path: [session ids]}``) minus each claimant whose newest recorded touch hash for the
+    path equals the HEAD blob's content hash: its bytes are at HEAD, nothing of it is in flight. A hashless
+    claimant, a path absent from HEAD, or a failed read keeps the hold. One batched blob read over the held
+    paths, none when nothing is held; never mutates a claim."""
+    if not held:
+        return held
+    try:
+        from coordinator_core.git.content_hash import eol_folded_sha256
+        from coordinator_core.ops.dispatch_emit import halted_hold_release
+        from coordinator_core.session import touch_record
+
+        blobs = halted_hold_release._blob_fetch(root, ["HEAD:" + p for p in held])
+        if blobs is None:
+            return held
+        head_hash = {
+            p: eol_folded_sha256(blobs["HEAD:" + p]) for p in held if blobs.get("HEAD:" + p) is not None
+        }
+        seen: dict = {}
+        kept: dict = {}
+        for path, sids in held.items():
+            expect = head_hash.get(path)
+            if not sids:
+                kept[path] = []
+            for sid in sids:
+                if expect is not None:
+                    if sid not in seen:
+                        seen[sid] = touch_record.last_seen_hashes(
+                            sid, [p for p, ss in held.items() if sid in ss], root
+                        )
+                    if seen[sid].get(path) == expect:
+                        continue
+                kept.setdefault(path, []).append(sid)
+        return kept
+    except Exception:  # noqa: BLE001 -- fail closed: an unanswerable read keeps today's hold
+        return held
+
+
 def _peer_held(
     root: Path, paths: Sequence[str], own_sid: Optional[str], run_id: object, script_path: object,
     *, plan_rel: Optional[str] = None, run_base: Optional[str] = None, minted_before: Optional[tuple] = None,
@@ -2615,6 +2653,7 @@ def _peer_held(
                     held.setdefault(path, []).append(sid)
     except Exception:  # noqa: BLE001 -- advisory: a failed lookup holds nothing, and no reply key reports the gap
         pass
+    held = _without_landed_claimants(root, held)
     try:
         from coordinator_core.ops import warp_run_deliverable
         from coordinator_core.ops.dispatch_emit import own_checkpoint_paths, sibling_claims

@@ -90,7 +90,7 @@ def test_absent_curated_file_adds_no_curated_keys_and_still_builds(tmp_path):
 @pytest.mark.parametrize("data", ["{not json", "[1, 2]", json.dumps({"counts": {}}), json.dumps({"verdicts": "x"})])
 def test_malformed_curated_file_raises_naming_it(tmp_path, data):
     _write_curated(tmp_path, data=data)
-    with pytest.raises(ValueError, match="curated.json"):
+    with pytest.raises(ValueError, match=r"curated\.json.*distill\.write_curated_clusters"):
         dla._handler(_params(tmp_path))
 
 
@@ -111,10 +111,48 @@ def test_curated_file_outside_scratch_is_refused(tmp_path, rel):
 
 
 def test_missing_manifest_and_repo_root_raise(tmp_path):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"distill\.launch_args requires a 'manifest'.*distill\.scope") as ei:
         dla._handler({"repo_root": str(tmp_path)})
+    assert "distill.workflow_input" not in str(ei.value)
     with pytest.raises(ValueError):
         dla._handler({"manifest": _manifest()})
+
+
+def _scope_result(tmp_path) -> dict:
+    rel = f"state/scratch/artifact-distillation/{RUN_ID}/input.json"
+    target = tmp_path / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(_manifest()), encoding="utf-8")
+    return {"run_id": RUN_ID, "input_json_path": rel, "counts": {}}
+
+
+def test_scope_result_as_manifest_loads_input_json(tmp_path):
+    out = dla._handler({"manifest": _scope_result(tmp_path), "repo_root": str(tmp_path)})
+
+    assert out["args"]["wikiSlugs"] == {"foo": "docs/wiki/foo.md"}
+    assert validate_workflow_input(out["args"]) == []
+
+
+def test_run_id_alone_loads_that_runs_input_json(tmp_path):
+    _scope_result(tmp_path)
+    out = dla._handler({"run_id": RUN_ID, "repo_root": str(tmp_path)})
+
+    assert out["args"]["wikiSlugs"] == {"foo": "docs/wiki/foo.md"}
+
+
+@pytest.mark.parametrize("bad", [{"run_id": RUN_ID}, {"run_id": RUN_ID, "batches": []}, {}])
+def test_unknown_manifest_shape_raises_valueerror_naming_wanted_keys(tmp_path, bad):
+    with pytest.raises(ValueError, match="wiki_slugs"):
+        dla._handler({"manifest": bad, "repo_root": str(tmp_path)})
+
+
+def test_scope_result_pointing_outside_scratch_or_missing_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="state/scratch"):
+        dla._handler({"manifest": {"input_json_path": "../x.json"}, "repo_root": str(tmp_path)})
+    with pytest.raises(ValueError, match="unreadable"):
+        dla._handler(
+            {"manifest": {"input_json_path": "state/scratch/nope/input.json"}, "repo_root": str(tmp_path)}
+        )
 
 
 def test_spawns_no_process(tmp_path, monkeypatch):

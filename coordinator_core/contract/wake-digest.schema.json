@@ -433,6 +433,29 @@
                             }
                           }
                         },
+                        "reverify": {
+                          "type": ["object", "null"],
+                          "additionalProperties": false,
+                          "properties": {
+                            "status_before": { "type": ["string", "null"] },
+                            "status_after": { "type": ["string", "null"] },
+                            "reverify_error": { "type": ["string", "null"] },
+                            "failing": { "type": "array", "items": { "type": "string" } },
+                            "pre_existing": { "type": "array", "items": { "type": "string" } },
+                            "foreign": { "type": "array", "items": { "type": "string" } },
+                            "reverted": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "path": { "type": ["string", "null"] },
+                                  "tests": { "type": "array", "items": { "type": "string" } }
+                                }
+                              }
+                            }
+                          }
+                        },
                         "integration": {
                           "type": ["object", "null"],
                           "additionalProperties": false,

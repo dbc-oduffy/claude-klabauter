@@ -2987,6 +2987,55 @@ def _assemble_commit_tree_input(
     return tree_input, absent
 
 
+#: git's canonical empty blob -- what an intent-to-add (`git add -N`) index entry carries.
+EMPTY_BLOB_SHA = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+
+
+def _empty_placeholder_refusal(
+    root: Path,
+    resolution: Dict[str, str],
+    tree_input: Dict[str, "_TreeEntry"],
+    head_spine: Optional[Dict[str, Dict[str, Tuple[int, str]]]],
+) -> Optional[GitResult]:
+    """Refuse a `_SOURCE_STAGED` path that would land as the empty blob while its worktree file has
+    bytes and HEAD does not already carry the empty blob there.
+
+    Such an entry is an intent-to-add placeholder (or an all-filtered new-file patch), not content
+    anyone staged. Committing it verbatim lands an empty file and leaves the real content dirty. A
+    genuinely empty worktree file, and a path HEAD already tracks as empty, pass. Spawn-free: reuses
+    the index/spine already read and one `stat` per candidate.
+    """
+    head_spine = head_spine or {}
+    offenders: List[str] = []
+    for path, source in resolution.items():
+        entry = tree_input.get(path)
+        if source != _SOURCE_STAGED or entry is None or entry[1] != EMPTY_BLOB_SHA:
+            continue
+        norm = _normalize_path_key(path)
+        dirpath, _, name = norm.rpartition("/")
+        head_entry = (head_spine.get(dirpath) or {}).get(name)
+        if head_entry is not None and head_entry[1] == EMPTY_BLOB_SHA:
+            continue
+        try:
+            size = (root / path).stat().st_size
+        except OSError:
+            continue
+        if size > 0:
+            offenders.append(path)
+    if not offenders:
+        return None
+    return GitResult(
+        returncode=-1,
+        stdout="",
+        stderr=(
+            "_commit_scoped_private_index: empty-blob placeholder refused -- staged entry is the "
+            "empty blob (intent-to-add) while the worktree file has content: "
+            + ", ".join(offenders)
+            + ". Nothing was written. Stage the content (`git add -- <path>`) or drop the entry (`git reset -q -- <path>`), then re-run."
+        ),
+    )
+
+
 def _hash_object_stdin_paths(
     paths: Sequence[str],
     *,
@@ -3311,6 +3360,10 @@ def _commit_scoped_private_index(
             stdout="",
             stderr=f"_commit_scoped_private_index: {exc}",
         )
+
+    placeholder_refusal = _empty_placeholder_refusal(root, resolution, tree_input, head_spine)
+    if placeholder_refusal is not None:
+        return placeholder_refusal
 
     assembled: Dict[str, Union[Tuple[int, str], object]] = {
         path: (int(mode, 8), sha) for path, (mode, sha) in tree_input.items()

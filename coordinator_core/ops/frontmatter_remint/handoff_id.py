@@ -7,10 +7,13 @@ the cockpit wire never publishes. The mint site is guarded here, not left to the
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import os
 import re
+import subprocess
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
 from coordinator_core.dag import (
     build_handoff_id_index,
@@ -20,38 +23,79 @@ from coordinator_core.dag import (
 from coordinator_core.ops.emit.context import resolve_repo_name
 from coordinator_core.ops.emit.sections.handoffs import _derive_handoff_id
 from coordinator_core.ops.frontmatter_remint._contract import Refused, Resolved
+from coordinator_core.win_portability import no_console_creationflags
 
 _MINTED_ID_RE = re.compile(r"^hnd-(?!placeholder-replace-with)[a-z0-9-]+-[0-9a-f]{6}$")
 
-#: Frontmatter fields whose values may name another handoff by id.
-_REFERENCE_FIELDS = (
-    "predecessor",
-    "predecessor_id",
-    "additional_predecessors",
-    "forked_from",
-    "origin_handoff",
-    "origin_handoff_id",
+_SCAN_TIMEOUT_S = 2
+
+#: Where a handoff id is cited: state ledgers and the handoff archive, not the whole repo (the
+#: full-repo scan measured over the 500ms bar). Machine-written run artifacts are excluded.
+_SCAN_SCOPE = (
+    "state",
+    "archive/handoffs",
+    ":(exclude)state/warp",
+    ":(exclude)state/plan-blitz",
+    ":(exclude)state/sizings",
+    ":(exclude)state/queue-grind",
+    ":(exclude)state/run-evidence",
+    ":(exclude)state/review-trail",
+    ":(exclude)state/mise-workflows",
 )
 
 
-def _strings(value: Any) -> Iterable[str]:
-    if isinstance(value, str):
-        yield value.strip()
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            yield from _strings(item)
+#: Per-call citer index set by `primed` (old id -> repo-relative citing files). Trap: one scan per
+#: call, never per path -- a per-path spawn made a 14-path call ~2-3s of process time.
+_PRIMED: contextvars.ContextVar[dict[str, list[str]] | None] = contextvars.ContextVar("remint_citers", default=None)
 
 
-def _references_to(old_id: str, metas: Mapping[str, dict], self_abs: str) -> list[str]:
-    hits: list[str] = []
-    for p, meta in metas.items():
-        if p == self_abs or not meta:
-            continue
-        for key in _REFERENCE_FIELDS:
-            if old_id in _strings(meta.get(key)):
-                hits.append(f"{os.path.basename(p)}:{key}")
-                break
-    return hits
+def scan_citers(old_ids: Iterable[str], repo_root: Path) -> dict[str, list[str]]:
+    """Repo-relative files under `_SCAN_SCOPE` (tracked or untracked, not ignored) citing each id.
+
+    One `git grep --no-index` spawn for every id; `--no-index` keeps it valid where `repo_root` is
+    not a repository. A spawn failure, timeout or git error (exit >1) raises rather than reporting
+    no citers.
+    """
+    ids = sorted({i for i in old_ids if i})
+    found: dict[str, set[str]] = {i: set() for i in ids}
+    if not ids:
+        return {}
+    patterns = [arg for i in ids for arg in ("-e", i)]
+    proc = subprocess.run(
+        [
+            "git", "-c", "grep.threads=1", "grep", "--no-index", "--exclude-standard",
+            "-I", "-F", "-o", "-z", *patterns, "--", *_SCAN_SCOPE,
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        timeout=_SCAN_TIMEOUT_S,
+        **no_console_creationflags(),
+    )
+    if proc.returncode > 1:
+        raise RuntimeError(f"citer scan failed: git grep exit {proc.returncode}")
+    for line in proc.stdout.decode("utf-8", "replace").splitlines():
+        rel, sep, match = line.partition("\0")
+        if sep and match in found:
+            found[match].add(rel.replace("\\", "/"))
+    return {i: sorted(v) for i, v in found.items()}
+
+
+@contextlib.contextmanager
+def primed(old_ids: Iterable[str], repo_root: Path) -> Iterator[None]:
+    """Run one citer scan for every id up front; `resolve` reads it instead of spawning."""
+    token = _PRIMED.set(scan_citers(old_ids, repo_root))
+    try:
+        yield
+    finally:
+        _PRIMED.reset(token)
+
+
+def _citers(old_id: str, repo_root: Path, self_abs: str) -> list[str]:
+    """Files citing `old_id`, self excluded: from the primed index, else one scan of its own."""
+    index = _PRIMED.get()
+    hits = index[old_id] if index is not None and old_id in index else scan_citers([old_id], repo_root).get(old_id, [])
+    root = os.path.abspath(repo_root)
+    return [h for h in hits if os.path.abspath(os.path.join(root, h)) != self_abs]
 
 
 def resolve(path: Path, fm: Mapping[str, Any], repo_root: Path) -> Resolved | Refused:
@@ -73,10 +117,10 @@ def resolve(path: Path, fm: Mapping[str, Any], repo_root: Path) -> Resolved | Re
     old = fm.get("handoff_id")
     old_id = str(old).strip() if old is not None else ""
     if old_id and old_id != new_id:
-        refs = _references_to(old_id, metas, self_abs)
+        try:
+            refs = _citers(old_id, repo_root, self_abs)
+        except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+            return Refused("handoff-id-referenced", f"{old_id} citer scan failed: {exc}")
         if refs:
-            return Refused(
-                "handoff-id-referenced",
-                f"{old_id} is cited by {', '.join(sorted(refs))}",
-            )
+            return Refused("handoff-id-referenced", f"{old_id} is cited by {', '.join(refs)}")
     return Resolved({"handoff_id": new_id})

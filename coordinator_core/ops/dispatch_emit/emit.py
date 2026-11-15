@@ -2780,11 +2780,13 @@ def _vitest_cap_clause() -> str:
 
 
 def _test_runner_clause(repo_root: Optional[str | Path] = None) -> str:
-    """The skip-report rule, the vitest cap when the box sets one, and the target repo's interpreter clause."""
+    """The skip-report and changed-file rules, the vitest cap when the box sets one, and the target
+    repo's interpreter clause."""
     from coordinator_core.ops.dispatch_emit.interpreter_pin import interpreter_clause
 
     cap = _vitest_cap_clause()
-    base = f"{_SKIP_REPORT_CLAUSE} {cap}" if cap else _SKIP_REPORT_CLAUSE
+    base = f"{_SKIP_REPORT_CLAUSE} {_CHANGED_FILES_CLAUSE}"
+    base = f"{base} {cap}" if cap else base
     return f"{base} {interpreter_clause(repo_root)}"
 
 
@@ -3725,6 +3727,12 @@ _SKIP_REPORT_CLAUSE = (
     "If the run passes but any test was skipped, set status `pass-with-skips` (never `pass`) "
     "and list each skip in `skipped` as {test, reason} -- the test id and its skip reason, "
     "at most 20; an import-skip means the code under test never ran."
+)
+# A haiku re-verify leg asked itself "what changed since the test log" and ran a tree-wide
+# `find -newer` from the repo root: 17.5 min, 594 CPU-s on a saturated box.
+_CHANGED_FILES_CLAUSE = (
+    "Changed files come from git only: `git diff --name-only <base>` and "
+    "`git ls-files --others --exclude-standard`; never `find`, `ls -R` or a tree walk."
 )
 _FALSIFIER_RESULT_VAR = "_falsifierResult"
 

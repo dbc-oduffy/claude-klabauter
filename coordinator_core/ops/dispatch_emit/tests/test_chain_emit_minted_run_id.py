@@ -73,6 +73,44 @@ def test_a_minted_run_id_equal_to_the_asks_own_is_still_refused():
     assert "is not a fresh run id" in out["result"]["error"]
 
 
+def _verify_sequence(replies: list) -> dict:
+    """Run `_verifiedScriptPath` in node against a relay whose successive receipt checks answer `replies`."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    block = des._RECEIPT_PATH_JS.replace("__AUTHORITY__", json.dumps("AUTH"))
+    block = block.replace("const RECEIPT_RETRY_WAIT_MS = 1000", "const RECEIPT_RETRY_WAIT_MS = 0")
+    code = (
+        "const REPO_ROOT = '/r';\n"
+        f"const REPLIES = {json.dumps(replies)};\n"
+        "let calls = 0;\n"
+        "const agent = async () => REPLIES[Math.min(calls++, REPLIES.length - 1)];\n"
+        + block
+        + "_verifiedScriptPath({ path: '/r/scratch/warp/ask-r1.workflow.mjs', run_id: 'ask-r1' })"
+        ".then((v) => console.log(JSON.stringify({ v, calls })));\n"
+    )
+    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+_GOOD = {"found": True, "receipt_sha256": "ab" * 32, "script_sha256": "ab" * 32}
+_TORN = {"found": True, "receipt_sha256": "ab" * 32, "script_sha256": "cd" * 32}
+
+
+def test_a_receipt_read_torn_by_a_retried_emit_is_reread_and_the_run_starts():
+    out = _verify_sequence([_TORN, _GOOD])
+    assert out["v"] == {"path": "/r/scratch/warp/ask-r1.workflow.mjs"}
+    assert out["calls"] == 2
+
+
+def test_a_receipt_that_stays_mismatched_is_still_refused():
+    out = _verify_sequence([_TORN])
+    assert "emit receipt sha mismatch" in out["v"]["error"] and "path" not in out["v"]
+    assert out["calls"] == 3
+
+
 _HANDOFF_MD = "/r/state/handoffs/2026-11/2026-11-09-x-ccbb6a.md"
 
 
@@ -90,6 +128,72 @@ def test_a_non_script_path_from_the_chain_emit_is_refused_unstarted():
     assert "non-script path" in out["result"]["error"]
 
 
+def test_a_handoff_naming_the_asks_own_script_mints_a_fresh_chained_run():
+    chained = f"/r/scratch/warp/{_MINTED}.workflow.mjs"
+    out = _drive({"path": _ASK_PATH, "run_id": _ASK, "fire_args": {}, "ask_brief": "x"},
+                 {"path": chained, "run_id": _MINTED, "fire_args": {}})
+    assert out["started"] == [chained]
+    assert out["result"]["chained_from"] == _ASK
+
+
+def test_a_handoff_naming_the_asks_own_script_is_refused_when_the_fresh_emit_names_it_again():
+    out = _drive({"path": _ASK_PATH, "run_id": _ASK, "fire_args": {}},
+                 {"path": _ASK_PATH, "run_id": _ASK, "fire_args": {}})
+    assert out["started"] == []
+    assert "is not a fresh run id" in out["result"]["error"]
+
+
 def test_the_handoff_run_id_is_used_when_the_gate_agent_already_emitted():
     out = _drive({"path": "/r/scratch/warp/chained.mjs", "run_id": _MINTED, "fire_args": {}})
     assert out["started"] == ["/r/scratch/warp/chained.mjs"]
+
+
+_SIZING = "state/sizings/2026-11-14-slice.yaml"
+_PARENT = "ask-20261114T211100-aaaaaa"
+
+
+@pytest.fixture
+def _halted_parent(tmp_path, monkeypatch):
+    """A repo whose sizing already has a halted ask run: the launcher-minted entry run the chain hop emits from."""
+    import yaml
+
+    from coordinator_core.ops import sizing_intake_contract as contract
+    from coordinator_core.ops.dispatch_emit import ask_compose, halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.delenv("DELIVERABLE_ID", raising=False)
+    monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n")
+    doc = contract.intake_record(name="slice", turn={"text": "plan it", "turn": 4}, today="2026-11-14")
+    (tmp_path / _SIZING).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+    halted_run.write_halt_marker(record_dir(tmp_path, _PARENT), halted="x", sizing_rel=_SIZING)
+    return tmp_path
+
+
+def _emit(repo, **extra) -> dict:
+    from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+
+    return _dispatch_emit({"ask": True, "sizing_path": _SIZING, "target_root": str(repo), **extra})
+
+
+def _run_json(repo, run_id: str) -> dict:
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    return json.loads((record_dir(repo, run_id) / "run.json").read_text(encoding="utf-8"))
+
+
+def test_a_chain_emit_never_rebinds_onto_its_halted_chain_parent(_halted_parent):
+    reply = _emit(_halted_parent, chain_parent=_PARENT)
+    assert "error" not in reply
+    assert reply["run_id"] != _PARENT
+    assert not reply["path"].endswith(f"{_PARENT}.workflow.mjs")
+    assert _run_json(_halted_parent, reply["run_id"]).get("resumed_from") != _PARENT
+
+
+def test_a_plain_emit_still_resumes_the_halted_run_for_its_sizing(_halted_parent):
+    reply = _emit(_halted_parent)
+    assert "error" not in reply
+    assert _run_json(_halted_parent, reply["run_id"])["resumed_from"] == _PARENT

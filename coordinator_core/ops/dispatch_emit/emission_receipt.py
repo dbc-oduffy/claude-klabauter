@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.frontmatter.primitives import canonical_body_sha
 from coordinator_core.ops.review_mint import op as review_mint_op
 from coordinator_core.ops.review_mint.roster import RosterFragmentError, require_emit_route
@@ -270,10 +271,9 @@ def _write_emission_receipt(
             receipt.update(extras)
         receipt.pop("landed", None)
         receipt["landing_markers"] = _landing_marker_lines(script_bytes)
-        receipt_path.write_text(
-            json.dumps(receipt, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-            newline="\n",
+        atomic_write_bytes(
+            receipt_path,
+            (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"),
         )
     except (OSError, TypeError, ValueError) as exc:
         print(

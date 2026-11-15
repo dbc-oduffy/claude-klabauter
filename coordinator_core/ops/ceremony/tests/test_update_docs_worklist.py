@@ -27,16 +27,19 @@ _NOW = _dt.datetime.now(tz=_dt.timezone.utc)
 class _Git:
     """Counting `run_git` double: `diff` answers `changed`, `rev-parse` answers `head`."""
 
-    def __init__(self, changed=(), head=_SHA_B, diff_ok=True):
+    def __init__(self, changed=(), head=_SHA_B, diff_ok=True, days=()):
         self.calls: list[list[str]] = []
         self.changed = list(changed)
         self.head = head
         self.diff_ok = diff_ok
+        self.days = list(days)
 
     def __call__(self, args, **kwargs):
         self.calls.append(list(args))
         if args[0] == "rev-parse":
             return GitResult(0, self.head + "\n", "", False)
+        if args[0] == "log":
+            return GitResult(0, "".join(d + "\n" for d in self.days), "", False)
         if not self.diff_ok:
             return GitResult(128, "", "bad object", False)
         return GitResult(0, "".join(p + "\0" for p in self.changed), "", False)
@@ -79,6 +82,35 @@ def test_op_registered():
 def test_repo_root_none_raises():
     with pytest.raises(ValueError):
         uw._ceremony_update_docs_worklist({}, repo_root=None)
+
+
+def test_worklist_symbols_gain_sym_only_when_example_retrieval_repo_resolves(repo):
+    from coordinator_core.symbol_knowledge.tests.test_anchors import _store
+
+    _store(repo, [("pkg/m.py", "fn", "function", "", "scip fn")])
+    prefix = "scip-python python p 0.1 "
+    worklist = [{"kind": "doc_drift_review", "symbols": [
+        {"path": "pkg/m.py", "qualified_name": prefix + "`pkg.m`/fn()."},
+        {"path": "pkg/m.py", "qualified_name": prefix + "`pkg.m`/gone()."},
+    ]}]
+    uw._anchor_worklist_symbols(repo, worklist)
+    hit, miss = worklist[0]["symbols"]
+    assert hit["sym"] == "scip fn"
+    assert "sym" not in miss
+
+
+def test_worklist_drift_row_emits_symbols_for_its_changed_paths(repo):
+    from coordinator_core.symbol_knowledge.tests.test_anchors import _store
+
+    _store(repo, [("coordinator_core/m.py", "fn", "function", "", "scip fn")])
+    worklist = [
+        {"kind": "doc_drift_review", "paths": ["coordinator_core/m.py", "coordinator_core/none.py"]},
+        {"kind": "lineage_held_disposed_plan", "paths": ["coordinator_core/m.py"]},
+    ]
+    uw._anchor_worklist_symbols(repo, worklist)
+    assert worklist[0]["symbols"] == [{"path": "coordinator_core/m.py", "qualified_name": "fn", "sym": "scip fn"}]
+    assert "symbols" not in worklist[1]
+    assert len(worklist[0]["symbols"]) == 1
 
 
 def test_prune_classification_and_lineage_hold(repo, monkeypatch):
@@ -426,3 +458,91 @@ def test_no_manifest_yields_no_retired_item_and_a_malformed_one_is_reported_not_
     bad = _run(repo, _Git(), monkeypatch)
     item = next(w for w in bad["agent_worklist"] if w["kind"] == uw.RETIRED_MANIFEST_KIND)
     assert "terms" in item["why"]
+
+
+def _day(offset: int) -> str:
+    return (_dt.date.today() - _dt.timedelta(days=offset)).isoformat()
+
+
+def test_no_change_tree_has_a_noop_changelog_backfill_and_no_log_spawn(repo, monkeypatch):
+    git = _Git()
+    out = _run(repo, git, monkeypatch)
+    assert out["decided_by_op"]["changelog_backfill"] == {
+        "verdict": "noop", "op": None, "missing_days_total": 0, "missing_days": [], "missing_weeks": [],
+    }
+    assert [c[0] for c in git.calls] == ["rev-parse"]
+
+
+def test_drift_run_takes_one_log_spawn_and_names_missing_days_and_weeks(repo, monkeypatch):
+    _seed_ack(os.environ["MACHINE_LOCAL_PATHS_UPDATE_DOCS_WORKLIST_CACHE"])
+    covered, gap, today = _day(30), _day(29), _day(0)
+    week = uw._monday(covered)
+    (repo / "archive" / "week-changelogs" / week).mkdir(parents=True)
+    _write(repo / "archive" / "week-changelogs" / week / f"{covered}.md", "x\n")
+    git = _Git(changed=["coordinator_core/x.py"], days=[covered, gap, today])
+
+    out = _run(repo, git, monkeypatch)
+
+    assert [c[0] for c in git.calls] == ["diff", "log"]
+    assert git.calls[1][-1] == f"{_SHA_A}..HEAD"
+    backfill = out["decided_by_op"]["changelog_backfill"]
+    assert backfill["verdict"] == "op" and backfill["op"] == uw.CHANGELOG_BACKFILL_OP
+    assert backfill["missing_days"] == [gap]
+    assert today not in backfill["missing_days"]
+    assert week in backfill["missing_weeks"]
+
+
+def test_changelog_backfill_is_noop_when_every_day_and_closed_week_has_its_entry(repo):
+    old, live_day = _day(30), _day(1)
+    week = uw._monday(old)
+    (repo / "archive" / "week-changelogs" / week).mkdir(parents=True)
+    _write(repo / "archive" / "week-changelogs" / week / f"{old}.md", "x\n")
+    _write(repo / "archive" / "week-changelogs" / week / uw.WEEK_SUMMARY, "x\n")
+    (repo / "state" / "week-changelog").mkdir(parents=True)
+    _write(repo / "state" / "week-changelog" / f"{live_day}-host-backfill.md", "x\n")
+    if uw._monday(live_day) < uw._monday(_day(0)):
+        (repo / "archive" / "week-changelogs" / uw._monday(live_day)).mkdir(parents=True)
+        _write(repo / "archive" / "week-changelogs" / uw._monday(live_day) / uw.WEEK_SUMMARY, "x\n")
+
+    got = uw._changelog_backfill(repo, [old, live_day], _day(0))
+
+    assert got["verdict"] == "noop" and got["missing_days"] == [] and got["missing_weeks"] == []
+    assert uw._changelog_backfill(repo, [old, _day(31)], _day(0))["missing_days"] == [_day(31)]
+
+
+def test_skipped_corpus_pass_reports_zero_answered_and_a_ran_pass_reports_all(repo, monkeypatch):
+    _archived(repo, 14)
+    ran = _run(repo, _Git(), monkeypatch)["decided_by_op"]["archived_handoffs_pass"]
+    assert ran == {"status": "ran", "candidates": 4, "answered": 4}
+    assert _run(repo, _Git(), monkeypatch)["decided_by_op"]["archived_handoffs_pass"]["status"] == "memo"
+
+    monkeypatch.setattr(uw, "BLOCKED_PASS_START_SECS", -1.0)
+    cache = Path(os.environ["MACHINE_LOCAL_PATHS_UPDATE_DOCS_WORKLIST_CACHE"]) / uw.CACHE_SUBDIR / uw.CACHE_FILE
+    cache.unlink()
+    skipped = _run(repo, _Git(), monkeypatch)
+    assert skipped["decided_by_op"]["archived_handoffs_pass"] == {"status": "guard_skipped", "candidates": 4, "answered": 0}
+    assert skipped["decided_by_op"]["prune"]["archived_handoffs"] == []
+
+    monkeypatch.setattr(uw, "REREAD_BUDGET_SECS", -1.0)
+    cache.unlink()
+    assert _run(repo, _Git(), monkeypatch)["decided_by_op"]["archived_handoffs_pass"]["status"] in ("scan_incomplete", "no_candidates")
+
+
+_REAL_ROOT = Path(__file__).resolve().parents[4]
+
+
+@pytest.mark.skipif(not (_REAL_ROOT / ".git").is_dir() or not (_REAL_ROOT / "archive" / "handoffs").is_dir(), reason="no HEAD corpus")
+def test_cold_run_on_the_head_corpus_holds_the_bar_and_reports_coverage_honestly(tmp_path, monkeypatch):
+    """A cold call stays under 500ms process time; coverage is whatever the pass answered, and a
+    cold call that never reached the pass reports 0 answered and prunes nothing."""
+    monkeypatch.setenv("MACHINE_LOCAL_PATHS_UPDATE_DOCS_WORKLIST_CACHE", str(tmp_path / "cache"))
+    git = _Git()
+    monkeypatch.setattr(uw, "run_git", git)
+    start = time.process_time()
+    out = uw._ceremony_update_docs_worklist({}, repo_root=_REAL_ROOT / ".git")
+    assert (time.process_time() - start) * 1000 < 500
+    info = out["decided_by_op"]["archived_handoffs_pass"]
+    counts = out["decided_by_op"]["archived_handoffs"]
+    assert counts["prune"] + counts["keep"] + counts["indeterminate"] == counts["total"]
+    if info["status"] != "ran":
+        assert info["answered"] == 0 and out["decided_by_op"]["prune"]["archived_handoffs"] == []

@@ -460,6 +460,43 @@ def _stale_write_setup(make_stale: bool) -> Callable[[Path, pytest.MonkeyPatch],
     return setup
 
 
+def _stale_temp_index_setup(make_stale: bool) -> Callable[[Path, pytest.MonkeyPatch], Dict[str, str]]:
+    """A scratch index built from HEAD; with `make_stale` a peer commit lands after it."""
+
+    def setup(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, str]:
+        repo = scratch_dir / "stale-index-repo"
+        repo.mkdir()
+        idx = scratch_dir / "scratch-index"
+
+        def _git(*args: str, index: Optional[Path] = None) -> None:
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+            if index is not None:
+                env["GIT_INDEX_FILE"] = str(index)
+            subprocess.run(
+                ["git", "-c", "commit.gpgsign=false", *args], cwd=str(repo), env=env,
+                check=True, capture_output=True, **no_console_creationflags(),
+            )
+
+        _git("init", "-q")
+        for name in ("p.txt", "q.txt"):
+            (repo / name).write_text(name + "0\n", encoding="utf-8")
+            _git("add", "--", name)
+            _git("commit", "-qm", "base " + name)
+        _git("read-tree", "HEAD", index=idx)
+        if make_stale:
+            (repo / "p.txt").write_text("p-peer\n", encoding="utf-8")
+            _git("add", "--", "p.txt")
+            _git("commit", "-qm", "peer lands p")
+        (repo / "q.txt").write_text("q-mine\n", encoding="utf-8")
+        _git("add", "--", "q.txt", index=idx)
+        return {
+            _CMD_OVERRIDE_KEY: 'GIT_INDEX_FILE=%s git commit -m "mine"' % str(idx).replace("\\", "/"),
+            _CWD_OVERRIDE_KEY: str(repo),
+        }
+
+    return setup
+
+
 def _build_advisory_only_repo(scratch_dir: Path) -> Path:
     repo = scratch_dir / "advisory-only-repo"
     repo.mkdir()
@@ -673,6 +710,7 @@ def _post_executor_setup(scratch_dir: Path, runs_so_far: int) -> Dict[str, str]:
     import os
 
     sid = os.environ["CLAUDE_CODE_SESSION_ID"]
+    (scratch_dir / ".git").mkdir()  # the gate's repo-root walk needs a `.git` entry
     ledger = hub_for_common(scratch_dir / ".git") / sid
     ledger.mkdir(parents=True)
     (ledger / "dispatched-agents.txt").write_text("abcdef0123456789\tsonnet\tcoordinator:executor\t1\n")
@@ -974,6 +1012,24 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         _DENY,
         False,
         setup=_stale_write_setup(make_stale=False),
+    ),
+    CorpusRow(
+        "stale-temp-index-base",
+        "stale-temp-index-base-fire",
+        'GIT_INDEX_FILE=<tmp> git commit -m "mine"',
+        True,
+        _DENY,
+        False,
+        setup=_stale_temp_index_setup(make_stale=True),
+    ),
+    CorpusRow(
+        "stale-temp-index-base",
+        "stale-temp-index-base-control",
+        'GIT_INDEX_FILE=<tmp> git commit -m "mine"',
+        False,
+        _DENY,
+        False,
+        setup=_stale_temp_index_setup(make_stale=False),
     ),
     CorpusRow(
         "destructive-git-clean",
@@ -4027,6 +4083,7 @@ from coordinator_core.hooks import guard_python_syntax_on_write as _hook_guard_p
 from coordinator_core.hooks import guard_repo_setup_claude_home_refusal as _hook_guard_repo_setup_claude_home_refusal
 from coordinator_core.hooks import guard_test_tree_git_fixture_spawn as _hook_guard_test_tree_git_fixture_spawn
 from coordinator_core.hooks import nudge_cross_repo_cwd_boundary as _hook_nudge_cross_repo_cwd_boundary
+from coordinator_core.warm.skew import _engine_stamp_path
 from coordinator_core.hooks import nudge_initiative_goals_ladder as _hook_nudge_initiative_goals_ladder
 from coordinator_core.hooks import nudge_multiwave_workflow as _hook_nudge_multiwave_workflow
 from coordinator_core.hooks import nudge_plan_test_surface_tier as _hook_nudge_plan_test_surface_tier
@@ -4761,6 +4818,9 @@ def _fire_submit_engine_ask_with(
             launch_dir = Path(scratch) / "launch"
             launch_dir.mkdir()
             mp.setattr(warp_live, "_launch_dirs", lambda tmpdir: [str(launch_dir)])
+            # Trap: the register-lint sweep is module-scoped, so it runs before the per-test home
+            # quarantine; without this pin `run_token.mint` writes the real engine-records.
+            mp.setenv("COORDINATOR_SETTINGS_HOME", str(Path(scratch) / "settings"))
             session_id = "sess-sea"
             sizing_rel = "state/sizings/a.yaml"
             if run_live:
@@ -6244,10 +6304,21 @@ def _orientation_payload(scratch: str) -> Dict[str, Any]:
     return {"cwd": scratch, "env": {"CLAUDE_PROJECT_DIR": scratch}}
 
 
+def _pin_engine_resolved(mp: pytest.MonkeyPatch) -> None:
+    """Resolves the engine so the banner never renders the host-dependent no-engine fetch line."""
+    mp.setattr(
+        _hook_project_orientation,
+        "_resolve_engine_root_with_class",
+        lambda: ("engine-root", _hook_project_orientation.RESOLUTION_RESOLVED_ENGINE),
+    )
+
+
 def _fire_project_orientation() -> Optional[Dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-po-", dir=_neutral_scratch_parent()) as scratch:
-        payload = _orientation_payload(scratch)
-        return _to_envelope_or_none(_hook_project_orientation._handler({"payload": payload}))
+    with pytest.MonkeyPatch.context() as mp:
+        _pin_engine_resolved(mp)
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-po-", dir=_neutral_scratch_parent()) as scratch:
+            payload = _orientation_payload(scratch)
+            return _to_envelope_or_none(_hook_project_orientation._handler({"payload": payload}))
 
 
 def _fire_runtime_tripwire_em_check() -> Optional[Dict[str, Any]]:
@@ -6361,6 +6432,7 @@ def _fire_sessionstart_bin_drift_refresh_control() -> Optional[Dict[str, Any]]:
 
 def _fire_sessionstart_dispatch() -> Optional[Dict[str, Any]]:
     with pytest.MonkeyPatch.context() as mp:
+        _pin_engine_resolved(mp)
         mp.setattr(
             _ops_guard_hook_generation_self_probe, "run_self_probe", lambda config_dir: "self-probe advisory text"
         )
@@ -6504,6 +6576,11 @@ def _fire_nudge_cross_repo_cwd_boundary() -> Optional[Dict[str, Any]]:
         with tempfile.TemporaryDirectory(prefix="guard-message-corpus-ncrcb-", dir=_neutral_scratch_parent()) as scratch:
             sibling = Path(scratch) / "claude-klabauter"
             sibling.mkdir()
+            # COORDINATOR_ENGINE_ROOT answers only for a stamped engine root
+            # (engine_root.coordinator_engine_root_with_class); unstamped, the hook is a no-op.
+            stamp = _engine_stamp_path(sibling)
+            stamp.parent.mkdir(parents=True)
+            stamp.write_text("corpus-fixture\n", encoding="utf-8")
             mp.setenv("COORDINATOR_ENGINE_ROOT", str(sibling))
             payload = {
                 "old_cwd": str(Path(scratch) / "elsewhere"),
@@ -6613,11 +6690,10 @@ def _fire_session_start_watch_presence() -> Optional[Dict[str, Any]]:
 
 
 def _fire_session_start_watch_presence_control() -> Optional[Dict[str, Any]]:
-    # `read_liveness` always returns a non-empty `verdict` (even "absent" --
-    # see its own docstring, "`absent` stays ONE verdict"), so a bare fresh
-    # repo still speaks the watch line. The true no-op leg is the liveness
-    # READ failing outright (`compute_context`'s own `except Exception: pass`
-    # arm), forced here rather than relied on from repo state.
+    # The hook speaks on every readable or unreadable heartbeat (an unreadable
+    # one reads UNKNOWN, 4aea1c5749), so its only silent leg is `_handler`'s
+    # SessionStart-never-blocks `except` arm, forced here by failing the
+    # liveness resolution outright.
     with pytest.MonkeyPatch.context() as mp:
         with tempfile.TemporaryDirectory(prefix="guard-message-corpus-sswp-ctrl-", dir=_neutral_scratch_parent()) as scratch:
             settings_home_dir = Path(scratch) / "settings-home"
@@ -6628,11 +6704,7 @@ def _fire_session_start_watch_presence_control() -> Optional[Dict[str, Any]]:
             def _raise(*_a, **_kw):
                 raise RuntimeError("no liveness in this scratch fixture")
 
-            mp.setattr(
-                _hook_session_start_watch_presence.group_em_watch_heartbeat,
-                "read_liveness",
-                _raise,
-            )
+            mp.setattr(_hook_session_start_watch_presence, "resolve_watch_liveness", _raise)
             payload = {"cwd": str(repo_root)}
             return _to_envelope_or_none(
                 _run_maybe_async(_hook_session_start_watch_presence._handler(payload))

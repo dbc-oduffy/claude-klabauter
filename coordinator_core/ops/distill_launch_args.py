@@ -9,7 +9,10 @@ returns ``{path, sha256, args, args_bytes}``; the PreToolUse(Workflow) hook swap
 ``{argsFile, argsSha256}`` stub for the file's content.
 
 Wire params:
-    manifest (dict, REQUIRED), repo_root (str, REQUIRED), format_hints, backlog_run_id — as for
+    manifest (dict, REQUIRED) — the scope manifest (input.json), or the distill.scope result, whose
+        ``input_json_path`` (repo-relative, under ``state/scratch/``) is loaded; any other shape
+        raises ValueError naming the wanted keys.
+    repo_root (str, REQUIRED), format_hints, backlog_run_id — as for
         distill.workflow_input.
     curated_file (str, optional) — repo-relative, confined to ``state/scratch/``; default
         ``state/scratch/artifact-distillation/<run_id>/curated.json`` (distill.write_curated_clusters).
@@ -45,6 +48,7 @@ _PASSTHROUGH_KEYS = (
     "contradictionClusterCount",
 )
 _SCRATCH_REL = "state/scratch"
+_MANIFEST_KEYS = frozenset({"run_id", "batches", "wiki_dirs", "wiki_slugs"})
 
 
 def curated_default_rel(run_id: str) -> str:
@@ -52,12 +56,16 @@ def curated_default_rel(run_id: str) -> str:
     return f"{RUN_DIR_REL}/{run_id}/curated.json"
 
 
-def _curated_target(root: Path, rel: str) -> Path:
+def _scratch_target(root: Path, rel: str, label: str) -> Path:
     scratch = (root / _SCRATCH_REL).resolve()
     target = (root / rel).resolve()
     if target == scratch or scratch not in target.parents:
-        raise ValueError(f"distill.launch_args: curated_file {rel!r} must be under {_SCRATCH_REL}/")
+        raise ValueError(f"distill.launch_args: {label} {rel!r} must be under {_SCRATCH_REL}/")
     return target
+
+
+def _curated_target(root: Path, rel: str) -> Path:
+    return _scratch_target(root, rel, "curated_file")
 
 
 @register_op("distill.launch_args")
@@ -74,7 +82,7 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
     if not root_param:
         raise ValueError("distill.launch_args requires a non-empty 'repo_root' param")
     root = Path(root_param)
-    payload = _workflow_input(params, None)
+    payload = _workflow_input(_with_scope_manifest(params, root), None)
 
     curated_rel = params.get("curated_file") or curated_default_rel(payload["runId"])
     if not isinstance(curated_rel, str):
@@ -85,11 +93,41 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
     return build(payload)
 
 
+def _with_scope_manifest(params: dict, root: Path) -> dict:
+    manifest = params.get("manifest")
+    run_id = params.get("run_id")
+    if manifest is None and isinstance(run_id, str) and run_id:
+        # distill.scope always writes input.json at this path, so run_id alone names the manifest.
+        manifest = {"input_json_path": f"{RUN_DIR_REL}/{run_id}/input.json"}
+    if not isinstance(manifest, dict):
+        raise ValueError(
+            "distill.launch_args requires a 'manifest' param: the distill.scope result "
+            "(or the input.json it points at, which distill.scope writes)"
+        )
+    if "input_json_path" in manifest and not _MANIFEST_KEYS <= manifest.keys():
+        rel = manifest["input_json_path"]
+        if not isinstance(rel, str):
+            raise ValueError("distill.launch_args: manifest.input_json_path must be a string")
+        target = _scratch_target(root, rel, "manifest.input_json_path")
+        try:
+            manifest = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"distill.launch_args: scope manifest {rel} is unreadable or not JSON: {exc}") from exc
+    if not isinstance(manifest, dict) or not _MANIFEST_KEYS <= manifest.keys():
+        raise ValueError(
+            f"distill.launch_args: manifest must be the scope manifest (input.json) with keys {sorted(_MANIFEST_KEYS)}, "
+            "or the distill.scope result carrying its 'input_json_path'"
+        )
+    return {**params, "manifest": manifest}
+
+
 def _curated_args(curated: Path, rel: str) -> dict:
     try:
         data = json.loads(curated.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        raise ValueError(f"distill.launch_args: curated file {rel} is unreadable or not JSON: {exc}") from exc
+        raise ValueError(f"distill.launch_args: curated file {rel} is unreadable or not JSON: {exc}; "
+                         "distill.write_curated_clusters writes it") from exc
     if not isinstance(data, dict) or not isinstance(data.get("verdicts"), list):
-        raise ValueError(f"distill.launch_args: curated file {rel} must be a JSON object with a 'verdicts' list")
+        raise ValueError(f"distill.launch_args: curated file {rel} must be a JSON object with a 'verdicts' list "
+                         "(as written by distill.write_curated_clusters)")
     return {CURATED_TAGS_KEY: data["verdicts"], **{k: data[k] for k in _PASSTHROUGH_KEYS if k in data}}

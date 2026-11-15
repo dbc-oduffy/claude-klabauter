@@ -159,3 +159,20 @@ def test_each_leg_composes_a_distinctly_labelled_retry_whose_gate_names_that_lab
     labels = [leg_.label for leg_ in leg_register.emitted_legs(script)]
     assert labels.count(f"{leg}-docs-check") == 1 and labels.count(f"{leg}-docs-check-retry") == 1
     assert script.count(f"label: '{leg}-docs-check-retry'") == 2
+
+
+def _staged_diff_docs_bodies(tmp_path):
+    sink: dict[str, str] = {}
+    script = _compose(repo_root=_ue_declared_repo(tmp_path), staged_out=sink, **_named_fragment())
+    return script, {n: t for n, t in sink.items() if "Docs-check this run's diff" in t}
+
+
+def test_the_staged_diff_docs_check_prompt_ends_in_a_complete_sentence_naming_the_review_paths(tmp_path):
+    script, bodies = _staged_diff_docs_bodies(tmp_path)
+    assert bodies
+    for text in bodies.values():
+        assert text.rstrip().endswith(".")
+        assert "to the review paths listed after this brief" in text
+    span = _checker_prompt_span(script, "diff-docs-check")
+    assert "_reviewPaths.join(', ')" in span
+    assert span.index("_reviewPaths.join") < span.index(GATE_OP)

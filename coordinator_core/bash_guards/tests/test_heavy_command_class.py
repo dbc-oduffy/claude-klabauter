@@ -803,7 +803,6 @@ _NOT_HEAVY = {
     "coordinator_core/ops/emit/enrich.py": "git log subprocess",
     "coordinator_core/ops/dispatch_emit/terminal_commit.py": "detached launcher whose child is the memory-admitted structural_index_refresh_admitted",
     "coordinator_core/ops/dispatch_emit/tranche_chain.py": "detached launcher whose child only emits the next tranche and fires its workflow runner, admitted by the fire op",
-    "coordinator_core/ops/rag_freshness.py": "detached launch of example-retrieval-repo's own remedy command, queued once per TTL marker, admitted by example-retrieval-repo itself",
     "coordinator_core/ops/session/safe_commit_offer.py": "light detached offer",
     "coordinator_core/ops/workflow_fire/fire.py": "workflow runner launch, admitted by the fire op",
     "coordinator/bin/lib/claude_author_control/relay_posix.py": "relay shim",
@@ -990,3 +989,39 @@ def test_a_commit_only_hold_does_not_trim():
     host, _, trims = _trimming_host([30.0])
     host.admit = lambda peak, st: types.SimpleNamespace(admit=False, need_avail=peak, avail_ok=True)
     assert not _hcc.admit_before_spawn("k", 4.0, host=host).admitted and trims == []
+
+
+def test_admit_before_spawn_forwards_declared_cores_to_the_engine_only_when_declared(monkeypatch):
+    local, _ = _fake_host(avail_gib=99)
+    local.read_memory_status = _denied
+    sent = []
+
+    def dispatch(msg, **kw):
+        sent.append(msg["params"])
+        return {"jsonrpc": "2.0", "id": 1, "result": {"admitted": True, "reason": "ADMIT k", "key": "k", "peak_gib": 1.0}}
+
+    monkeypatch.setattr("coordinator_core.warm.client.try_warm_dispatch", dispatch)
+    _hcc.admit_before_spawn("k", 1.0, host=local, register_pid=9, cores=3)
+    _hcc.admit_before_spawn("k", 1.0, host=local, register_pid=9)
+    assert sent[0]["cores"] == 3 and "cores" not in sent[1]
+
+
+def test_local_admit_holds_on_cores_and_names_the_cpu_axis():
+    host, _ = _fake_host(avail_gib=99)
+    real = _hcc._load_box_memory_host()
+    host.admit = lambda peak, status: real.AdmitVerdict(admit=True, need_avail=peak, avail_ok=True, commit_ok=True)
+    host.reserved_cores = lambda path: 3
+    host._with_cpu_axis = lambda v, declared, reserved, budget: real._with_cpu_axis(v, declared, reserved, 4)
+    over = _hcc.admit_before_spawn("k", 1.0, host=host, cores=2)
+    assert not over.admitted and over.reason.startswith("HOLD k: cpu: declared 2 + reserved 3 cores > budget 4")
+    assert _hcc.admit_before_spawn("k", 1.0, host=host, cores=1).admitted
+    assert _hcc.admit_before_spawn("k", 1.0, host=host).admitted
+
+
+def test_register_spawn_carries_declared_cores_only_when_declared():
+    seen = []
+    host = types.SimpleNamespace(
+        admission_file=lambda: "adm", register_command=lambda *a, **kw: seen.append((a, kw)),
+    )
+    assert _hcc.register_spawn("k", 1.0, 7, host) and _hcc.register_spawn("k", 1.0, 7, host, cores=3)
+    assert seen[0][1] == {} and seen[1][1] == {"cores": 3}

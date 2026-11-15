@@ -5,12 +5,12 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 
 import pytest
 
 from coordinator_core.ops.workflow_fire import headless
+from coordinator_core.temp_layout import mkdtemp_in
 from coordinator_core.warm import breadcrumb, client, election, engine_root, skew
 
 ASK = {'ask': 'unused'}
@@ -210,7 +210,7 @@ def _point_everything_at(monkeypatch, root: Path) -> None:
 @pytest.fixture
 def real_warm(tmp_path, monkeypatch, request):
     """A real warm server child at a stamped temp engine root, reached by the real client."""
-    runtime = Path(tempfile.mkdtemp(prefix='hw-', dir=None if os.name == 'nt' else '/tmp'))
+    runtime = mkdtemp_in('hw-', None if os.name == 'nt' else '/tmp')
     request.addfinalizer(lambda: shutil.rmtree(runtime, ignore_errors=True))
     monkeypatch.setenv('COORDINATOR_WARM', '1')
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(runtime))

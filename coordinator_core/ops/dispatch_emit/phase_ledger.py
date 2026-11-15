@@ -51,6 +51,8 @@ HALT_PHASE = {
     "plan_gate_ruling": "plan_gate_rulings",
     "ruling": "plan_gate_rulings",
     "rulings": "plan_gate_rulings",
+    # Synthetic: `ask_gate._resume_phases` derives it from a `refusal` marker plus landed execute; no marker records it.
+    "refusal_after_execute": "review",
     "orphaned_staged": "execute",
     "orphaned_planned": "plan_review",
 }

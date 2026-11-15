@@ -99,11 +99,11 @@ class World:
         self.tmp = tmp_path
         self.capsys = capsys
         self.default_repo = tmp_path / "default-repo"
-        self.claude_klabauter = tmp_path / "claude-klabauter"
-        self.routed = self.claude_klabauter / "coordinator"
+        self.engine_repo = tmp_path / "claude-klabauter"
+        self.routed = self.engine_repo / "coordinator"
         self.dest = tmp_path / "dest-repo"
         _init_repo(self.default_repo, self_origin=False)
-        _init_repo(self.claude_klabauter, self_origin=False)
+        _init_repo(self.engine_repo, self_origin=False)
         _init_repo(self.dest, self_origin=True)
         with (self.dest / ".git" / "info" / "exclude").open("a", encoding="utf-8", newline="\n") as handle:
             handle.write(".percolate/\n")
@@ -114,7 +114,7 @@ class World:
 
         _write(self.routed / "bin" / "kept-tool", "#!/usr/bin/env python3\nprint('kept')\n")
         _write(self.routed / "bin" / "demoted.py", "demoted = 1\n")
-        self.source_head = _commit_with_modes(self.claude_klabauter, "claude-klabauter: seed bin", ("coordinator/bin/kept-tool",))
+        self.source_head = _commit_with_modes(self.engine_repo, "claude-klabauter: seed bin", ("coordinator/bin/kept-tool",))
         if os.name != "nt":
             os.chmod(self.routed / "bin" / "kept-tool", 0o755)
 
@@ -131,7 +131,7 @@ class World:
     def _wire(self, monkeypatch) -> None:
         tmp = self.tmp
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp))
-        monkeypatch.setattr(publish, "_REPO_ROOT", self.claude_klabauter)
+        monkeypatch.setattr(publish, "_REPO_ROOT", self.engine_repo)
         row = f"row-a|mirror|{self.default_root}|{self.dest}|||{self.routed}=bin"
         monkeypatch.setattr(publish, "_resolve_percolate_root_and_rung", lambda **kw: (tmp, "test-rung"))
         monkeypatch.setattr(publish, "load_targets", lambda setup_dir, target_filter=None, **_: [row])
@@ -198,7 +198,7 @@ def test_every_retained_file_lands_at_its_source_tree_mode(world):
 
     assert rc == 0, out
     for rel in ("bin/kept-tool", "bin/demoted.py"):
-        source_mode = _tree_mode(world.claude_klabauter, "HEAD", f"coordinator/{rel}")
+        source_mode = _tree_mode(world.engine_repo, "HEAD", f"coordinator/{rel}")
         assert _tree_mode(world.dest, "HEAD", rel) == source_mode, rel
     assert _tree_mode(world.dest, "HEAD", "bin/demoted.py") == _PLAIN
     assert _tree_mode(world.dest, "HEAD", "bin/kept-tool") == _EXEC

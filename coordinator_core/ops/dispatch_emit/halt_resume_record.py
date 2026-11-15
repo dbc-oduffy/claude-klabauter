@@ -311,6 +311,19 @@ def claim_recompose(record_dir: Union[str, Path], now: float, ttl_s: float) -> b
     return True
 
 
+def recompose_in_flight(record_dir: Union[str, Path], now: float) -> bool:
+    """True while a recompose claim younger than `RECOMPOSE_TTL_S` stands in `record_dir` (a claim whose
+    stamp is not yet parseable counts: `claim_recompose` is mid-write). Reads one file; spawns nothing."""
+    try:
+        text = (Path(record_dir) / BUILDING_FILE).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    try:
+        return now - float(text) < RECOMPOSE_TTL_S
+    except ValueError:
+        return True
+
+
 def release_recompose(record_dir: Union[str, Path]) -> None:
     try:
         (Path(record_dir) / BUILDING_FILE).unlink()

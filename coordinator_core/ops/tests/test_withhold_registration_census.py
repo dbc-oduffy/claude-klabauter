@@ -131,7 +131,12 @@ _AGENT_FACING_SUFFIXES = ("_note", "_msg", "_err", "_ctx")
 #:
 #: `"remedy"` is operator-facing diagnostic text (`door_route_signal.diagnose_inert_sink`): the
 #: kill switch is named in its `cause` by design, so absence from `remedy` is not a withhold.
-_NOT_WITHHOLD_EXACT = frozenset({"os.environ", "env", "base_env", "hooks_text", "code", "remedy"})
+#:
+#: `seen[0]` is the `env=` kwarg a spied `subprocess.Popen` received, and `wire["env"]` is the
+#: environment a fake codex child captured: both are the spawned process's environment dict.
+_NOT_WITHHOLD_EXACT = frozenset({
+    "os.environ", "env", "base_env", "hooks_text", "code", "remedy", "seen[0]", 'wire["env"]',
+})
 _NOT_WITHHOLD_PREFIXES = ("captured[",)
 _NOT_WITHHOLD_SUFFIXES = ("_env",)
 

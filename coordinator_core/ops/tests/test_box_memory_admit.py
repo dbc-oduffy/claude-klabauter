@@ -72,6 +72,66 @@ def host(monkeypatch):
     return h
 
 
+_REAL = hcc._load_box_memory_host()
+
+
+class _CpuHost(_Host):
+    """The fake host plus the real CPU-axis fold, over a fixed reserved-cores sum."""
+
+    def __init__(self, reserved_cores=0, **kw):
+        super().__init__(**kw)
+        self.reserved_core_sum = reserved_cores
+        self.rows_cores = {}
+
+    def admit(self, peak_bytes, status):
+        ok = status.avail_phys >= peak_bytes
+        return _REAL.AdmitVerdict(admit=ok, need_avail=peak_bytes, avail_ok=ok, commit_ok=True)
+
+    def reserved_cores(self, path):
+        return self.reserved_core_sum
+
+    def _with_cpu_axis(self, verdict, declared, reserved, budget):
+        return _REAL._with_cpu_axis(verdict, declared, reserved, budget)
+
+    def register_command(self, path, key, pid, peak_gib, cores=1):
+        self.rows[(key, pid)] = peak_gib
+        self.rows_cores[(key, pid)] = cores
+
+
+@pytest.fixture
+def cpu_host(monkeypatch):
+    h = _CpuHost(avail_gib=8, reserved_cores=3)
+    monkeypatch.setattr(hcc, "_load_box_memory_host", lambda: h)
+    monkeypatch.setattr(_REAL, "default_cpu_budget", lambda: 4)
+    return h
+
+
+def test_admit_holds_on_the_cpu_axis_when_declared_plus_reserved_exceed_the_budget(cpu_host):
+    r = _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0, "register_pid": 9, "cores": 2})["result"]
+    assert r["admitted"] is False and r["reason"].startswith("HOLD k: cpu: declared 2 + reserved 3")
+    assert cpu_host.rows == {}
+
+
+def test_admit_at_the_cpu_budget_admits_and_records_the_declared_cores(cpu_host):
+    r = _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0, "register_pid": 9, "cores": 1})["result"]
+    assert r["admitted"] is True and cpu_host.rows_cores == {("k", 9): 1}
+    cpu_host.reserved_core_sum = 2
+    r = _call("box_memory.admit", {"key": "j", "default_peak_gib": 1.0, "register_pid": 8, "cores": 2})["result"]
+    assert r["admitted"] is True and cpu_host.rows_cores[("j", 8)] == 2
+
+
+def test_admit_without_cores_counts_as_one_core(cpu_host):
+    cpu_host.reserved_core_sum = 4
+    r = _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0})["result"]
+    assert r["admitted"] is False and "declared 1 + reserved 4" in r["reason"]
+    cpu_host.reserved_core_sum = 3
+    assert _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0})["result"]["admitted"] is True
+
+
+def test_admit_rejects_a_non_positive_cores(cpu_host):
+    assert "error" in _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0, "cores": 0})
+
+
 def _call(method, params):
     msg = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     return asyncio.run(ipc.dispatch_message(msg))

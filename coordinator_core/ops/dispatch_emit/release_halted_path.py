@@ -5,7 +5,9 @@ and non-blank. Reply on success: ``{ok, run_id, path, released, reason}``; a rep
 ``released: false`` and echoes the FIRST recorded reason. The path moves out of the marker's
 ``run_artifacts.withheld`` into ``released_paths[path] = {reason, session, at}``; ``status`` stays
 ``halted`` and every other withheld path keeps holding. A path is accepted when the run withholds it or
-its ``manifest.json`` declares it in a row's ``writes``. Reads one run's marker and manifest, writes the
+its ``manifest.json`` declares it in a row's ``writes``. A landed run holds nothing: the reply is
+``{ok: true, released: false, reason: "recorded-landed"}`` and nothing is written; a run that is neither
+halted nor landed is refused. Reads one run's marker and manifest, writes the
 marker through the halted_run writer; no spawn, no git call.
 """
 
@@ -27,6 +29,17 @@ def _norm(path: object) -> str:
     return text
 
 
+def _landed(rdir: Path, marker: Optional[dict]) -> bool:
+    """True when the run's marker reads ``landed``, or it has no marker and its ``run-stage.json`` does."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_STAGE_FILE, _read_json_object
+
+    if marker:
+        return marker.get("status") == halted_run.STATUS_LANDED
+    stage = _read_json_object(rdir / RUN_STAGE_FILE)
+    return bool(stage) and stage.get("stage") == "landed"
+
+
 def release_path(root: Path, run_id: str, path: str, reason: str, session_id: str = "") -> dict:
     """Release `path` from halted `run_id`'s holds, recording `reason`; the op reply dict. Never raises."""
     if not isinstance(reason, str) or not reason.strip():
@@ -37,13 +50,15 @@ def release_path(root: Path, run_id: str, path: str, reason: str, session_id: st
     try:
         from coordinator_core.ops.dispatch_emit import halted_run
         from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
-        from coordinator_core.ops.dispatch_emit.halted_hold_release import RELEASED_PATHS_FIELD
+        from coordinator_core.ops.dispatch_emit.halted_hold_release import RELEASE_RECORDED_LANDED, RELEASED_PATHS_FIELD
         from coordinator_core.ops.dispatch_emit.halted_withheld_index import _manifest_declared
 
         rdir = record_dir(Path(root), run_id)
         marker = halted_run.read_strict(rdir)
+        if _landed(rdir, marker):
+            return {"ok": True, "run_id": run_id, "path": rel, "released": False, "reason": RELEASE_RECORDED_LANDED}
         if not marker or marker.get("status") != halted_run.STATUS_HALTED:
-            return {"ok": False, "error": f"run {run_id} is not halted; only a halted run's hold can be released"}
+            return {"ok": False, "error": f"run {run_id} is neither halted nor landed; only a halted run's hold can be released"}
         released = marker.get(RELEASED_PATHS_FIELD)
         released = dict(released) if isinstance(released, dict) else {}
         first = released.get(rel)

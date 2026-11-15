@@ -8,6 +8,7 @@ _ADMIT_SCHEMA = {
         "default_peak_gib": {"type": "number", "exclusiveMinimum": 0},
         "register_pid": {"type": "integer", "minimum": 1},
         "session_id": {"type": "string"},
+        "cores": {"type": "integer", "minimum": 1},
     },
     "required": ["key", "default_peak_gib"],
     "additionalProperties": False,
@@ -62,7 +63,8 @@ def admit(params, repo_root=None):
 
     Runs `_admit_local` in the unsandboxed engine: same arithmetic, lock and reservation as an in-process
     admit. Never waits for a slot (a held engine thread is the load the brightline forbids); a HOLD
-    is returned as `admitted: false`. A host error propagates as a JSON-RPC error envelope.
+    is returned as `admitted: false`. Optional `cores` (default 1) is the leg's declared core count;
+    a HOLD reading `HOLD <key>: cpu:` is the CPU axis refusing. A host error propagates as a JSON-RPC error envelope.
     """
     p = _checked("box_memory.admit", params, _ADMIT_SCHEMA)
     from coordinator_core.bash_guards import _heavy_command_class as hcc
@@ -70,7 +72,7 @@ def admit(params, repo_root=None):
     with hcc.in_engine():
         verdict = hcc._admit_local(
             p["key"], float(p["default_peak_gib"]), hcc._load_box_memory_host(), p.get("register_pid"),
-            wait_kw=None, session_id=p.get("session_id", ""),
+            wait_kw=None, session_id=p.get("session_id", ""), cores=p.get("cores", 1),
         )
     return {
         "admitted": bool(verdict.admitted), "reason": verdict.reason, "key": verdict.key,

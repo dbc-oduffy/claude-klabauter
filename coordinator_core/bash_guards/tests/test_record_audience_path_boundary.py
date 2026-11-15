@@ -94,14 +94,23 @@ def test_whole_filesystem_scan_still_allows_a_scoped_search():
     assert scan.check({"tool_name": "Bash", "tool_input": {"command": "find src -name x"}, "cwd": None}) is None
 
 
-@pytest.mark.parametrize("guard, call", [(drive_root, lambda g: g._deny("stray")), (home_root, lambda g: g._deny())])
-def test_drive_and_home_root_are_advisory_at_every_level(guard, call, monkeypatch):
-    # Neither guard is a deny_registry floor guard, so no level yields a record or a refusal.
+def test_home_root_is_advisory_at_every_level(monkeypatch):
+    # block-home-root-bash-write is not a deny_registry entry, so no level yields a record or a refusal.
     for level in ("strict", "warn", "off"):
         monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
         machine_profile.reset_cache()
-        out = call(guard)
+        out = home_root._deny()
         assert isinstance(out, dict) and not isinstance(out, AlternativeRecord)
         assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
         assert out["guardLevel"] == "log"
+    machine_profile.reset_cache()
+
+
+def test_drive_root_denies_at_every_level_as_a_box_degrading_registry_entry(monkeypatch):
+    # block-drive-root-new-dir-bash-write is BOX_DEGRADING in deny_registry, so the level never softens it.
+    for level in ("strict", "warn", "off"):
+        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
+        machine_profile.reset_cache()
+        out = drive_root._deny("stray")
+        assert isinstance(out, AlternativeRecord) and out.verdict_kind == "deny"
     machine_profile.reset_cache()

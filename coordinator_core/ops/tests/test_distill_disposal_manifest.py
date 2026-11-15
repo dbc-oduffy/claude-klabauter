@@ -413,7 +413,7 @@ def test_handler_raises_on_repo_root_none():
 
 def test_handler_raises_on_missing_run_id(tmp_path: Path):
     (tmp_path / ".git").mkdir()
-    with pytest.raises(ValueError, match="run_id"):
+    with pytest.raises(ValueError, match=r"run_id.*distill\.scope"):
         _handler({"candidates": []}, repo_root=tmp_path / ".git")
 
 

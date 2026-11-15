@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from coordinator_core.learn_lessons_pipeline import grind_cost, mechanical_close
 from coordinator_core.ops.dispatch_emit.tests.test_queue_emit import (
     _FIXTURE_PROFILE_DIR,
@@ -152,3 +154,71 @@ def test_measure_splits_oversize_batches_so_the_max_stays_under_the_tier(tmp_pat
     )
     assert result["triage_batches"] >= 2
     assert result["max_triage_batch_tokens"] <= LONG_PROMPT_TIER_TOKENS
+
+
+def test_measure_reports_the_budget_before_and_after_narrowing(tmp_path):
+    from coordinator_core.ops.dispatch_emit.tests.test_queue_emit_budget import _BATCH, _ROWS, _repo
+
+    repo, queue, pdir = _repo(tmp_path)
+    result = grind_cost.measure(repo, profile="lessons", queue=queue, profile_dir=pdir)
+
+    assert result["refused"] is False
+    assert result["budget"]["cap"] == {"agents": 10, "tokens": 200000, "minutes": 15}
+    assert all(result["budget"]["within"].values())
+    assert not result["budget_before"]["within"]["tokens"]
+    assert 0 < result["fitted_rows"] < _ROWS
+    assert result["fitted_rows"] % _BATCH == 0, "whole batches only"
+    assert result["deferred"] == _ROWS - result["fitted_rows"]
+    assert result["admitted"] == _ROWS
+
+
+def _calibration(tmp_path, rate):
+    path = tmp_path / "prevet_calibration.json"
+    path.write_text(json.dumps({grind_cost.PREVET_RATE_KEY: rate}), encoding="utf-8")
+    return path
+
+
+def test_a_prevet_spawn_is_priced_at_the_prevet_role_rate(tmp_path):
+    rates = grind_cost.role_rates(True, _calibration(tmp_path, 5_000))
+    assert rates["prevet"] == 5_000 != grind_cost.ROLE_TOKENS["triage"]
+    spawns = {"prevet": 10, "triage": 3, "verify": 3}
+    cost = grind_cost.projected_cost(grind_cost.UnitCost(minutes=1), 3, spawns, rates)
+    assert cost.agents == 16
+    assert cost.tokens == 10 * 5_000 + 6 * grind_cost.ROLE_TOKENS["triage"]
+    assert cost.tokens < 16 * grind_cost.ROLE_TOKENS["triage"]
+
+
+def test_batch_unit_cost_prices_each_role(tmp_path):
+    rates = grind_cost.role_rates(True, _calibration(tmp_path, 5_000))
+    unit = grind_cost.batch_unit_cost(True, 25, 50, rates)
+    assert unit.agents == 4
+    assert unit.tokens == 2 * 5_000 + 2 * grind_cost.ROLE_TOKENS["triage"]
+
+
+def test_a_declared_prevet_without_calibration_refuses_naming_the_file(tmp_path):
+    missing = tmp_path / "prevet_calibration.json"
+    with pytest.raises(grind_cost.PrevetCalibrationError, match="prevet_calibration.json"):
+        grind_cost.role_rates(True, missing)
+    missing.write_text("{}", encoding="utf-8")
+    with pytest.raises(grind_cost.PrevetCalibrationError, match=grind_cost.PREVET_RATE_KEY):
+        grind_cost.role_rates(True, missing)
+
+
+def test_a_profile_without_prevet_never_reads_the_calibration(tmp_path, monkeypatch):
+    monkeypatch.setattr(grind_cost, "PREVET_CALIBRATION", tmp_path / "absent.json")
+    assert grind_cost.role_rates(False)["prevet"] == 0
+    repo_root, queue_dir, _run_dir = _setup_repo(tmp_path, n_rows=3)
+    result = grind_cost.measure(
+        repo_root, profile="fixture", queue=queue_dir, profile_dir=_FIXTURE_PROFILE_DIR
+    )
+    assert result["spawns_by_role"]["prevet"] == 0
+    assert result["projected_spawns"] == sum(result["spawns_by_role"].values())
+
+
+def test_measure_does_not_narrow_a_profile_outside_the_mechanical_close_set(tmp_path):
+    repo_root, queue_dir, _run_dir = _setup_repo(tmp_path, n_rows=5)
+    result = grind_cost.measure(
+        repo_root, profile="fixture", queue=queue_dir, profile_dir=_FIXTURE_PROFILE_DIR
+    )
+    assert result["deferred"] == 0
+    assert result["fitted_rows"] == result["admitted"] == 5

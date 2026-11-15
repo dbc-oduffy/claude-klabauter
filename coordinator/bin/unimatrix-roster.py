@@ -459,24 +459,56 @@ def ssh_fields(alias):
     return fields
 
 
+_ENDPOINTS = {}
+
+
 def ssh_endpoint(alias):
-    """(host, port) that ssh dials for `alias`, read from `ssh -G`; None when it prints neither."""
+    """(host, port) that ssh dials for `alias`, read from `ssh -G` once per process; None when it prints neither.
+
+    A failed connect drops the entry (`_dial`), so the next call re-resolves."""
+    if alias in _ENDPOINTS:
+        return _ENDPOINTS[alias]
     fields = ssh_fields(alias)
     if not fields.get("hostname"):
         return None
-    return fields["hostname"], int(fields.get("port") or 22)
+    _ENDPOINTS[alias] = (fields["hostname"], int(fields.get("port") or 22))
+    return _ENDPOINTS[alias]
+
+
+def _dial(alias, resolve, connect):
+    """(ok, reason): one TCP connect to `alias`'s ssh endpoint; after a failure the endpoint is re-resolved
+    once and dialled again only if it moved."""
+    tried, reason = None, f"{alias}: no ssh endpoint"
+    for _ in range(2):
+        try:
+            ep = resolve(alias)
+            if ep is None or ep == tried:
+                break
+            tried = ep
+            connect(ep, timeout=PROBE_SECONDS).close()
+            return True, ""
+        except (OSError, ValueError, subprocess.SubprocessError) as ex:
+            where = f" {tried[0]}:{tried[1]}" if tried else ""
+            reason = f"{alias}{where}: {type(ex).__name__}: {ex}"
+            _ENDPOINTS.pop(alias, None)
+    return False, reason
 
 
 def lan_reachable(alias, resolve=None, connect=None):
     """True when a TCP connection to the alias's ssh endpoint opens within PROBE_SECONDS."""
-    try:
-        ep = (resolve or ssh_endpoint)(alias)
-        if ep is None:
-            return False
-        (connect or socket.create_connection)(ep, timeout=PROBE_SECONDS).close()
-        return True
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return False
+    return _dial(alias, resolve or ssh_endpoint, connect or socket.create_connection)[0]
+
+
+def link_probe(remote, tunnel_remote=None, resolve=None, connect=None):
+    """(ok, reason): the link is up when the LAN alias or, failing that, the tunnel alias accepts a TCP
+    connect within PROBE_SECONDS. Spawns nothing while the cached endpoint answers; independent of the roster."""
+    reasons = []
+    for alias in dict.fromkeys(a for a in (remote, tunnel_remote) if a):
+        ok, why = _dial(alias, resolve or ssh_endpoint, connect or socket.create_connection)
+        if ok:
+            return True, ""
+        reasons.append(why)
+    return False, "; ".join(reasons)
 
 
 def stable_remote(alias, reachable=None, fields=None, connect=None):
@@ -1296,6 +1328,17 @@ def note_link(prev, ok, alias, reason, say, path):
     return state
 
 
+LINK_FLIP_POLLS = 2
+
+
+def link_verdict(run, ok):
+    """(run, verdict): `run` is (last probe result, consecutive count). `verdict` is that result once
+    LINK_FLIP_POLLS consecutive probes agree, else None, so one dropped SYN never flips the record."""
+    last, n = run
+    n = n + 1 if ok == last else 1
+    return (ok, n), (ok if n >= LINK_FLIP_POLLS else None)
+
+
 BACKOFF_CAP_SECONDS = 4 * POLL_SECONDS
 
 
@@ -1331,27 +1374,32 @@ def main(argv=None):
     link_path = link_state_path(cfg.remote)
     # No record yet: None, so the first poll writes one and the G-EM watch sees a new box's first state.
     link = read_link_state(link_path) if os.path.exists(link_path) else None
-    failures = 0
+    failures, stale, next_fetch, run = 0, False, 0.0, (None, 0)
     try:
         guarded(say, "startup reap", reap_orphaned_mirrors, cfg.remote, say)
         while True:
-            try:
-                rows = mirrorable(fetch_roster(cfg.remote, cfg.key, cfg.tunnel_remote), skip, inbound_names())
-            except Exception as ex:
-                failures += 1
-                say(f"roster failed: {ex}")
-                link = guarded(say, "link-state note", note_link, link, False, cfg.remote, str(ex), say,
-                               link_path, default=link)
-                guarded(say, "reap", reap_orphaned_mirrors, cfg.remote, say, unbacked=True)
-                time.sleep(backoff_seconds(failures))
-                continue
-            failures = 0
-            link = guarded(say, "link-state note", note_link, link, True, cfg.remote, "", say, link_path,
-                           default=link)
-            guarded(say, "sync", sync, bridges, rows, cfg, say)
-            guarded(say, "reap", reap_orphaned_mirrors, cfg.remote, say, unbacked=True,
-                    keep={b.pid for b in bridges.values()})
-            guarded(say, "agy reap", reap_unbacked_agy_faces, say)
+            ok, why = guarded(say, "link probe", link_probe, cfg.remote, cfg.tunnel_remote,
+                              default=(False, "probe error"))
+            run, verdict = link_verdict(run, ok)
+            if verdict is not None:
+                link = guarded(say, "link-state note", note_link, link, verdict, cfg.remote, why, say, link_path,
+                               default=link)
+            if _now() >= next_fetch:
+                try:
+                    rows = mirrorable(fetch_roster(cfg.remote, cfg.key, cfg.tunnel_remote), skip, inbound_names())
+                except Exception as ex:
+                    failures += 1
+                    if not stale:
+                        say(f"ROSTER-STALE {cfg.remote}: {ex}")
+                    stale = True
+                    next_fetch = _now() + backoff_seconds(failures)
+                    guarded(say, "reap", reap_orphaned_mirrors, cfg.remote, say, unbacked=True)
+                else:
+                    failures, stale, next_fetch = 0, False, 0.0
+                    guarded(say, "sync", sync, bridges, rows, cfg, say)
+                    guarded(say, "reap", reap_orphaned_mirrors, cfg.remote, say, unbacked=True,
+                            keep={b.pid for b in bridges.values()})
+                    guarded(say, "agy reap", reap_unbacked_agy_faces, say)
             time.sleep(POLL_SECONDS)
     finally:
         tree_kill_many([b.pid for b in bridges.values()])

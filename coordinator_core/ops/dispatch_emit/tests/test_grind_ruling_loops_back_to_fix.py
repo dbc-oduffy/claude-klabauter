@@ -125,7 +125,7 @@ def test_a_continued_rows_tradeoff_is_judged_against_the_ruling_not_re_adjudicat
     sink: list = []
     refused = _run({"rulings": [_ruled("r0")]}, fix=tradeoff("rejects"), sink=sink)
     assert [h["type"] for h in refused["handed_back"]] == ["repeat-refused"]
-    assert refused["handed_back"][0]["ruling"] == _RULING
+    assert refused["handed_back"][0]["pm_ruling"] == _RULING
     assert refused["settled"] == []
     assert [k for k, _ in sink].count("adjudicate") == 1
 

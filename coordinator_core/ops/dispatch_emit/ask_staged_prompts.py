@@ -52,6 +52,22 @@ def _decode(content: str) -> str | None:
     return _ESC.sub(lambda m: _ESCAPES[m.group(1)], content)
 
 
+def _code_span_edges(js: str, run: list[tuple[int, int]], text: str) -> tuple[int, int]:
+    """The ``[lead, tail)`` slice of ``text`` safe to stage: a run with an odd backtick count opens or closes a
+    code span around a neighbouring JS operand (`cmd '` + params + `' --repo r`), so the edge touching that
+    operand stays inline. Trap: staging the whole run leaves the agent the params alone, the command cut
+    away into the file."""
+    if text.count("`") % 2 == 0:
+        return 0, len(text)
+    lead, tail = 0, len(text)
+    if js[max(0, run[0][0] - len(_JOIN)) : run[0][0]] == _JOIN:
+        eol = text.find("\n", text.index("`"))
+        lead = len(text) if eol < 0 else eol + 1
+    if js[run[-1][1] : run[-1][1] + len(_JOIN)] == _JOIN:
+        tail = text.rfind("\n", 0, text.rindex("`")) + 1
+    return lead, max(lead, tail)
+
+
 def stage_literal_runs(js: str, name: str, stager: Stager) -> str:
     """``js`` with each large run of adjacent single-quoted literals replaced by its pointer literal.
 
@@ -73,11 +89,17 @@ def stage_literal_runs(js: str, name: str, stager: Stager) -> str:
         if any(t is None for t in texts):
             continue
         text = "".join(texts)  # type: ignore[arg-type]
-        if len(text.encode("utf-8")) < MIN_STAGE_BYTES:
+        lead, tail = _code_span_edges(js, run, text)
+        body = text[lead:tail]
+        if len(body.encode("utf-8")) < MIN_STAGE_BYTES:
             continue
         staged += 1
         out.append(js[last : run[0][0]])
-        out.append(stager(name if staged == 1 else f"{name}-{staged}", text))
+        parts = [_js_string_literal(text[:lead])] if lead else []
+        parts.append(stager(name if staged == 1 else f"{name}-{staged}", body))
+        if tail < len(text):
+            parts.append(_js_string_literal(text[tail:]))
+        out.append(_JOIN.join(parts))
         last = run[-1][1]
     out.append(js[last:])
     return "".join(out)

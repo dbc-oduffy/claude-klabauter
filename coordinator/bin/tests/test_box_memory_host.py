@@ -20,6 +20,12 @@ _spec.loader.exec_module(host)
 GIB = host.GIB
 
 
+@pytest.fixture(autouse=True)
+def _roomy_cpu_budget(monkeypatch):
+    """Keep memory-axis tests independent of the runner's core count."""
+    monkeypatch.setattr(host, "default_cpu_budget", lambda: 64)
+
+
 def _status(avail=100 * GIB, total=128 * GIB, used=10 * GIB, limit=200 * GIB):
     return host.MemoryStatus(avail, total, used, limit)
 
@@ -607,3 +613,106 @@ def test_trim_file_cache_is_windows_only_and_reuses_the_governor_fire(monkeypatc
     monkeypatch.setattr(file_cache_trim, "fire_box_cache_trim",
                         lambda live_fn: seen.append(live_fn) or "trimmed")
     assert host.trim_file_cache() == "trimmed" and seen == [host._group_em_live]
+
+
+_CPU_KW = dict(rss_fn=lambda p: 0.0, alive_fn=lambda p: True, image_fn=lambda p: "python.exe")
+_ROOMY = host.MemoryStatus(100 * GIB, 128 * GIB, 0, 200 * GIB)
+_LEGACY_KW = dict(alive_fn=lambda p: True, create_time_fn=lambda p: 500.0, image_fn=lambda p: "python.exe",
+                  now_fn=lambda: 1000.0)
+
+
+def _cpu_ledger(tmp_path, *cores):
+    adm = tmp_path / "admission.jsonl"
+    for i, n in enumerate(cores):
+        host.register_command(adm, f"leg{i}", 10 + i, 1.0, **({} if n is None else {"cores": n}))
+    return adm
+
+
+def test_register_records_declared_cores_and_absent_counts_one(tmp_path):
+    import json
+
+    adm = _cpu_ledger(tmp_path, 3, None)
+    declared = [json.loads(t)["declared_cores"] for t in adm.read_text(encoding="utf-8").splitlines()]
+    assert declared == [3, 1]
+    assert host.reserved_cores(adm, **{k: v for k, v in _CPU_KW.items() if k != "rss_fn"}) == 4
+
+
+def test_row_without_declared_cores_counts_one(tmp_path):
+    adm = _ledger(tmp_path, *(_start(r, p, ts=999.0, **extra) for r, p, extra in (
+        ("a", 5, {}), ("b", 6, {"declared_cores": 0}), ("c", 7, {"declared_cores": True}))))
+    assert host.reserved_cores(adm, **_LEGACY_KW) == 3
+
+
+def test_reserved_cores_skips_ended_dead_and_unreserving_rows(tmp_path):
+    adm = _ledger(
+        tmp_path,
+        _start("a", 5, declared_cores=4, ts=999.0),
+        {"phase": "END", "session_id": "s", "run": "a", "pids": []},
+        _start("b", 6, declared_cores=4, ts=999.0),
+        {"phase": "START", "session_id": "s", "run": "nopeak", "pids": [7], "declared_cores": 9, "ts": 999.0},
+        _start("live", 8, declared_cores=2, ts=999.0),
+    )
+    kw = dict(_LEGACY_KW, alive_fn=lambda p: p != 6)
+    assert host.reserved_cores(adm, **kw) == 2
+
+
+def test_cpu_axis_holds_when_declared_plus_reserved_exceeds_budget(tmp_path):
+    adm = _cpu_ledger(tmp_path, 3)  # budget 4, reserved 3
+    verdict, _ = host.admit_and_register(adm, "k", 99, 1.0, _ROOMY, cores=2, cpu_budget=4, **_CPU_KW)
+    assert not verdict.admit and verdict.avail_ok and verdict.commit_ok and not verdict.cpu_ok
+    assert verdict.hold_reason.startswith("HOLD") and "cpu:" in verdict.hold_reason
+    assert "memory" not in verdict.hold_reason
+    assert (verdict.declared_cores, verdict.reserved_cores, verdict.cpu_budget) == (2, 3, 4)
+    assert len(adm.read_text(encoding="utf-8").splitlines()) == 1  # a HOLD writes no reservation
+
+
+def test_cpu_axis_admits_exactly_at_budget_and_default_leg_is_one_core(tmp_path):
+    adm = _cpu_ledger(tmp_path, 3)
+    verdict, _ = host.admit_and_register(adm, "k", 99, 1.0, _ROOMY, cpu_budget=4, **_CPU_KW)
+    assert verdict.admit and verdict.hold_reason == "" and verdict.declared_cores == 1
+    over, _ = host.admit_and_register(adm, "k2", 98, 1.0, _ROOMY, cpu_budget=4, **_CPU_KW)
+    assert not over.admit and "cpu:" in over.hold_reason
+
+
+def test_admitted_leg_records_its_cores_for_the_next_admit(tmp_path):
+    adm = tmp_path / "admission.jsonl"
+    first, _ = host.admit_and_register(adm, "a", 1, 1.0, _ROOMY, cores=3, cpu_budget=4, **_CPU_KW)
+    second, _ = host.admit_and_register(adm, "b", 2, 1.0, _ROOMY, cores=2, cpu_budget=4, **_CPU_KW)
+    assert first.admit and not second.admit and second.reserved_cores == 3
+
+
+def test_lone_leg_wider_than_budget_still_admits(tmp_path):
+    verdict, _ = host.admit_and_register(tmp_path / "admission.jsonl", "k", 1, 1.0, _ROOMY, cores=30, cpu_budget=4, **_CPU_KW)
+    assert verdict.admit and verdict.cpu_ok
+
+
+def test_memory_hold_and_cpu_hold_both_named(tmp_path):
+    adm = _cpu_ledger(tmp_path, 3)
+    tight = host.MemoryStatus(1 * GIB, 128 * GIB, 0, 200 * GIB)
+    verdict, _ = host.admit_and_register(adm, "k", 99, 4.0, tight, cores=2, cpu_budget=4, **_CPU_KW)
+    assert not verdict.admit and "memory:" in verdict.hold_reason and "cpu:" in verdict.hold_reason
+
+
+def test_selected_reservation_holds_on_cpu_axis_and_excludes_own_row(tmp_path):
+    adm = _cpu_ledger(tmp_path, 3)
+    sel = lambda: {"kind": "own-grant", "session_id": "g", "run": "r",  # noqa: E731
+                   "grant": {"grantee_session_id": "g", "run": "r", "issuer_session_id": "i", "declared_peak_mb": 1024}}
+    verdict, _, _ = host.admit_selected_reservation(adm, 1.0, _ROOMY, sel, cores=2, cpu_budget=4, **_CPU_KW)
+    assert not verdict.admit and "cpu:" in verdict.hold_reason
+    ok, _, _ = host.admit_selected_reservation(adm, 1.0, _ROOMY, sel, cores=1, cpu_budget=4, **_CPU_KW)
+    assert ok.admit
+
+
+def test_default_cpu_budget_is_physical_minus_reserve_floor_one(monkeypatch):
+    monkeypatch.undo()  # drop the autouse roomy budget
+    monkeypatch.delenv(host._CORE_RESERVE_ENV, raising=False)
+    monkeypatch.setattr(host, "physical_cores", lambda: 24)
+    assert host.default_cpu_budget() == 24 - host.CONTROL_PLANE_CORE_RESERVE
+    monkeypatch.setenv(host._CORE_RESERVE_ENV, "6")
+    assert host.default_cpu_budget() == 18
+    monkeypatch.setattr(host, "physical_cores", lambda: 1)
+    assert host.default_cpu_budget() == 1
+
+
+def test_physical_cores_is_positive():
+    assert host.physical_cores() >= 1

@@ -550,6 +550,13 @@ class TestRepoRootRequired:
         )
         assert exit_code == grind_rows.EXIT_USAGE
 
+    def test_close_usage_spells_each_flag_and_every_closing_verdict(self, close_fixture, capsys):
+        exit_code = grind_rows.main(["close", "--profile-dir", str(close_fixture["profile_dir"])])
+        err = capsys.readouterr().err
+        assert exit_code == grind_rows.EXIT_USAGE
+        assert str(sorted(grind_rows.CLOSURE_CLOSING_BRANCHES)) in err
+        assert "--profile-dir <dir>" in err and "--verdict D" not in err and "--verdict V" not in err
+
     def test_settle_without_repo_root_is_a_usage_error(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         exit_code = grind_rows.main(["settle", "--profile", "bug", "--row-id", "never-existed"])

@@ -27,6 +27,14 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def _payload_files_unlinked_per_test():
+    from coordinator_core.ops.dispatch_emit.tests._node_support import release_payload_files
+
+    yield
+    release_payload_files()
+
+
+@pytest.fixture(autouse=True)
 def _xs_diff_budget_gate_off_outside_its_own_tests(request, monkeypatch):
     """A terminal_commit fixture cites an XS sizing but names no run base, so the XS diff-budget
     gate refuses it as unmeasurable before the behaviour under test. A module marked

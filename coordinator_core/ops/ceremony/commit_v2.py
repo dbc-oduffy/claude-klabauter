@@ -773,7 +773,7 @@ _KNOWN_PARAMS = frozenset(
     {
         "repo", "repo_root", "paths", "deleted_paths", "untracked_paths", "message",
         "prefer_staged", "prefer_deliberate_stage", "allow_empty", "finish_merge", "session_id",
-        "declared_reverts", "expected_blobs", "expected_content_sha256", "supplied_blobs",
+        "one_commit", "declared_reverts", "expected_blobs", "expected_content_sha256", "supplied_blobs",
         "skip_missing", "gone_tracked_as_deleted", "on_main_reason", "force_ignored",
         "drop_ignored", "ignored_untracked", "full_reply", *_RETIRED_CARRY_PARAMS,
     }
@@ -1132,6 +1132,8 @@ def _parse_params(params: dict, repo_root: Optional[Path]):
         finish_merge (bool, optional, DEFAULT FALSE) -- with MERGE_HEAD present and every conflict
                                        resolved, land the merge as one two-parent commit over
                                        `paths`, never split into halves; reply has `merge_parent`.
+        one_commit (bool, optional, DEFAULT FALSE) -- land a mixed product/process set as ONE
+                                       commit under `message`, skipping the process split.
         session_id (str, optional)  -- canonical UUID (8-4-4-4-12 hex,
                                        case-insensitive) threaded into
                                        `apply_missing_trailers` as
@@ -1270,6 +1272,8 @@ def _parse_params(params: dict, repo_root: Optional[Path]):
     raw_finish_merge = params.get("finish_merge", False)
     if not isinstance(raw_finish_merge, bool):
         return _error("params.finish_merge must be a boolean")
+    if not isinstance(params.get("one_commit", False), bool):
+        return _error("params.one_commit must be a boolean")
 
     session_id_override = params.get("session_id")
     if session_id_override is not None:
@@ -1632,6 +1636,8 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
         )
         # A merge is one commit: a finish_merge over a live MERGE_HEAD never splits.
         if mixed and raw_finish_merge and (resolve_git_dir(worktree_root) / "MERGE_HEAD").exists():
+            mixed = False
+        if params.get("one_commit") is True:
             mixed = False
         if mixed:
             proc_set = set(proc_paths) | set(proc_deleted) | set(proc_untracked)

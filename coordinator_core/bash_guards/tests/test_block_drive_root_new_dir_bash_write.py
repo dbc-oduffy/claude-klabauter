@@ -121,6 +121,19 @@ def test_cwd_at_root(world):
     assert _enveloped(guard.check)(_payload("mkdir existing", "Bash", root)) is None
 
 
+@pytest.mark.parametrize("prefix", ["cd {r} && ", "cd {w} && cd {r} && ", "cd {w}; cd {r} && "])
+def test_relative_write_after_cd_chain_into_root_is_denied(world, prefix):
+    root, _, work = world
+    cmd = prefix.format(r=root.as_posix(), w=work.as_posix()) + "mkdir new"
+    assert _denied(_enveloped(guard.check)(_payload(cmd, "Bash", work)))
+
+
+def test_relative_write_after_cd_chain_out_of_root_is_allowed(world):
+    root, _, work = world
+    cmd = f"cd {root.as_posix()} && cd {work.as_posix()} && mkdir new"
+    assert _enveloped(guard.check)(_payload(cmd, "Bash", work)) is None
+
+
 def test_general_work_cwd_is_exempt_other_cwd_still_denied(world, monkeypatch):
     from coordinator_core.session import general_work_scope as gws
 

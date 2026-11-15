@@ -78,7 +78,9 @@ def test_codex_schema_prompt_label_and_environment(tmp_path, monkeypatch):
     assert wire["argv"][-1] == "-"
     assert all(key not in wire["env"] for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_RUNNER_ALLOW_API_KEY", "CODEX_THREAD_ID"))
     assert wire["env"]["COORDINATOR_PARENT_SESSION_ID"] == "01a1b63b-acfb-78d1-86f2-a74ad6ca4572"
-    assert wire["env"]["COORDINATOR_WARM"] == "0"
+    assert "COORDINATOR_WARM" not in wire["env"]
+    assert wire["env"]["COORDINATOR_WARM_LISTENER_AUTOSTART"] == "0"
+    assert wire["env"]["COORDINATOR_WARM_SERVER_AUTOSTART"] == "0"
     assert wire["env"]["COORDINATOR_ENGINE_ROOT"] == str(Path(__import__("coordinator_core").__file__).resolve().parent.parent)
     assert wire["env"]["COORDINATOR_AGENT_PROVIDER"] == "codex"
     assert wire["env"]["COORDINATOR_AGENT_VENDOR"] == "codex"
@@ -571,7 +573,7 @@ def test_model_options_cannot_select_private_cli(tmp_path,monkeypatch):
     capture=fake_cli(tmp_path,monkeypatch)
     agents.run_agent('x',{'schema':SCHEMA,'private_cli':{'env':{'COORDINATOR_WARM':'1'}}},repo_root=tmp_path,artifact_dir=tmp_path/'agent')
     assert not (tmp_path/'agent/private-cli.json').exists()
-    assert json.loads(capture.read_text())['env']['COORDINATOR_WARM']=='0'
+    assert 'COORDINATOR_WARM' not in json.loads(capture.read_text())['env']
 
 
 class _Spawned(Exception):

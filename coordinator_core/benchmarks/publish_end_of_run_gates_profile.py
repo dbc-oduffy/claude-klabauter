@@ -126,6 +126,18 @@ class DriftProbe:
         return bool(self.caught) and all(self.caught.get(g) for g in LITERAL_GATES)
 
 
+def isolate_gate_cache(publish: Any, cache_dir: Path, identities_keep: Optional[int] = None) -> None:
+    """Point the publish module's gate caches at `cache_dir` so the cold leg starts empty and never touches a
+    destination repo; `identities_keep` overrides the cap a flush prunes to (the cap a round must fit under)."""
+    from coordinator_core.percolate import gate_result_cache as grc
+
+    if identities_keep is not None:
+        grc._IDENTITIES_KEEP = identities_keep
+    publish._gate_cache_for = lambda target, gate_module, gate_id: grc.GateResultCache(
+        cache_dir, gate_id, grc.gate_version_of(gate_module.__file__)
+    )
+
+
 def load_publish_module():
     """`coordinator/bin/publish.py` loaded by path, the way its own tests load it."""
     path = _REPO / "coordinator" / "bin" / "publish.py"
@@ -366,6 +378,7 @@ def run(
     skip_drift: bool = False,
     work_dir: Path = _WORK_DIR,
     keep_work_dir: bool = False,
+    identities_keep: Optional[int] = None,
 ) -> tuple[list[GateProfile], Optional[DriftProbe], str]:
     declare_benchmark_origin()
     publish = load_publish_module()
@@ -374,11 +387,18 @@ def run(
         shutil.rmtree(work_dir, ignore_errors=True)
     git_dir = work_dir / "git-dir"
     git_dir.mkdir(parents=True, exist_ok=True)
-    root = (gate_root or _REPO).resolve()
-    meter = _Meter()
-    calls = gate_calls(publish, engine_ctx, sections, root, git_dir, parse_only=parse_only)
-    profiles = [profile_gate(meter, g, calls[g], warm_repeat) for g in gates]
-    probe = None if skip_drift else drift_probe(publish, engine_ctx, sections, meter)
+    from coordinator_core.percolate import gate_result_cache as grc
+
+    original_keep = grc._IDENTITIES_KEEP
+    isolate_gate_cache(publish, work_dir / "gate-cache", identities_keep)
+    try:
+        root = (gate_root or _REPO).resolve()
+        meter = _Meter()
+        calls = gate_calls(publish, engine_ctx, sections, root, git_dir, parse_only=parse_only)
+        profiles = [profile_gate(meter, g, calls[g], warm_repeat) for g in gates]
+        probe = None if skip_drift else drift_probe(publish, engine_ctx, sections, meter)
+    finally:
+        grc._IDENTITIES_KEEP = original_keep
     return profiles, probe, meter.instrument
 
 
@@ -391,6 +411,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--parse-only", action="store_true", help="function gate parse sweep only (the warm-round shape)")
     parser.add_argument("--skip-drift", action="store_true")
     parser.add_argument("--keep-work-dir", action="store_true", help="reuse the work dir (a non-empty cache makes the cold leg warm)")
+    parser.add_argument("--identities-keep", type=int, default=None,
+                        help="override the gate cache's identity cap (8 reproduces the pre-fix round: the warm leg misses)")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     gates = tuple(g for g in args.gates.split(",") if g)
@@ -406,6 +428,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             parse_only=args.parse_only,
             skip_drift=args.skip_drift,
             keep_work_dir=args.keep_work_dir,
+            identities_keep=args.identities_keep,
         )
     except SetupError as exc:
         print(f"publish_end_of_run_gates_profile: {exc}", file=sys.stderr)

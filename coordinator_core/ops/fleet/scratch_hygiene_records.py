@@ -113,10 +113,17 @@ def summary_record(records: Iterable[Mapping[str, Any]], *, applied: bool) -> di
 def contract_exit(records: Iterable[Mapping[str, Any]]) -> int:
     """1 when any purge record is ``skipped-*`` or any nag finding is ``missing-readme`` or ``hold-pending``, else 0.
 
+    ``skipped-budget`` is cursor-deferred, not a refusal: it counts only when no purge record walked (a stall).
     Exit 2 (bad arguments) is the handler's, never derivable from records.
     """
+    records = list(records)
+    purge_actions = [str(r.get("action", "")) for r in records if r.get("kind") == "purge"]
+    progressed = any(a != "skipped-budget" for a in purge_actions)
     for rec in records:
-        if rec.get("kind") == "purge" and str(rec.get("action", "")).startswith("skipped-"):
+        action = str(rec.get("action", ""))
+        if rec.get("kind") == "purge" and action.startswith("skipped-"):
+            if action == "skipped-budget" and progressed:
+                continue
             return 1
         if rec.get("kind") == "hold-nag" and rec.get("finding") in ("missing-readme", "hold-pending"):
             return 1

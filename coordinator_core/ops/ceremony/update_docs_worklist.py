@@ -88,6 +88,13 @@ started; every unclassified handoff is then `indeterminate`, never prunable."""
 
 LESSONS_OUTBOX = "state/lessons-outbox"
 
+CHANGELOG_LIVE_DIR = record_homes.home_rel("week-changelog")
+CHANGELOG_ARCHIVE_DIR = "archive/week-changelogs"
+WEEK_SUMMARY = "WEEK-SUMMARY.md"
+CHANGELOG_BACKFILL_OP = "changelog_ops.backfill_gaps"
+CHANGELOG_GAPS_CAP = 50
+DRIFT_SYMBOLS_PER_FILE = 2
+
 AGENT = "agent"
 OP = "op"
 NOOP = "noop"
@@ -119,6 +126,8 @@ _ANCESTRY_RE = re.compile(
     r"[^\n]*(?:\n[ \t]+[^\n]*)*",
     re.M,
 )
+_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DAY_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 _MD_NAME_RE = re.compile(r"[A-Za-z0-9._\-]+\.md")
 _DAY_NS = 86400e9
 
@@ -382,13 +391,16 @@ def _classify_archived_handoffs(
     cache: dict,
     started: float,
     stats: dict,
-) -> tuple[list[str], dict[str, int]]:
-    """(prune rows, {total, prune, keep, indeterminate}) over every archive/handoffs file.
+) -> tuple[list[str], dict[str, int], dict[str, Any]]:
+    """(prune rows, {total, prune, keep, indeterminate}, pass_info) over every archive/handoffs file.
 
     KEEP: the newest `ARCHIVED_HANDOFFS_KEEP_NEWEST` by filename, a roadmap-exempt `kind`, a
     basename named by a live plan or handoff ancestry field, or a live `blocked_by` dependent.
     PRUNE only when the one corpus pass answered `none`; a file never read, a pass not run
-    and any `indeterminate` reply are all `indeterminate`, never prunable."""
+    and any `indeterminate` reply are all `indeterminate`, never prunable. `pass_info` is
+    {status: ran|memo|guard_skipped|scan_incomplete|no_candidates, candidates, answered}:
+    `answered` counts only candidates the pass (or its memo) replied to, so a skipped pass is
+    coverage 0, never 100."""
     arch = "archive/handoffs/"
     names = sorted((k for k in hfiles if k.startswith(arch)), key=lambda k: (Path(k).name, k), reverse=True)
     counts = {"total": len(names), "prune": 0, "keep": 0, "indeterminate": 0}
@@ -402,7 +414,10 @@ def _classify_archived_handoffs(
             candidates.append(key)
 
     states: dict[str, str] = {}
-    if candidates and scan_complete:
+    status = "no_candidates"
+    if candidates and not scan_complete:
+        status = "scan_incomplete"
+    elif candidates:
         holders = sorted(k for k, rec in hfiles.items() if rec[3] and not k.startswith("docs/plans/"))
         sig = hashlib.blake2b(
             repr([(k, hfiles[k][0], hfiles[k][1]) for k in sorted(set(holders) | set(names))]).encode(),
@@ -411,13 +426,18 @@ def _classify_archived_handoffs(
         memo = cache.get("blocked_by")
         if isinstance(memo, dict) and memo.get("sig") == sig:
             states = memo.get("states", {})
+            status = "memo"
         elif time.process_time() - started <= BLOCKED_PASS_START_SECS:
             from coordinator_core.ops.handoff_children import blocked_by_dependents_many
 
             replies = blocked_by_dependents_many([str(root / k) for k in candidates], root)
-            states = {k: (replies.get(str(root / k)) or {}).get("state", "indeterminate") for k in candidates}
+            states = {k: replies[str(root / k)].get("state", "indeterminate") for k in candidates if replies.get(str(root / k))}
             cache["blocked_by"] = {"sig": sig, "states": states}
             stats["handoff_reread"] += 1
+            status = "ran"
+        else:
+            status = "guard_skipped"
+    pass_info = {"status": status, "candidates": len(candidates), "answered": sum(1 for k in candidates if k in states)}
     prune_rows: list[str] = []
     for key in candidates:
         state = states.get(key, "indeterminate")
@@ -428,7 +448,56 @@ def _classify_archived_handoffs(
             counts["keep"] += 1
         else:
             counts["indeterminate"] += 1
-    return sorted(prune_rows), counts
+    return sorted(prune_rows), counts, pass_info
+
+
+def _commit_days(root: Path, ack_head: str) -> list[str]:
+    """Distinct committer days of `ack_head..HEAD`: the one extra spawn of a drift run."""
+    res = run_git(["log", "--format=%cs", f"{ack_head}..HEAD"], cwd=str(root), timeout=CEREMONY_BUDGET_SECS)
+    return sorted({d for d in res.stdout.split() if _DAY_RE.match(d)}) if res.ok else []
+
+
+def _entry_days(directory: Path) -> set[str]:
+    try:
+        with os.scandir(directory) as it:
+            return {e.name[:10] for e in it if e.name.endswith(".md") and _DAY_PREFIX_RE.match(e.name)}
+    except OSError:
+        return set()
+
+
+def _monday(day: str) -> str:
+    d = _dt.date.fromisoformat(day)
+    return (d - _dt.timedelta(days=d.weekday())).isoformat()
+
+
+def _changelog_backfill(root: Path, commit_days: list[str], today: str) -> dict[str, Any]:
+    """R4 verdict: `noop` when every committed day before `today` has a daily entry (live
+    `state/week-changelog` or its archived week dir) and every closed week has its
+    WEEK-SUMMARY, else `op` naming `changelog_ops.backfill_gaps` with the missing dates.
+    Reads the filesystem only; older gaps stay with that op's own sweep."""
+    live = _entry_days(root / CHANGELOG_LIVE_DIR)
+    this_week = _monday(today)
+    week_days: dict[str, set[str]] = {}
+    missing_days: list[str] = []
+    missing_weeks: set[str] = set()
+    for day in commit_days:
+        if day >= today:
+            continue
+        week = _monday(day)
+        if week not in week_days:
+            week_days[week] = _entry_days(root / CHANGELOG_ARCHIVE_DIR / week)
+        if day not in live and day not in week_days[week]:
+            missing_days.append(day)
+        if week < this_week and not (root / CHANGELOG_ARCHIVE_DIR / week / WEEK_SUMMARY).is_file():
+            missing_weeks.add(week)
+    gap = bool(missing_days or missing_weeks)
+    return {
+        "verdict": OP if gap else NOOP,
+        "op": CHANGELOG_BACKFILL_OP if gap else None,
+        "missing_days_total": len(missing_days),
+        "missing_days": missing_days[:CHANGELOG_GAPS_CAP],
+        "missing_weeks": sorted(missing_weeks)[:CHANGELOG_GAPS_CAP],
+    }
 
 
 def _phase_verdicts(changed_total: int, worklist: list[dict[str, Any]], outbox_pending: bool) -> dict[str, str]:
@@ -492,6 +561,23 @@ def _bound_output(out: dict) -> dict:
     return out
 
 
+def _anchor_worklist_symbols(root: Path, worklist: list[dict[str, Any]]) -> None:
+    """Emit `symbols` (`{path, qualified_name, sym}`, SCIP id example-retrieval-repo indexed) on each
+    `doc_drift_review` row for its changed source paths, and give any other row's bare symbol entry
+    its `sym`; unresolved entries stay bare. Opens the store only when a row has paths or symbols."""
+    from coordinator_core.symbol_knowledge import anchors
+
+    for w in worklist:
+        if w.get("kind") == "doc_drift_review" and w.get("paths"):
+            found = anchors.symbols_in(root, w["paths"], DRIFT_SYMBOLS_PER_FILE)
+            symbols = [s for p in w["paths"] for s in found.get(p, ())]
+            if symbols:
+                w["symbols"] = symbols
+    items = [s for w in worklist for s in w.get("symbols", ()) if "sym" not in s]
+    if items:
+        anchors.attach(root, items)
+
+
 @register_op("ceremony.update_docs_worklist")
 def _ceremony_update_docs_worklist(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "ceremony.update_docs_worklist" handler.
@@ -507,7 +593,11 @@ def _ceremony_update_docs_worklist(params: dict, repo_root: Optional[Path] = Non
     Returns {schema_version, ack_head, cache{state, entries, reread, complete},
     changed_since_ack, decided_by_op, agent_worklist, phase_verdicts}. Writes only its own
     cache file. `decided_by_op.archived_handoffs` holds the uncapped prune/keep/indeterminate
-    counts (summing to `total`); `prune.archived_handoffs` lists the prune rows, capped.
+    counts (summing to `total`); `prune.archived_handoffs` lists the prune rows, capped;
+    `archived_handoffs_pass` says whether the corpus pass ran and how many candidates it
+    answered. `decided_by_op.changelog_backfill` is the R4 daily/weekly verdict: `noop`, or
+    `op` naming `changelog_ops.backfill_gaps` with the missing days and weeks; commit days
+    come from one extra `git log` spawn taken only when source drift is non-empty.
     """
     if repo_root is None:
         raise ValueError(
@@ -521,7 +611,9 @@ def _ceremony_update_docs_worklist(params: dict, repo_root: Optional[Path] = Non
 
     cache_path = _cache_path(root)
     cache = _load_cache(cache_path)
-    head, changed = _git_drift(root, cache.get("ack_head"))
+    prior_ack = cache.get("ack_head")
+    head, changed = _git_drift(root, prior_ack)
+    commit_days = _commit_days(root, prior_ack) if changed and head == prior_ack else []
     if ack:
         head = _git_head(root) or head
     baseline_moved = bool(head) and head != cache.get("ack_head")
@@ -540,7 +632,7 @@ def _ceremony_update_docs_worklist(params: dict, repo_root: Optional[Path] = Non
     harvested = _harvested_paths(root, cache)
     prune, totals, blocked, held = _classify(files, arch_rel, harvested, now)
     hfiles, h_complete = _scan_handoff_files(root, cache.get("hfiles", {}), started, stats)
-    prune["archived_handoffs"], handoff_counts = _classify_archived_handoffs(
+    prune["archived_handoffs"], handoff_counts, handoff_pass = _classify_archived_handoffs(
         root, hfiles, h_complete, cache, started, stats
     )
     totals["archived_handoffs"] = len(prune["archived_handoffs"])
@@ -587,6 +679,7 @@ def _ceremony_update_docs_worklist(params: dict, repo_root: Optional[Path] = Non
                 "hits": retired[:WORKLIST_PATHS_CAP],
             })
 
+    _anchor_worklist_symbols(root, worklist)
     out = {
         "schema_version": SCHEMA_VERSION,
         "ack_head": head,
@@ -606,6 +699,8 @@ def _ceremony_update_docs_worklist(params: dict, repo_root: Optional[Path] = Non
             "lineage_blocked": len(blocked),
             "prune_totals": totals,
             "archived_handoffs": handoff_counts,
+            "archived_handoffs_pass": handoff_pass,
+            "changelog_backfill": _changelog_backfill(root, commit_days, now.date().isoformat()),
             "prune": {c: rows[:PRUNE_ROWS_CAP] for c, rows in prune.items()},
         },
         "agent_worklist": worklist,

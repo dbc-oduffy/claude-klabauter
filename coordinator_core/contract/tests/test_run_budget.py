@@ -96,3 +96,24 @@ def test_budget_report_shape():
     assert r["within"] == {"agents": True, "tokens": False, "minutes": True}
     assert r["over_cap_fixed"] is False
     assert "over_cap_fixed" not in rb.budget_report(B, UnitCost())
+
+
+def test_admitted_share_is_the_rows_share_of_the_whole_backlog_bar():
+    assert rb.admitted_share(10, 40) == 250_000
+    assert rb.admitted_share(50, 40) == 1_000_000
+    assert rb.admitted_share(0, 40) == 0 and rb.admitted_share(5, 0) == 0
+    assert rb.scaled_budget(B, 10, 40) == RunBudget(10, 250_000, 15)
+
+
+def test_fit_to_share_narrows_to_the_largest_n_within_its_share_and_never_below_one():
+    per = UnitCost(2, 100_000, 1)
+
+    def batches(n):
+        return -(-n // 4)
+
+    # Full batches cost 25k a row; the share is 25k a row at 40 open rows, so a partial last
+    # batch is what falls outside it: 10 wanted -> 8.
+    assert rb.fit_to_share(B, per, batches, 10, 12) == 10
+    assert rb.fit_to_share(B, per, batches, 10, 40) == 8
+    assert rb.fit_to_share(B, per, batches, 10, 400) == 1
+    assert rb.fit_to_share(B, per, batches, 0, 40) == 0

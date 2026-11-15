@@ -29,7 +29,7 @@ from coordinator_core.prior_art_recall.search_log import validate_sidecar
 
 CASES_DIR = Path(__file__).parent / "cases"
 BASE_DIR = CASES_DIR / "_base"
-DEFAULT_AGENT = Path("C:/dev/coordinator-content-repo/coordinator/agents/prior-art-checker.md")
+AGENT_FILE_NAME = "prior-art-checker.md"
 KINDS = ("project-wiki", "doctrine-wiki", "decision-record", "lesson-only", "improvement-queue", "skill-predicate")
 
 # Run in the workdir; the benchmark corpus roots are overridden by the brief, not the agent's defaults.
@@ -160,8 +160,23 @@ def format_report(report: dict, baseline: str = "sonnet", candidate: str = "haik
     return "\n".join(lines)
 
 
-def claude_cli_runner(agent_file: Path = DEFAULT_AGENT, timeout_s: int = 900) -> Runner:
+def default_agent_file() -> Path:
+    """The prior-art-checker agent under the resolved coordinator content root (its `agents/`,
+    directly or under `coordinator/`). Raises FileNotFoundError naming `--agent-file` when none resolves."""
+    from coordinator_core.content_root import read_content_root
+
+    root = read_content_root()
+    if root:
+        for base in (Path(root), Path(root) / "coordinator"):
+            candidate = base / "agents" / AGENT_FILE_NAME
+            if candidate.is_file():
+                return candidate
+    raise FileNotFoundError(f"{AGENT_FILE_NAME} not found under the coordinator content root; pass --agent-file")
+
+
+def claude_cli_runner(agent_file: Path | None = None, timeout_s: int = 900) -> Runner:
     """Drive the real agent through `claude -p`, its body as the system prompt, cwd = the case repo."""
+    agent_file = agent_file or default_agent_file()
     body = agent_file.read_text(encoding="utf-8")
     body = re.sub(r"\A---\n.*?\n---\n", "", body, count=1, flags=re.DOTALL)
 
@@ -194,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--n", type=int, default=5)
     ap.add_argument("--cases", default="", help="comma-separated case ids; default all")
     ap.add_argument("--out", default="", help="default <repo>/scratch/prior-art-recall")
-    ap.add_argument("--agent-file", default=str(DEFAULT_AGENT))
+    ap.add_argument("--agent-file", default="", help="default: resolved from the coordinator content root")
     ap.add_argument("--self-check", action="store_true")
     a = ap.parse_args(argv)
     cases = load_cases(set(filter(None, a.cases.split(","))) or None)
@@ -204,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if problems else 0
     out = Path(a.out) if a.out else Path(__file__).resolve().parents[2] / "scratch" / "prior-art-recall"
     models = [m for m in a.models.split(",") if m]
-    report = run_benchmark(models, a.n, claude_cli_runner(Path(a.agent_file)), out, cases)
+    report = run_benchmark(models, a.n, claude_cli_runner(Path(a.agent_file) if a.agent_file else None), out, cases)
     print(format_report(report))
     return 0
 

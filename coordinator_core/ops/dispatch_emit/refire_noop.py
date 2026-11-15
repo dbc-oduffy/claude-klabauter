@@ -14,6 +14,7 @@ from .ask_contract import (
     LEDGER_HALT_KIND,
     LEG_DISPATCH,
     RESUME_LEDGER_CREDITED_FIELD,
+    RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RESUME_LEDGER_HALT_SHA_FIELD,
     RESUME_LEDGER_KIND_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
@@ -24,6 +25,7 @@ from .ask_contract import (
     UNCLAIMED_ROWS_HALT_KIND,
 )
 from .run_truth_contract import MutationReply
+from .spine_read import DISPOSITION_ALIASES, NON_DISPATCHABLE_DISPOSITIONS
 
 _BLOCKING_FIELD = "blocking"
 _LEG_ACTION_FIELD = "action"
@@ -74,6 +76,39 @@ def identical_rehalt_reason(
     return (
         f"refire would re-halt identically: {ids} still blocking and nothing changed since halt {halt_sha}. "
         "`workflow.revise` a note naming the work, or land it."
+    )
+
+
+def unserved_blocking_reason(
+    resume_ledger: Mapping | None,
+    serving: Sequence[Mapping],
+) -> str | None:
+    """One-line reason when a ledger-check refire has no open spine row serving a blocking id, else None.
+
+    `serving` is the spine rows serving a blocking id (`ledger_remaining_paths.serving_rows`). A row is
+    open when its disposition is dispatchable and the plan has not em-discharged it. A revise note or a
+    blocking id the register has since ruled releases it. A dispatch leg built from the ledger's remaining
+    paths does not: it carries no spine row, so it cannot discharge the id.
+    """
+    if not resume_ledger:
+        return None
+    if resume_ledger.get(RESUME_LEDGER_KIND_FIELD, LEDGER_HALT_KIND) != LEDGER_HALT_KIND:
+        return None
+    blocking = resume_ledger.get(_BLOCKING_FIELD) or []
+    if not blocking or resume_ledger.get(RESUME_LEDGER_NOTES_FIELD):
+        return None
+    rulable = resume_ledger.get(_RULABLE_FIELD)
+    if rulable is not None and any(b not in rulable for b in blocking):
+        return None
+    discharged = resume_ledger.get(RESUME_LEDGER_EM_DISCHARGED_FIELD) or {}
+    for row in serving:
+        disposition = DISPOSITION_ALIASES.get(str(row.get("disposition") or "").strip(), row.get("disposition"))
+        if disposition not in NON_DISPATCHABLE_DISPOSITIONS and str(row.get("id")) not in discharged:
+            return None
+    ids = ", ".join(str(b) for b in blocking)
+    return (
+        f"refire would re-halt: no open spine row serves {ids}. "
+        "`plan.tasks.mutate` add a row serving it, or `workflow.revise` a note naming the work."
     )
 
 

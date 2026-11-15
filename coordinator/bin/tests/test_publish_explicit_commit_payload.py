@@ -93,22 +93,22 @@ class World:
         self.tmp = tmp_path
         self.capsys = capsys
         self.default_repo = tmp_path / "default-repo"
-        self.claude_klabauter = tmp_path / "claude-klabauter"
-        self.routed = self.claude_klabauter / "coordinator"
+        self.engine_repo = tmp_path / "claude-klabauter"
+        self.routed = self.engine_repo / "coordinator"
         self.dest = tmp_path / "dest-repo"
         _init_repo(self.default_repo, self_origin=False)
-        _init_repo(self.claude_klabauter, self_origin=False)
+        _init_repo(self.engine_repo, self_origin=False)
         _init_repo(self.dest, self_origin=True)
         with (self.dest / ".git" / "info" / "exclude").open("a", encoding="utf-8", newline="\n") as handle:
             handle.write(".percolate/\n")
         _write(self.default_repo / "ext" / "ext.txt", "ext A\n")
         self.default_a = _commit_all(self.default_repo, "foreign: A")
-        self.default_root = self.claude_klabauter / "plugin"
+        self.default_root = self.engine_repo / "plugin"
         _write(self.default_root / "README.md", "readme A\n")
 
         _write(self.routed / "bin" / "tool.py", "tool = 'A'\n")
         _write(self.routed / "bin" / "other.py", "other = 'A'\n")
-        self.sha_a = _commit_all(self.claude_klabauter, "claude-klabauter: A")
+        self.sha_a = _commit_all(self.engine_repo, "claude-klabauter: A")
 
         _write(self.dest / "README.md", "old\n")
         _write(self.dest / "bin" / "tool.py", "old\n")
@@ -122,7 +122,7 @@ class World:
     def _wire(self, monkeypatch) -> None:
         tmp = self.tmp
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp))
-        monkeypatch.setattr(publish, "_REPO_ROOT", self.claude_klabauter)
+        monkeypatch.setattr(publish, "_REPO_ROOT", self.engine_repo)
         row = f"row-a|mirror|{self.default_root}|{self.dest}|||{self.routed}=bin;{self.default_repo}=ext"
         monkeypatch.setattr(publish, "_resolve_percolate_root_and_rung", lambda **kw: (tmp, "test-rung"))
         monkeypatch.setattr(publish, "load_targets", lambda setup_dir, target_filter=None, **_: [row])
@@ -159,7 +159,7 @@ class World:
         _write(self.routed / "bin" / "tool.py", "tool = 'B'\n")
         _write(self.routed / "bin" / "late.py", "late = 'B'\n")
         _write(self.default_root / "README.md", "readme B\n")
-        self.sha_b = _commit_all(self.claude_klabauter, "claude-klabauter: B")
+        self.sha_b = _commit_all(self.engine_repo, "claude-klabauter: B")
         _write(self.default_repo / "ext" / "ext.txt", "ext B\n")
         self.default_b = _commit_all(self.default_repo, "foreign: B")
         self.moved = True
@@ -180,8 +180,8 @@ class World:
         if not self.moved:
             self._move_heads()
         pins = kwargs["round_pinned_shas"]
-        payload = self._pinned_files(self.claude_klabauter, pins, "plugin", "")
-        payload.update(self._pinned_files(self.claude_klabauter, pins, "coordinator/bin", "bin/"))
+        payload = self._pinned_files(self.engine_repo, pins, "plugin", "")
+        payload.update(self._pinned_files(self.engine_repo, pins, "coordinator/bin", "bin/"))
         payload.update(self._pinned_files(self.default_repo, pins, "ext", "ext/"))
         staging = Path(tempfile.mkdtemp(prefix=".publish-staging-", dir=str(target.dest_dir.parent)))
         for rel, data in payload.items():
@@ -216,9 +216,9 @@ def world(tmp_path, monkeypatch, capsys):
 
 def _assert_ships(world: World, engine_sha: str, default_sha: str) -> None:
     for rel, repo, sha, src in (
-        ("bin/tool.py", world.claude_klabauter, engine_sha, "coordinator/bin/tool.py"),
-        ("bin/other.py", world.claude_klabauter, engine_sha, "coordinator/bin/other.py"),
-        ("README.md", world.claude_klabauter, engine_sha, "plugin/README.md"),
+        ("bin/tool.py", world.engine_repo, engine_sha, "coordinator/bin/tool.py"),
+        ("bin/other.py", world.engine_repo, engine_sha, "coordinator/bin/other.py"),
+        ("README.md", world.engine_repo, engine_sha, "plugin/README.md"),
         ("ext/ext.txt", world.default_repo, default_sha, "ext/ext.txt"),
     ):
         assert _blob(world.dest, "HEAD", rel) == _blob(repo, sha, src), rel

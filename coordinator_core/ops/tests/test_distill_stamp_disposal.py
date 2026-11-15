@@ -205,7 +205,7 @@ def test_handler_raises_on_repo_root_none():
 
 def test_handler_raises_on_missing_run_id(tmp_path: Path):
     (tmp_path / ".git").mkdir()
-    with pytest.raises(ValueError, match="run_id"):
+    with pytest.raises(ValueError, match="distill.assemble_disposal_manifest"):
         _handler(
             {"by": "pm", "at": "2026-07-23T10:00:00Z", "note": "ok"},
             repo_root=tmp_path / ".git",

@@ -41,7 +41,7 @@ def _snapshot(*roots: Path) -> set[str]:
     seen: set[str] = set()
     for root in roots:
         for dirpath, dirnames, filenames in os.walk(root):
-            seen.update(os.path.join(dirpath, n) for n in dirnames + filenames)
+            seen.update(os.path.join(dirpath, n) for n in dirnames + filenames if n != ".scratch-hygiene-cursor")
     return seen
 
 

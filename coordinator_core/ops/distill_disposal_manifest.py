@@ -322,13 +322,14 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
     run_id = params.get("run_id")
     if not run_id:
         raise ValueError(
-            "distill.assemble_disposal_manifest requires an explicit run_id param — "
-            "never minted from wallclock inside the handler."
+            "distill.assemble_disposal_manifest requires a 'run_id' param: the run_id of the "
+            "distill.scope result for this run (never minted from wallclock inside the handler)."
         )
     candidates = params.get("candidates")
     if not isinstance(candidates, list):
         raise ValueError(
-            "distill.assemble_disposal_manifest requires a 'candidates' list param."
+            "distill.assemble_disposal_manifest requires a 'candidates' list param: the "
+            "disposal candidates from the distill Workflow result for this run's distill.scope output."
         )
 
     worktree_root = main_worktree_root(repo_root)

@@ -126,6 +126,19 @@ def test_every_ssh_argv_carries_the_host_key_alias_and_a_host_name(mux):
     assert "HostKeyAlias=farbox" in seen[0] and seen[0][-2] == "farbox" and seen[0][-1] == "roster"
 
 
+def test_a_caller_keepalive_is_the_first_value_ssh_reads_so_it_overrides_the_default(mux):
+    # ssh keeps the first of a repeated -o: with the defaults first, the roster's 5s x 2 keepalive was dead
+    # and a half-dead link held a call to the default 90s, past the roster's 20s budget.
+    argv = mux.ssh_argv("farbox", "k", "farbox", ["-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2"])
+    first = {}
+    for opt in (a for a in argv if "=" in a):
+        first.setdefault(opt.split("=")[0], opt)
+    assert first["ServerAliveInterval"] == "ServerAliveInterval=5" and first["ServerAliveCountMax"] == "ServerAliveCountMax=2"
+    assert argv[0] == "ssh" and argv[-1] == "farbox"
+    bare = mux.ssh_argv("farbox", "k", "farbox")
+    assert "ServerAliveInterval=30" in bare
+
+
 def test_an_ip_literal_remote_with_no_member_name_stays_on_the_ip_with_the_ip_as_host_key_alias(mux):
     ch = mux.for_remote("me@192.168.4.7", key="k", ip_hosts={}, direct=True, mux_options=lambda h: [])
     assert ch.host == "me@192.168.4.7" and ch.box == "192.168.4.7"

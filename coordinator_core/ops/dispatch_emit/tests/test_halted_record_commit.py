@@ -217,3 +217,37 @@ def test_a_checkpoint_landed_path_is_withheld_when_the_halt_names_no_plan(repo):
     out = _call(repo)
 
     assert out["withheld"] == {"done.py": "halt-record-only", "product.py": "halt-record-only"}
+
+
+def _halt_marker(repo, halted: dict) -> dict:
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    _write_record(repo, RUN)
+    out = _call(repo, halted)
+    assert out["committed"] is True, out
+    return json.loads((repo / RECORD_DIR_ROOT / RUN / halted_run.HALTED_FILE).read_text(encoding="utf-8"))
+
+
+def test_a_halt_carrying_a_prep_reply_records_its_summary_in_halted_json(repo):
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import HALT_PREP_REPLY_FIELD
+
+    prep = {"verdict": None, "error": "boom", "basis": "b", "product_files": 3, "slices": [], "excluded": ["x.yaml"]}
+    marker = _halt_marker(repo, {"halted": "refusal", "reason": "r", "prep": prep})
+
+    summary = marker[HALT_PREP_REPLY_FIELD]
+    assert summary["error"] == "boom" and summary["product_files"] == 3
+    assert summary["slices"] == 0 and summary["excluded"] == ["x.yaml"]
+
+
+def test_a_null_prep_reply_is_recorded_as_null_and_an_absent_key_records_nothing(repo):
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import HALT_PREP_REPLY_FIELD
+
+    assert _halt_marker(repo, {"halted": "refusal", "reason": "r", "prep": None})[HALT_PREP_REPLY_FIELD] is None
+
+
+def test_a_halt_without_a_prep_key_records_no_prep_reply(repo):
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import HALT_PREP_REPLY_FIELD
+
+    assert HALT_PREP_REPLY_FIELD not in _halt_marker(repo, {"halted": "refusal", "reason": "r"})

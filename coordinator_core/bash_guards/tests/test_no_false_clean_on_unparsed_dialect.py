@@ -218,6 +218,7 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
         lambda mod: "p4.exe -p ssl:host:1666 -c client submit"
     ),
     "block_editor_kill_by_name": lambda mod: "Stop-Process -Name UnrealEditor",
+    "block_empty_source_push": lambda mod: "git push origin :refs/heads/x",
     "block_whole_filesystem_scan": lambda mod: "find / -name x",
     "block_perforce_submit": lambda mod: "p4.exe submit -d msg",
     "block_external_workspace_vcs_write": lambda mod: "git.exe commit -m msg",

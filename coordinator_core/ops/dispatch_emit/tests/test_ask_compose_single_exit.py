@@ -218,3 +218,74 @@ def test_single_exit_gates_the_later_review_blocks_on_an_already_delivered_close
     script = _m_plus_script(monkeypatch)
     assert "if (!_halted && !_alreadyDelivered) {" in script
     assert "await _alreadyDeliveredClose()" in script
+
+
+_DOCS_ONLY_PATHS = ["docs/plans/p.evidence.yaml"]
+_PRODUCT_PATHS = ["docs/plans/p.evidence.yaml", "pkg/mod.py"]
+_NO_PRODUCT_REPLIES = {
+    "null relay reply": [],
+    "degraded reply": [{"verdict": None, "basis": "", "error": None, "product_files": 0, "slices": [], "excluded": []}],
+    "errored reply": [{"verdict": None, "basis": "", "error": "freeze failed", "product_files": 0, "slices": []}],
+}
+_ZERO_FILE_REPLY = [{"verdict": None, "basis": "worktree", "error": None, "product_files": 0, "slices": [], "foreign_claims": []}]
+
+
+def _run_ask_guard(monkeypatch, replies, review_paths):
+    fragment = _merge_and_guard_fragment(_m_plus_script(monkeypatch))
+    harness = (
+        "let _halted = null;\n"
+        "let _reviewPrep = null;\n"
+        f"const _reviewPaths = {json.dumps(review_paths)};\n"
+        f"const _prepReplies = {json.dumps(replies)};\n"
+        "const _waveRaw = _prepReplies.map(p => ({ prep: p, review: null }));\n"
+        "const _busyPrefix = 'review.prep busy:';\n"
+        "const _busyReplies = [];\n"
+        "const _malformed = [];\n"
+        "const _foreignAdvisories = [];\n"
+        f"{fragment}\n"
+        "process.stdout.write(JSON.stringify({ halted: _halted && _halted.halted, verifyOnly: _verifyOnly }));\n"
+    )
+    out = subprocess.run(
+        ["node", "-"], input=harness, capture_output=True, text=True, timeout=20, check=True, **no_console_creationflags()
+    )
+    return json.loads(out.stdout)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
+@pytest.mark.parametrize("shape", sorted(_NO_PRODUCT_REPLIES))
+def test_ask_verification_wave_with_no_product_path_passes_review_empty_whatever_the_prep_reply(monkeypatch, shape):
+    result = _run_ask_guard(monkeypatch, _NO_PRODUCT_REPLIES[shape], _DOCS_ONLY_PATHS)
+    assert result == {"halted": None, "verifyOnly": True}
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
+@pytest.mark.parametrize("shape", sorted(_NO_PRODUCT_REPLIES))
+def test_ask_wave_with_a_declared_product_write_and_a_failed_prep_still_halts(monkeypatch, shape):
+    result = _run_ask_guard(monkeypatch, _NO_PRODUCT_REPLIES[shape], _PRODUCT_PATHS)
+    assert result["halted"].startswith(NO_SLICES_HALT)
+    assert result["verifyOnly"] is False
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
+def test_ask_docs_only_wave_whose_prep_reports_product_or_a_partition_still_halts(monkeypatch):
+    for reply in (
+        {"verdict": "PARTITION-MANDATORY", "basis": "", "error": "x", "product_files": 0, "slices": []},
+        {"verdict": None, "basis": "", "error": "x", "product_files": 0, "slices": [], "foreign_claims": ["peer.py"]},
+    ):
+        result = _run_ask_guard(monkeypatch, [reply], _DOCS_ONLY_PATHS)
+        assert result["halted"].startswith(NO_SLICES_HALT)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
+def test_ask_zero_file_reply_keeps_its_no_op_and_verify_only_outcomes(monkeypatch):
+    """The clean zero-file reply keeps its no-op over docs-only paths and verify-only over a declared product write."""
+    assert _run_ask_guard(monkeypatch, _ZERO_FILE_REPLY, _DOCS_ONLY_PATHS)["halted"] == "no-op"
+    assert _run_ask_guard(monkeypatch, _ZERO_FILE_REPLY, _PRODUCT_PATHS) == {"halted": None, "verifyOnly": True}

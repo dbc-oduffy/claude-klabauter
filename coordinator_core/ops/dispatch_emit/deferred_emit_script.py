@@ -42,13 +42,19 @@ const EMIT_SCHEMA = {
 function _blankPath(p) {
   return typeof p !== 'string' || p.replace(/["'\s]/g, '') === '';
 }
+// A failed or refused emit ends the run halted: the engine reads `halted_by` off the returned object, and a return without it reads as a completed run that did no work.
+function _halted(r) {
+  return { ...r, halted_by: { halted: r.error, reason: r.error } };
+}
 """
 
 
 # Trap: a workflow script has no filesystem, so the receipt is read through a read-only relay; the started path is one
 # whose `<script>.emitted.json` sha equals the script's own bytes, never the relay's word for where the script is.
 # Self-contained: the block is run alone under node by its test.
-_RECEIPT_PATH_JS = r"""const RECEIPT_SCHEMA = {
+_RECEIPT_PATH_JS = r"""const RECEIPT_CHECK_ATTEMPTS = 3;
+const RECEIPT_RETRY_WAIT_MS = 1000;
+const RECEIPT_SCHEMA = {
   type: 'object',
   required: ['found'],
   properties: { found: { type: 'boolean' }, receipt_sha256: { type: 'string' }, script_sha256: { type: 'string' }, error: { type: 'string' } },
@@ -70,17 +76,26 @@ async function _verifiedScriptPath(reply) {
   if (typeof engineOp === 'function') return { path: cands[0] };
   const errors = [];
   for (const cand of cands) {
-    const r = await agent(
-      __AUTHORITY__
-      + ' Run `sha256sum "' + cand + '"` (`shasum -a 256` where sha256sum is absent) and read the file `' + cand + '.emitted.json`. Do not delete or modify any file. Then '
-      + 'return found true with receipt_sha256 (the "sha256" field of that JSON) and script_sha256 (the digest the command printed), both verbatim. '
-      + 'When either file is missing or unreadable, return found false and the error text verbatim in the error field.',
-      { label: 'receipt-check', phase: 'emit', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: RECEIPT_SCHEMA },
-    );
-    if (!r || r.found !== true) { errors.push('no emit receipt for ' + cand + (r && r.error ? ' (' + r.error + ')' : '')); continue; }
-    const rs = String(r.receipt_sha256 || '').trim().toLowerCase();
-    if (!/^[0-9a-f]{64}$/.test(rs) || rs !== String(r.script_sha256 || '').trim().toLowerCase()) { errors.push('emit receipt sha mismatch for ' + cand); continue; }
-    return { path: cand };
+    // Trap: a re-sent emit under a stalled engine can still be writing the script and its receipt when the first read lands, so the two reads disagree for a moment; a mismatch is re-read before it is believed, and one that persists is refused.
+    let verdict = '';
+    for (let attempt = 1; attempt <= RECEIPT_CHECK_ATTEMPTS; attempt++) {
+      if (attempt > 1) await new Promise((res) => setTimeout(res, RECEIPT_RETRY_WAIT_MS));
+      const r = await agent(
+        __AUTHORITY__
+        + ' Run `sha256sum "' + cand + '"` (`shasum -a 256` where sha256sum is absent) and read the file `' + cand + '.emitted.json`. Do not delete or modify any file. Then '
+        + 'return found true with receipt_sha256 (the "sha256" field of that JSON) and script_sha256 (the digest the command printed), both verbatim. '
+        + 'When either file is missing or unreadable, return found false and the error text verbatim in the error field.',
+        { label: 'receipt-check', phase: 'emit', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: RECEIPT_SCHEMA },
+      );
+      if (!r || r.found !== true) { verdict = 'no emit receipt for ' + cand + (r && r.error ? ' (' + r.error + ')' : ''); break; }
+      const rs = String(r.receipt_sha256 || '').trim().toLowerCase();
+      const ss = String(r.script_sha256 || '').trim().toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(rs) || rs !== ss) { verdict = 'emit receipt sha mismatch for ' + cand + ': receipt sha256 ' + (rs || '(none)') + ' != script sha256 ' + (ss || '(none)') + '; re-emit this run id so the script and its receipt are rewritten together'; continue; }
+      verdict = '';
+      break;
+    }
+    if (verdict === '') return { path: cand };
+    errors.push(verdict);
   }
   return { error: errors.join('; ') };
 }
@@ -117,14 +132,14 @@ for (let attempt = 1; attempt <= HANDOVER_MAX_ATTEMPTS; attempt++) {
   await new Promise((res) => setTimeout(res, waitS * 1000));
 }
 if (!reply || _blankPath(reply.path)) {
-  return { status: 'emit_refused', error: (reply && reply.error) || (_isHandover(reply) ? 'handover_pending persisted across ' + HANDOVER_MAX_ATTEMPTS + ' emit attempts' : 'the deferred emit returned no script path') };
+  return _halted({ status: 'emit_refused', error: (reply && reply.error) || (_isHandover(reply) ? 'handover_pending persisted across ' + HANDOVER_MAX_ATTEMPTS + ' emit attempts' : 'the deferred emit returned no script path') });
 }
 const _verified = await _verifiedScriptPath(reply);
 if (_verified.error) {
   const _rid = (typeof reply.run_id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(reply.run_id.trim())) ? reply.run_id.trim() : '';
-  return _rid
+  return _halted(_rid
     ? { status: 'minted_not_started', run_id: _rid, error: 'minted, not started: dispatch.minted_run start ' + _rid + ' (' + _verified.error + ')' }
-    : { status: 'emit_refused', error: _verified.error };
+    : { status: 'emit_refused', error: _verified.error });
 }
 const scriptPath = _verified.path;
 __START__
@@ -183,12 +198,12 @@ function _pathRunId(p) {
 function _isScriptPath(p) {
   return typeof p === 'string' && p.trim().replace(/["']+$/, '').endsWith('.mjs');
 }
-if (!first.ok) return { status: 'failed', run_id: ASK_RUN_ID, error: first.error };
+if (!first.ok) return _halted({ status: 'failed', run_id: ASK_RUN_ID, error: first.error });
 const handoff = (first.result !== null && typeof first.result === 'object') ? first.result.__CHAIN_KEY__ : null;
 if (handoff === null || typeof handoff !== 'object') return first.result;
-// Trap: one hop only. A gate agent that already ran dispatch.emit leaves its reply keys in the hand-off; those are never emit params.
-const { path: _rp, run_id: _rr, ok: _rk, error: _re, fire_args: _rf, ...chainParams } = handoff;
-const _fail = (why) => ({ status: 'failed', run_id: ASK_RUN_ID, error: 'the chained run did not complete (' + why + '); the ask run ' + ASK_RUN_ID + ' stays resumable' });
+// Trap: one hop only. A gate agent that already ran dispatch.emit leaves its reply keys in the hand-off; those are never emit params. emit_error is a launcher child's failed retry: dispatch.emit refuses it as a key, so the hop emits without it.
+const { path: _rp, run_id: _rr, ok: _rk, error: _re, emit_error: _ee, fire_args: _rf, ...chainParams } = handoff;
+const _fail = (why) => _halted({ status: 'failed', run_id: ASK_RUN_ID, error: 'the chained run did not complete (' + why + '); the ask run ' + ASK_RUN_ID + ' stays resumable' });
 // Trap: the payload rides a quoted heredoc on stdin; JSON.stringify escapes every newline, so the body is one line and cannot equal the tag.
 const _chainTag = 'CHAIN_PARAMS_JSON';
 // Trap: the hand-off the ask script returns names the sizing and no EM brief, so the chained run would compose without it; the deferred params' brief keys ride the hop.
@@ -196,11 +211,8 @@ const _briefCarry = __BRIEF_CARRY__;
 const _chainJson = JSON.stringify({ ...chainParams, ..._briefCarry, __LAUNCHER_PARAM__: true });
 let chain;
 if (typeof _re === 'string' && _re !== '') return _fail('emit failed: ' + _re);
-// Trap: a hand-off path that is not a `.mjs` script (the L-sized ask's handoff .md) is never started; the hop emits its own chained run.
-if (!_blankPath(_rp) && _isScriptPath(_rp)) {
-  chain = { path: _rp, run_id: _rr, fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
-} else {
-  chain = await agent(
+function _relayEmit() {
+  return agent(
     __AUTHORITY__
     + ' Run this command once, with the command word exactly as written, and copy the heredoc body byte for byte:\n'
     + INVOKE + ' ' + EMIT_OP + ' --params-file - <<\'' + _chainTag + '\'\n' + _chainJson + '\n' + _chainTag + '\n\n'
@@ -211,13 +223,25 @@ if (!_blankPath(_rp) && _isScriptPath(_rp)) {
     { label: 'chain-emit', phase: 'emit', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: EMIT_SCHEMA },
   );
 }
-if (!chain || _blankPath(chain.path)) return _fail((chain && chain.error) || 'the chain emit returned no script path');
-if (!_isScriptPath(chain.path)) return _fail('the chain emit returned a non-script path ' + JSON.stringify(chain.path));
 // Trap: the path basename is the trusted run id; the emit's minted run_id stands in only when the basename yields none (a path the
 // suffix/staged check rejects), and the ask-equal refusal below still catches a relay that copied the ask's own id.
-let _chainRun = _pathRunId(chain.path);
-if (_chainRun === '' && typeof chain.run_id === 'string') _chainRun = chain.run_id.trim();
-if (_chainRun === '' || _chainRun === ASK_RUN_ID || _chainRun === _pathRunId(ASK_SCRIPT_PATH)) return _fail('chain emit path run id ' + JSON.stringify(_chainRun) + ' is not a fresh run id (path ' + JSON.stringify(chain.path) + ')');
+function _runIdOf(c) {
+  const fromPath = _pathRunId(c.path);
+  return (fromPath === '' && typeof c.run_id === 'string') ? c.run_id.trim() : fromPath;
+}
+const _askNamed = (id) => id === ASK_RUN_ID || id === _pathRunId(ASK_SCRIPT_PATH);
+// Trap: a hand-off path that is not a `.mjs` script (the L-sized ask's handoff .md) is never started; the hop emits its own chained run.
+if (!_blankPath(_rp) && _isScriptPath(_rp)) {
+  chain = { path: _rp, run_id: _rr, fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
+  // Trap: a hand-off naming the ask's own run is never started; the hop mints its own chained run once, and that emit naming the ask again still fails below.
+  if (_askNamed(_runIdOf(chain))) chain = await _relayEmit();
+} else {
+  chain = await _relayEmit();
+}
+if (!chain || _blankPath(chain.path)) return _fail((chain && chain.error) || 'the chain emit returned no script path');
+if (!_isScriptPath(chain.path)) return _fail('the chain emit returned a non-script path ' + JSON.stringify(chain.path));
+const _chainRun = _runIdOf(chain);
+if (_chainRun === '' || _askNamed(_chainRun)) return _fail('chain emit path run id ' + JSON.stringify(_chainRun) + ' is not a fresh run id (path ' + JSON.stringify(chain.path) + ')');
 const chained = await _startLoop(_normPath(chain.path));
 if (!chained.ok) return _fail(chained.error);
 const r = chained.result;

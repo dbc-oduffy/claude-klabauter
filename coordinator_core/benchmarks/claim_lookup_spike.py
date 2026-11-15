@@ -31,7 +31,8 @@ MAX_BAR_MS = 110.0
 
 GATE_NAMES = (
     "declared_deletion_gate", "carry_gate", "residue_gate", "op_scope_coverage_gate", "leak_gate",
-    "registration_quad_gate", "claude_md_budget_gate", "machine_path_leak_gate", "attribution_gate",
+    "registration_quad_gate", "claude_md_budget_gate", "machine_path_leak_gate", "abs_path_citation_gate",
+    "attribution_gate",
 )
 
 
@@ -386,6 +387,7 @@ def gate_attribution(root: Path, paths: Sequence[str]) -> tuple[dict, int]:
             "registration_quad_gate": lambda: cv2.registration_quad_gate(root, paths, read_source=read_source),
             "claude_md_budget_gate": lambda: cv2.claude_md_budget_gate(root, paths, read_source=read_source),
             "machine_path_leak_gate": lambda: cv2.machine_path_leak_gate(root, paths, read_source=read_source),
+            "abs_path_citation_gate": lambda: cv2.abs_path_citation_gate(root, paths, read_source=read_source),
             "attribution_gate": lambda: cv2.attribution_gate(root, paths, vacated=[]),
         }
         for name in GATE_NAMES:

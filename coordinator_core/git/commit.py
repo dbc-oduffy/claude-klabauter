@@ -109,6 +109,7 @@ from coordinator_core.git.git_objects import (
 from coordinator_core.git.git_state import IndexParseError, head_blobs, head_sha, head_tree_sha, index_read_cache_scope, read_commit, read_index, read_tree_spine
 from coordinator_core.git import published_tree_classification
 from coordinator_core.git import rollback_check
+from coordinator_core.git.worktree_sync import sync_landed_paths
 from coordinator_core.git import checkpoint_guard
 from coordinator_core.git import merge_state
 from coordinator_core.git.tree_spine import (
@@ -226,6 +227,21 @@ class CommitOutcome(NamedTuple):
     #: differed from the pre-commit HEAD blob), or the shape is not rewritten in process
     #: (filter driver, symlink, undecidable CRLF, unreadable). Their worktree is byte-identical.
     left_alone: Tuple[str, ...] = ()
+    #: Landed paths whose worktree now holds the landed hunks plus the worktree's own dirt
+    #: (3-way synced); the index entry stays the landed blob.
+    rebased: Tuple[str, ...] = ()
+    #: Landed paths whose worktree could not be reconciled with the landing and stayed
+    #: byte-identical. A report, never a rollback: the commit stands.
+    sync_refused: Tuple[str, ...] = ()
+
+
+def sync_report(outcome: object) -> Dict[str, object]:
+    """Reply fragment for a landing whose worktree sync refused paths: `worktree_sync_refused`
+    plus `sync_incomplete: true`; empty when nothing was refused. A report, never a deny."""
+    refused = list(getattr(outcome, "sync_refused", ()) or ())
+    if not refused:
+        return {}
+    return {"worktree_sync_refused": refused, "sync_incomplete": True}
 
 
 class BlobDrift(NamedTuple):
@@ -460,6 +476,25 @@ def _text_pin_checkin(root: Path, rel: str, data: bytes) -> Optional[bytes]:
 
 
 def _checkin_bytes(
+    root: Path, rel: str, data: bytes, autocrlf: Optional[Callable[[], bool]] = None
+) -> bytes:
+    """`_checkin_bytes_uncached` computed once per (root, rel, content) per `call_io_scope`.
+
+    The size pass, the blob write and the hash-only gates of one landing present the same
+    bytes for a path; keying on the content keeps an edited file from reusing a stale form.
+    A refusal (`FilterUnsupported`) is not cached. Outside a scope every call computes."""
+    key = f"{root}\x00{rel}\x00{len(data)}\x00{hash(data)}"
+    # The entry keeps its input so a `hash` collision between two contents is a recompute, never
+    # another content's check-in form.
+    cached_data, form = call_io_scope.memo(
+        "checkin-bytes", key, lambda: (data, _checkin_bytes_uncached(root, rel, data, autocrlf))
+    )
+    if cached_data is not data and cached_data != data:
+        return _checkin_bytes_uncached(root, rel, data, autocrlf)
+    return form
+
+
+def _checkin_bytes_uncached(
     root: Path, rel: str, data: bytes, autocrlf: Optional[Callable[[], bool]] = None
 ) -> bytes:
     """The bytes git's checkin filter would hash for `rel`.
@@ -1673,7 +1708,7 @@ def commit_paths(
         if merge_refused:
             raise CommitRefused(merge_refused)
     staged = parse_index_identity(
-        repo, wanted=set(path_list),
+        repo, wanted=set(path_list), with_flags=True,
         unmerged_out=set() if merge_view is not None else None,
     )
 
@@ -1775,6 +1810,7 @@ def commit_paths(
                 staged_passed_over.append(p)
         assembled[p] = (mode, blob)
         index_updates[p] = (mode, blob)
+      pass_io_scope = call_io_scope._SCOPE.get()
 
     if refused:
         if blob_fallback is None:
@@ -2008,20 +2044,24 @@ def commit_paths(
 
     # Snapshot before `_rewrite_head_spine` splices the new entries into `spine`: the pre-commit
     # HEAD entry is what a convergence write must find still sitting in the worktree.
-    converge_plan: Dict[str, Tuple[Optional[Tuple[int, str]], Tuple[int, str], bool]] = {}
+    sync_plan: Dict[str, Tuple[Optional[Tuple[int, str]], Optional[Tuple[int, str]]]] = {}
+    skip_worktree_paths: List[str] = []
     no_delta_set = set(no_delta)
-    for p in supplied:
-        val = assembled.get(p)
-        if val is None or val is _ABSENT or p in no_delta_set:
+    untrack_keep = set(untrack_list)
+    for p, val in assembled.items():
+        if p in no_delta_set or p in untrack_keep:
+            continue
+        pre_index = staged.get(p)
+        if pre_index is not None and pre_index.skip_worktree:
+            if p in supplied:
+                skip_worktree_paths.append(p)
             continue
         head_dir, _, head_name = p.rpartition("/")
         pre_head = spine.get(head_dir, {}).get(head_name)
-        pre_index = staged.get(p)
-        index_matches = (
-            pre_index is None if pre_head is None
-            else pre_index is not None and (pre_index.mode, pre_index.sha) == tuple(pre_head)
+        sync_plan[p] = (
+            None if pre_head is None else (pre_head[0], pre_head[1]),
+            None if val is _ABSENT else (val[0], val[1]),
         )
-        converge_plan[p] = (pre_head, val, index_matches)
 
     filled = _synthesize_absent_spine_dirs(spine, assembled)
     if filled is not None:
@@ -2145,9 +2185,34 @@ def commit_paths(
         merge_state.clear_merge_state(gitdir)
 
     converged: Tuple[str, ...] = ()
-    left_alone: Tuple[str, ...] = ()
-    if publish_error is None and converge_plan:
-        converged, left_alone = _converge_supplied_worktree(repo, converge_plan)
+    left_alone: Tuple[str, ...] = tuple(skip_worktree_paths)
+    rebased: Tuple[str, ...] = ()
+    sync_refused: Tuple[str, ...] = ()
+    if publish_error is None and sync_plan:
+        # The pass's attribute reads and index snapshot are reused: the sync's check-in resolvers
+        # would otherwise re-open every attribute file and re-parse the index per landed path.
+        token = call_io_scope._SCOPE.set(pass_io_scope)
+        try:
+            synced = sync_landed_paths(repo, sync_plan)
+            already = tuple(
+                p for p in synced.refused
+                if _landed_hunks_already_in_worktree(repo, p, *sync_plan[p])
+            )
+            # Only a head_equal path's index entry may be stat-refreshed: a rebased path's
+            # worktree differs from the landed blob the index holds, and its bytes are never staged.
+            if synced.head_equal:
+                try:
+                    refresh_stat_in_process(repo, list(synced.head_equal))
+                except (OSError, index_write.IndexWriteError, IndexParseError):
+                    pass
+        finally:
+            call_io_scope._SCOPE.reset(token)
+        rebased = synced.rebased + already
+        sync_refused = tuple(p for p in synced.refused if p not in already)
+        head_equal = set(synced.head_equal)
+        refused_set = set(sync_refused)
+        converged = tuple(p for p in supplied if p in head_equal)
+        left_alone += tuple(p for p in supplied if p in refused_set)
 
     # The index is published only after the ref moved (an index matching a commit that never
     # landed is a lie), so a publish failure here is a landed commit with a stale index: reported
@@ -2155,6 +2220,8 @@ def commit_paths(
     outcome = CommitOutcome(
         converged=converged,
         left_alone=left_alone,
+        rebased=rebased,
+        sync_refused=sync_refused,
         sha=commit_sha,
         staged_preferred=tuple(staged_preferred),
         worktree_over_staged=tuple(worktree_over_staged),
@@ -2177,102 +2244,60 @@ def commit_paths(
     return outcome
 
 
-def _blob_sha_of(data: bytes) -> str:
-    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+def _landed_hunks_already_in_worktree(
+    repo: Union[str, Path], rel: str, parent: Optional[Tuple[int, str]], landed: Optional[Tuple[int, str]]
+) -> bool:
+    """True when `rel`'s worktree already holds every landed hunk plus only its own additions, so
+    the 3-way merge (which cannot apply a hunk twice) had nothing to write. Read-only, zero spawns.
 
-
-def _worktree_equals_pre_head(
-    root: Path, rel: str, pre_head: Optional[Tuple[int, str]]
-) -> Optional[Tuple[bytes, bytes]]:
-    """`(raw worktree bytes, their check-in form)` when `rel` still holds the pre-commit HEAD
-    blob (absent iff HEAD lacked it, then `(b"", b"")`); None for anything else, including every
-    shape this module does not hash (symlink, non-file, filter driver, unreadable)."""
-    target = root / rel
-    if pre_head is None:
-        return (b"", b"") if not os.path.lexists(target) else None
-    if target.is_symlink() or not target.is_file():
-        return None
-    try:
-        data = target.read_bytes()
-    except OSError:
-        return None
-    out = checkin_form(root, rel, data)
-    if out is None or _blob_sha_of(out) != pre_head[1]:
-        return None
-    return data, out
-
-
-def _converge_supplied_worktree(
-    repo: Union[str, Path],
-    plan: Mapping[str, Tuple[Optional[Tuple[int, str]], Tuple[int, str], bool]],
-) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
-    """Bring each supplied-blob path's worktree to the committed blob and refresh its index stat;
-    returns `(converged, left_alone)`. Zero git spawns.
-
-    INVARIANT: write only over bytes equal to the pre-commit HEAD blob (and only where the
-    pre-splice index entry equalled it too); anything else is someone's edit and stays
-    byte-identical. The check runs again after the temp file is written, immediately before
-    `os.replace`. A residual window remains -- an edit landing between that hash and the replace
-    is lost -- accepted because no lock covers peer editors of the worktree.
-
-    A CRLF checkout (every line CRLF, LF blob) receives the committed blob CRLF-converted; a
-    blob carrying CR, or a mixed-ending worktree, cannot be decided in process and is left alone.
+    Requires: theirs is a line subsequence of ours, and no line the landing removed from base
+    survives in ours beyond its count in theirs. Any other shape stays refused.
     """
+    import difflib
+
+    from coordinator_core.git.own_delta_merge import MAX_MERGE_LINES
+
+    if parent is None or landed is None or any(
+        e[0] in (0o120000, 0o160000) for e in (parent, landed)
+    ):
+        return False
     root = Path(repo)
     common = resolve_git_common_dir(repo)
-    converged: List[str] = []
-    left_alone: List[str] = []
-    for p, (pre_head, (mode, sha), index_matches) in plan.items():
-        if not index_matches or mode in (0o120000, 0o160000) or (
-            pre_head is not None and pre_head[0] in (0o120000, 0o160000)
-        ):
-            left_alone.append(p)
-            continue
-        tmp: Optional[Path] = None
-        try:
-            if checkin_attrs.clean_filter_may_apply(root, p) is not None:
-                left_alone.append(p)
-                continue
-            before = _worktree_equals_pre_head(root, p, pre_head)
-            obj = read_object(common, sha)
-            if before is None or obj is None or obj[0] != "blob":
-                left_alone.append(p)
-                continue
-            payload = obj[1]
-            data, out = before
-            if data != out:
-                if b"\r" in payload or out.replace(b"\n", b"\r\n") != data:
-                    left_alone.append(p)
-                    continue
-                payload = payload.replace(b"\n", b"\r\n")
-            target = root / p
-            target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.with_name(f".{target.name}.{os.getpid()}.converge.tmp")
-            tmp.write_bytes(payload)
-            if os.name != "nt":
-                perm = target.stat().st_mode & 0o777 if pre_head is not None else 0o644
-                os.chmod(tmp, (perm | 0o111) if mode == _EXEC_MODE else (perm & ~0o111))
-            again = _worktree_equals_pre_head(root, p, pre_head)
-            if again is None or again[0] != data:
-                left_alone.append(p)
-                continue
-            os.replace(tmp, target)
-            tmp = None
-            converged.append(p)
-        except OSError:
-            left_alone.append(p)
-        finally:
-            if tmp is not None:
-                try:
-                    tmp.unlink()
-                except OSError:
-                    pass
-    if converged:
-        try:
-            refresh_stat_in_process(repo, converged)
-        except (OSError, index_write.IndexWriteError, IndexParseError):
-            pass
-    return tuple(converged), tuple(left_alone)
+    target = root / rel
+    try:
+        if checkin_attrs.clean_filter_may_apply(root, rel) is not None:
+            return False
+        if target.is_symlink() or not target.is_file():
+            return False
+        ours = checkin_form(root, rel, target.read_bytes())
+        base_obj = read_object(common, parent[1])
+        theirs_obj = read_object(common, landed[1])
+    except OSError:
+        return False
+    if ours is None or base_obj is None or theirs_obj is None:
+        return False
+    if base_obj[0] != "blob" or theirs_obj[0] != "blob":
+        return False
+    base, theirs = base_obj[1].splitlines(True), theirs_obj[1].splitlines(True)
+    mine = ours.splitlines(True)
+    if max(len(base), len(theirs), len(mine)) > MAX_MERGE_LINES:
+        return False
+    if any(
+        tag in ("delete", "replace")
+        for tag, *_ in difflib.SequenceMatcher(None, theirs, mine, autojunk=False).get_opcodes()
+    ):
+        return False
+    removed: Dict[bytes, int] = {}
+    for tag, i1, i2, _j1, _j2 in difflib.SequenceMatcher(
+        None, base, theirs, autojunk=False
+    ).get_opcodes():
+        if tag in ("delete", "replace"):
+            for line in base[i1:i2]:
+                removed[line] = removed.get(line, 0) + 1
+    for line in removed:
+        if mine.count(line) > theirs.count(line):
+            return False
+    return True
 
 
 def _prepare_index_splice(

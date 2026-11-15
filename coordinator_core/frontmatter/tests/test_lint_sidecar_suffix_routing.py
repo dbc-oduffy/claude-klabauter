@@ -13,6 +13,12 @@ from coordinator_core.frontmatter import schema_validate as sv
         "docs/decisions/2026-07-14-fleet-claim-identity-space-contract.annotations.md",
         "docs/plans/2026-11-14-foo.annotations.md",
         "docs/plans/2026-11-14-foo.premise-check.md",
+        "docs/plans/2026-10/2026-10-25-x-77db60.first-red-ledger.md",
+        "docs/plans/2026-10/2026-10-29-group-em-references-split.cut-ledger.md",
+        "docs/plans/2026-11/2026-11-04-hnd-773493.c6-matrix.md",
+        "docs/plans/2026-11/2026-11-15-foo-33835f.evidence.yaml",
+        "docs/plans/REDIRECTS.md",
+        "state/handoffs/REDIRECTS.md",
     ],
 )
 def test_sidecar_suffix_is_exempt(path):
@@ -25,6 +31,7 @@ def test_sidecar_suffix_is_exempt(path):
         "docs/decisions/2026-07-14-fleet-claim-identity-space-contract.md",
         "docs/plans/2026-11-14-annotations-cleanup.md",
         "docs/plans/2026-11-14-premise-check-rework.md",
+        "docs/plans/2026-11-14-ledger-cut-matrix-evidence.md",
     ],
 )
 def test_parent_artifact_is_not_exempt(path):

@@ -83,5 +83,5 @@ def test_direct_sizing_path_stage_of_a_plan_edge_xs_sizing_stages_the_plan(repo)
 
 def test_direct_sizing_path_stage_of_a_plan_edge_xs_sizing_with_a_missing_plan_is_refused(repo):  # noqa: F811
     _put(repo, tshirt="XS", route="dispatch", plan=PLAN_REL)
-    with pytest.raises(AskStageError, match="^XS-MINT-MISROUTED: "):
+    with pytest.raises(AskStageError, match="^PLAN-EDGE-DANGLING: "):
         stage(repo, run_id="r1", sizing_rel=REL, writes=["pkg/a.py"])

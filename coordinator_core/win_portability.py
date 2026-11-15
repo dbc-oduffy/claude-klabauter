@@ -358,6 +358,58 @@ def leaf_spawn_creationflags() -> dict:
     return {"creationflags": getattr(subprocess, "DETACHED_PROCESS", 0)}
 
 
+_CREATE_NEW_CONSOLE = 0x00000010
+_DETACHED_PROCESS = 0x00000008
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def _process_has_no_console() -> bool:
+    try:
+        import ctypes
+
+        return ctypes.windll.kernel32.GetConsoleCP() == 0
+    except Exception:  # noqa: BLE001 -- unknown leaves launches untouched
+        return False
+
+
+def install_console_less_spawn_default() -> None:
+    """Make every Windows spawn from a console-less process default to ``CREATE_NO_WINDOW``.
+
+    Purpose: a process with no console (``pythonw`` pool workers, detached legs)
+    that spawns a console program with default flags makes Windows allocate a
+    NEW VISIBLE console -- under Windows Terminal, a focus-stealing window. Per-
+    call-site ``no_console_creationflags()`` cannot reach spawns made by stdlib
+    (multiprocessing), third-party code, or a site that forgot; patching
+    ``_winapi.CreateProcess`` (which subprocess and multiprocessing both call via
+    the module attribute) closes all of them, and the child's windowless console
+    is then inherited by its whole subtree.
+
+    Invariants: acts only while this process has NO console attached
+    (``GetConsoleCP() == 0``), checked per spawn. Not ``GetConsoleWindow() == 0``:
+    a ``CREATE_NO_WINDOW`` child has a console but no window, and re-flagging its
+    handle-less children would strand their output in a fresh unread console.
+    Never alters a launch that chose ``CREATE_NEW_CONSOLE`` or ``DETACHED_PROCESS``.
+    Idempotent; composes with any other wrapper of the same attribute.
+    """
+    if not _is_windows():
+        return
+    try:
+        import _winapi
+    except ImportError:
+        return
+    if getattr(_winapi.CreateProcess, "_console_less_default", False):
+        return
+    orig = _winapi.CreateProcess
+
+    def CreateProcess(app, cmd, proc_attrs, thread_attrs, inherit, flags, env, cwd, startupinfo):
+        if not (flags & (_CREATE_NEW_CONSOLE | _DETACHED_PROCESS)) and _process_has_no_console():
+            flags |= _CREATE_NO_WINDOW
+        return orig(app, cmd, proc_attrs, thread_attrs, inherit, flags, env, cwd, startupinfo)
+
+    CreateProcess._console_less_default = True  # type: ignore[attr-defined]
+    _winapi.CreateProcess = CreateProcess
+
+
 def no_console_passthrough_kwargs() -> dict:
     """Kwargs mapping for a spawn that must suppress the console popup AND
     still let the child's output reach this process's stdout/stderr.

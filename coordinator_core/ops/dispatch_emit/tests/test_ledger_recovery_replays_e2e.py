@@ -232,7 +232,8 @@ def _replay_432570(monkeypatch, repo: Path, tmp_path: Path, **stage_emits) -> di
     # A recorded manifest names test targets, so the verify stage owes a test verdict; without one the run halts
     # test_verdict_empty before the ledger loop this replay exists to exercise.
     ran = {"status": "passed", "tests_run": 1, "tests_failed": 0, "sidecar_path": "scratch/replay-tests.json"}
-    out = _drive(monkeypatch, {}, items=[item], manifest=manifest, test=ran)
+    clean_overlay = {"exit_code": 0, "detail": "clean overlay green"}
+    out = _drive(monkeypatch, {"overlay-verify": clean_overlay}, items=[item], manifest=manifest, test=ran)
 
     assert _fix_calls(out) == []
     assert (out["result"]["halted_by"] or {}).get("halted") != "ledger-check", out["result"]["halted_by"]

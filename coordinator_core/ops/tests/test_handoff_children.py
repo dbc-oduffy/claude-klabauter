@@ -174,3 +174,73 @@ def test_candidate_in_archive_handoffs_passes_guard(tmp_path):
     assert result["exit_code"] in (0, 1), (
         f"archive/handoffs/ candidate must pass the containment guard; got {result!r}"
     )
+
+
+def _write_fm(path: Path, fm: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"---\n{fm}---\nbody\n", encoding="utf-8")
+    return path
+
+
+def test_blocked_by_dependents_many_archived_tri_state_one_pass(tmp_path):
+    """Archived candidates classify tri-state in one corpus pass, no spawn,
+    and never through the per-file full-parse gate index."""
+    from coordinator_core.ops import handoff_children
+    from coordinator_core.reconcile import handoff_corpus
+
+    arch = tmp_path / "archive" / "handoffs" / "2026-01"
+    held = _write_fm(arch / "held.md", "stub_id: held-1\nstatus: archived\n")
+    free = _write_fm(arch / "free.md", "handoff_id: 'free-1'\nstatus: archived\n")
+    noid = _write_fm(arch / "noid.md", "status: archived\n")
+    _write_fm(
+        tmp_path / "state" / "handoffs" / "live.md",
+        "stub_id: live-1\nstatus: open\nblocked_by:\n  - held-1\n",
+    )
+
+    with patch.object(
+        handoff_corpus,
+        "_collect_all_handoffs_for_gate_index",
+        side_effect=AssertionError("full-parse gate index must not run"),
+    ), patch("subprocess.Popen", side_effect=AssertionError("spawned")):
+        result = handoff_children.blocked_by_dependents_many(
+            [held, free, noid], tmp_path
+        )
+
+    assert result[str(held)]["state"] == "dependents"
+    assert result[str(free)]["state"] == "none"
+    assert result[str(noid)]["state"] == "indeterminate"
+
+
+def test_blocked_by_dependents_many_unreadable_live_dir_fails_closed(tmp_path):
+    from coordinator_core.ops import handoff_children
+
+    cand = _write_fm(
+        tmp_path / "archive" / "handoffs" / "2026-01" / "c.md", "stub_id: c-1\n"
+    )
+    with patch(
+        "coordinator_core.ops.fleet._common.collect_live_handoff_paths",
+        side_effect=PermissionError("denied"),
+    ):
+        result = handoff_children.blocked_by_dependents_many([cand], tmp_path)
+    assert result[str(cand)]["state"] == "indeterminate"
+
+
+def test_blocked_by_dependents_many_head_corpus_under_500ms_process_time():
+    """Every archived handoff in the HEAD corpus classifies under the 500ms bar."""
+    import time
+
+    from coordinator_core.dag import _FRONTMATTER_CACHE
+    from coordinator_core.ops.handoff_children import blocked_by_dependents_many
+
+    root = Path(__file__).resolve().parents[3]
+    archive = root / "archive" / "handoffs"
+    if not archive.is_dir():
+        pytest.skip("no archive/handoffs corpus in this checkout")
+    paths = sorted(archive.rglob("*.md"))
+    _FRONTMATTER_CACHE.clear()
+    start = time.process_time()
+    result = blocked_by_dependents_many(paths, root)
+    elapsed_ms = (time.process_time() - start) * 1000
+    assert len(result) == len(paths)
+    assert {v["state"] for v in result.values()} <= {"none", "dependents", "indeterminate"}
+    assert elapsed_ms < 500, f"{len(paths)} archived handoffs took {elapsed_ms:.0f}ms process time"

@@ -135,6 +135,9 @@ from coordinator_core.bash_guards import (
 from coordinator_core.bash_guards import (
     block_reviewer_bash_outside_allowlist as reviewer_guard,
 )
+from coordinator_core.bash_guards import (
+    block_drive_root_new_dir_bash_write as drive_root_guard,
+)
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
@@ -208,6 +211,11 @@ def _wire_subagent_identity(monkeypatch, module, subagent_type: str) -> None:
     monkeypatch.setattr(
         reviewer_guard, "is_confined_by_roster_absence", lambda effective_type: False
     )
+    # Same attribution rule for `block-drive-root-new-dir-bash-write`: the
+    # `chained_cd` shape (`cd /tmp && cd / && <write>`) really does land a relative
+    # write target on `/`, so that guard rightly denies it as a new drive-root
+    # folder. That deny belongs to its own tests, not to the guard a cell probes.
+    monkeypatch.setattr(drive_root_guard, "check", lambda payload: None)
 
 
 def _wrap_variants(cmd: str) -> Dict[str, str]:

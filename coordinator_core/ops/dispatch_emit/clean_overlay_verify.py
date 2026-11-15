@@ -30,7 +30,7 @@ from coordinator_core.git.run import _git_exe, run_git
 from coordinator_core.locked_write import LockTimeout, held_lock
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
-from coordinator_core.ops.dispatch_emit.interpreter_pin import resolve_targeted_test_python
+from coordinator_core.ops.dispatch_emit.interpreter_pin import REMEDY, SOURCE_KEY, resolve_targeted_test_python
 from coordinator_core.testing import scoped_pytest
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -117,6 +117,7 @@ _PASSED_RE = re.compile(r"\b\d+ passed\b")
 _NOT_PASSED_RE = re.compile(r"\b\d+ (?:failed|errors?)\b|^(?:FAILED|ERROR) ", re.MULTILINE)
 _TEARDOWN_MARKERS = ("pytest_sessionfinish", "pytest_unconfigure", "cleanup_dead_symlinks", "pytest_terminal_summary")
 _PYTEST_INTERNAL_ERROR = 3
+_MODULE_MISSING = "ModuleNotFoundError"
 _COLLECTION_RE = re.compile(r"\berrors? during collection\b|^ERROR collecting ", re.MULTILINE)
 
 
@@ -584,6 +585,11 @@ def verify(
     seeds = tuple(seeds)
     if not seeds:
         return OverlayVerdict("inconclusive", "the landing set has no test seeds", seeds)
+    pin = resolve_targeted_test_python(root)
+    if pin.defect and pin.source == SOURCE_KEY:
+        return OverlayVerdict(
+            "inconclusive", f"declared {SOURCE_KEY} `{pin.command}` does not resolve: {pin.defect}; pytest was not run", seeds,
+        )
     run_dirs: list = []
     in_seeds = False
     try:
@@ -625,9 +631,11 @@ def verify(
                 full = ran.stdout + ran.stderr
                 tail = full.strip()[-_OUTPUT_TAIL:]
             notes = "; ".join(n for n in (scan_note, shard_note) if n)
+            bad = [r for r in runs if r.returncode != 0 and not teardown_only_error(r.returncode, r.stdout + r.stderr)]
+            if pin.source != SOURCE_KEY and any(_MODULE_MISSING in r.stdout + r.stderr for r in bad):
+                notes = "; ".join(n for n in (f"ModuleNotFoundError under an undeclared interpreter: {REMEDY}", notes) if n)
             if notes:
                 tail = f"{notes}: {tail}"
-            bad = [r for r in runs if r.returncode != 0 and not teardown_only_error(r.returncode, r.stdout + r.stderr)]
             at_base: frozenset = frozenset()
             ids = tuple(dict.fromkeys(i for r in runs for i in failing_ids(r.stdout + r.stderr)))
             collected = any(collection_error(r.returncode, r.stdout + r.stderr) for r in bad)

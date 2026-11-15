@@ -1745,6 +1745,36 @@ def write_register(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     return {"status": "registered", "reason": f"register tally recorded for {tally['sizing']}"}
 
 
+def backfill_register(root: Path, repo_root: Path) -> Dict[str, Any]:
+    """Sweep `root` for implemented plans whose review_stamp lacks `register` (and which carry
+    register_claims), calling `write_register` on each. Returns `{"registered": [...],
+    "unchanged": [...], "refused": [(path, reason), ...], "unreadable": [...]}`; a MintRefusal is
+    recorded per plan and never aborts the sweep. `unreadable` lists files whose frontmatter failed
+    to read or parse (MintRefusal on a frontmatter-less file is a non-plan, not listed)."""
+    out: Dict[str, Any] = {"registered": [], "unchanged": [], "refused": [], "unreadable": []}
+    for plan_path in sorted(root.rglob("*.md")):
+        try:
+            _, split = _read_plan_frontmatter(plan_path)
+            fm = yaml.safe_load(split.fm_text)
+        except MintRefusal:
+            continue
+        except (OSError, yaml.YAMLError):
+            out["unreadable"].append(str(plan_path))
+            continue
+        if not isinstance(fm, dict) or fm.get("status") != "implemented" or not fm.get("register_claims"):
+            continue
+        stamp = fm.get("review_stamp")
+        if not isinstance(stamp, dict) or "register" in stamp:
+            continue
+        try:
+            result = write_register(plan_path, repo_root)
+        except MintRefusal as exc:
+            out["refused"].append((str(plan_path), str(exc)))
+            continue
+        out["registered" if result["status"] == "registered" else "unchanged"].append(str(plan_path))
+    return out
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="review-stamp")
     sub = parser.add_subparsers(dest="verb", required=True)
@@ -1789,7 +1819,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     rj_p.add_argument("--repo-root", required=False, default=None)
 
     rg_p = sub.add_parser("register", help="Write review_stamp.register from the plan's register tally.")
-    rg_p.add_argument("--plan", required=True)
+    rg_p_target = rg_p.add_mutually_exclusive_group(required=True)
+    rg_p_target.add_argument("--plan")
+    rg_p_target.add_argument(
+        "--backfill-under",
+        metavar="ROOT",
+        help="Sweep ROOT: register every implemented plan whose review_stamp lacks register.",
+    )
     rg_p.add_argument("--repo-root", required=False, default=None)
 
     pf_p = sub.add_parser("product-files", help="Print the product-file count of a diff.")
@@ -1807,12 +1843,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(len(files))
         return 0
 
-    plan_path = Path(args.plan)
+    backfill_root = getattr(args, "backfill_under", None)
+    plan_path = Path(backfill_root if backfill_root else args.plan)
     from coordinator_core.git.repo_root import show_toplevel
 
     repo_root = Path(args.repo_root) if getattr(args, "repo_root", None) else None
     if repo_root is None:
-        top = show_toplevel(str(plan_path.parent))
+        top = show_toplevel(str(plan_path if backfill_root else plan_path.parent))
         repo_root = Path(top) if top else Path.cwd()
 
     if args.verb == "mint":
@@ -1857,6 +1894,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         print(f"review-stamp: {result['status']}: {result['reason']}")
         return 0 if result["status"] == "rejudged" or result["reason"] == "criterion already met" else 1
+
+    if args.verb == "register" and backfill_root:
+        swept = backfill_register(plan_path, repo_root)
+        for p in swept["registered"]:
+            print(f"review-stamp: registered: {p}")
+        for p in swept["unchanged"]:
+            print(f"review-stamp: unchanged: {p}")
+        for p, reason in swept["refused"]:
+            print(f"review-stamp: refused: {p}: {reason}", file=sys.stderr)
+        for p in swept["unreadable"]:
+            print(f"review-stamp: unreadable: {p}", file=sys.stderr)
+        return 1 if swept["refused"] else 0
 
     if args.verb == "register":
         try:

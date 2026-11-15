@@ -2522,6 +2522,9 @@ def _pool_not_started_envelope(msg: dict, occupancy: Optional[dict] = None) -> d
     }
 
 
+#: Upper bound on `_ctx_shutdown` waiting for cancelled-queue connections to write their reply.
+_CANCELLED_REPLY_SETTLE_SECS = 2.0
+
 _POOL_SATURATED_MESSAGE = (
     "warm dispatch refused: every dispatch worker has held a task past {0:.0f}s, so this "
     "request was not submitted. Nothing was executed or written; it is safe to re-run "
@@ -3297,6 +3300,10 @@ def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None) ->
     _restore_worker_priority()
     polite_io.lower_own_priority()
     _bind_null_std_streams()
+    # pythonw worker: without this every git/console child it spawns opens a visible console.
+    from coordinator_core.win_portability import install_console_less_spawn_default
+
+    install_console_less_spawn_default()
     _bind_worker_stderr_log(stderr_dir)
     threading.Thread(
         target=_exit_with_parent,
@@ -4907,6 +4914,19 @@ class _ServerContext:
                         error["data"] = {}
                     _name_stall_dump(error["data"], dump_note)
                 return _with_reconcile_route(envelope, dispatch_key)
+        except concurrent.futures.CancelledError:
+            # Shutdown cancelled this still-queued future (`_ctx_shutdown`): no worker ran it, so the
+            # determinate not-started reply is the truthful answer, never a transport cut.
+            _release_claim(claim)
+            if dispatch_key is not None:
+                _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
+            return _pool_not_started_envelope(
+                msg,
+                {
+                    "pool_size": DISPATCH_PROCESS_POOL_SIZE,
+                    "outstanding": self._pool_outstanding(),
+                },
+            )
         except BrokenProcessPool:
             # A ProcessPoolExecutor whose worker died is broken PERMANENTLY --
             # every later submit() on that instance raises, so without this
@@ -5002,6 +5022,8 @@ class _ServerContext:
                 pass
         if self.endpoint_path is not None:
             election.unlink_if_owned(self.endpoint_path, self._endpoint_identity)
+        queued = list(self.__dict__.get("_pool_tasks", {}))
+        connections = self.in_flight()
         if self._dispatch_pool is not None:
             try:
                 self._dispatch_pool.shutdown(wait=False, cancel_futures=True)
@@ -5012,6 +5034,12 @@ class _ServerContext:
                 self._guard_pool.shutdown(wait=False, cancel_futures=True)
             except Exception:  # noqa: BLE001
                 pass
+        # `os._exit` follows: let each connection whose queued future was just cancelled write its
+        # not-started reply first. Bounded; a running leg never holds this up.
+        cancelled = sum(1 for f in queued if f.cancelled())
+        settle_until = time.monotonic() + _CANCELLED_REPLY_SETTLE_SECS
+        while cancelled and self.in_flight() > connections - cancelled and time.monotonic() < settle_until:
+            time.sleep(0.02)
         return None
 
     def drain_outstanding(self) -> int:
@@ -5027,9 +5055,21 @@ class _ServerContext:
         """
         return self.in_flight() + self._pool_outstanding()
 
+    def _admitted_bound_secs(self) -> float:
+        """Longest any admitted pool task may still legitimately run: the max
+        `_executing_bound_secs` over its op. 0.0 when nothing is admitted."""
+        return max(
+            (_executing_bound_secs(row[0]) for row in list(self.__dict__.get("_pool_tasks", {}).values())),
+            default=0.0,
+        )
+
     def _drain(self) -> None:
+        """The superseded generation's drain: its successor already answers, so it waits out
+        its own admitted ops (never cut mid-run) rather than only the idle-demotion ceiling."""
         lifecycle.drain_and_exit(
-            in_flight_count=self.drain_outstanding, ctx_shutdown=self._ctx_shutdown
+            in_flight_count=self.drain_outstanding,
+            ctx_shutdown=self._ctx_shutdown,
+            drain_ceiling_secs=max(lifecycle._drain_ceiling_secs(), self._admitted_bound_secs()),
         )
 
     def _token_is_stale(self) -> bool:
@@ -5914,6 +5954,9 @@ def _run_guarded() -> int:
     _start_dump_request_poll(repo_root)
 
     _suppress_pool_worker_consoles()
+    from coordinator_core.win_portability import install_console_less_spawn_default
+
+    install_console_less_spawn_default()
 
     # No op registry import here: this process runs no op. Dispatch happens in
     # pool workers, which import each op on first use; the one in-process

@@ -45,7 +45,8 @@ def test_a_second_hand_off_from_the_chained_run_fails_the_hop(repo, tmp_path):
 
 @pytest.mark.spawns_process
 def test_a_chain_path_naming_the_ask_itself_starts_nothing(repo, tmp_path):
-    got = _node(_direct_script(repo), tmp_path, [], [_handoff(RUN_REL)])
+    again = {"path": RUN_REL, "run_id": RUN_ID, "fire_args": {}}
+    got = _node(_direct_script(repo), tmp_path, [again], [_handoff(RUN_REL)])
     assert got["out"]["status"] == "failed" and "not a fresh run id" in got["out"]["error"]
     assert len(_starts(got)) == 1
 
@@ -54,7 +55,8 @@ def test_a_chain_path_naming_the_ask_itself_starts_nothing(repo, tmp_path):
 @pytest.mark.parametrize("run_id", ["", RUN_ID])
 def test_a_chain_path_naming_no_run_script_without_a_fresh_minted_run_id_starts_nothing(repo, tmp_path, run_id):
     handoff = {CHAIN_HANDOFF_KEY: {"path": "scratch/warp/not-a-run-script.mjs", "run_id": run_id}}
-    got = _node(_direct_script(repo), tmp_path, [], [handoff])
+    replies = [{"path": RUN_REL, "run_id": RUN_ID, "fire_args": {}}] if run_id else []
+    got = _node(_direct_script(repo), tmp_path, replies, [handoff])
     assert got["out"]["status"] == "failed" and "not a fresh run id" in got["out"]["error"]
     assert len(_starts(got)) == 1
 

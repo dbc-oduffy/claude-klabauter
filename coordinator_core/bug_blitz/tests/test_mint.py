@@ -31,19 +31,50 @@ def _tests():
     )
 
 
-def test_one_row_per_file_with_fields(tmp_path):
+def test_one_row_per_target_with_fields(tmp_path):
     ids = mint_tf_rows(tmp_path, "r1", _tests(), target_ref="redset.txt")
     rows = _rows(tmp_path)
-    assert len(ids) == 2 and set(ids) == set(rows)
-    by_surface = {r["surface"]: r for r in rows.values()}
-    a, b = by_surface["a/test_x.py"], by_surface["b/test_y.py"]
-    assert a["title"] == "TF: a/test_x.py (2 failing)"
-    assert a["severity"] == "P1" and b["severity"] == "P0"
+    assert len(ids) == 3 and set(ids) == set(rows)
+    by_title = {r["title"]: r for r in rows.values()}
+    a, c = by_title["TF: a/test_x.py::test_one"], by_title["TF: b/test_y.py::test_three"]
+    assert a["surface"] == "a/test_x.py" and a["severity"] == "P1" and c["severity"] == "P0"
     assert a["tags"] == ["tf", run_tag("r1")]
     assert a["evidence"] == "redset.txt"
     assert a["status"] == "open"
     assert "test_one :: AssertionError: boom" in a["body"]
-    assert "more" not in a["body"]
+    assert "more" not in a["body"] and "test_two" not in a["body"]
+
+
+def _six_targets():
+    return (
+        FailingTest(file="a/test_x.py", name="TestX::test_one", message="boom"),
+        FailingTest(file="a/test_x.py", name="TestX::test_two", message="boom"),
+        FailingTest(file="a/test_x.py", name="test_plain", message="boom"),
+        FailingTest(file="b/test_y.py", name="TestY::test_one", message="boom"),
+        FailingTest(file="b/test_y.py", name="TestY::test_two", message="boom"),
+        FailingTest(file="c/test_z.py", name="test_only", message="boom"),
+    )
+
+
+def test_six_targets_in_three_files_mint_six_rows_and_rerun_reuses_them(tmp_path):
+    ids = mint_tf_rows(tmp_path, "r1", _six_targets(), target_ref="t")
+    assert len(ids) == 6 == len(set(ids)) == len(_rows(tmp_path))
+    before = _snapshot(tmp_path)
+    assert mint_tf_rows(tmp_path, "r1", _six_targets(), target_ref="t") == ids
+    assert _snapshot(tmp_path) == before
+
+
+def test_duplicate_node_id_collapses_to_one_row(tmp_path):
+    dup = _six_targets()[:1] * 2
+    assert len(mint_tf_rows(tmp_path, "r1", dup, target_ref="t")) == 1
+
+
+def test_archived_row_suppresses_only_its_own_target(tmp_path):
+    ids = mint_tf_rows(tmp_path, "r1", _six_targets()[:2], target_ref="t")
+    _archive_first_row(tmp_path, ids[0])
+    again = mint_tf_rows(tmp_path, "r2", _six_targets()[:2], target_ref="t")
+    assert again[0] == ids[0] and again[1] == ids[1]
+    assert len(_rows(tmp_path)) == 1
 
 
 def test_file_level_target_renders_as_bare_file_never_trailing_colons(tmp_path):

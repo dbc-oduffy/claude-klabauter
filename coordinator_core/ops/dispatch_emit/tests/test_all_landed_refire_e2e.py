@@ -28,6 +28,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     read_ledger_halt,
 )
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler, gate
+from coordinator_core.ops.dispatch_emit.phase_ledger import RESUME_PHASES_FIELD
 from coordinator_core.ops.dispatch_emit.reply_sidecar import read_reply
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW, write_run_scripts
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put, repo  # noqa: F401
@@ -127,6 +128,12 @@ def _run_composed(root, verify) -> dict:
     if node is None:
         pytest.skip("node not on PATH")
     gate_reply = agent_gate_reply(root, _handler({"sizing_path": REL, "run_id": _RUN}, repo_root=root))
+    # The landed rows are code, so the review floor is owed; the earlier run's review wave is its verdict.
+    sidecar = root / "state" / "reviews" / "prior-wave.md"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    sidecar.write_text("PASS\n", encoding="utf-8", newline="\n")
+    wave = [{"slice_id": "S1", "verdict": "PASS", "findings": 0, "applied": 0, "sidecar_path": sidecar.relative_to(root).as_posix()}]
+    gate_reply[RESUME_PHASES_FIELD] = {"reuse": ["review"], "rerun": [], "verdicts": {"review": {"wave": wave}}}
     script = compose_ask_script(
         repo_root="REPO", prompt=None, sizing_rel=REL, run_id=_RUN, session_id=None,
         wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub",

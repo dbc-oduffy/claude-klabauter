@@ -166,12 +166,12 @@ def test_undated_plan_files_are_never_recent(tmp_path):
 
 def test_other_corpora_still_require_every_doc_linked(tmp_path):
     root = _plans_fixture(tmp_path, _GOOD_PLANS)
-    _write(root / "docs" / "research" / "r1.md", "# R1\n")
+    _write(root / "docs" / "problems" / "r1.md", "# R1\n")
     readme = root / "docs" / "README.md"
-    readme.write_text(readme.read_text(encoding="utf-8") + "\n## Research\n\nNothing yet.\n", encoding="utf-8")
+    readme.write_text(readme.read_text(encoding="utf-8") + "\n## Problems\n\nNothing yet.\n", encoding="utf-8")
     drift = compute_readme_index_drift(root)
-    research = next(s for s in drift.sections if s.section == "Research")
-    assert research.missing == ["r1.md"]
+    listed = next(s for s in drift.sections if s.section == "Problems")
+    assert listed.missing == ["r1.md"]
 
 
 def test_undeclared_sections_report_no_drift(tmp_path):
@@ -255,7 +255,7 @@ def test_reference_documentation_uses_top_level_docs_only(tmp_path):
     ref = next(s for s in drift.sections if s.section == "Reference Documentation")
     assert "not-top-level.md" not in ref.missing
     assert "exec-summary.md" not in ref.missing
-    assert "README.md" in ref.missing
+    assert "README.md" not in ref.missing, "the index is never its own Reference entry"
 
 
 from coordinator_core.updatedocs.readme_index import _extract_title  # noqa: E402
@@ -289,14 +289,14 @@ def test_title_extraction_reads_a_bounded_head_not_the_whole_file(tmp_path):
 def test_table_form_section_counts_every_linked_row_as_indexed(tmp_path):
     root = tmp_path
     docs = root / "docs"
-    rows = "".join(f"| [`r{i}.md`](research/r{i}.md) | topic {i} |\n" for i in range(3))
+    rows = "".join(f"| [`r{i}.md`](problems/r{i}.md) | topic {i} |\n" for i in range(3))
     for i in range(3):
-        _write(docs / "research" / f"r{i}.md", f"# R{i}\n")
-    _write(docs / "README.md", f"## Research\n\n| Doc | Topic |\n|---|---|\n{rows}")
-    research = next(s for s in compute_readme_index_drift(root).sections if s.section == "Research")
-    assert research.linked == 3
-    assert research.missing == []
-    assert research.dead == []
+        _write(docs / "problems" / f"r{i}.md", f"# R{i}\n")
+    _write(docs / "README.md", f"## Problems\n\n| Doc | Topic |\n|---|---|\n{rows}")
+    listed = next(s for s in compute_readme_index_drift(root).sections if s.section == "Problems")
+    assert listed.linked == 3
+    assert listed.missing == []
+    assert listed.dead == []
 
 
 def test_plan_sidecars_are_not_plans_on_disk_or_in_the_index(tmp_path):
@@ -316,3 +316,13 @@ def test_a_sidecar_the_readme_links_is_not_dead_and_a_real_doc_still_is(tmp_path
     )
     _write(root / "docs" / "plans" / "2026-01-08-p8.premise-check.md", "x\n")
     assert _plans_section(root).dead == ["gone.md"]
+
+
+def test_research_is_a_pointer_section_checked_by_count_and_recent(tmp_path):
+    docs = tmp_path / "docs"
+    for i in range(7):
+        _write(docs / "research" / f"2026-11-0{i + 1}-r{i}.md", f"# R{i}\n")
+    recent = "\n".join(f"- [`2026-11-0{i}-r{i - 1}.md`](research/2026-11-0{i}-r{i - 1}.md)" for i in range(7, 2, -1))
+    _write(docs / "README.md", f"## Research\n→ [`docs/research/`](research/) — outputs.\n7 docs currently on file. Most recent:\n\n{recent}\n")
+    research = next(s for s in compute_readme_index_drift(tmp_path).sections if s.section == "Research")
+    assert research.missing == [] and research.dead == []

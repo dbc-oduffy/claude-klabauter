@@ -29,13 +29,13 @@ import os
 import re
 import shutil
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 from coordinator_core.benchmarks import terminal_commit_real_session_shape as shape
 from coordinator_core.git.run import run_git
+from coordinator_core.temp_layout import mkdtemp_in
 
 ARMS = ("core", "gated", "scratch", "scratch_gate_import", "scratch_gated")
 RESULT_FILE = "spike.json"
@@ -358,7 +358,7 @@ def main(argv: list[str]) -> int:
         return 2
     parent = Path(args[0])
     parent.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="spike-", dir=str(parent)))
+    work = mkdtemp_in("spike-", parent)
     try:
         with fixture_settings_home(work):
             repo, rels, workflows = build_fixture(work, landing_paths=paths)

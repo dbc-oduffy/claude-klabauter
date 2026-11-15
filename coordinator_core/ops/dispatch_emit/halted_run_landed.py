@@ -173,6 +173,32 @@ def _review_record_in(root: Path, session_id: Optional[str], outcome: Optional[d
     return None
 
 
+def _sizing_plan(root: Path, run_id: str, marker: dict) -> Optional[str]:
+    """The plan path the run's sizing names when the halt marker carries none (a commit-stage halt records no plan), else None.
+
+    The sizing is the marker's ``sizing_rel`` or, absent that, the run's ``run.json`` ``sizing_rel``. The plan
+    must be an existing file under *root*; one yaml read at most.
+    """
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    sizing = marker.get("sizing_rel")
+    try:
+        if not isinstance(sizing, str) or not sizing:
+            run = json.loads((ask_contract.record_dir(root, run_id) / "run.json").read_text(encoding="utf-8"))
+            sizing = run.get("sizing_rel") if isinstance(run, dict) else None
+        if not isinstance(sizing, str) or not sizing or sizing.startswith("/") or ".." in sizing.split("/"):
+            return None
+        import yaml
+
+        data = yaml.safe_load((root / sizing).read_text(encoding="utf-8"))
+        plan = data.get("plan") if isinstance(data, dict) else None
+        if isinstance(plan, str) and plan and not plan.startswith("/") and ".." not in plan.split("/") and (root / plan).is_file():
+            return plan
+    except Exception:  # noqa: BLE001 -- an unreadable sizing names no plan
+        return None
+    return None
+
+
 def _queue_close(root: Path, run_id: str, sha: str, marker: Optional[dict], session_id: Optional[str]) -> dict:
     """The reply's ``close`` and ``withheld`` for a run just recorded landed at *sha*.
 
@@ -186,7 +212,7 @@ def _queue_close(root: Path, run_id: str, sha: str, marker: Optional[dict], sess
 
     marker = marker if isinstance(marker, dict) else {}
     withheld = _withheld(marker)
-    plan = marker.get("plan")
+    plan = marker.get("plan") or _sizing_plan(root, run_id, marker)
     if not isinstance(plan, str) or not plan:
         return {"close": {"status": "not-applicable", "detail": "halt record names no plan"}, "blocking_rows": withheld}
     base = marker.get("run_base_sha")
@@ -310,9 +336,55 @@ def _close_landed(
             out.update(_commit_records(root, run_id, record_dir, sha, verified, claims=claims))
     if marker is None:
         return {**out, "close": {"status": "not-applicable", "detail": _NEVER_HALTED.format(sha=sha[:12])}, "blocking_rows": []}
-    if run_close.resolve_close_job_stem(root, run_id) is not None:
-        return {**out, "close": {"status": "not-applicable", "detail": "close job already recorded"}, "blocking_rows": _withheld(marker)}
+    stem = run_close.resolve_close_job_stem(root, run_id)
+    if stem is not None:
+        return {**out, **_existing_close(root, run_id, stem, marker)}
     return {**out, **_queue_close(root, run_id, sha, marker, session_id)}
+
+
+def _existing_close(root: Path, run_id: str, stem: str, marker: dict) -> dict:
+    """The reply's ``close`` and ``blocking_rows`` when a close-job record already exists.
+
+    A leg that failed (including one still queued past the deadline) is requeued under a fresh deadline and the
+    detached close relaunched; a failed relaunch replies ``next_action``, the command that pays them. A leg queued
+    inside the deadline is a job in flight and a settled record is finished: both reply ``not-applicable``.
+    """
+    from datetime import datetime, timedelta
+
+    from coordinator_core.ops.dispatch_emit import run_close
+
+    withheld = _withheld(marker)
+    now = datetime.now().astimezone()
+    legs = run_close.read_close_job(root, stem, now)
+    unpaid = [leg for leg, result in legs.items() if result.status == "failed"]
+    if not unpaid:
+        return {"close": {"status": "not-applicable", "detail": "close job already recorded"}, "blocking_rows": withheld}
+    command = (
+        f"python coordinator_core/ops/ceremony/close_background.py {run_id} --root . "
+        "--params '{\"claimed_batons\": [], \"source_memo\": null}'"
+    )
+    try:
+        run_close.amend_close_job(
+            root, stem, queue=[leg for leg in unpaid if leg in run_close.RUN_BOUND_LEGS],
+            deadline=now + timedelta(minutes=_CLOSE_JOB_WINDOW_MINUTES),
+        )
+    except Exception as exc:  # noqa: BLE001 -- the landed write stands; the close reports itself
+        return {
+            "close": {"status": "unpaid", "unpaid": unpaid, "launched": False, "error": f"{type(exc).__name__}: {exc}", "next_action": command},
+            "blocking_rows": withheld,
+        }
+    launch_error = None
+    try:
+        launched = bool(_launch(root, run_id))
+    except Exception as exc:  # noqa: BLE001 -- the requeue stands; the reply reports launched: false
+        launched = False
+        launch_error = f"{type(exc).__name__}: {exc}"
+    close: dict = {"job": run_close.close_job_path(stem), "launched": launched, "queued": unpaid, "requeued": True}
+    if launch_error is not None:
+        close["error"] = launch_error
+    if not launched:
+        close["next_action"] = command
+    return {"close": close, "blocking_rows": withheld}
 
 
 def _live_successor(root: Path, run_id: str) -> Optional[str]:

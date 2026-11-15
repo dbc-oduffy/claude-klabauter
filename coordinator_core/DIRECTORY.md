@@ -98,6 +98,7 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `plan_match.py` | `plan.match_candidates` | Read-only ranked resolver over `docs/plans/*.md` |
 | `plan_tasks_mutate.py` | `plan.tasks.mutate` | Authoritative mutation of a plan's `## Tasks` task-spine (`add-task`/`stamp` verbs) |
 | `poll_scratch_dir.py` | `fanout.poll_scratch_dir` | Blocks until a scratch dir holds ≥N entries or a timeout elapses (`time.monotonic()` loop, no shell) |
+| `atlas_mechanical_report.py` | `update_docs.atlas_mechanical_report` | Writes the atlas-mechanical-layer report (`mechanical_report.produce`) for /update-docs Step 0; replies path, pages_changed, dead_paths, tokens |
 | `probe_fresh_repo_noop.py` | `update_docs.probe_fresh_repo_noop` | Read-only fresh-repo probe (DIRECTORY.md/archive/tasks existence) for `/update-docs` no-op detection |
 | `queue_append.py` | `queue.append` | Port of `coordinator-queue-append` — one YAML entry writer |
 | `queue_promote.py` | `queue.promote` | Port of `coordinator-lesson-promote` — lessons-outbox appender |

@@ -58,6 +58,8 @@ REMEDY_ADMISSION_KEY = "rag-freshness-remedy"
 REMEDY_PEAK_GIB = 1.0
 VERDICT_ADMISSION_KEY = "rag-freshness-verdict"
 VERDICT_PEAK_GIB = 0.25
+REMEDY_CORES = 2
+VERDICT_CORES = 1
 
 SpawnFn = Callable[[Sequence[str], str], None]
 
@@ -133,13 +135,13 @@ def detach_kwargs(os_name: Optional[str] = None) -> dict:
     return {"start_new_session": True}
 
 
-def _spawn_admitted(key: str, peak_gib: float, argv: Sequence[str], cwd: str, env: Optional[dict] = None) -> None:
+def _spawn_admitted(key: str, peak_gib: float, argv: Sequence[str], cwd: str, env: Optional[dict] = None, cores: int = 1) -> None:
     """Admit, spawn ``argv`` detached (closed argv, shell=False, no stdio) and hand the
-    memory reservation to the child. Raises on a held admission or a spawn failure."""
+    memory and declared-core reservation to the child. Raises on a held admission or a spawn failure."""
     from coordinator_core.bash_guards import _heavy_command_class as capacity
 
     host = capacity._load_box_memory_host()
-    admission = capacity.admit_before_spawn(key, peak_gib, host=host, register_pid=os.getpid())
+    admission = capacity.admit_before_spawn(key, peak_gib, host=host, register_pid=os.getpid(), cores=cores)
     if not admission.admitted:
         raise RuntimeError(f"spawn held: {admission.reason}")
     try:
@@ -153,14 +155,14 @@ def _spawn_admitted(key: str, peak_gib: float, argv: Sequence[str], cwd: str, en
             close_fds=True,
             **detach_kwargs(),
         )
-        capacity.register_spawn(key, admission.peak_gib, proc.pid, host)
+        capacity.register_spawn(key, admission.peak_gib, proc.pid, host, cores)
     finally:
         capacity.release_spawn(key, os.getpid(), host)
 
 
 def default_spawn_fn(argv: Sequence[str], cwd: str) -> None:
     """Spawn example-retrieval-repo's remedy ``argv`` detached and admitted; do not wait."""
-    _spawn_admitted(REMEDY_ADMISSION_KEY, REMEDY_PEAK_GIB, argv, cwd)
+    _spawn_admitted(REMEDY_ADMISSION_KEY, REMEDY_PEAK_GIB, argv, cwd, cores=REMEDY_CORES)
 
 
 def default_verdict_spawn_fn(argv: Sequence[str], cwd: str) -> None:
@@ -168,7 +170,7 @@ def default_verdict_spawn_fn(argv: Sequence[str], cwd: str) -> None:
     env = dict(os.environ)
     package_root = str(Path(__file__).resolve().parents[2])
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [package_root, env.get("PYTHONPATH")]))
-    _spawn_admitted(VERDICT_ADMISSION_KEY, VERDICT_PEAK_GIB, argv, cwd, env)
+    _spawn_admitted(VERDICT_ADMISSION_KEY, VERDICT_PEAK_GIB, argv, cwd, env, VERDICT_CORES)
 
 
 def _marker_path(repo_root: str, marker_root: Optional[Path], suffix: str = ".json") -> Path:

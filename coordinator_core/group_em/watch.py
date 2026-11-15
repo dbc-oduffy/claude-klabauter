@@ -197,11 +197,14 @@ reintroducing the by-path resolver this note retires.
 from __future__ import annotations
 
 import functools
+import getpass
 import io
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
 import time
 import threading
 import traceback
@@ -214,6 +217,7 @@ from coordinator_core.group_em import remote_identity
 from coordinator_core.group_em import remote_roster
 from coordinator_core.group_em import idle_report
 from coordinator_core.group_em import obligations
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core import memo_corpus
 from coordinator_core.group_em import read_pass
 from coordinator_core.group_em import repo_root_arg
@@ -325,6 +329,78 @@ def _goal_board_drift(
         if key not in prior:
             emit(f"DRIFT goal-board {key}")
     return {"flags": current}
+
+
+_LOW_DISK_FREE_BYTES = 100 * 1024**3
+_LOW_DISK_ENTRY_CAP = 1000
+_LOW_DISK_WINDOW_SECONDS = 3600.0
+#: Machine-local registry keys overriding the defaults above (bytes / entries).
+LOW_DISK_FREE_BYTES_KEY = "group_em.low_disk_free_bytes"
+LOW_DISK_ENTRY_CAP_KEY = "group_em.low_disk_entry_cap"
+
+
+def _low_disk_setting(key: str, default: int) -> int:
+    """The positive-int registry value for `key`, else `default` (absent, unparseable or non-positive)."""
+    from coordinator_core import machine_resolver
+
+    try:
+        value = int(machine_resolver.merged_flat_registry().get(key))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _low_disk_stamp_path() -> str:
+    from coordinator_core._settings_home import settings_home
+
+    return os.path.join(str(settings_home()), "group-em", "low-disk.stamp")
+
+
+def _pytest_root_entry_count(root: str) -> tuple[int, bool]:
+    """`(entries, capped)` for `root`'s top level; stops at the cap. Never descends: a tree walk here saturated C:."""
+    cap = _low_disk_setting(LOW_DISK_ENTRY_CAP_KEY, _LOW_DISK_ENTRY_CAP)
+    count = 0
+    try:
+        with os.scandir(root) as it:
+            for _ in it:
+                count += 1
+                if count >= cap:
+                    return count, True
+    except FileNotFoundError:
+        return 0, False
+    return count, False
+
+
+def _low_disk_tick(now_epoch: float, emit: Callable[[str], None]) -> None:
+    """Emit one `LOW-DISK` line when the pytest temp root's drive is under the free-bytes setting (default 100 GiB), at most once per window.
+
+    The window stamp lives under the settings home, so it holds across watch restarts. Cost per
+    un-rate-limited tick: one `disk_usage` plus a capped top-level scandir only when low. Never
+    raises: any probe failure, including an unresolvable settings home, yields no line.
+    """
+    try:
+        stamp = _low_disk_stamp_path()
+        try:
+            with open(stamp, "r", encoding="utf-8") as fh:
+                last = float(fh.read().strip())
+            if 0 <= now_epoch - last < _LOW_DISK_WINDOW_SECONDS:
+                return
+        except (OSError, ValueError):
+            pass
+        tmp_root = tempfile.gettempdir()
+        free = shutil.disk_usage(tmp_root).free
+        if free >= _low_disk_setting(LOW_DISK_FREE_BYTES_KEY, _LOW_DISK_FREE_BYTES):
+            return
+        entries, capped = _pytest_root_entry_count(
+            os.path.join(tmp_root, f"pytest-of-{getpass.getuser()}")
+        )
+        atomic_write_bytes(stamp, repr(now_epoch).encode("utf-8"))
+        emit(
+            f"LOW-DISK free={free / 1024**3:.0f}GB drive={tmp_root} "
+            f"pytest-entries={'>=' if capped else ''}{entries}"
+        )
+    except Exception:
+        return
 
 
 _PARKED_STATE_RELATIVE_PATH = os.path.join("state", "group-em-watch-parked.json")
@@ -558,7 +634,7 @@ def gone(
 def link_state_dir(home: Optional[str] = None) -> str:
     """Directory of per-far-alias link-state records written by `coordinator/bin/unimatrix-roster.py`.
 
-    Each `<alias>.json` holds {"alias", "state": "up"|"down", "since", "reason"}.
+    Each `<alias>.json` holds {"alias", "state": "up"|"down"|"unresolved", "since", "reason"}.
     """
     if home is None:
         from coordinator_core._settings_home import settings_home
@@ -581,7 +657,7 @@ def read_link_states(home: Optional[str] = None) -> dict[str, dict[str, str]]:
                 rec = json.load(fh)
         except (OSError, ValueError):
             continue
-        if not isinstance(rec, dict) or rec.get("state") not in ("up", "down"):
+        if not isinstance(rec, dict) or rec.get("state") not in ("up", "down", "unresolved"):
             continue
         alias = rec.get("alias")
         if not isinstance(alias, str) or not alias:
@@ -605,6 +681,9 @@ def link_transitions(
         if cur[alias] != before:
             out.append((alias, cur[alias]))
     return out
+
+
+_LINK_PENDING_PREFIX = "~pending:"
 
 
 def signed_members(home: Optional[str] = None) -> Optional[list[dict]]:
@@ -635,11 +714,14 @@ def signed_members(home: Optional[str] = None) -> Optional[list[dict]]:
 
 def _is_member(alias: str, members: list[dict]) -> bool:
     """True when `alias` (`user@host`) names a member by its host, or by its box id (the host's first label)."""
+    def fold(s: str) -> str:
+        return s.lower().replace("-", "").replace("_", "")
+
     host = alias.rpartition("@")[2].lower()
-    label = host.split(".")[0]
+    label = fold(host.split(".")[0])
     for m in members:
         m_host = str(m.get("host") or "").lower()
-        if host == m_host or label in (m_host.split(".")[0], str(m.get("box") or "").lower()):
+        if host == m_host or label in (fold(m_host.split(".")[0]), fold(str(m.get("box") or ""))):
             return True
     return False
 
@@ -658,16 +740,25 @@ def link_tick(
     emit: Callable[[str], None],
     home: Optional[str] = None,
 ) -> Optional[dict[str, str]]:
-    """Emit one LINK-DOWN/LINK-UP line per link-state change; return the new `{alias: state}` map.
+    """Emit one LINK-DOWN/LINK-UNRESOLVED/LINK-UP line per confirmed link-state change; return the carried map.
 
-    A LINK-UP for a box the signed membership snapshot does not admit names that, and such a box's
-    first `up` record gets one line of its own, so the G-EM learns of an unadmitted box coming up.
-    Never raises. An unreadable state dir returns `prev` unchanged so the next tick diffs
-    against the last good read.
+    A change fires only once its new state is read on 2 consecutive ticks; a one-tick
+    blip emits nothing. The returned map holds committed `{alias: state}` plus
+    `~pending:<alias>` entries for a change seen once. A LINK-UP for a box the signed membership
+    snapshot does not admit names that, and such a box's first `up` record gets one line of its own,
+    so the G-EM learns of an unadmitted box coming up. Never raises. An unreadable
+    state dir returns `prev` unchanged so the next tick diffs against the last good read.
     """
     try:
         records = read_link_states(home)
         cur = {alias: rec["state"] for alias, rec in records.items()}
+        committed: dict[str, str] = {}
+        pending: dict[str, str] = {}
+        for key, state in (prev or {}).items():
+            if key.startswith(_LINK_PENDING_PREFIX):
+                pending[key[len(_LINK_PENDING_PREFIX):]] = state
+            else:
+                committed[key] = state
         member_memo: list = []
 
         def note(alias: str, first: bool = False) -> str:
@@ -675,19 +766,29 @@ def link_tick(
                 member_memo.append(signed_members(home))
             return _admission_note(alias, member_memo[0], first)
 
-        for alias, state in link_transitions(prev, cur):
-            parts = [records[alias]["reason"], note(alias) if state == "up" else ""]
-            text = "; ".join(p for p in parts if p)
-            emit(f"LINK-{state.upper()} {alias}" + (f": {text}" if text else ""))
-        for alias in sorted(a for a, s in cur.items() if s == "up" and prev is not None and a not in prev):
-            why = note(alias, first=True)  # a far box's first record: only a non-member is worth a line
+        first_up = [a for a, s in sorted(cur.items()) if s == "up" and prev is not None
+                    and a not in committed and a not in pending]
+        for alias, state in link_transitions(committed if prev is not None else None, cur):
+            if pending.get(alias) == state:
+                parts = [records[alias]["reason"], note(alias) if state == "up" else ""]
+                text = "; ".join(p for p in parts if p)
+                emit(f"LINK-{state.upper()} {alias}" + (f": {text}" if text else ""))
+                committed[alias] = state
+                pending.pop(alias, None)
+            else:
+                pending[alias] = state
+        for alias in first_up:  # a far box's first record: only a non-member is worth a line
+            why = note(alias, first=True)
             if why:
                 emit(f"LINK-UP {alias}: first link; {why}")
-        if prev is not None:
-            # A record that vanished keeps its last state so its reappearance is not a transition.
-            for alias, state in prev.items():
-                cur.setdefault(alias, state)
-        return cur
+        for alias, state in cur.items():
+            if state == committed.get(alias, "up"):
+                committed[alias] = state
+                pending.pop(alias, None)
+        out = dict(committed)
+        for alias, state in pending.items():
+            out[_LINK_PENDING_PREFIX + alias] = state
+        return out
     except Exception:
         return None if prev is None else dict(prev)
 
@@ -1203,6 +1304,12 @@ def poll_once(
         prior = (prev_names or {}).get(session_id) or {}
         if prior.get("gone_reported"):
             continue
+        if not prior.get("absent_ticks"):
+            # First absent tick: carry the session so a one-tick blip is silent;
+            # GONE fires only when it is absent on the next tick too.
+            cur_parked[session_id] = prev_parked[session_id]
+            peer_notes[session_id] = {**prior, "absent_ticks": 1}
+            continue
         peer_notes.setdefault(session_id, {"gone_reported": True, "gone_at": now_epoch})
         last_seen = prior.get("last_seen")
         emit(
@@ -1274,6 +1381,8 @@ def poll_once(
     board_note = _goal_board_drift(now, prev_names, emit)
     if board_note is not None:
         peer_notes[_GOAL_BOARD_NOTE_KEY] = board_note
+
+    _low_disk_tick(now_epoch, emit)
 
     return cur_parked, declinations, peer_notes, cur_inbox_open
 
@@ -1458,8 +1567,14 @@ def _process_census():
     return HostPrimitives.snapshot()
 
 
+def _host_primitives():
+    from coordinator_core.bash_guards._host_probe import HostPrimitives
+
+    return HostPrimitives
+
+
 def _reap_orphans() -> list:
-    """PIDs `orphan_reap.reap` terminated (dead-parent grep/find only); [] when it cannot run."""
+    """PIDs `orphan_reap.reap` terminated (grep/find aged >= 30 min under a dead parent); [] when it cannot run."""
     from coordinator_core.bash_guards._host_probe import HostPrimitives
     from coordinator_core.box_memory import orphan_reap
 
@@ -1488,7 +1603,7 @@ def _memory_tick(
         low = was_low if verdict == pressure.UNKNOWN else verdict == pressure.LOW
 
         census = _process_census()
-        count = pressure.storm_count(census) if census is not None else None
+        count = pressure.storm_count(census, _host_primitives()) if census is not None else None
         storming = was_storm if count is None else count >= pressure.DEFAULT_STORM_THRESHOLD
 
         if low and not was_low:

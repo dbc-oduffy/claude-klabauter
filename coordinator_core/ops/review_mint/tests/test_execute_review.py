@@ -724,7 +724,7 @@ def _run_prep_block(prep_result: dict, landed: dict | None = None, review_paths:
         + (f"const _landed = {json.dumps(landed)};\n" if landed is not None else "")
         + (f"const _reviewPaths = {json.dumps(review_paths)};\n" if review_paths is not None else "")
         + "\n".join(body)
-        + "\n return {slices: _reviewPrep.slices, verifyOnly: _verifyOnly}; })();"
+        + "\n return {slices: _reviewPrep?.slices ?? null, verifyOnly: _verifyOnly}; })();"
         "\n console.log(JSON.stringify(_out));"
         "\n} catch (e) { console.log(JSON.stringify({error: e.message})); } })();"
     )
@@ -856,6 +856,29 @@ def test_landed_rows_with_failed_or_product_prep_still_refuse(prep):
     result = _run_prep_block(prep, landed=_LANDED)
     assert result["halted"].startswith("review prep returned no slices")
     assert "error" not in result and result["wave"] is None
+
+
+_VERIFY_LANDED = {"D0": {"paths": [], "declared": ["docs/plans/p.evidence.yaml"]}}
+_PRODUCT_LANDED = {"D0": {"paths": ["pkg/mod.py"], "declared": []}}
+_FAILED_PREPS = {
+    "null relay reply": None,
+    "degraded reply": {**_ZERO_FILE_PREP, "basis": ""},
+    "errored reply": {**_ZERO_FILE_PREP, "basis": "", "error": "freeze failed"},
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_FAILED_PREPS))
+def test_verification_only_wave_passes_review_empty_whatever_the_prep_reply(shape):
+    result = _run_prep_block(_FAILED_PREPS[shape], landed=_VERIFY_LANDED, review_paths=["docs/plans/p.evidence.yaml"])
+    assert "halted" not in result and result["verifyOnly"] is True
+
+
+@pytest.mark.parametrize("shape", sorted(_FAILED_PREPS))
+def test_wave_with_a_landed_or_declared_product_path_and_a_failed_prep_still_halts(shape):
+    prep = _FAILED_PREPS[shape]
+    for landed, paths in ((_PRODUCT_LANDED, None), (_VERIFY_LANDED, ["pkg/mod.py"]), ({"D0": {"status": "coded"}}, None)):
+        result = _run_prep_block(prep, landed=landed, review_paths=paths)
+        assert result["halted"].startswith("review prep returned no slices"), (shape, landed, paths)
 
 
 def test_landed_rows_with_product_files_keep_their_review_slice():
@@ -2008,3 +2031,28 @@ def test_delivery_notes_ride_only_the_code_reviewer_slice_prompt():
 def test_delivery_notes_also_ride_the_grouped_prep_in_wave_prompt():
     block = _wave_block(_ratio_review(), executor_rows_js="n", delivery_notes_js="_deliveryNotes")
     assert block.count(_NOTES_LABEL) == 1
+
+
+def test_no_slices_halt_persists_the_prep_reply_into_halted_json(tmp_path):
+    """A halt's `prep` reply lands in halted.json as `prep_reply`; a null reply lands as null."""
+    from coordinator_core.ops.dispatch_emit import halted_record_commit as hrc
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    record_dir = tmp_path / "state" / "warp" / "run-1"
+    halted_run.write_halt_marker(record_dir, halted="review prep returned no slices (prep verdict: none)", sizing_rel=None)
+    halted = {
+        "halted": "review prep returned no slices (prep verdict: none)",
+        "prep": {"verdict": None, "error": "freeze failed", "basis": "", "product_files": 0, "slices": [],
+                 "excluded": [{"path": "a.md", "reason": "no-delta"}], "foreign_claims": []},
+    }
+    hrc._stamp_prep_reply(record_dir, halted)
+    marker = json.loads((record_dir / "halted.json").read_text(encoding="utf-8"))
+    assert marker["prep_reply"] == {
+        "verdict": None, "error": "freeze failed", "basis": "", "product_files": 0, "slices": 0,
+        "excluded": [{"path": "a.md", "reason": "no-delta"}], "foreign_claims": 0, "whole_diff_path": None,
+    }
+    assert marker["halted"] == halted["halted"]
+    hrc._stamp_prep_reply(record_dir, {"halted": "x", "prep": None})
+    assert json.loads((record_dir / "halted.json").read_text(encoding="utf-8"))["prep_reply"] is None
+    hrc._stamp_prep_reply(record_dir, {"halted": "y"})
+    assert "prep_reply" in json.loads((record_dir / "halted.json").read_text(encoding="utf-8"))

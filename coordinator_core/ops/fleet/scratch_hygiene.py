@@ -117,18 +117,31 @@ def run_hygiene(params: dict) -> dict[str, Any]:
     budget = _number(params.get("budget_secs", DEFAULT_BUDGET_SECS))
     if budget is None:
         return _bad("budget_secs must be a non-negative number")
-    deadline = time.monotonic() + budget
+    # A call with no explicit budget always gates its first entry, so the cursor moves every call.
+    # Trap: that first walk has no deadline, so one huge entry exceeds the 500ms brightline.
+    guarantee = "budget_secs" not in params
 
     records: list[dict[str, Any]] = []
     applied = False
     walk: dict[str, int] | None = None
     if not nag_only:
         candidates = ordered_candidates(repo_root, _read_cursor(repo_root))
+    # Armed after the listing: the listing is outside the budget, so a large scratch dir
+    # costs process time beyond ``budget`` (brightline: keep the listing cheap).
+    deadline = time.monotonic() + budget
     if not nag_only and not apply:
         records = plan_purge(
-            repo_root, quiescence_hours=quiescence, verify_copy=verify_copy, deadline=deadline, candidates=candidates
+            repo_root,
+            quiescence_hours=quiescence,
+            verify_copy=verify_copy,
+            deadline=deadline,
+            candidates=candidates,
+            first_unbounded=guarantee,
         )
         walk = _walk_counts(records)
+        last = next((c for c, r in zip(reversed(candidates), reversed(records)) if r["action"] != "skipped-budget"), None)
+        if last is not None:
+            _write_cursor(repo_root, last)
     elif not nag_only:
         # Gate and delete one entry at a time, so each entry is walked once and a budget
         # that runs out mid-pass has still freed what it gated. One registry read for the pass.
@@ -136,13 +149,13 @@ def run_hygiene(params: dict) -> dict[str, Any]:
         eligible = deleted = 0
         last_walked: str | None = None
         gated: list[dict[str, Any]] = []
-        for entry in candidates:
+        for i, entry in enumerate(candidates):
             rec = classify_entry(
                 entry,
                 repo_root=repo_root,
                 quiescence_hours=quiescence,
                 verify_copy=verify_copy,
-                deadline=deadline,
+                deadline=None if guarantee and i == 0 else deadline,
                 _ctx=ctx,
             )
             gated.append(rec)

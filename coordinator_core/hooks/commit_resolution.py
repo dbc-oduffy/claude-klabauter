@@ -1,7 +1,7 @@
 """Per-commit staged-set and toplevel resolution shared by every git hook body.
 
 One commit runs several hook processes; each used to spawn its own
-`git diff --cached`. `staged_raw` runs ONE `git diff --cached --raw -z -M` per
+`git diff --cached`. `staged_raw` runs ONE `git diff-index --cached --raw -z -M` per
 (index identity, HEAD) and persists it under the git dir, so later hooks of the
 same commit read a file instead of spawning. Imported on the commit hot path:
 beyond the stdlib it needs only `coordinator_core.git.run`, so a by-file-path
@@ -32,6 +32,7 @@ from coordinator_core.git.run import run_git
 _CACHE_PREFIX = "coordinator-commit-resolution-"
 _CACHE_SUFFIX = ".json"
 _SCHEMA = 1
+_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
 class ResolutionError(RuntimeError):
@@ -213,9 +214,12 @@ def _parse(raw: str) -> "list[RawRecord]":
 
 
 def raw_text(git_dir: str, timeout: Optional[float] = None) -> str:
-    """The `git diff --cached --raw -z -M` stdout for this commit, spawning at
-    most once per (index identity, HEAD). Raises `ResolutionError` if the live
-    spawn fails."""
+    """The `git diff-index --cached --raw -z -M HEAD` stdout for this commit,
+    spawning at most once per (index identity, HEAD). Index-vs-tree only: the
+    plumbing never stats the worktree (porcelain `diff --cached` preloads the
+    index, a stat per tracked file), so cost follows the staged set, not dirty
+    worktree files. An unborn HEAD diffs against the empty tree. Raises
+    `ResolutionError` if the live spawn fails."""
     keyed = _cache_key(git_dir)
     if keyed is not None:
         key, index = keyed
@@ -223,7 +227,8 @@ def raw_text(git_dir: str, timeout: Optional[float] = None) -> str:
         cached = _load(path, key).get("raw")
         if isinstance(cached, str):
             return cached
-    out = _run_git(["diff", "--cached", "--raw", "-z", "-M"], timeout)
+    tree = "HEAD" if _head_oid(git_dir) else _EMPTY_TREE
+    out = _run_git(["diff-index", "--cached", "--raw", "-z", "-M", tree], timeout)
     text = out.decode("utf-8", errors="surrogateescape")
     if keyed is not None:
         entry = _load(path, key)

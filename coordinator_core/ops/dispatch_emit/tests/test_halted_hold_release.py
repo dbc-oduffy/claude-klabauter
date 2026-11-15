@@ -977,3 +977,33 @@ def test_checkin_of_cr_free_plain_data_never_reaches_the_commit_module(tmp_path,
     root = _git_root(tmp_path, "")
     monkeypatch.setattr(kept_work, "checkin_form", lambda *a: pytest.fail("delegated"))
     assert hr._checkin_of(root, "a.py", b"plain\n") == b"plain\n"
+
+
+def _fake_index(monkeypatch, index, head):
+    from coordinator_core.git import git_state
+
+    monkeypatch.setattr(git_state, "read_index", lambda root: index)
+    monkeypatch.setattr(git_state, "head_blobs", lambda root, paths: head)
+
+
+def test_staged_among_sees_mode_only_change_and_clean_path_is_not_staged(tmp_path, monkeypatch):
+    from coordinator_core.git.git_state import IndexEntry
+
+    index = {
+        "same.py": IndexEntry(mode=0o100644, sha="a" * 40, stage=0),
+        "chmod.py": IndexEntry(mode=0o100755, sha="b" * 40, stage=0),
+    }
+    head = {"same.py": (0o100644, "a" * 40), "chmod.py": (0o100644, "b" * 40)}
+    _fake_index(monkeypatch, index, head)
+    assert hr._staged_among(tmp_path, frozenset({"same.py", "chmod.py"})) == frozenset({"chmod.py"})
+
+
+def test_staged_among_unreadable_index_holds_all(tmp_path, monkeypatch):
+    from coordinator_core.git import git_state
+
+    def boom(root):
+        raise OSError("no index")
+
+    monkeypatch.setattr(git_state, "read_index", boom)
+    paths = frozenset({"a.py", "b.py"})
+    assert hr._staged_among(tmp_path, paths) == paths

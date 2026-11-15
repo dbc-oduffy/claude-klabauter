@@ -33,8 +33,12 @@ caller with its condition. This module's own unlinks are the protocol and are ou
 `mint` unlinks a stale claimed record, a stale halted receipt, a stale escrow
 and (when no live record is replaced) a stale retired receipt, `redeem` unlinks
 the live record it claims, and `consume` / `discard` unlink their targets and the escrow.
-`sweep_expired_escrows` unlinks escrows older than `TTL_SECONDS`. A receipt is never removed
-otherwise; it ages out by `TTL_SECONDS` and `live_records` / `held_records` (non-recursive) never list it.
+`sweep_expired_escrows` unlinks escrows older than `TTL_SECONDS`. `sweep_expired_receipts` unlinks
+spent, halted and retired receipts whose mtime (the settle time) is older than `RETENTION_SECONDS`; no
+receipt is removed otherwise. Admitting readers stop honouring a receipt at `TTL_SECONDS`, but
+`readmit_reviewed`'s spent guard and `ask_gate`'s `token_retired` / `reservation_spent` test presence only:
+a swept receipt reads as never fired, so a run id re-used past `RETENTION_SECONDS` is the residual.
+`live_records` / `held_records` (non-recursive) never list a receipt.
 """
 
 from __future__ import annotations
@@ -80,6 +84,9 @@ _RETIRED = "retired"
 #: Digests of earlier tokens a `carry_prior` re-mint keeps admitting, newest first, and how many.
 _PRIOR = "prior"
 MAX_PRIOR = 7
+#: A spent, halted or retired receipt older than this (by mtime, its settle time) is swept; well past
+#: `TTL_SECONDS` because some readers test a receipt's presence with no age bound.
+RETENTION_SECONDS = 7 * 24 * 3600
 #: The record fields every receipt (retired, spent, halted) copies from the record it replaces.
 _RECEIPT_KEYS = ("run_id", "sha256", "script_path", "minted_at", _PRIOR)
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
@@ -670,6 +677,37 @@ def sweep_expired_escrows(repo_root: Path, now: Optional[float] = None) -> int:
                 removed += 1
         except OSError:
             continue
+    return removed
+
+
+def sweep_expired_receipts(repo_root: Path, now: Optional[float] = None) -> int:
+    """Unlink `spent/`, `halted/` and `retired/` receipts whose mtime is older than `RETENTION_SECONDS`;
+    return the count. Age is the file mtime, the settle time: `minted_at` alone would sweep a run that
+    settles long after minting on arrival. Never touches live or claimed records, escrow or the live-run
+    index. Never raises; one listing per subdir, no spawn."""
+    home = engine_record_dir(repo_root)
+    if home is None:
+        return 0
+    cutoff = (time.time() if now is None else now) - RETENTION_SECONDS
+    removed = 0
+    for sub in (_SPENT, _HALTED, _RETIRED):
+        aged: list[str] = []
+        try:
+            with os.scandir(home / _DIR / sub) as entries:
+                for e in entries:
+                    try:
+                        if e.name.endswith(".json") and e.stat().st_mtime < cutoff:
+                            aged.append(e.path)
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+        for path in aged:
+            try:
+                os.unlink(path)
+                removed += 1
+            except OSError:
+                continue
     return removed
 
 

@@ -265,6 +265,7 @@ _NON_SUBPROCESS_HELPERS = {
     "dirty_relpaths_from_porcelain",
     "canonical_repo_relative_path_refusal",
     "first_non_canonical_path_refusal",
+    "build_new_file_commit",
 }
 
 #: `check_ignore()` is a thin single-`git`-call wrapper like everything in

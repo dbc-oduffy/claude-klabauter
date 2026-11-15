@@ -213,6 +213,41 @@ def test_not_a_repo_returns_empty(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Staged-path derivation: one index-only spawn, however dirty the worktree.
+# ---------------------------------------------------------------------------
+
+
+def test_staged_path_derivation_is_one_index_only_spawn(repo, monkeypatch):
+    from coordinator_core.hooks import commit_resolution as cr
+
+    for i in range(40):
+        (repo / f"t{i}.txt").write_text("v1\n", encoding="utf-8")
+    _git(["add", "-A"], cwd=repo)
+    _git(["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "-m", "more"], cwd=repo)
+    for i in range(40):
+        (repo / f"t{i}.txt").write_text("v2\n", encoding="utf-8")
+    (repo / "staged.txt").write_text("s\n", encoding="utf-8")
+    _git(["add", "staged.txt"], cwd=repo)
+
+    mod = _load_module()
+    monkeypatch.chdir(repo)
+    for var in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE"):
+        monkeypatch.delenv(var, raising=False)
+    spawned = []
+    real = cr._run_git
+
+    def _spy(args, timeout):
+        spawned.append(list(args))
+        return real(args, timeout)
+
+    monkeypatch.setattr(cr, "_run_git", _spy)
+    assert mod._resolve_staged_paths() == ["staged.txt"]
+    (argv,) = spawned
+    assert argv[0] == "diff-index" and "--cached" in argv
+    assert not {"diff", "status", "update-index", "add", "--refresh"} & set(argv)
+
+
+# ---------------------------------------------------------------------------
 # End-to-end: the hot path's git-dir resolution no longer spawns.
 # ---------------------------------------------------------------------------
 

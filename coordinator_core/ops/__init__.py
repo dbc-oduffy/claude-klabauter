@@ -375,6 +375,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "pairing leg unmeasured, docs/plans/2026-07-20-kr-baselining-package.md C1)",
     ),
     (
+        "coordinator_core.ops.atlas_mechanical_report",
+        'registers "update_docs.atlas_mechanical_report" (writes the atlas-mechanical-layer '
+        "report via mechanical_report.produce; replies path and counts)",
+    ),
+    (
         "coordinator_core.ops.cascade_retract",
         'registers "deliverable.cascade_retract" (C6d retraction/revision, AC6f)',
     ),

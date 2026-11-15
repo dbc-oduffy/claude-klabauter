@@ -515,6 +515,11 @@ def _await_stage_admission(msg: dict, hook_path: bool = False) -> None:
 #: per-call classification, never a permanent, first-wins one.
 _last_cold_bucket: "str | None" = None
 
+#: True when the last `_try_warm_dispatch_inner` call hit "no server" -- the one miss that
+#: starts a server. The inner only records it; `try_warm_dispatch` acts on it, so a caller of
+#: `try_warm_dispatch_no_spawn` reaches no spawn site.
+_spawn_wanted = False
+
 
 def _cold_bucket_for_row() -> "str | None":
     """The reason tag AC3's `record_client_cold_fallback` attaches to the
@@ -756,6 +761,15 @@ def spawn_detached(
     return _spawn_detached_impl(repo_root, script_path, args, env_extra)
 
 
+def _server_autostart_disabled() -> bool:
+    """True when `COORDINATOR_WARM_SERVER_AUTOSTART` is exactly "0".
+
+    The codex native-worker child env pins this so the child reaches a live
+    engine but never spawns a warm server from a pipe-open miss.
+    """
+    return os.environ.get("COORDINATOR_WARM_SERVER_AUTOSTART") == "0"
+
+
 def _spawn_once() -> None:
     """Best-effort spawn on the FileNotFoundError trigger, gated to at most
     one attempt per client process (Backstop 1). See module docstring's
@@ -786,6 +800,8 @@ def _spawn_once() -> None:
     other cold-fallback outcome."""
     global _spawned_this_process
     if _spawned_this_process:
+        return
+    if _server_autostart_disabled():
         return
     if _live_tree_cold:
         return
@@ -1208,6 +1224,18 @@ _FIRE_AND_FORGET_INDETERMINATE_MESSAGE = (
 )
 
 
+#: `dispatch.emit`'s indeterminate text. The door still never re-sends it (not in
+#: `_COLD_REPLAY_SAFE`); the CALLER may, because the engine answers a re-send of the same
+#: sizing_path or ask with the live run's run_id instead of minting a second run.
+_EMIT_INDETERMINATE_MESSAGE = (
+    "warm dispatch indeterminate: this dispatch.emit was written to the warm engine, which did "
+    "not answer in time. Run the printed warm.request_status poll; state not_received "
+    "means the emit was NOT STARTED, so re-send the emit. Otherwise re-send the same params: a live "
+    "run already holding the same sizing_path or ask answers with its run_id, so the re-send "
+    "yields exactly one run."
+)
+
+
 def _indeterminate_text_for(method: Any) -> str:
     """The indeterminate message text for `method`, selected by its declared
     completion-evidence class (docs/decisions/DR-442-completion-evidence-is-
@@ -1218,6 +1246,8 @@ def _indeterminate_text_for(method: Any) -> str:
     on every invocation's cold-start preamble. `UNDECLARED`, and any import
     or lookup failure, fall back to the fail-closed `_MUTATION_INDETERMINATE_MESSAGE`.
     """
+    if method == "dispatch.emit":
+        return _EMIT_INDETERMINATE_MESSAGE
     try:
         from coordinator_core.authz.completion_evidence import EvidenceClass, evidence_class
 
@@ -1347,6 +1377,8 @@ def _indeterminate_envelope(
     text = _indeterminate_text_for(msg.get("method"))
     message = f"{text} ({detail})"
     data: dict = {"retry_safe": False}
+    if msg.get("method") == "dispatch.emit":
+        data["resend_returns_existing_run"] = True
     if landed is not None:
         data["landed"] = landed
         message = (
@@ -1540,6 +1572,24 @@ def try_warm_dispatch(
     unanticipated exception is caught here and treated as a cold-path
     signal rather than propagated.
     """
+    result = try_warm_dispatch_no_spawn(msg, read_deadline_secs=read_deadline_secs, hook_path=hook_path)
+    if _spawn_wanted:
+        try:
+            _spawn_once()
+        except Exception as exc:  # noqa: BLE001 -- Backstop 2: never fail the op
+            _record_permanent_preamble_failure(exc)
+    return result
+
+
+def try_warm_dispatch_no_spawn(
+    msg: dict, *, read_deadline_secs: Optional[float] = None, hook_path: bool = False
+) -> Optional[dict]:
+    """`try_warm_dispatch` that never starts a server on a "no server" miss.
+
+    `spawn_wanted()` reports whether the miss was the one that would have. Same return and
+    never-raises contract; a caller that must not spawn (a sandboxed codex EM) uses this."""
+    global _spawn_wanted
+    _spawn_wanted = False
     try:
         result = _try_warm_dispatch_inner(msg, read_deadline_secs, hook_path)
     except Exception as exc:  # noqa: BLE001 -- Backstop 2: never fail the op
@@ -1552,6 +1602,11 @@ def try_warm_dispatch(
     if result is None:
         _record_cold_fallback(msg.get("method"))
     return result
+
+
+def spawn_wanted() -> bool:
+    """True when the last dispatch missed because no server was listening."""
+    return _spawn_wanted
 
 
 def _record_permanent_preamble_failure(exc: Exception) -> None:
@@ -1596,6 +1651,58 @@ def _record_permanent_preamble_failure(exc: Exception) -> None:
         )
 
 
+def _process_token_is_restricted() -> bool:
+    """True when this process runs under a restricted token (a sandbox child).
+
+    Windows-only; False off Windows and on any API failure, so a probe
+    problem never invents a cause."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        advapi32.OpenProcessToken.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.HANDLE),
+        ]
+        advapi32.IsTokenRestricted.argtypes = [wintypes.HANDLE]
+        advapi32.IsTokenRestricted.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        token = wintypes.HANDLE()
+        token_query = 0x0008
+        if not advapi32.OpenProcessToken(
+            kernel32.GetCurrentProcess(), token_query, ctypes.byref(token)
+        ):
+            return False
+        try:
+            return bool(advapi32.IsTokenRestricted(token))
+        finally:
+            kernel32.CloseHandle(token)
+    except Exception:  # noqa: BLE001 -- a probe failure names no cause
+        return False
+
+
+def _record_restricted_token_denial(exc: PermissionError) -> None:
+    """Name the cause of a winerror-5 pipe denial when the caller's token is
+    restricted, so the COLD line says why instead of citing a respawn that
+    never happened. A non-restricted denial records nothing (still "someone
+    else's pipe"). First reason wins; never overwrites."""
+    global _cold_reason
+    if _cold_reason is not None or getattr(exc, "winerror", None) != 5:
+        return
+    if not _process_token_is_restricted():
+        return
+    _cold_reason = (
+        "pipe open denied (winerror 5): caller holds a restricted (sandboxed) "
+        "token the warm pipe DACL does not admit"
+    )
+
+
 def _record_cold_fallback(op: "str | None" = None) -> None:
     """Record one cold fallback -- the instrument W6+W7 found dead: only
     THIS process (the client) ever observes a cold fallback, so this is
@@ -1636,7 +1743,7 @@ def _record_cold_fallback(op: "str | None" = None) -> None:
 def _try_warm_dispatch_inner(
     msg: dict, read_deadline_secs: Optional[float] = None, hook_path: bool = False
 ) -> Optional[dict]:
-    global _last_cold_bucket
+    global _last_cold_bucket, _spawn_wanted
 
     # AC3: a per-call classification, reset every call -- never a permanent,
     # first-wins value like `_cold_reason`. Left `None` if this call raises
@@ -1785,10 +1892,11 @@ def _try_warm_dispatch_inner(
                 if outcome is False:
                     _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
                     return None
-            _spawn_once()
+            _spawn_wanted = True
             _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
             return None
-        except PermissionError:
+        except PermissionError as exc:
+            _record_restricted_token_denial(exc)
             _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
             return None
         except TimeoutError:

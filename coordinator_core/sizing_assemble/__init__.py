@@ -1900,6 +1900,34 @@ def _mint_register(
     )
 
 
+def _record_is_relayed(target: Path) -> bool:
+    """True when the sizing at `target` stamps its ask relayed (`em_analysis.provenance` or
+    `ask_source`): no session turn is its PM turn."""
+    import yaml
+
+    try:
+        doc = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001 -- unreadable record: the write path refuses it with its own error
+        return False
+    em = doc.get("em_analysis") if isinstance(doc, dict) else None
+    return isinstance(em, dict) and "relayed" in (em.get("provenance"), em.get("ask_source"))
+
+
+def _keep_quoted_turns(
+    window: list[dict[str, Any]], intent: Optional[str], cwd: str
+) -> list[dict[str, Any]]:
+    """`window` minus any turn the intent does not quote: a relayed ask takes bound_window's
+    content match, never its recency fallback."""
+    from coordinator_core.ops.baton_pm_turns import quotes_turn, read_turns
+
+    kept = []
+    for item in window:
+        full = read_turns(start=item["turn"], end=item["turn"], cwd=cwd).get("turns") or []
+        if full and quotes_turn(intent or "", full[0]["prompt"]):
+            kept.append(item)
+    return kept
+
+
 def write_back(root: Path, sizing: str, decision: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     """`_write_back`, holding its nothing-written-on-refusal contract for a record it scaffolds:
     a scaffold created by this call is removed when the write is then refused."""
@@ -1998,6 +2026,8 @@ def _write_back(
     elif verbatim_turns is None:
         # Bound by content: the turns the intent quotes, whatever their age, then recent ones.
         pm_verbatims = bound_window(decision.get("intent"), cwd=str(root))
+        if pm_verbatims and _record_is_relayed(target):
+            pm_verbatims = _keep_quoted_turns(pm_verbatims, decision.get("intent"), str(root))
     else:
         from coordinator_core.ops.baton_pm_turns import read_turns
 

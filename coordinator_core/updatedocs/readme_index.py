@@ -142,10 +142,10 @@ def _linked_names_for_section(docs_dir: Path, corpus_dir: Path, body: str) -> se
 
 
 #: Sections the README keeps as pointer + stated count + recent links, not a full index.
-_POINTER_COUNT_RECENT_SECTIONS = frozenset({"Plans"})
+_POINTER_COUNT_RECENT_SECTIONS = frozenset({"Plans", "Research"})
 RECENT_LINK_COUNT = 5
 _DATED_NAME_RE = re.compile(r"\d{4}-\d{2}-\d{2}-")
-_STATED_COUNT_RE = re.compile(r"(\d[\d,]*)\s+plan\s+docs", re.IGNORECASE)
+_STATED_COUNT_RE = re.compile(r"(\d[\d,]*)\s+(?:plan\s+)?docs", re.IGNORECASE)
 _TABLE_COUNT_RE = re.compile(
     r"^\|[^|\n]*\bplans?\b[^|\n]*\|\s*(\d[\d,]*)\s*(?:plans?|docs?)?\s*\|", re.IGNORECASE | re.MULTILINE
 )
@@ -241,6 +241,9 @@ def compute_readme_index_drift(repo_root: Path) -> ReadmeIndexDrift:
             except OSError:
                 pass
         stamps = {n: st for n, st in stamps.items() if not _is_sidecar(subdir, n)}
+        if not subdir:
+            # Trap: the docs/ root corpus holds the index itself; README.md is never its own entry.
+            stamps.pop("README.md", None)
         on_disk_names = set(stamps)
 
         body = bodies.get(section_name, "")

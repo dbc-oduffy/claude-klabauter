@@ -70,6 +70,7 @@ from typing import Mapping, Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.warm import breadcrumb
+from coordinator_core.warm.cookie import grant_logon_sid_read
 
 __all__ = [
     "CREDENTIAL_HEADER",
@@ -296,6 +297,8 @@ def ensure_secret() -> str:
     """
     existing = read_secret()
     if existing is not None:
+        # An existing secret minted before the grant existed gains it here.
+        grant_logon_sid_read(secret_path())
         return existing
 
     # HARDEN, NOT JUST CREATE. A bare `mkdir` here is what left the directory
@@ -306,6 +309,7 @@ def ensure_secret() -> str:
     minted = secrets.token_hex(SECRET_NBYTES)
     # mkstemp-backed: unique name, created 0o600 regardless of any stale sibling.
     atomic_write_bytes(path, minted.encode("utf-8"), preserve_mode=False)
+    grant_logon_sid_read(path)
     return minted
 
 

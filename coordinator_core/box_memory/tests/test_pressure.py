@@ -14,11 +14,62 @@ def test_classify_both_sides():
     assert p.classify(R(100, trusted=False), 2000) == p.UNKNOWN
 
 
-def test_storm_threshold_both_sides():
-    census = [SimpleNamespace(name="grep.exe")] * 3 + ["usr/bin/find", "python.exe", "bash.exe"]
-    assert p.storm_count(census) == 4
-    assert p.storm(census, 4)
-    assert not p.storm(census, 5)
+_UNIT = 10_000_000
+_NOW = 10_000 * _UNIT
+
+
+def row(pid, name, age_s, ppid=999_999):
+    return SimpleNamespace(pid=pid, ppid=ppid, name=name, ctime=_NOW - age_s * _UNIT)
+
+
+def _units(monkeypatch):
+    from coordinator_core.bash_guards import _host_probe
+
+    monkeypatch.setattr(_host_probe, "ctime_units_per_second", lambda: _UNIT)
+
+
+class _Dead:
+    @staticmethod
+    def creation_time(pid):
+        return None
+
+
+def test_storm_threshold_both_sides(monkeypatch):
+    _units(monkeypatch)
+    census = [row(i, "grep.exe", 3600) for i in range(3)] + [
+        row(10, "find", 3600), row(11, "python.exe", 3600), row(12, "bash.exe", 3600)]
+    assert p.storm_count(census, _Dead, _NOW) == 4
+    assert p.storm(census, 4, _Dead, _NOW)
+    assert not p.storm(census, 5, _Dead, _NOW)
+
+
+def test_young_dead_parent_searches_never_count(monkeypatch):
+    _units(monkeypatch)
+    young = [row(i, "grep.exe", 60) for i in range(20)]
+    assert p.storm_count(young, _Dead, _NOW) == 0
+    just_under = [row(1, "grep", 30 * 60 - 1)]
+    at_floor = [row(2, "grep", 30 * 60)]
+    assert p.storm_count(just_under, _Dead, _NOW) == 0
+    assert p.storm_count(at_floor, _Dead, _NOW) == 1
+
+
+def test_aged_search_under_live_parent_or_unknown_ctime_never_counts(monkeypatch):
+    _units(monkeypatch)
+    parent = SimpleNamespace(pid=5, ppid=1, name="bash", ctime=_NOW - 7200 * _UNIT)
+    live_child = row(6, "grep", 3600, ppid=5)
+    zero = row(7, "grep", 3600)
+    zero.ctime = 0
+    assert p.storm_count([parent, live_child, zero], _Dead, _NOW) == 0
+    assert p.storm_count(["grep.exe"] * 9, _Dead, _NOW) == 0
+    assert p.storm_count(None) == 0
+
+
+def test_now_ctime_is_a_plausible_current_instant():
+    import time
+
+    a = p.now_ctime()
+    time.sleep(0.01)
+    assert p.now_ctime() > a > 0
 
 
 def test_remedy_text(tmp_path):
@@ -27,4 +78,5 @@ def test_remedy_text(tmp_path):
     assert t.startswith("GOVERNOR CACHE-TRIM-HINT run elevated: python ")
     assert t.endswith("trim-file-cache.py\" --apply")
     assert "unavailable" in p.remedy_text(p.KIND_LOW_MEMORY, tmp_path / "nope")
-    assert "reap" in p.remedy_text(p.KIND_GREP_STORM)
+    storm = p.remedy_text(p.KIND_GREP_STORM)
+    assert "reap" in storm and "30 min" in storm

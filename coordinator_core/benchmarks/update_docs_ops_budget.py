@@ -35,7 +35,6 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import tempfile
 import time
 from pathlib import Path
 from typing import Optional, Sequence
@@ -380,7 +379,9 @@ def main(argv: list[str]) -> int:
     if own_dir:
         scratch_root = repo_root() / "scratch"
         scratch_root.mkdir(exist_ok=True)
-        workdir = Path(tempfile.mkdtemp(prefix="update-docs-ops-budget-", dir=scratch_root))
+        from coordinator_core.temp_layout import mkdtemp_in
+
+        workdir = mkdtemp_in("update-docs-ops-budget-", scratch_root)
     else:
         workdir = Path(opts["workdir"]).resolve()
         workdir.mkdir(parents=True, exist_ok=True)

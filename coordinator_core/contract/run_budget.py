@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 CEREMONIES = frozenset({"distill", "learn-lessons"})
 VENDORED_PATH = Path(__file__).with_name("ceremony-budget.json")
@@ -80,6 +80,45 @@ def whole_backlog_bar(path: Optional[Path] = None) -> int:
     """Token bar for covering an entire backlog across runs."""
     data = _read(path)
     return PINNED_WHOLE_BACKLOG_BAR if data is None else data["bar"]
+
+
+def admitted_share(admitted: int, open_rows: int, path: Optional[Path] = None) -> int:
+    """Tokens of the whole-backlog bar owed to `admitted` of `open_rows` open rows:
+    `whole_backlog_bar() * admitted / open_rows`, floored. Zero when either count is not positive;
+    `admitted` is clamped to `open_rows`."""
+    if admitted <= 0 or open_rows <= 0:
+        return 0
+    return whole_backlog_bar(path) * min(admitted, open_rows) // open_rows
+
+
+def scaled_budget(budget: RunBudget, admitted: int, open_rows: int, path: Optional[Path] = None) -> RunBudget:
+    """`budget` with its token cap replaced by the admitted rows' share of the whole-backlog bar;
+    agents and minutes stay the slice's."""
+    return RunBudget(
+        budget.agents, admitted_share(admitted, open_rows, path), budget.minutes, source="admitted-share"
+    )
+
+
+def fit_to_share(
+    budget: RunBudget,
+    per_batch: UnitCost,
+    batches_for: Callable[[int], int],
+    wanted: int,
+    open_rows: int,
+    path: Optional[Path] = None,
+) -> int:
+    """Largest n <= wanted whose `batches_for(n)` batches of `per_batch` stay within `budget`'s
+    agents and minutes and within the share of the bar owed to n of `open_rows` rows.
+
+    Minimum 1 when wanted >= 1: it narrows, never refuses. The share grows with n while cost steps
+    up per batch, so the scan is downward from `wanted` and the first fit wins.
+    """
+    for n in range(wanted, 0, -1):
+        batches = batches_for(n)
+        cap = scaled_budget(budget, n, open_rows, path)
+        if all(batches * getattr(per_batch, a) <= getattr(cap, a) for a in _AXES):
+            return n
+    return 1 if wanted >= 1 else 0
 
 
 def _cap(budget: RunBudget) -> dict:

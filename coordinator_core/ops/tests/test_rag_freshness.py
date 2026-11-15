@@ -95,17 +95,27 @@ def _fixture():
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+_spawn_cores: list = []
+
+
 def _fake_capacity(monkeypatch, events, admitted=True):
     from coordinator_core.bash_guards import _heavy_command_class as cap
+
+    _spawn_cores.clear()
 
     monkeypatch.setattr(cap, "_load_box_memory_host", lambda: "host")
 
     def admit(key, peak, host=None, register_pid=None, **kw):
         events.append(("admit", key))
+        _spawn_cores.append(("admit", key, kw.get("cores", 1)))
         return cap.SpawnAdmission(admitted, "held" if not admitted else "ok", key, peak)
 
     monkeypatch.setattr(cap, "admit_before_spawn", admit)
-    monkeypatch.setattr(cap, "register_spawn", lambda key, peak, pid, host=None: events.append(("register", key)))
+    monkeypatch.setattr(
+        cap,
+        "register_spawn",
+        lambda key, peak, pid, host=None, cores_=1: (events.append(("register", key)), _spawn_cores.append(("register", key, cores_))),
+    )
     monkeypatch.setattr(cap, "release_spawn", lambda key, pid, host=None: events.append(("release", key)))
 
 
@@ -269,7 +279,7 @@ def test_fetch_and_cache_writes_only_on_clean_json_exit(tmp_path, monkeypatch):
     assert not cache.exists()
     assert rf.fetch_and_cache(str(tmp_path), marker_root=root, run_fn=run(0, json.dumps(_fixture())), now=5.0) == "written"
     assert json.loads(cache.read_text(encoding="utf-8"))["fetched_at"] == 5.0
-    assert seen["argv"] == ["/opt/rag/py", "/opt/rag/project_rag_cli.py", "freshness-verdict", "--cwd", str(tmp_path)]
+    assert seen["argv"] == ["/opt/rag/py", str(Path("/opt/rag") / "project_rag_cli.py"), "freshness-verdict", "--cwd", str(tmp_path)]
     assert seen["shell"] is False
 
 
@@ -280,6 +290,7 @@ def test_verdict_spawn_is_admitted_closed_argv_detached(monkeypatch, tmp_path):
     rf.default_verdict_spawn_fn(rf._worker_argv(str(tmp_path)), str(tmp_path))
     assert [e[0] for e in events] == ["admit", "popen", "register", "release"]
     assert events[0][1] == rf.VERDICT_ADMISSION_KEY
+    assert _spawn_cores == [("admit", rf.VERDICT_ADMISSION_KEY, rf.VERDICT_CORES), ("register", rf.VERDICT_ADMISSION_KEY, rf.VERDICT_CORES)]
     assert isinstance(seen["argv"], list) and not seen.get("shell")
     assert seen["stdin"] is subprocess.DEVNULL and seen["cwd"] == str(tmp_path)
     assert all(seen[k] == v for k, v in rf.detach_kwargs().items())
@@ -291,6 +302,8 @@ def test_remedy_spawn_is_admitted_and_held_admission_never_spawns(monkeypatch, t
     _popen(monkeypatch, events, seen)
     rf.default_spawn_fn(["a", "b"], str(tmp_path))
     assert events[0] == ("admit", rf.REMEDY_ADMISSION_KEY) and seen["argv"] == ["a", "b"]
+    assert _spawn_cores == [("admit", rf.REMEDY_ADMISSION_KEY, rf.REMEDY_CORES), ("register", rf.REMEDY_ADMISSION_KEY, rf.REMEDY_CORES)]
+    assert rf.REMEDY_CORES > 1
     held, popens = [], []
     _fake_capacity(monkeypatch, held, admitted=False)
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: popens.append(a))

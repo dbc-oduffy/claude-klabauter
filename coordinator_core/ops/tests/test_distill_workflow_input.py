@@ -108,8 +108,13 @@ def test_validate_catches_wiki_slugs_wrong_type():
 
 
 def test_handler_raises_on_missing_manifest():
-    with pytest.raises(ValueError, match="manifest"):
+    with pytest.raises(ValueError, match=r"manifest.*distill\.scope"):
         _handler({"repo_root": "/repo"}, repo_root=None)
+
+
+def test_handler_raises_on_manifest_lacking_keys_naming_the_producer_not_keyerror():
+    with pytest.raises(ValueError, match=r"lacks .*wiki_slugs.*distill\.scope"):
+        _handler({"manifest": {"run_id": "r", "input_json_path": "x"}, "repo_root": "/repo"}, repo_root=None)
 
 
 def test_handler_raises_on_missing_repo_root():

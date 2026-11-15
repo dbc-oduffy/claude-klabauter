@@ -565,7 +565,7 @@ def test_handler_raises_on_repo_root_none():
 
 
 def test_handler_raises_on_missing_run_id(fixture_repo):
-    with pytest.raises(ValueError, match="run_id"):
+    with pytest.raises(ValueError, match=r"'run_id' param \(str, e\.g\. '\d{4}-\d{2}-\d{2}-\d{2}h\d{2}'"):
         _handler({}, repo_root=fixture_repo / ".git")
 
 

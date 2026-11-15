@@ -1,7 +1,8 @@
-"""Reap grep/find processes whose parent is verified dead.
+"""Reap grep/find processes whose parent is verified dead and which are at least 30 minutes old.
 
 Dead parent: the ppid is absent from the census and fails a liveness probe, or present with a creation time later than the
-child's (the PID was reused). An unreadable census, a zero ctime or a ppid of 0 reads as alive.
+child's (the PID was reused). An unreadable census, a zero ctime or a ppid of 0 reads as alive; a zero ctime also reads as
+young. A dead parent alone proves nothing: Git Bash fork emulation drops the parent of a live pipeline.
 No per-process spawn: one census read, then a direct terminate per orphan.
 """
 
@@ -12,26 +13,18 @@ import signal
 from typing import Callable, List, Optional, Sequence
 
 from coordinator_core.box_memory import ReapPrimitives
-from coordinator_core.box_memory.pressure import is_search_name
+from coordinator_core.box_memory.pressure import is_aged_orphan
 
 
-def _parent_dead(row, by_pid: dict, primitives: Optional[ReapPrimitives] = None) -> bool:
-    if row.ppid <= 0:
-        return False
-    parent = by_pid.get(row.ppid)
-    if parent is None:
-        # A census can omit a live protected parent; only a failed liveness probe confirms death.
-        return not (primitives is not None and primitives.alive(row.ppid))
-    return bool(row.ctime and parent.ctime and parent.ctime > row.ctime)
-
-
-def select(census: Sequence, primitives: Optional[ReapPrimitives] = None) -> List:
-    """grep/find rows of `census` whose parent is verified dead. A parent missing from the census
-    is confirmed through `primitives.alive` before its child is selected."""
+def select(census: Sequence, primitives: Optional[ReapPrimitives] = None,
+           now: Optional[int] = None) -> List:
+    """grep/find rows of `census` whose parent is verified dead AND whose age is at least
+    `pressure.MIN_ORPHAN_AGE_S` (`now` in ProcRow.ctime units, default the host clock). A parent
+    missing from the census is confirmed through `primitives.creation_time` before its child is selected."""
     if not census:
         return []
     by_pid = {r.pid: r for r in census}
-    return [r for r in census if is_search_name(r.name) and _parent_dead(r, by_pid, primitives)]
+    return [r for r in census if is_aged_orphan(r, by_pid, primitives, now)]
 
 
 def protected_pids(self_pid: Optional[int] = None) -> frozenset:
@@ -60,15 +53,15 @@ def _terminate(pid: int) -> None:
 
 
 def reap(primitives: ReapPrimitives, terminate: Callable[[int], None] = _terminate,
-         self_pid: Optional[int] = None) -> List[int]:
-    """Terminate each orphan `select` finds over a fresh census; return the PIDs reaped. A child
-    whose creation time no longer matches its census row (PID reused since) is left alone."""
+         self_pid: Optional[int] = None, now: Optional[int] = None) -> List[int]:
+    """Terminate each aged orphan `select` finds over a fresh census; return the PIDs reaped. A
+    child whose creation time no longer matches its census row (PID reused since) is left alone."""
     census = primitives.snapshot()
     if not census:
         return []
     protected = protected_pids(self_pid)
     reaped: List[int] = []
-    for row in select(census, primitives):
+    for row in select(census, primitives, now):
         if row.pid in protected:
             continue
         if row.ctime and primitives.creation_time(row.pid) != row.ctime:

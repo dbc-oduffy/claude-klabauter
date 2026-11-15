@@ -5,7 +5,8 @@
 
     select(census: Sequence[ProcRow], primitives: ReapPrimitives) -> list[ProcRow]
         grep/find rows whose parent is verified dead (absent from census, or created after the
-        child). Unreadable parent counts as alive.
+        child) AND whose age (now minus ctime) is >= pressure.MIN_ORPHAN_AGE_S (30 min).
+        Unreadable parent or ctime counts as alive/young. `pressure.storm_count` uses the same rule.
     reap(primitives: ReapPrimitives) -> list[int]
         terminate what `select` returns over a fresh census; return the reaped PIDs.
 """
@@ -17,8 +18,6 @@ from typing import Callable, List, Optional, Protocol, Sequence
 
 class ReapPrimitives(Protocol):
     """The `_host_probe.HostPrimitives` surface `orphan_reap` consumes."""
-
-    def alive(self, pid: int) -> bool: ...
 
     def creation_time(self, pid: int) -> Optional[int]: ...
 

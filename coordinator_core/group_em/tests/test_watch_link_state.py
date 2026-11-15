@@ -31,6 +31,28 @@ def test_one_down_and_one_up_across_many_ticks(tmp_path):
     assert lines == ["LINK-DOWN machine-b: timed out", "LINK-UP machine-b"]
 
 
+def test_a_one_tick_down_blip_emits_nothing(tmp_path):
+    _write(tmp_path, "a", "up")
+    lines = []
+    prev = _ticks(tmp_path, 2, None, lines)
+    _write(tmp_path, "a", "down", "blip")
+    prev = _ticks(tmp_path, 1, prev, lines)
+    _write(tmp_path, "a", "up")
+    _ticks(tmp_path, 3, prev, lines)
+    assert lines == []
+
+
+def test_a_one_tick_up_blip_during_an_outage_emits_no_link_up(tmp_path):
+    _write(tmp_path, "a", "down", "x")
+    lines = []
+    prev = _ticks(tmp_path, 3, None, lines)
+    _write(tmp_path, "a", "up")
+    prev = _ticks(tmp_path, 1, prev, lines)
+    _write(tmp_path, "a", "down", "x")
+    _ticks(tmp_path, 3, prev, lines)
+    assert lines == ["LINK-DOWN a: x"]
+
+
 def test_already_down_on_first_tick_is_reported_once_up_is_not(tmp_path):
     _write(tmp_path, "a", "down", "x")
     _write(tmp_path, "b", "up")
@@ -52,10 +74,27 @@ def test_missing_and_corrupt_records_are_skipped(tmp_path):
     assert watch.read_link_states(str(tmp_path / "absent")) == {}
 
 
+def test_unresolved_is_its_own_link_line_not_link_down(tmp_path):
+    lines = []
+    prev = _ticks(tmp_path, 2, None, lines)
+    _write(tmp_path, "far", "unresolved", "no address")
+    _ticks(tmp_path, 3, prev, lines)
+    assert lines == ["LINK-UNRESOLVED far: no address"]
+
+
+def test_unresolved_then_down_reports_the_escalation(tmp_path):
+    _write(tmp_path, "far", "unresolved", "no address")
+    lines = []
+    prev = _ticks(tmp_path, 3, None, lines)
+    _write(tmp_path, "far", "down", "timed out")
+    _ticks(tmp_path, 3, prev, lines)
+    assert lines == ["LINK-UNRESOLVED far: no address", "LINK-DOWN far: timed out"]
+
+
 def test_a_vanished_record_is_not_a_transition(tmp_path):
     _write(tmp_path, "a", "down")
     lines = []
-    prev = _ticks(tmp_path, 1, None, lines)
+    prev = _ticks(tmp_path, 2, None, lines)
     os.remove(os.path.join(watch.link_state_dir(str(tmp_path)), "a.json"))
     prev = _ticks(tmp_path, 2, prev, lines)
     assert lines == ["LINK-DOWN a"]
@@ -134,3 +173,18 @@ def test_an_unverified_snapshot_admits_no_one(tmp_path):
     _write(tmp_path, "u@macmini", "up")
     _ticks(tmp_path, 2, prev, lines)
     assert lines == ["LINK-UP u@macmini: first link; no signed membership snapshot is stored"]
+
+
+def test_a_hyphenated_box_matches_its_unhyphenated_alias_and_a_stranger_stays_flagged(tmp_path):
+    _members(tmp_path, [{"box": "Mac-mini", "host": "Mac-mini.local", "user": "example-operator"}])
+    _write(tmp_path, "example-operator@macmini", "down", "timed out")
+    _write(tmp_path, "example-operator@otherbox", "down", "timed out")
+    lines = []
+    prev = _ticks(tmp_path, 2, None, lines)
+    _write(tmp_path, "example-operator@macmini", "up")
+    _write(tmp_path, "example-operator@otherbox", "up")
+    _ticks(tmp_path, 3, prev, lines)
+    assert lines[-2:] == [
+        "LINK-UP example-operator@macmini",
+        "LINK-UP example-operator@otherbox: not in the signed membership snapshot",
+    ]

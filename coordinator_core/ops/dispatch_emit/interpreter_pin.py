@@ -6,8 +6,10 @@ repo's pinned interpreter, so committed config never carries a host path; the en
 
 Ladder, first hit wins: `targeted_test_python:` in the repo's coordinator.local.md, then an explicit
 interpreter leading `fast_test_cmd:` (absolute path or versioned name; bare python/python3 is not a
-pin), then, for the claude-klabauter root only, the provisioned interpreter (one in-process pin read per process,
-lazy), then none. A pin is one executable: arguments or spaces resolve as "not on PATH". Pin
+pin, and only when it runs `-m <module>`: an interpreter plus a script is a wrapper's launcher, not a pin),
+then, for the claude-klabauter root only, the provisioned interpreter (one in-process pin read per process,
+lazy), then none. `targeted_test_python: machine-local:<key>` resolves the key through the per-box registry, so tracked config
+carries no host path. A pin is one executable: arguments or spaces resolve as "not on PATH". Pin
 resolution is in-process: shutil.which and os.access.
 """
 from __future__ import annotations
@@ -34,6 +36,11 @@ _ABS_INTERPRETER = re.compile(r"^python[\d.]*(\.exe)?$", re.IGNORECASE)
 
 LAUNCHER_KEY = "targeted_test_launcher"
 SOURCE_KEY = "targeted_test_python"
+MACHINE_LOCAL_PREFIX = "machine-local:"
+REMEDY = (
+    "declare `targeted_test_python: machine-local:<key>` in coordinator.local.md "
+    "(set <key> to a Python that imports the repo's packages on each box)"
+)
 SOURCE_FAST_CMD = "fast_test_cmd"
 SOURCE_PROVISIONED = "provisioned"
 SOURCE_NONE = "none"
@@ -58,8 +65,23 @@ def _leading_interpreter(fast_test_cmd: str) -> Optional[str]:
     token = tokens[0].strip("\"'")
     if _is_absolute(token):
         base = re.split(r"[\\/]", token)[-1]
-        return token if _ABS_INTERPRETER.match(base) else None
-    return token if _VERSIONED_NAME.match(token) else None
+        named = bool(_ABS_INTERPRETER.match(base))
+    else:
+        named = bool(_VERSIONED_NAME.match(token))
+    if not named or not _runs_module_or_alone(tokens[1:]):
+        return None
+    return token
+
+
+def _runs_module_or_alone(rest: list) -> bool:
+    """True when the interpreter's arguments are flags then `-m <module>` (or nothing): a script or a
+    flag-argument pair is a wrapper's launcher, not the test interpreter."""
+    for tok in rest:
+        if tok == "-m":
+            return True
+        if not tok.startswith("-"):
+            return False
+    return not rest
 
 
 def _is_absolute(token: str) -> bool:
@@ -82,11 +104,29 @@ def _unresolved(command: str) -> Optional[str]:
     return f"{command} is not on PATH on this host"
 
 
+def _machine_local_pin(ref: str) -> TargetedPython:
+    """`machine-local:<key>` resolved through the in-process registry; `command` is the box's interpreter, or
+    the reference itself when the key is absent or its value does not resolve (the defect names the key)."""
+    from coordinator_core.machine_resolver import registry_get
+
+    key = ref[len(MACHINE_LOCAL_PREFIX):].strip()
+    value = (registry_get(key) if key else None) or ""
+    value = value.strip()
+    if not value:
+        return TargetedPython(ref, SOURCE_KEY, f"machine-local key `{key}` is not set on this host")
+    defect = _unresolved(value)
+    if defect:
+        return TargetedPython(ref, SOURCE_KEY, f"machine-local key `{key}`: {defect}")
+    return TargetedPython(value, SOURCE_KEY, None)
+
+
 def resolve_targeted_test_python(repo_root: Union[str, Path]) -> TargetedPython:
     """The repo-pinned interpreter for targeted tests, per the module ladder."""
     root = str(repo_root)
     pin = read_local_md_key(root, SOURCE_KEY).strip()
     source = SOURCE_KEY
+    if pin.lower().startswith(MACHINE_LOCAL_PREFIX):
+        return _machine_local_pin(pin)
     if not pin:
         pin = _leading_interpreter(read_local_md_key(root, SOURCE_FAST_CMD)) or ""
         source = SOURCE_FAST_CMD

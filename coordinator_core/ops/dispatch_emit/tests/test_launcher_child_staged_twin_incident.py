@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import ask_compose, fan_launcher, reply_sidecar
+from coordinator_core.ops.dispatch_emit import ask_compose, fan_launcher, reply_sidecar, run_token
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests._node_support import payload_file
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
@@ -85,11 +85,14 @@ def _child_script(monkeypatch) -> str:
 
 
 def _stage(root: Path, monkeypatch) -> dict:
-    """Lay down the emitted child script, then its manifest sidecar; return the pieces the harness needs."""
+    """Lay down the emitted child script, mint and escrow the run token, then the manifest sidecar whose twin inlines it."""
     script = _child_script(monkeypatch)
     script_path = root / f"scratch/warp/{_RUN_ID}.workflow.mjs"
     script_path.parent.mkdir(parents=True, exist_ok=True)
     script_path.write_text(script, encoding="utf-8", newline="")
+    (root / ".git").mkdir(exist_ok=True)
+    token = run_token.mint(root, _RUN_ID, script_path.relative_to(root).as_posix())
+    assert run_token.escrow(root, _RUN_ID, token)
     manifest = big_manifest(3)
     handle = reply_sidecar.write_reply(root, root / f"state/warp/{_RUN_ID}/manifest.json", manifest)
     twin = root / f"scratch/warp/{_RUN_ID}.staged-{handle['sha256']}.workflow.mjs"

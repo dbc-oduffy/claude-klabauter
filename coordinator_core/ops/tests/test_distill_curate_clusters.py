@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 import coordinator_core.ops  # noqa: F401 -- import for side effect: registers every op, incl. distill.curate_clusters (see _EAGER_OP_MODULES)
 from coordinator_core import ipc
 from coordinator_core.ops.distill_curate_clusters import (
@@ -261,8 +263,48 @@ def test_keep_verdict_weights_nugget_volume_via_keep_threshold() -> None:
     assert curate_clusters(two_nuggets)["verdicts"][0]["verdict"] == "keep"
     assert curate_clusters(two_nuggets, keep_threshold=3)["verdicts"][0]["verdict"] == "drop"
 
-    family = curate_clusters({"audit-trail": 1, "audit-scope": 1})
+    family = curate_clusters({"audit-trail": 2, "audit-scope": 1})
     assert {v["verdict"] for v in family["verdicts"]} == {"keep", "merge"}
+
+
+@pytest.mark.parametrize(
+    "tags",
+    [
+        {"claim_store": 1, "claim-resolve-head-leak": 1},
+        {"cross_repo_memo": 1, "cross-corpus-entity-resolution": 1},
+    ],
+)
+def test_single_shared_token_tie_keeps_both(tags) -> None:
+    result = curate_clusters(tags, keep_threshold=1)
+    assert {v["verdict"] for v in result["verdicts"]} <= {"keep", "normalize"}
+    assert all(v["merge_target"] is None for v in result["verdicts"])
+
+
+def test_strictly_larger_target_still_merges_and_reason_states_counts() -> None:
+    result = curate_clusters({"claim-store": 1, "claim-resolve-head-leak": 3}, keep_threshold=1)
+    by_tag = {v["tag"]: v for v in result["verdicts"]}
+    assert by_tag["claim-store"]["verdict"] == "merge"
+    assert by_tag["claim-store"]["merge_target"] == "claim-resolve-head-leak"
+    assert "larger sibling" in by_tag["claim-store"]["reason"]
+
+
+def test_two_token_prefix_tie_still_merges_without_claiming_larger() -> None:
+    result = curate_clusters({"review-trail-safety": 1, "review-trail-scope": 1}, keep_threshold=1)
+    by_tag = {v["tag"]: v for v in result["verdicts"]}
+    assert by_tag["review-trail-safety"]["verdict"] == "keep"
+    scope = by_tag["review-trail-scope"]
+    assert scope["verdict"] == "merge"
+    assert scope["merge_target"] == "review-trail-safety"
+    assert "larger" not in scope["reason"]
+    assert "multi-token prefix" in scope["reason"]
+
+
+def test_bare_token_tied_with_compound_sibling_has_no_home() -> None:
+    result = curate_clusters({"coordination": 3, "coordination-ledger": 3}, keep_threshold=1)
+    by_tag = {v["tag"]: v for v in result["verdicts"]}
+    assert by_tag["coordination-ledger"]["verdict"] == "keep"
+    assert by_tag["coordination"]["verdict"] == "drop"
+    assert by_tag["coordination"]["drop_cause"] == "bare-no-sibling"
 
 
 def test_handler_wire_contract() -> None:
@@ -447,3 +489,45 @@ def test_contradiction_clusters_capped_at_five_largest_and_degraded_empty() -> N
     assert len(clusters) == 5
     assert clusters[0]["clusterTag"] == "fam6"
     assert curate_clusters({})["contradictionClusters"] == []
+
+
+def _by_tag(reply: dict) -> dict:
+    return {v["tag"]: v for v in reply["verdicts"]}
+
+
+def test_bare_tag_with_wiki_home_is_kept_and_names_the_home() -> None:
+    v = _by_tag(curate_clusters({"installer": 2}, keep_threshold=2, wiki_names=["installation"]))["installer"]
+    assert v["verdict"] == "keep" and v["drop_cause"] is None
+    assert "installation" in v["reason"]
+
+
+def test_bare_tag_without_wiki_home_still_drops() -> None:
+    v = _by_tag(curate_clusters({"installer": 2}, keep_threshold=2, wiki_names=["testing", "meta"]))["installer"]
+    assert (v["verdict"], v["drop_cause"]) == ("drop", "bare-no-sibling")
+
+
+def test_wiki_names_absent_or_empty_changes_no_verdict() -> None:
+    counts = {"installer": 2, "git-safety": 3, "meta": 1}
+    base = curate_clusters(counts, keep_threshold=2)
+    assert curate_clusters(counts, keep_threshold=2, wiki_names=[]) == base
+    assert curate_clusters(counts, keep_threshold=2, wiki_names=()) == base
+
+
+def test_short_shared_prefix_is_not_a_stem_match() -> None:
+    v = _by_tag(curate_clusters({"meta": 2}, keep_threshold=2, wiki_names=["metadata"]))["meta"]
+    assert (v["verdict"], v["drop_cause"]) == ("drop", "bare-no-sibling")
+
+
+def test_wiki_home_does_not_override_keep_threshold() -> None:
+    v = _by_tag(curate_clusters({"installer": 1}, keep_threshold=2, wiki_names=["installation"]))["installer"]
+    assert (v["verdict"], v["drop_cause"]) == ("drop", "below-threshold")
+
+
+def test_bare_tag_tied_with_compound_sibling_kept_by_wiki_home() -> None:
+    reply = curate_clusters({"install": 2, "install-steps": 2}, keep_threshold=2, wiki_names=["installation"])
+    assert _by_tag(reply)["install"]["verdict"] == "keep"
+
+
+def test_handler_accepts_wiki_names_wire_param() -> None:
+    reply = _handler({"tag_counts": {"installer": 2}, "keep_threshold": 2, "wiki_names": ["installation"]})
+    assert reply["verdicts"][0]["verdict"] == "keep"

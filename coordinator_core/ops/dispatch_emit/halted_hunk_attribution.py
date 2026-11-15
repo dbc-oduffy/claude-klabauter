@@ -20,9 +20,11 @@ module top (the land_run / terminal_commit cold-import pins); every reader is im
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Iterator, Optional
 
 
 def _norm(path: object) -> str:
@@ -40,10 +42,27 @@ def _read_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+_PINNED: ContextVar[Optional[tuple]] = ContextVar("hha_pinned_manifest", default=None)
+
+
+@contextmanager
+def pinned_manifest(root: Path, run_id: str, manifest: dict) -> Iterator[None]:
+    """Within the block `_manifest(root, run_id)` answers `manifest` without a read, so a caller that
+    already read it derives `_baseline` from the same bytes. Scoped to the context, never cached."""
+    token = _PINNED.set((str(root), run_id, manifest))
+    try:
+        yield
+    finally:
+        _PINNED.reset(token)
+
+
 def _manifest(root: Path, run_id: str) -> dict:
     """`manifest.json` of `run_id`: the record dir first, then the RUN_DIR_ROOT copy."""
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir
 
+    pin = _PINNED.get()
+    if pin is not None and pin[0] == str(root) and pin[1] == run_id:
+        return pin[2]
     try:
         data = _read_json(record_dir(root, run_id) / "manifest.json")
     except ValueError:

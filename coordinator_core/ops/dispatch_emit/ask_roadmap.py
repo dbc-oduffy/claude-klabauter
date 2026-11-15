@@ -400,7 +400,7 @@ def compose_roadmap_script(
         *_shadowed_stage(ROADMAP_STAGE_FN, rb_fn),
         *(_shadowed_stage(PLAN_BLITZ_STAGE_FN, plan_blitz_fn) if plan_blitz_fn else []),
         "  phase('gate');",
-        f"  const _gate = await {agent(gate_prompt, label='gate', phase='gate', agent_type=ac._MECHANICAL_AGENT_TYPE, agent_model=ac._MECHANICAL_MODEL, effort=ac._MECHANICAL_EFFORT, schema=ac._GATE_SCHEMA, run_id=run_id)};",
+        f"  const _gate = await {agent(gate_prompt, label='gate', phase='gate', agent_type=ac._GATE_AGENT_TYPE, agent_model=ac._MECHANICAL_MODEL, effort=ac._MECHANICAL_EFFORT, schema=ac._GATE_SCHEMA, run_id=run_id)};",
         "  if (_gate.halt || !_gate.arm) { _halted = { halted: (_gate.halt && _gate.halt.kind) || "
         f"{lit(HALT_REFUSAL)}, ..._gate.halt, reason: String((_gate.halt && _gate.halt.reason) || "
         "(_gate.halt ? 'the gate halted (' + _gate.halt.kind + ') without a reason' : "

@@ -83,9 +83,11 @@ def _root_spellings(repo: Path) -> list[str]:
 
 
 # Host-dependent bytes: the runtime cap reads os.cpu_count(), the vitest clause reads a
-# machine-local registry key, and the pytest launcher names the emitting interpreter, so each
-# would pin the golden to the box that regenerated it.
+# machine-local registry key, the pytest launcher names the emitting interpreter, and the
+# example-retrieval-repo line appears only where example-retrieval-repo serves the temp repo, so each would pin the
+# golden to the box that regenerated it.
 _HOST_CAP_RES = (
+    (re.compile(r"Code lookup: example-retrieval-repo first\.[^\n]*\n\n"), ""),
     (re.compile(r"(dispatched-agent calls: )\d+( on the emitting host)"), r"\1<RUNTIME_CAP>\2"),
     (re.compile(r"(runtime_cap_on_emitting_host: )\d+"), r"\1<RUNTIME_CAP>"),
     (re.compile(r"Vitest worker cap: every vitest invocation you run passes `--maxWorkers=\d+` "

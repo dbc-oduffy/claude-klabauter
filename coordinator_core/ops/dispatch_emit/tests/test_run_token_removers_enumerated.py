@@ -47,6 +47,8 @@ _ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
         1, "write-overlap refusal ending this run; reached only when a blocker is not a live engine run or the wait expired"),
     ("ops/dispatch_emit/terminal_commit.py", "_settle_token"): (
         1, "commit landed (sha present)"),
+    ("ops/dispatch_emit/run_landing.py", "_settle_token"): (
+        1, "commit landed (sha present)"),
     ("ops/dispatch_emit/land_run.py", "_settle_token"): (
         1, "commit landed (sha present)"),
     ("ops/dispatch_emit/land_run_grind.py", "commit_grind_rows"): (
@@ -55,8 +57,6 @@ _ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
         1, "fan-out commit landed (landed set only on committed reply)"),
     ("ops/dispatch_emit/roadmap_fanout_commit.py", "commit_fanout_record"): (
         1, "fanout commit landed"),
-    ("ops/dispatch_emit/land_run_grind.py", "commit_grind_rows"): (
-        1, "grind commit landed"),
     ("ops/dispatch_emit/land_run_fanout.py", "land"): (
         1, "fanout commit landed"),
     ("ops/dispatch_emit/halted_run_superseded.py", "_end_parent_ask"): (
@@ -148,7 +148,7 @@ def test_run_token_own_unlinks_are_the_protocol_functions_only():
                     scopes.add(fn.name)
     # `_bounded_glob` (its nested `work`) reaps TTL-expired legacy unclaimed files in its listing pass.
     assert scopes == {"mint", "redeem_claim", "_unlink_both", "_drop_legacy", "sweep_expired_escrows",
-                      "_bounded_glob", "work"}
+                      "sweep_expired_receipts", "_bounded_glob", "work"}
 
 
 def test_only_consume_and_discard_wake_parked_stages():

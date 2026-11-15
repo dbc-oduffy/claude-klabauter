@@ -157,11 +157,83 @@ def test_overlay_runs_pytest_under_the_repo_pinned_interpreter(tmp_path, monkeyp
     assert _pytest_argv_head(monkeypatch, root, head, shim) == str(shim)
 
 
-def test_overlay_falls_back_to_sys_executable_when_no_pin_or_the_pin_is_unresolved(tmp_path, monkeypatch):
+def test_overlay_falls_back_to_sys_executable_when_no_pin_is_declared(tmp_path, monkeypatch):
     root, head = _repo(tmp_path)
     assert _pytest_argv_head(monkeypatch, root, head, None) == sys.executable
     assert cov.mirror_root(root).exists()
-    assert _pytest_argv_head(monkeypatch, root, head, tmp_path / "missing" / "python3.99") == sys.executable
+
+
+def test_a_declared_pin_that_does_not_resolve_is_reported_and_pytest_is_not_run(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    (root / "coordinator.local.md").write_text(
+        f'---\ntargeted_test_python: "{tmp_path / "missing" / "python3.99"}"\n---\n', encoding="utf-8",
+    )
+    ran = []
+    monkeypatch.setattr(cov, "_run", lambda *a, **k: ran.append(a) or pytest.fail("pytest must not run"))
+
+    out = cov.verify(root, "run1", head, [READER])
+
+    assert out.verdict == "inconclusive" and not ran
+    assert "targeted_test_python" in out.detail and "python3.99" in out.detail and "does not resolve" in out.detail
+
+
+def test_an_absent_machine_local_pin_key_is_reported_naming_the_key(tmp_path, monkeypatch):
+    from coordinator_core import machine_resolver
+
+    root, head = _repo(tmp_path)
+    (root / "coordinator.local.md").write_text('---\ntargeted_test_python: "machine-local:no.such.key"\n---\n', encoding="utf-8")
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: None)
+
+    out = cov.verify(root, "run1", head, [READER])
+
+    assert out.verdict == "inconclusive" and "no.such.key" in out.detail
+
+
+def _missing_module_repo(tmp_path):
+    root, _ = _repo(tmp_path)
+    _write(root, "t/test_needs_pkg.py", "import pkg_that_is_not_installed_xyz\n\n\ndef test_x():\n    pass\n")
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "needs")
+    return root, _git(root, "rev-parse", "HEAD").strip()
+
+
+def test_a_missing_module_under_an_undeclared_pin_names_the_machine_local_remedy(tmp_path):
+    root, head = _missing_module_repo(tmp_path)
+
+    out = cov.verify(root, "run1", head, ["t/test_needs_pkg.py"])
+
+    assert out.verdict != "green"
+    assert "targeted_test_python: machine-local:<key>" in out.detail
+    assert str(Path(sys.executable).parent) not in out.detail.split("ModuleNotFoundError")[0]
+
+
+def test_a_missing_module_under_a_declared_pin_adds_no_remedy(tmp_path, monkeypatch):
+    from coordinator_core import machine_resolver
+
+    root, head = _missing_module_repo(tmp_path)
+    (root / "coordinator.local.md").write_text('---\ntargeted_test_python: "machine-local:py.test"\n---\n', encoding="utf-8")
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: sys.executable if key == "py.test" else None)
+
+    out = cov.verify(root, "run1", head, ["t/test_needs_pkg.py"])
+
+    assert out.verdict != "green" and "machine-local:<key>" not in out.detail
+
+
+def test_land_run_refusal_carries_the_remedy_and_no_absolute_interpreter_path(halted, monkeypatch):  # noqa: F811
+    _no_spawn(monkeypatch)
+    _track_fixture(halted)
+    resume, token = _stage(halted)
+    measured = mr.measured_rev(RUN2, LANDING, repo_root=halted)
+    cov.write_verdict(
+        halted, RUN2, measured,
+        cov.OverlayVerdict("inconclusive", f"ModuleNotFoundError under an undeclared interpreter: {cov.REMEDY}: pytest exit 4", ("t/x.py",)),
+    )
+    _write(halted, FIXTURE, '{"a": 9, "dirty": true}\n')
+
+    result = _terminal_with(halted, token, resume, _VERDICT)
+
+    assert result["refused"] == "verify-overlay-unverified", result
+    assert "targeted_test_python: machine-local:<key>" in result["error"]
 
 
 def test_the_mirror_fill_runs_under_the_overlay_bound_not_the_2s_plumbing_budget(tmp_path, monkeypatch):

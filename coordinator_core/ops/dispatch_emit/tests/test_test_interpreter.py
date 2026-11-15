@@ -135,3 +135,48 @@ def test_non_claude_klabauter_root_never_consults_provisioned(tmp_path, monkeypa
 def test_launcher_missing_or_absolute_is_a_resolution_defect(tmp_path):
     assert ti.DEFECT_PREFIX in ti.interpreter_clause(_repo(tmp_path, targeted_test_launcher="scripts/none.py"))
     assert ti.DEFECT_PREFIX in ti.interpreter_clause(_repo(tmp_path, targeted_test_launcher=sys.executable))
+
+
+@pytest.mark.parametrize(
+    "cmd", ["python3.14 bin/run-fast-tests.py", "python3.14 -u bin/run-fast-tests.py --fast", "python3.14 -X utf8 bin/run.py"],
+)
+def test_wrapper_script_launcher_is_not_a_pin(tmp_path, monkeypatch, cmd):
+    monkeypatch.setattr(ti.shutil, "which", lambda name: "x")
+    repo = _repo(tmp_path, fast_test_cmd=cmd)
+    assert ti.resolve_targeted_test_python(repo) == ti.TargetedPython(None, "none", None)
+    assert ti.interpreter_clause(repo) == f"{ti.PORTABLE_CLAUSE} {ti.LITERAL_PATHS_CLAUSE}"
+
+
+def test_absolute_interpreter_plus_script_is_not_a_pin_but_flags_then_module_is(tmp_path, monkeypatch):
+    monkeypatch.setattr(ti.shutil, "which", lambda name: "x")
+    assert ti.resolve_targeted_test_python(_repo(tmp_path, fast_test_cmd=f"{sys.executable} bin/run.py")).command is None
+    got = ti.resolve_targeted_test_python(_repo(tmp_path, fast_test_cmd=f"{sys.executable} -u -m pytest -q"))
+    assert got.command == sys.executable and got.source == "fast_test_cmd"
+
+
+def test_machine_local_pin_resolves_the_registry_value(tmp_path, monkeypatch):
+    from coordinator_core import machine_resolver
+
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: sys.executable if key == "example_retrieval_repo.python" else None)
+    repo = _repo(tmp_path, targeted_test_python="machine-local:example_retrieval_repo.python")
+    assert ti.resolve_targeted_test_python(repo) == ti.TargetedPython(sys.executable, "targeted_test_python", None)
+    assert sys.executable in ti.interpreter_clause(repo)
+
+
+def test_machine_local_pin_absent_key_or_unexecutable_value_is_a_defect_naming_the_key(tmp_path, monkeypatch):
+    from coordinator_core import machine_resolver
+
+    repo = _repo(tmp_path, targeted_test_python="machine-local:example_retrieval_repo.python")
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: None)
+    got = ti.resolve_targeted_test_python(repo)
+    assert got.command == "machine-local:example_retrieval_repo.python" and "example_retrieval_repo.python" in got.defect
+    assert "interpreter-resolution-defect:" in ti.interpreter_clause(repo)
+
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: str(tmp_path / "nope" / "python3.99"))
+    got = ti.resolve_targeted_test_python(repo)
+    assert got.defect and "example_retrieval_repo.python" in got.defect
+
+
+def test_remedy_names_the_machine_local_form_and_no_absolute_path():
+    assert "targeted_test_python: machine-local:<key>" in ti.REMEDY
+    assert not any(tok.startswith(("/", "~")) or ":\\" in tok for tok in ti.REMEDY.split())

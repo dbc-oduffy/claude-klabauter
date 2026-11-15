@@ -21,6 +21,7 @@ from coordinator_core.session_baton import store
 
 SID = "sess-minted-reuse"
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
+_TAGS = ("job", "other", "old", "new")
 
 
 @pytest.fixture
@@ -37,6 +38,10 @@ def repo(tmp_path, monkeypatch):
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
     assert PT.append_turn("fix the parser and also rename the exporter, they are unrelated jobs", session_id=SID)["ok"]
+    # Seed prior turns so each ask text the tests submit has history to match.
+    for tag in _TAGS:
+        for i in range(3):
+            assert PT.append_turn(f"{tag} {i}", session_id=SID)["ok"]
     monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: _BLITZ)

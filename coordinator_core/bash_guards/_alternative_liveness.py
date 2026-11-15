@@ -153,6 +153,7 @@ from coordinator_core.bash_guards import block_topic_branch
 from coordinator_core.bash_guards import guard_uncapped_pytest_plugin
 from coordinator_core.bash_guards import rewrite_repo_root_search
 from coordinator_core.bash_guards import block_editor_kill_by_name
+from coordinator_core.bash_guards import block_empty_source_push
 from coordinator_core.bash_guards import guard_subagent_heavy_ue_launch
 from coordinator_core.bash_guards import guard_heavy_command_admission
 from coordinator_core.bash_guards import guard_deploy_dirty_tree
@@ -787,6 +788,9 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     ),
     "block_editor_kill_by_name": lambda: block_editor_kill_by_name.check(
         _payload("taskkill /IM UnrealEditor.exe", agent_id=None)
+    ),
+    "block_empty_source_push": lambda: block_empty_source_push.check(
+        _payload("git push origin :refs/heads/altlive-probe", agent_id=None)
     ),
     "guard_subagent_heavy_ue_launch": lambda: guard_subagent_heavy_ue_launch.check(
         _payload("UnrealEditor-Cmd.exe Proj.uproject -run=Cook")

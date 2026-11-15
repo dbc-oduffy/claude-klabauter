@@ -372,9 +372,11 @@ def plan_purge(
     now: Optional[float] = None,
     deadline: Optional[float] = None,
     candidates: Optional[list[str]] = None,
+    first_unbounded: bool = False,
 ) -> list[dict[str, Any]]:
     """Dry-run purge records for every candidate entry (``candidates`` when given, else
-    ``purge_candidates``). Deletes nothing. A missing root yields no records."""
+    ``purge_candidates``). Deletes nothing. A missing root yields no records.
+    ``first_unbounded`` walks the first entry with no deadline, so a call always gates one."""
     repo_root = Path(repo_root)
     ctx = _Context(registry_dir=registry_dir)
     now = time.time() if now is None else now
@@ -385,8 +387,8 @@ def plan_purge(
             quiescence_hours=quiescence_hours,
             verify_copy=verify_copy,
             now=now,
-            deadline=deadline,
+            deadline=None if first_unbounded and i == 0 else deadline,
             _ctx=ctx,
         )
-        for p in (purge_candidates(repo_root) if candidates is None else candidates)
+        for i, p in enumerate(purge_candidates(repo_root) if candidates is None else candidates)
     ]

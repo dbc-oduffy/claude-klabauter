@@ -38,6 +38,7 @@ class PeakResult:
     path: str
     peak_bytes: int
     returncode: int
+    timed_out: bool = False
 
 
 def _import_psutil():
@@ -81,7 +82,7 @@ def _run_polled(argv: Sequence[str], env: Mapping[str, str], cwd: str, timeout_s
         list(argv),
         cwd=cwd,
         env=dict(env),
-        stdout=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
@@ -157,8 +158,15 @@ def measure_files(paths: Sequence[str], *, env: Optional[Mapping[str, str]] = No
             seen[pid] = max(seen.get(pid, 0), figure)
         snapshot["max_total"] = max(snapshot["max_total"], sum(poll.values()))
 
-    rc = _run_polled(_pytest_argv(paths), child_env, str(REPO_ROOT), timeout_s, poll_s, sampler)
-    return PeakResult(label if label is not None else ",".join(paths), _tree_total(seen, snapshot["max_total"]), rc)
+    # A timeout is a per-file finding, never an abort: the peak sampled up to the kill still stands,
+    # and a CLI sweep over many files must not lose every other result to one slow file.
+    timed_out = False
+    try:
+        rc = _run_polled(_pytest_argv(paths), child_env, str(REPO_ROOT), timeout_s, poll_s, sampler)
+    except TimeoutError:
+        rc, timed_out = -1, True
+    return PeakResult(label if label is not None else ",".join(paths), _tree_total(seen, snapshot["max_total"]), rc,
+                      timed_out)
 
 
 def measure_file(path: str, *, env: Optional[Mapping[str, str]] = None, **kwargs) -> PeakResult:
@@ -204,13 +212,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.as_json:
         print(json.dumps({
             "bound_bytes": bound,
-            "results": [{"path": r.path, "peak_bytes": r.peak_bytes, "returncode": r.returncode} for r in results],
+            "results": [{"path": r.path, "peak_bytes": r.peak_bytes, "returncode": r.returncode,
+                         "timed_out": r.timed_out} for r in results],
             "over_bound": [r.path for r in bad],
         }, indent=2))
     else:
         for r in sorted(results, key=lambda r: -r.peak_bytes):
             flag = "OVER" if r.peak_bytes > bound else "ok"
-            print(f"{r.peak_bytes / 2**20:9.1f} MiB  rc={r.returncode}  {flag:4}  {r.path}")
+            note = "  TIMEOUT" if r.timed_out else ""
+            print(f"{r.peak_bytes / 2**20:9.1f} MiB  rc={r.returncode}  {flag:4}  {r.path}{note}")
     return 1 if bad else 0
 
 

@@ -256,6 +256,7 @@ from coordinator_core.cartography._guard import PathEscapeError
 from coordinator_core.content_root import read_content_root
 from coordinator_core.git.commit_trailers import read_host_commit_trailers
 from coordinator_core.ipc import register_op
+from coordinator_core.locked_write import contended_lock_wait_secs, held_lock
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._research_grounding import GROUNDING_REPORT
 from coordinator_core.ops._workflow_contract import Severity, run_checks
@@ -2172,29 +2173,6 @@ def _emit_script_file(
         agent_type_host=agent_type_host,
     )
     findings = [*run_checks(script), *plan_findings]
-    # newline="" suppresses the platform line-ending translation: a CRLF-carrying .mjs is
-    # rejected by the Workflow surface that fires it.
-    _refuse_spent_overwrite(path, script.encode("utf-8"), path, _SPENT_HINT_OUTPUT)
-    if not params.get("force"):
-        _refuse_foreign_emission(
-            path, script, session_id, _repo_root_for_plan(str(path)),
-            run_owned=run_owned,
-            remedy=_FOREIGN_REMEDY_ASK if ask_run else _FOREIGN_REMEDY_DEFAULT,
-        )
-    before_write()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(script, encoding="utf-8", newline="")
-    # Best-effort like the receipt: a failed digest degrades sha256 to None, never fails the emit.
-    try:
-        script_sha256 = _script_sha256(path)
-    except OSError as exc:
-        print(
-            f"dispatch.emit: wrote {path} but could not digest it "
-            f"({exc}). The script stands; its reply carries no sha256, and "
-            "a --fire/workflow.fire caller cannot drift-guard this emission.",
-            file=sys.stderr,
-        )
-        script_sha256 = None
     finding_dicts = [
         {
             "severity": f.severity.value,
@@ -2204,13 +2182,35 @@ def _emit_script_file(
         }
         for f in findings
     ]
-    receipt = _write_emission_receipt(
-        path,
-        receipt_plan_path,
-        params,
-        extras={**(receipt_extras or {}), "findings": finding_dicts},
-        sha256=script_sha256,
-    )
+    script_bytes = script.encode("utf-8")
+    # Script and receipt are one unit: a second emit of this path waits here, so the receipt's
+    # digest is always of the bytes the script holds. Both writes are atomic, so a reader never
+    # sees a truncated script; the digest is of the bytes written, never a read-back. The bytes
+    # are written verbatim (no newline translation): a CRLF-carrying .mjs is rejected by the
+    # Workflow surface that fires it.
+    with held_lock(
+        Path(os.path.abspath(path)),
+        timeout=contended_lock_wait_secs(),
+        holder_label="dispatch.emit",
+    ):
+        _refuse_spent_overwrite(path, script_bytes, path, _SPENT_HINT_OUTPUT)
+        if not params.get("force"):
+            _refuse_foreign_emission(
+                path, script, session_id, _repo_root_for_plan(str(path)),
+                run_owned=run_owned,
+                remedy=_FOREIGN_REMEDY_ASK if ask_run else _FOREIGN_REMEDY_DEFAULT,
+            )
+        before_write()
+        atomic_write_bytes(path, script_bytes)
+        script_sha256 = hashlib.sha256(script_bytes).hexdigest()
+        receipt = _write_emission_receipt(
+            path,
+            receipt_plan_path,
+            params,
+            extras={**(receipt_extras or {}), "findings": finding_dicts},
+            sha256=script_sha256,
+            script_bytes=script_bytes,
+        )
     return {
         "path": path,
         "sha256": script_sha256,
@@ -2258,9 +2258,9 @@ _CALLER_RELATIVE_KEYS = ("plan_path", "plan", "inventory_path", "sizing_path", "
 
 
 def _caller_root(params: dict, repo_root: Optional[Path]) -> Optional[Path]:
-    """The caller's repo: the request root, `target_root`, else the `.git` ancestor of the
+    """The caller's repo: the request root, `repo_root` or `target_root` param, else the `.git` ancestor of the
     caller's stamped cwd. Never the engine process cwd."""
-    given = repo_root or params.get("target_root")
+    given = repo_root or params.get("repo_root") or params.get("target_root")
     if given:
         return Path(given)
     cwd = params.get(_CALLER_CWD_KEY)
@@ -2827,9 +2827,13 @@ def _dispatch_emit_body(
                         cwd=params.get("session_root") or str(ask_root),
                     )
                     pm_turn_recorded = recorded.get("turn") if recorded.get("ok") else None
+        # A chain hop (`chain_parent` names the ask run) always mints its own run: it takes no premint or
+        # reservation, and never rebinds to an `ask-` run, whose script the hop's caller refuses to start.
+        chain_hop = params.get("chain_parent") is not None
+        reserved_param = None if chain_hop else params.get("reserved_run_id")
         run_stamp = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
         run_id = f"warp-{_unstamped_stem(sizing_rel)}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
-        if not sizing_rel and params.get("preminted_run_id") is not None:
+        if not sizing_rel and not chain_hop and params.get("preminted_run_id") is not None:
             run_id = _preminted_ask_run_id(params["preminted_run_id"])
         reserved_parent = None
         rebound = False
@@ -2839,37 +2843,49 @@ def _dispatch_emit_body(
         resumed_from = None
         from coordinator_core.ops.dispatch_emit.ask_gate import token_spent as _token_spent
 
+        chain_parent = _chain_parent_param(ask_root, params)
         retired_reserved = (
-            params["reserved_run_id"]
-            if params.get("reserved_run_id") is not None and isinstance(params["reserved_run_id"], str)
+            reserved_param
+            if reserved_param is not None and isinstance(reserved_param, str)
             and sizing_rel and (
-                _token_spent(ask_root, params["reserved_run_id"])
-                or _reserved_run_landed(ask_root, params["reserved_run_id"])
+                _token_spent(ask_root, reserved_param)
+                or _reserved_run_landed(ask_root, reserved_param)
             )
             else None
         )
-        if retired_reserved is None and params.get("reserved_run_id") is not None and not _is_halt_resume_hint(
-            ask_root, params["reserved_run_id"], sizing_doc, sizing_rel
+        if retired_reserved is None and reserved_param is not None and not _is_halt_resume_hint(
+            ask_root, reserved_param, sizing_doc, sizing_rel
         ):
-            run_id, reserved_parent = _reserved_run(ask_root, params["reserved_run_id"], sizing_doc, sizing_rel)
+            run_id, reserved_parent = _reserved_run(ask_root, reserved_param, sizing_doc, sizing_rel)
             from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume, notes_predecessor
 
-            predecessor = halted_run_to_resume(ask_root, sizing_rel)
+            predecessor = halted_run_to_resume(
+                ask_root, sizing_rel, caller_session=_receipt_session_id(params) or None
+            )
             resumed_from = predecessor if predecessor != run_id else None
             if resumed_from is None:
                 resumed_from = notes_predecessor(ask_root, sizing_rel, exclude=run_id)
         elif sizing_rel:
             from coordinator_core.ops.dispatch_emit.halted_run import (
-                halted_ask_run_for, halted_run_base, halted_run_for, notes_predecessor,
+                halted_ask_run_for, halted_run_base, halted_run_for, notes_predecessor, preferred_halted_run,
             )
 
-            halted_id = halted_run_for(ask_root, sizing_rel)
+            preferred_ask = None
+            preferred = preferred_halted_run(ask_root, sizing_rel, caller_session=_receipt_session_id(params) or None)
+            if preferred is None:
+                halted_id = halted_run_for(ask_root, sizing_rel)
+            else:
+                halted_id, preferred_ask = (preferred, None) if preferred.startswith("warp-") else (None, preferred)
+            if chain_parent is not None and halted_id == chain_parent:
+                halted_id = None  # a successor never rebinds onto the run it chains from
             if halted_id:
                 inherited_base = _recorded_run_base(ask_root, halted_id) or halted_run_base(
                     record_dir(ask_root, halted_id)
                 )
             else:
-                resumes_ask = halted_ask_run_for(ask_root, sizing_rel)
+                resumes_ask = preferred_ask or halted_ask_run_for(ask_root, sizing_rel)
+                if chain_parent is not None and resumes_ask == chain_parent:
+                    resumes_ask = None
                 if resumes_ask:
                     inherited_base = _recorded_run_base(ask_root, resumes_ask) or halted_run_base(
                         record_dir(ask_root, resumes_ask)
@@ -2879,6 +2895,8 @@ def _dispatch_emit_body(
                         halted_ask_run_for(ask_root, sizing_rel, ignore_superseded=True)
                         or notes_predecessor(ask_root, sizing_rel, exclude=run_id)
                     )
+                    if chain_parent is not None and resumed_from == chain_parent:
+                        resumed_from = None
             if retired_reserved is not None and resumed_from is None and not halted_id:
                 resumed_from = retired_reserved
             if halted_id:
@@ -2898,13 +2916,16 @@ def _dispatch_emit_body(
                         "prior_session": recorded_emitter(ask_root, halted_id),
                         "reason": blocker,
                     }
+        if chain_parent is not None and run_id == chain_parent:
+            # Trap: a chained script under its parent's id collides on state/warp and the hop refuses it.
+            run_id = f"warp-{_unstamped_stem(sizing_rel)}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
+            reserved_parent, rebound, output_redirect = None, False, None
         prompt = ask if isinstance(ask, str) and ask else None
         sizing_stop = (
             intake_doc["em_analysis"].get(STOP_AFTER_KEY)
             if intake_doc is not None and isinstance(intake_doc.get("em_analysis"), dict)
             else None
         )
-        chain_parent = _chain_parent_param(ask_root, params)
         effective_stop = (
             params.get(STOP_AFTER_KEY)
             or sizing_stop

@@ -357,6 +357,7 @@ RUNG_FLOORS: Dict[str, str] = {
     "block_dev_repo_sentinel_removal": "DCC",
     "block_drive_root_new_dir_bash_write": "BDD",
     "block_editor_kill_by_name": "DDD",
+    "block_empty_source_push": "DCC",
     "block_external_workspace_vcs_write": "BDD",
     "block_home_root_bash_write": "BDD",
     "block_illegal_filename": "ACC",

@@ -20,6 +20,9 @@ Wire params:
         ``state/scratch/artifact-distillation/<run_id>/curated.json``. One of the two
         is required.
 
+The target repo's top-level ``docs/wiki`` page stems and folder names are passed to the curation
+as ``wiki_names``, so a bare tag with an existing wiki home is kept.
+
 File shape: the ``distill.curate_clusters`` return verbatim (``verdicts``, ``counts``,
 ``threshold_applied``, ``threshold_auto``, ``nugget_drop_share``, ``contradictionClusters``,
 ``degraded``) plus ``contradictionClusterCount`` — the shape ``distill.launch_args`` reads.
@@ -80,6 +83,19 @@ def _write_atomic(target: Path, obj: dict) -> None:
                 pass
 
 
+def _wiki_names(worktree_root: Path) -> list:
+    """Top-level docs/wiki page stems and folder names; one directory listing, no recursion."""
+    try:
+        with os.scandir(worktree_root.joinpath("docs", "wiki")) as entries:
+            return sorted(
+                Path(e.name).stem if e.is_file() else e.name
+                for e in entries
+                if e.is_dir() or e.name.endswith(".md")
+            )
+    except OSError:
+        return []
+
+
 _INVOCATION_A_NAME = "invocation-a.json"
 
 
@@ -106,7 +122,7 @@ def _read_invocation_a(worktree_root: Path, params: dict, run_id: object) -> Opt
             raise ValueError(f"distill.write_curated_clusters: invocation_a_file {rel!r} not found")
         return None
     except (OSError, ValueError) as exc:
-        raise ValueError(f"distill.write_curated_clusters: unreadable invocation A result {path.name}: {exc}")
+        raise ValueError(f"distill.write_curated_clusters: unreadable invocation A result {path.name}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError("distill.write_curated_clusters: invocation A result must be a JSON object")
     return data
@@ -131,7 +147,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if not isinstance(run_id, str) or not _RUN_ID_RE.fullmatch(run_id):
             raise ValueError(
                 "distill.write_curated_clusters requires output_path, or run_id "
-                "(letters, digits, '.', '_', '-') to default it to "
+                "(the distill.scope result's run_id; letters, digits, '.', '_', '-') to default it to "
                 f"{'/'.join(_DEFAULT_DIR)}/<run_id>/curated.json"
             )
         output_path = "/".join((*_DEFAULT_DIR, run_id, "curated.json"))
@@ -155,11 +171,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree_root = main_worktree_root(repo_root)
     target = _confined_target(worktree_root, output_path)
-    result = curate_clusters(tag_counts, keep_threshold=keep_threshold)
+    result = curate_clusters(
+        tag_counts, keep_threshold=keep_threshold, wiki_names=_wiki_names(worktree_root)
+    )
     if result["degraded"]:
         raise ValueError(
             "distill.write_curated_clusters: tag_counts is missing, not a dict, or empty; "
-            "nothing written"
+            "it is the tag_counts of invocation A's result (the distill Workflow run launched with "
+            "distill.launch_args args; pass invocation_a / invocation_a_file or tag_counts); nothing written"
         )
     payload = curated_file_payload(result)
     _write_atomic(target, payload)

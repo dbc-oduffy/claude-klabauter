@@ -18,6 +18,7 @@ import yaml
 from coordinator_core.win_portability import no_console_creationflags
 
 
+from coordinator_core.ops.dispatch_emit import live_run_index
 from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_FIELD, RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE, write_halt_marker
 
@@ -56,6 +57,7 @@ def _halt_at_plan_blitz(repo: Path, *, marker: bool) -> Path:
     rd.mkdir(parents=True)
     (rd / "run.json").write_text(json.dumps({"sizing_rel": _SIZING}), encoding="utf-8")
     (rd / "run-stage.json").write_text(json.dumps({"stage": "halted"}), encoding="utf-8")
+    live_run_index.add(repo, _RUN, time.time())  # 542ae2b20f: the unmarked-run lookup is keyed on the live-run index
     if marker:
         write_halt_marker(
             rd, halted="refusal", sizing_rel=_SIZING, plan_rel=_PLAN, reason="plan-blitz reported no ready plan"

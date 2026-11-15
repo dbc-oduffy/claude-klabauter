@@ -148,6 +148,7 @@ import contextlib
 import dataclasses
 import os
 import shutil
+import sys
 import threading
 import time
 import uuid
@@ -1025,16 +1026,30 @@ def _single_flight(key: str):
 
 
 def _begin_index(base: str, index_dir: str) -> Optional[str]:
-    """Reset ``index_dir`` and create its stream directories BEFORE the build's walk, so any claim
-    appended after the walk read its sink finds the directory and indexes itself. Returns this
-    build's token (also written to ``BUILDING``) or ``None``; a concurrent build's reset removes
-    the token, which ``_finish_index`` checks before it stamps."""
+    """Open a build over ``index_dir`` and create its stream directories BEFORE the build's walk, so
+    any claim appended after the walk read its sink finds the directory and indexes itself. Returns
+    this build's token (also written to ``BUILDING``) or ``None``; a concurrent build overwrites the
+    token, which ``_finish_index`` checks before it stamps.
+
+    The previous directory is renamed aside (O(1)), never deleted here: a delete walks every stream
+    file and stalled the calling op past 30s under load, and ``_sweep_retired`` removes it off the
+    caller's wait. A rename that fails (a reader holds a handle inside the directory) never fails the
+    build: it proceeds over the live directory with only ``COMPLETE`` removed. Entries an earlier build
+    left stay, which is sound because the index is a superset of the truth and every positive is
+    verified against its sink's own fold."""
     if not os.path.isdir(base):
         return None
     touch_record.forget_indexed()
     token = uuid.uuid4().hex
     try:
-        shutil.rmtree(index_dir, ignore_errors=True)
+        try:
+            os.replace(index_dir, f"{index_dir}{_RETIRED_MARK}{token}")
+            _spawn_sweep(index_dir)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(os.path.join(index_dir, touch_record.CLAIM_INDEX_COMPLETE))
         os.makedirs(os.path.join(index_dir, "p"), exist_ok=True)
         os.makedirs(os.path.join(index_dir, "s"), exist_ok=True)
         with open(os.path.join(index_dir, _BUILD_TOKEN_FILE), "w", encoding="utf-8") as fh:
@@ -1083,6 +1098,33 @@ def _finish_index(
 
 
 _BUILD_TOKEN_FILE = "BUILDING"
+
+_RETIRED_MARK = ".retired-"
+_SWEEP_GUARD = threading.Lock()
+
+
+def _sweep_retired(index_dir: str) -> None:
+    """Remove the directories ``_begin_index`` renamed aside. Best effort; one sweep at a time per
+    process, and a directory another process is already deleting is skipped."""
+    if not _SWEEP_GUARD.acquire(blocking=False):
+        return
+    try:
+        parent = os.path.dirname(index_dir)
+        prefix = os.path.basename(index_dir) + _RETIRED_MARK
+        for entry in os.listdir(parent):
+            if entry.startswith(prefix):
+                shutil.rmtree(os.path.join(parent, entry), ignore_errors=True)
+    except Exception as exc:  # noqa: BLE001 -- best-effort cleanup; the next retirement retries
+        print(f"claim-index sweep of {index_dir} retired dirs failed: {exc!r}", file=sys.stderr)
+    finally:
+        _SWEEP_GUARD.release()
+
+
+def _spawn_sweep(index_dir: str) -> None:
+    """Run ``_sweep_retired`` on a daemon thread so no caller waits on the delete."""
+    threading.Thread(
+        target=_sweep_retired, args=(index_dir,), name="claim-index-sweep", daemon=True
+    ).start()
 
 
 def _read_build_token(index_dir: str) -> Optional[str]:

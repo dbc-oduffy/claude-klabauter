@@ -67,6 +67,18 @@ def _message(run_id: str, chunks: list[str], deleted: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _release_landed_claims(root: Path, landed: list[str]) -> None:
+    """Release the resolved session's touch claims on the landed paths; a failure retains them."""
+    from coordinator_core.session import core as session_core
+    from coordinator_core.session import scope as session_scope
+
+    try:
+        sid = session_core.resolve_session_id(str(root))
+    except Exception:
+        return
+    session_scope.release_committed_claims_or_retain(root, landed, sid, "land_remainder")
+
+
 def land(root: Path, params: dict) -> dict:
     """Run the lane against worktree ``root``; the reply carries ``contract.REPLY_KEYS``."""
     from coordinator_core.ops._path_guard import safe_id
@@ -133,6 +145,7 @@ def land(root: Path, params: dict) -> dict:
         return _reply(omitted=omitted_reply, retest=verdict.get("retest"), nothing_to_commit=True)
     except CommitRefused as exc:
         return _refusal("commit-refused", str(exc), omitted=omitted_reply, retest=verdict.get("retest"))
+    _release_landed_claims(root, paths + deleted)
     return _reply(
         landed=True, sha=outcome.sha, omitted=omitted_reply, retest=verdict.get("retest"),
         paths=sorted(paths + deleted), landed_chunks=chunks,

@@ -19,7 +19,7 @@ import test_publish_quiesces_warm_pair as _q  # noqa: E402
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-_RUN = ("example-game-repo", "ask-be779d", "implement", "2026-10-31T22:46:00Z")
+_RUN = ("repo-a", "ask-be779d", "implement", "2026-10-31T22:46:00Z")
 
 
 def test_live_run_hands_over_with_no_stop_across_the_land(tmp_path, monkeypatch):

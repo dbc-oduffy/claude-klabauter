@@ -308,13 +308,13 @@ def test_live_midstage_runs_refuse_the_handover_naming_each_run(tmp_path, monkey
     monkeypatch.setattr(live_runs, "HOLD_BOUND_S", 0.0)
     env = _setup(tmp_path, monkeypatch, True)
     env.live_runs[:] = [
-        live_runs.LiveRun("example-game-repo", "ask-be779d", "implement", "2026-10-31T22:46:00Z"),
-        live_runs.LiveRun("claude-klabauter", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z"),
+        live_runs.LiveRun("repo-a", "ask-be779d", "implement", "2026-10-31T22:46:00Z"),
+        live_runs.LiveRun("repo-b", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z"),
     ]
     env.leg_in_flight = True
     rc, text = _run(env)
     assert rc == 1, text
-    assert "example-game-repo ask-be779d" in text and "claude-klabauter ask-aaaaaa" in text
+    assert "repo-a ask-be779d" in text and "repo-b ask-aaaaaa" in text
     assert "--allow" not in text and "--cut-run" not in text
     assert env.names("land_diff") == []
     assert env.names("stop") == []
@@ -325,7 +325,7 @@ def test_staged_idle_run_does_not_hold_the_handover(tmp_path, monkeypatch):
     from coordinator_core.warm import live_runs
 
     env = _setup(tmp_path, monkeypatch, True)
-    env.live_runs[:] = [live_runs.LiveRun("claude-klabauter", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z")]
+    env.live_runs[:] = [live_runs.LiveRun("repo-b", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z")]
     env.leg_in_flight = False
     rc, err = _run(env)
     assert rc == 0, err
@@ -337,7 +337,7 @@ def test_handover_pending_is_held_across_the_drain_and_the_successor(tmp_path, m
     from coordinator_core.warm import live_runs
 
     env = _setup(tmp_path, monkeypatch, True)
-    env.live_runs[:] = [live_runs.LiveRun("claude-klabauter", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z")]
+    env.live_runs[:] = [live_runs.LiveRun("repo-b", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z")]
     successor_pending: list = []
 
     from coordinator_core.percolate import round as round_mod
@@ -366,7 +366,7 @@ def test_a_leg_that_starts_after_the_drain_refuses_before_the_marked_stop(tmp_pa
     from coordinator_core.warm import live_runs
 
     monkeypatch.setattr(live_runs, "engine_legs_in_flight", legs)
-    env.live_runs[:] = [live_runs.LiveRun("claude-klabauter", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z")]
+    env.live_runs[:] = [live_runs.LiveRun("repo-b", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z")]
     rc, text = _run(env)
     assert rc == 1, text
     assert env.names("stop") == []
@@ -413,7 +413,7 @@ def test_live_midstage_run_ignored_for_non_engine_root(tmp_path, monkeypatch):
     from coordinator_core.warm import live_runs
 
     env = _setup(tmp_path, monkeypatch, False)
-    env.live_runs[:] = [live_runs.LiveRun("example-game-repo", "ask-be779d", "implement", "2026-10-31T22:46:00Z")]
+    env.live_runs[:] = [live_runs.LiveRun("repo-a", "ask-be779d", "implement", "2026-10-31T22:46:00Z")]
     rc, err = _run(env)
     assert rc == 0, err
     assert env.names("find_live_runs") == []

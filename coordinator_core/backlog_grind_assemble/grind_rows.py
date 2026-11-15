@@ -566,9 +566,11 @@ def cmd_close(rest: list[str]) -> int:
     )
     if flags is None:
         return _usage(
-            "usage: grind-row close --profile-dir D --profile P --row <path> "
-            "--digest D --verdict V --evidence-file F --closed-by S --run-stamp T "
-            "--repo-root D"
+            "usage: grind-row close --profile-dir <dir> --profile <name> --row <path> "
+            "--digest <sha256> "
+            f"--verdict {sorted(CLOSURE_CLOSING_BRANCHES)} "
+            "--evidence-file <path> --closed-by <stage> --run-stamp <stamp> "
+            "--repo-root <dir>"
         )
 
     repo_root = Path(flags["repo-root"])

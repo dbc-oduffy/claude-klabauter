@@ -21,7 +21,7 @@ pytestmark = pytest.mark.complete
 CORE = Path(__file__).resolve().parents[3]
 DISPATCH_EMIT = CORE / "ops" / "dispatch_emit"
 SCAN_ROOTS = (CORE / "ops", CORE / "bash_guards")
-_NOT_A_KIND_SUFFIXES = ("_FIELD", "_FIELDS", "_TRAILER", "_UNCLOSED_REASON", "_RULE", "_PLACEHOLDER")
+_NOT_A_KIND_SUFFIXES = ("_FIELD", "_FIELDS", "_TRAILER", "_UNCLOSED_REASON", "_RULE", "_PLACEHOLDER", "_ALTERNATIVE")
 REMEDY_CALL = "remedy_or_halt"
 
 # Pseudo-kinds have no constant: a marker is a substring of the message a site emits for that condition.

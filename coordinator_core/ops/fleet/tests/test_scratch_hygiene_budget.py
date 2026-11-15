@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 
@@ -125,18 +126,119 @@ def test_missing_or_garbled_cursor_starts_from_the_top(tmp_path, monkeypatch):
     assert seen == ["a00-kept"]
 
 
-def test_dry_run_does_not_advance_the_cursor_and_matches_apply(tmp_path, monkeypatch):
+def test_dry_run_advances_the_cursor_and_deletes_nothing(tmp_path, monkeypatch):
     _fixture(tmp_path, kept=2, old=4)
     seen = _limited(monkeypatch, 4)
     dry = _call(tmp_path, False)
-    assert not (tmp_path / "scratch" / ".scratch-hygiene-cursor").exists()
-    dry_seen = list(seen)
+    assert (tmp_path / "scratch" / ".scratch-hygiene-cursor").exists()
+    assert seen == ["a00-kept", "a01-kept", "b00-old", "b01-old"]
+    assert dry["walk"] == {"eligible": 2, "walked": 4, "skipped_budget": 2}
+    assert len(list((tmp_path / "scratch").glob("b*-old"))) == 4
     seen.clear()
     wet = _call(tmp_path, True)
-    assert seen == dry_seen
-    assert dry["walk"] == {"eligible": 2, "walked": 4, "skipped_budget": 2}
-    assert wet["walk"]["eligible"] == dry["walk"]["eligible"] == wet["walk"]["deleted"]
+    assert seen == ["b02-old", "b03-old", "a00-kept", "a01-kept"]
+    assert wet["walk"]["eligible"] == wet["walk"]["deleted"] == 2
     assert wet["walk"]["recheck_kept"] == 0
+
+
+def _default_call(tmp_path, apply):
+    return op.run_hygiene({"repo_root": str(tmp_path), "cadence": "distill", "apply": apply})
+
+
+def test_default_call_walks_a_slow_first_entry_and_moves_the_cursor(tmp_path, monkeypatch):
+    for apply in (False, True):
+        root = tmp_path / str(apply)
+        root.mkdir()
+        _fixture(root, kept=0, old=3)
+        real = plan_module._walk
+        monkeypatch.setattr(op, "DEFAULT_BUDGET_SECS", 0.01)
+
+        def slow(top, cutoff, deadline=None, _real=real):
+            time.sleep(0.05)
+            return _real(top, cutoff, deadline)
+
+        monkeypatch.setattr(plan_module, "_walk", slow)
+        out = _default_call(root, apply)
+        assert out["walk"]["walked"] >= 1
+        assert out["walk"]["skipped_budget"] == 2
+        assert json.loads((root / "scratch" / ".scratch-hygiene-cursor").read_text(encoding="utf-8"))["after"] == str(
+            root / "scratch" / "b00-old"
+        )
+        assert (root / "scratch" / "b00-old").exists() is (not apply)
+
+
+def test_default_calls_cover_the_whole_backlog_and_wrap(tmp_path, monkeypatch):
+    _fixture(tmp_path, kept=4, old=0)
+    real = plan_module._walk
+    order: list[str] = []
+
+    def slow(top, cutoff, deadline=None):
+        order.append(os.path.basename(top))
+        time.sleep(0.05)
+        return real(top, cutoff, deadline)
+
+    monkeypatch.setattr(op, "DEFAULT_BUDGET_SECS", 0.01)
+    monkeypatch.setattr(plan_module, "_walk", slow)
+    for _ in range(5):
+        _default_call(tmp_path, False)
+    assert order == [f"a{i:02d}-kept" for i in range(4)] + ["a00-kept"]
+
+
+def test_an_entry_cut_off_by_the_deadline_is_never_deleted(tmp_path, monkeypatch):
+    _fixture(tmp_path, kept=0, old=3)
+    real = plan_module._walk
+
+    def cut(top, cutoff, deadline=None):
+        w = real(top, cutoff, deadline)
+        if deadline is not None:
+            w.out_of_time = True
+        return w
+
+    monkeypatch.setattr(plan_module, "_walk", cut)
+    out = _default_call(tmp_path, True)
+    assert out["walk"]["deleted"] == 1
+    assert [p.name for p in (tmp_path / "scratch").glob("b*-old")] == ["b01-old", "b02-old"]
+
+
+def test_progressing_budget_deferred_call_exits_zero_and_other_skips_still_exit_one(tmp_path, monkeypatch):
+    _fixture(tmp_path, kept=0, old=4)
+    seen = _limited(monkeypatch, 2)
+    for apply in (False, True):
+        seen.clear()
+        out = _call(tmp_path, apply)
+        assert out["walk"]["walked"] >= 1 and out["walk"]["skipped_budget"] >= 1
+        assert any(r.get("action") == "skipped-budget" for r in out["records"])
+        assert out["contract_exit"] == 0
+    # A progressing call with a non-budget skip still exits 1.
+    real = plan_module.classify_entry
+
+    def active(entry, **kw):
+        rec = real(entry, **kw)
+        rec["action"], rec["reason"] = "skipped-active", "active"
+        return rec
+
+    monkeypatch.setattr(op, "classify_entry", active)
+    monkeypatch.setattr(plan_module, "classify_entry", active)
+    seen.clear()
+    out = _call(tmp_path, False)
+    assert out["walk"]["walked"] >= 1
+    assert out["contract_exit"] == 1
+
+
+def test_default_call_on_a_large_backlog_with_slow_first_entry_exits_zero(tmp_path, monkeypatch):
+    _fixture(tmp_path, kept=0, old=60)
+    real = plan_module._walk
+    monkeypatch.setattr(op, "DEFAULT_BUDGET_SECS", 0.01)
+
+    def slow(top, cutoff, deadline=None):
+        time.sleep(0.05)
+        return real(top, cutoff, deadline)
+
+    monkeypatch.setattr(plan_module, "_walk", slow)
+    out = _default_call(tmp_path, False)
+    assert out["walk"]["walked"] >= 1
+    assert out["walk"]["skipped_budget"] > 0
+    assert out["contract_exit"] == 0
 
 
 def test_cursor_file_is_never_a_purge_candidate(tmp_path):

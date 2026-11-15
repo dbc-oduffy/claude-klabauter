@@ -394,6 +394,82 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "ineligible: claims bookkeeping commit; it is the claim store, not a claim holder",
         "confirmed": True,
     },
+    "benchmarks/ask_gate_run_bound_process_budget.py::_seed_history": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/ask_gate_run_bound_process_budget.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/consolidate_brief_cost.py::_build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/land_run_dirty_scan_bytes.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/landing_worktree_sync_cost.py::_build": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/landing_worktree_sync_cost.py::measure_once": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/post_run_finish_bench.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/publish_under_live_engine.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/review_prep_peer_scale.py::_fast_import": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/run_landing_spike.py::land_core": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/run_landing_spike.py::land_scratch": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/sizing_assemble_process_budget.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/validate_commit_machine_a_replay.py::inflate_index": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "ops/ceremony/git_native.py::build_new_file_commit": {
+        "reason": "ineligible: object-only -- builds a commit object without moving a ref or touching the worktree; nothing lands, so no claim is due",
+        "confirmed": True,
+    },
+    "ops/dispatch_emit/checkpoint_stamp.py::_land_stamp": {
+        "reason": "release",
+        "confirmed": True,
+    },
+    "ops/fleet/_common.py::archive_and_commit_sync": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    "ops/handoff_human_gate_clear.py::human_gate_clear_sync": {
+        "reason": "ineligible: the op rewrites the handoff in-process, never through a touch-recorded tool, so no session claim exists on it",
+        "confirmed": True,
+    },
+    "ops/post_run_finish.py::_handler": {
+        "reason": "release",
+        "confirmed": True,
+    },
+    "warm/push_cadence.py::_land_tracking_ref": {
+        "reason": "ineligible: CAS-moves a remote-tracking ref after a push; no commit is built and no worktree path lands",
+        "confirmed": True,
+    },
     "benchmarks/close_background_full_path.py::build_fixture": {
         "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,
@@ -574,10 +650,6 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": True,
     },
-    "ops/fleet/_common.py::archive_and_commit": {
-        "reason": "release",
-        "confirmed": False,
-    },
     "ops/fleet/_common.py::rm_and_commit": {
         "reason": "release",
         "confirmed": False,
@@ -741,12 +813,6 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "confirmed": True,
     },
     # VERIFIED INELIGIBLE by reading the body: commits into
-    "ops/fleet/memo_send.py::_deliver_cc_copy": {
-        "reason": "ineligible: commits into a `cc:` receiver's own PEER "
-        "repo, never the sending session's worktree -- no session claims "
-        "exist there to release",
-        "confirmed": True,
-    },
     # VERIFIED INELIGIBLE by reading the body: commits into
     "ops/fleet/memo_migrate_group_em_inbox.py::_deliver": {
         "reason": "ineligible: commits a migrated memo into the RECEIVER's "
@@ -777,10 +843,6 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     "ops/fleet/_receiver_landing.py::apply_receiver_landing": {
         "reason": "ineligible: mints/switches a branch ref via `cas_ref` and "
         "the HEAD symref -- no commit is authored, no pathspec, no session id",
-        "confirmed": True,
-    },
-    "ops/dispatch_emit/checkpoint_stamp.py::stamp_checkpoint": {
-        "reason": "release",
         "confirmed": True,
     },
     "ops/research_close.py::_close_archived": {
@@ -842,9 +904,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "confirmed": True,
     },
     "ops/dispatch_emit/land_remainder.py::land": {
-        "reason": "ineligible: lands a halted run's verified remainder keyed by "
-        "run_id; params carry no session id, so there is no id to release "
-        "claims under",
+        "reason": "release",
         "confirmed": True,
     },
     "ops/dispatch_emit/run_close_parts.py::part_closes": {

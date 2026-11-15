@@ -79,6 +79,24 @@ def test_contract_exit_mapping(records, expected):
     assert rec.contract_exit(records) == expected
 
 
+def _p(action):
+    return rec.purge_record("r", "scratch/a", action)
+
+
+@pytest.mark.parametrize(
+    "records, expected",
+    [
+        ([_p("would-delete"), _p("skipped-budget")], 0),
+        ([_p("skipped-young"), _p("skipped-budget")], 1),
+        ([_p("deleted"), _p("skipped-budget"), _p("skipped-live")], 1),
+        ([_p("skipped-budget"), _p("skipped-budget")], 1),
+        ([_p("would-delete"), _p("skipped-budget"), rec.hold_nag_record("r", "scratch-hold/a", finding="hold-pending")], 1),
+    ],
+)
+def test_contract_exit_budget_deferral_is_failure_only_when_nothing_walked(records, expected):
+    assert rec.contract_exit(records) == expected
+
+
 def test_contract_exit_ignores_summary_record():
     assert rec.contract_exit([rec.summary_record([], applied=False)]) == 0
 

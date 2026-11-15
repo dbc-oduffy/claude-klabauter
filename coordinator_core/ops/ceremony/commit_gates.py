@@ -458,12 +458,45 @@ def deletion_block_gate(
     return GateOutcome(passed=not diagnostics, skipped=False, diagnostics=diagnostics)
 
 
+def files_present(root: Union[str, Path], paths: Sequence[str]) -> Set[str]:
+    """The members of `paths` that are files under `root` (symlinks followed, as `Path.is_file`).
+
+    A directory holding many of `paths` is listed once and answered from the listing's entry
+    metadata, which costs no per-file stat; a name the listing lacks (a case variant on a
+    case-insensitive filesystem, or absent) is confirmed by one stat."""
+    base = os.fspath(root)
+    by_dir: Dict[str, List[Tuple[str, str]]] = {}
+    for p in paths:
+        head, _, name = p.replace("\\", "/").rpartition("/")
+        by_dir.setdefault(head, []).append((p, name))
+    present: Set[str] = set()
+    for head, items in by_dir.items():
+        listing: Optional[Dict[str, bool]] = None
+        if len(items) >= 16:
+            try:
+                with os.scandir(os.path.join(base, head) if head else base) as entries:
+                    listing = {e.name: e.is_file() for e in entries}
+            except OSError:
+                listing = None
+        for p, name in items:
+            known = listing.get(name) if listing is not None else None
+            if known is None:
+                known = os.path.isfile(os.path.join(base, p))
+            if known:
+                present.add(p)
+    return present
+
+
 def declared_deletion_gate(
     worktree_root: Union[str, Path],
     gate_paths: Sequence[str],
     declared_deletions: Sequence[str],
+    known_present: Optional[Set[str]] = None,
 ) -> GateOutcome:
     """Every IN-SCOPE staged deletion must be declared in `declared_deletions`.
+
+    `known_present` (forward-slash keys) are paths the caller already stat-ed as files this landing;
+    they skip the existence stat.
 
     SIBLING to `deletion_block_gate`, not a replacement: its Assertion-3 needs a
     "Step 2.67" commit-body block, a convention `ceremony.commit_v2` cannot assume
@@ -529,10 +562,12 @@ def declared_deletion_gate(
         return GateOutcome(passed=True, skipped=True, diagnostics=[])
 
     declared_set = set(declared_deletions)
-    root = Path(worktree_root)
+    root = os.fspath(worktree_root)
     candidates = {
         p for p in gate_scope
-        if p not in declared_set and not (root / p).exists()
+        if p not in declared_set
+        and not (known_present is not None and p in known_present)
+        and not os.path.exists(os.path.join(root, p))
     }
     if not candidates:
         return GateOutcome(passed=True, skipped=False, diagnostics=[])
@@ -737,6 +772,7 @@ def attribution_gate(
     prefer_staged: Sequence[str] = (),
     deliberate_stage: bool = False,
     vacated: Optional[Sequence[str]] = None,
+    read_source: Optional[Callable[[str], Optional[bytes]]] = None,
 ) -> GateOutcome:
     """Refuse a commit whose staged content ADDS a reviewer-attribution line
     (`coordinator_core.attribution.scan_added_lines`) to a non-exempt tracked path.
@@ -749,6 +785,10 @@ def attribution_gate(
     `vacated` (declared deletions), when given, is the rename-source pool and skips the
     `read_index` rename scan; an attribution line moved into an unrelated new file then passes.
 
+    `read_source` (the commit's memoised landed-bytes reader) serves the pass-1 worktree text of a
+    path that is neither vacated nor staged-preferred, where landed bytes ARE the worktree bytes;
+    every other path is read from disk.
+
     Diagnostics are `<path>:<line_no>: adds reviewer attribution ("<match>")`, every hit uncapped, then one
     remedy line (two when a hit path is new at HEAD). No override key, no bypass.
     """
@@ -760,14 +800,20 @@ def attribution_gate(
     # Pass 1, worktree bytes only: a path whose worktree text no pattern can match, and whose staged
     # blob is not also scanned, cannot add an attribution line. Only the rest pay for HEAD/index reads.
     prefer_staged_set = set(prefer_staged)
+    landed_is_worktree = read_source is not None and not deliberate_stage
+    off_source = {_norm(p) for p in prefer_staged_set} | {_norm(p) for p in (vacated or ())}
     worktree_texts: Dict[str, Optional[str]] = {}
     suspects: List[str] = []
     for path in remaining:
-        worktree_path = root / path
         text: Optional[str] = None
         undecodable = False
         try:
-            text = worktree_path.read_text(encoding="utf-8")
+            if landed_is_worktree and _norm(path) not in off_source:
+                data = read_source(path)
+                # Text mode's universal newlines, which `read_text` applied.
+                text = None if data is None else data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+            else:
+                text = (root / path).read_text(encoding="utf-8")
         except UnicodeDecodeError:
             undecodable = True
         except OSError:
@@ -1388,12 +1434,14 @@ def reparse_advisory_gate(
     if ml is None or not gate_paths:
         return GateOutcome(passed=True, skipped=True, diagnostics=[])
     root = Path(worktree_root)
-    ancestors: Set[str] = set()
+    folded = os.sep == "\\"
+    seen: Set[str] = set()
     for rel in gate_paths:
-        parent = Path(rel).parent
-        while parent.parts and str(parent) != ".":
-            ancestors.add(str(parent))
-            parent = parent.parent
+        parent = (rel.replace("\\", "/") if folded else rel).rpartition("/")[0]
+        while parent and parent != "." and parent not in seen:
+            seen.add(parent)
+            parent = parent.rpartition("/")[0]
+    ancestors = {a.replace("/", os.sep) for a in seen} if folded else seen
     hits: List[Tuple[str, str]] = []
     for rel in sorted(ancestors):
         path = str(root / rel)

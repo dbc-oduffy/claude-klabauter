@@ -800,6 +800,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # tasks/ are main-worktree-rooted paths, shared across linked worktrees of the
     # same repo per this table's own common_dir definition.
     "update_docs.probe_fresh_repo_noop":       "common_dir",
+    "update_docs.atlas_mechanical_report":     "common_dir",
     # install.probe_skill_frontmatter_valid / install.probe_windows_terminal_presence
     # — "none": both inspect the OPERATOR's own machine (coordinator-claude
     # installation tree / PATH+winget packages), same "none" class as engine.drift /

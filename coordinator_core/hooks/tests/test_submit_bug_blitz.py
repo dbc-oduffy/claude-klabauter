@@ -167,6 +167,30 @@ def test_default_mint_lands_every_minted_row_in_one_commit_naming_the_run(real_r
     ]
 
 
+_SIX = (
+    FailingTest(file="a/test_x.py", name="TestX::test_one", message="boom"),
+    FailingTest(file="a/test_x.py", name="TestX::test_two", message="boom"),
+    FailingTest(file="a/test_x.py", name="test_plain", message="boom"),
+    FailingTest(file="b/test_y.py", name="TestY::test_one", message="boom"),
+    FailingTest(file="b/test_y.py", name="TestY::test_two", message="boom"),
+    FailingTest(file="c/test_z.py", name="test_only", message="boom"),
+)
+
+
+def test_default_path_six_targets_in_three_files_mint_six_rows_and_six_accounts(real_repo):
+    env = _call(real_repo, {"targets": "red-set"}, mint=None, parse=lambda spec: ParseResult(tests=_SIX))
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    assert len(list((real_repo / "state" / "bug-backlog").glob("*.yaml"))) == 6
+    script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))
+    row_ids = [t["row_id"] for t in decisions["targets"]]
+    assert len(row_ids) == 6 == len(set(row_ids))
+    assert len(decisions["minted"]) == 6
+    _call(real_repo, {"targets": "red-set"}, mint=None, run_id=RUN_ID, parse=lambda spec: ParseResult(tests=_SIX))
+    assert len(list((real_repo / "state" / "bug-backlog").glob("*.yaml"))) == 6
+    assert _porcelain_state(real_repo) == []
+
+
 def test_second_run_reusing_rows_commits_their_new_tag(real_repo):
     _call(real_repo, {"targets": "red-set"}, mint=None)
     _call(real_repo, {"targets": "red-set"}, mint=None, run_id="20261015T130000Z")
@@ -275,7 +299,10 @@ def test_declined_target_is_accounted_named_in_the_reason_and_token_is_grind_kin
         script.with_name(script.name + ".emitted.json").write_text(
             json.dumps(
                 {
-                    "declined": [{"id": "TF-2", "path": "state/bug-backlog/TF-2.yaml", "reason": "route to plan"}],
+                    "declined": [
+                        {"id": "TF-3", "path": "state/bug-backlog/TF-3.yaml", "reason": "route to plan"},
+                        {"id": "TF-4", "path": "state/bug-backlog/TF-4.yaml", "reason": "route to plan"},
+                    ],
                     "not_admitted": {"row_ids": []},
                     "unselected": {"row_ids": []},
                 }
@@ -288,7 +315,7 @@ def test_declined_target_is_accounted_named_in_the_reason_and_token_is_grind_kin
         repo,
         {"targets": "red-set"},
         parse=lambda spec: ParseResult(tests=_FIVE),
-        mint=lambda root, run_id, tests, *, target_ref: ["TF-0", "TF-1", "TF-2"],
+        mint=lambda root, run_id, tests, *, target_ref: [f"TF-{i}" for i in range(5)],
         emit=emit,
     )
     hso = env["hookSpecificOutput"]
@@ -297,7 +324,8 @@ def test_declined_target_is_accounted_named_in_the_reason_and_token_is_grind_kin
     decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))
     assert len(decisions["targets"]) == 5
     assert [t["disposition"] for t in decisions["targets"]] == ["row", "row", "row", "declined", "declined"]
-    assert "2 of 5 targets not run: TF-2 (route to plan)" in hso["permissionDecisionReason"]
+    assert [t["row_id"] for t in decisions["targets"]] == [f"TF-{i}" for i in range(5)]
+    assert "2 of 5 targets not run: TF-3 (route to plan); TF-4 (route to plan)" in hso["permissionDecisionReason"]
     assert [r["kind"] for r in run_token.live_records(repo) if r["run_id"] == RUN_ID] == ["grind"]
 
 

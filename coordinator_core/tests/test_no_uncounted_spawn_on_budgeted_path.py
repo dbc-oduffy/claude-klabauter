@@ -7488,6 +7488,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # landing.guard_selection: one reachable git site (run_git in the landing invariant node
     # selection); constant per call, never per path.
     "landing.guard_selection": 1,
+    # update_docs.atlas_mechanical_report: one reachable git site, run_git, from
+    # architecture_survey.structure._file_index_need (one `git ls-files -z` per report).
+    "update_docs.atlas_mechanical_report": 1,
     # memo.redeliver: static reachable-site ceiling over run_git, git._invoke and
     # write_signed_commit_object; re-delivery of a stranded memo onto the upstream tip.
     "memo.redeliver": 3,

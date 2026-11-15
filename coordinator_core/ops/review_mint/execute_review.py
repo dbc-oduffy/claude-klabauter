@@ -514,6 +514,19 @@ _DECLARED_PRODUCT_WRITE_JS = (
     "!/\\.md$/.test(String(p))))"
 )
 
+#: True only on positive evidence that no landed row wrote a product path: the plan route's `_landed`
+#: is non-empty and every entry names its `paths`/`declared`, none of them product; a composer with no
+#: `_landed` (the ask route) reads the evidence off a bound `_reviewPaths`. An entry that names no
+#: paths is unknown, never "no product".
+_NO_PRODUCT_LANDED_JS = (
+    "(() => { const isP = (p) => !/^(state|archive|scratch|tasks|cross-repo|docs|\\.coordinator-local)\\//.test(String(p)) && "
+    "!/\\.md$/.test(String(p)); "
+    "if (typeof _landed === 'undefined') return typeof _reviewPaths !== 'undefined'; "
+    "const rows = Object.values(_landed); "
+    "return rows.length > 0 && rows.every(l => l && (Array.isArray(l.paths) || Array.isArray(l.declared))) && "
+    "!rows.flatMap(l => [...(l.paths ?? []), ...(l.declared ?? [])]).some(isP); })()"
+)
+
 #: Rows the run's committed settlements closed (archived). Composers that bind no `_settled`/`_rows`
 #: (the plan route) read 0. A closure-only run committed, so it is not a no-op.
 _CLOSED_ROWS_JS = (
@@ -563,9 +576,17 @@ _PREP_GUARDS_JS = (
     # The same clean-prep predicate as the no-op halt, minus its
     # landed-rows condition; a refused prep fails `verdict`, and a prep
     # with product files fails `product_files`, so both still throw.
-    "  const _verifyOnly = !!(_prepNothing && "
+    "  const _verifyOnly = !!((_prepNothing && "
     "(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
-    "!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).some(s => (s?.files ?? []).length));\n"
+    "!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).some(s => (s?.files ?? []).length)) || "
+    # A wave whose landed rows wrote no product path and whose declared paths hold none has nothing
+    # to review whatever shape the prep reply took (null, degraded, errored): the prep cannot
+    # surface product the rows never wrote. A prep that itself reports product, a peer claim or a
+    # partition verdict still halts.
+    f"({_NO_PRODUCT_LANDED_JS} && !{_DECLARED_PRODUCT_WRITE_JS} && (!_reviewPrep || "
+    "((_reviewPrep.product_files ?? 0) === 0 && _reviewPrep.verdict !== 'PARTITION-MANDATORY' && "
+    "!(_reviewPrep.foreign_claims ?? []).length && "
+    "!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).some(s => (s?.files ?? []).length)))));\n"
     # A failed or refused prep yields no slices -- a refusal reports
     # product_files 0, so the guard keys on the slices alone. The wave's
     # `?? []` would otherwise expand to no sliced reviewer and land the
@@ -574,6 +595,8 @@ _PREP_GUARDS_JS = (
     # route skips the wave before prep when no row committed.
     # A composer that hoists `_alreadyDeliveredClose` may close the run landed here; the hook sets its
     # own state and a refusal reason. Absent the hook (the plan route) the halt below is unchanged.
+    # A null prep passes only as `_verifyOnly`; the guard line below stays the one single-exit composition rewrites.
+    "  if (_reviewPrep || !_verifyOnly)\n"
     "  if (!_reviewPrep || (!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && !_verifyOnly)) { "
     "if (!(typeof _metBySinceHaltSkip === 'function' && _metBySinceHaltSkip()) && "
     "!(typeof _alreadyDeliveredClose === 'function' && await _alreadyDeliveredClose())) "
@@ -1906,13 +1929,14 @@ def compose_execute_review(
                 "Run this one engine command exactly and return its bare JSON reply. Run nothing else.\n"
                 f"coordinator-invoke {agent.op} '{op_params}' --bare"
             )
+            relay_type, relay_role = _host_native(_OP_RELAY_AGENT_TYPE, host_degraded)
             op_call = _agent_call_literal(
-                _OP_RELAY_AGENT_TYPE,
-                op_prompt,
+                relay_type,
+                relay_role + op_prompt,
                 wave_phase,
                 schema=True,
                 as_arrow=True,
-                agent_opts={_OP_RELAY_AGENT_TYPE: {"model": _OP_RELAY_MODEL, "effort": "low"}},
+                agent_opts={relay_type: {"model": _OP_RELAY_MODEL, "effort": "low"}},
                 schema_literal=_schema_literal(agent.schema, stage_schemas),
             )
             op_line = _degrading(op_call, degrade_on_error)

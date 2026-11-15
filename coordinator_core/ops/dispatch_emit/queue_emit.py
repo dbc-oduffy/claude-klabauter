@@ -52,9 +52,11 @@ the guard exists to catch (module docstring,
 `coordinator_core/ops/_path_guard.py`).
 
 Negative-spec:
-  - Does NOT write anything to disk. `op.py` is the one write leg in this
-    pipeline (module docstring, `op.py`); this module returns the script TEXT
-    and the receipt extras dict, nothing more.
+  - Writes no script or receipt: `op.py` is that write leg; this module returns the
+    script TEXT and the receipt extras dict. The only writes here are the ones
+    `select_rows(write_handback_marks=True)` makes and, for a
+    `mechanical_close.PROFILES` profile, the closures `mechanical_close.apply_closures`
+    makes before any LLM sees a row (receipt key `mechanically_closed`).
   - Does NOT re-implement `select_rows`/`load_profile`/`validate_graph`/
     `resolve_appetite`/`compose_grind_script`. Every disk read, ledger
     fold-in, `where` evaluation, and script-body composition happens inside
@@ -83,10 +85,15 @@ import hashlib
 import json
 import os
 import sys
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple, Optional, Sequence
 
 from coordinator_core.git.git_state import head_sha
+from coordinator_core.contract import run_budget
+from coordinator_core.learn_lessons_pipeline import grind_cost, mechanical_close
+from coordinator_core.ops import backlog_pass_ledger
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.grind_admission import (
     NOT_ADMITTED_EXTRA_KEY,
@@ -100,7 +107,12 @@ from coordinator_core.ops.dispatch_emit.grind_profile import (
     resolve_appetite,
     validate_graph,
 )
-from coordinator_core.ops.dispatch_emit.queue_select import load_row_schema_gate, restrict_manifest, select_rows
+from coordinator_core.ops.dispatch_emit.queue_select import (
+    Manifest,
+    load_row_schema_gate,
+    restrict_manifest,
+    select_rows,
+)
 from coordinator_core.ops.dispatch_emit.receipt_extras_guard import refuse_colliding_receipt_extras
 from coordinator_core.session import core
 
@@ -152,6 +164,104 @@ def _reemit_argv(
     return argv
 
 
+def _fit_to_admitted_share(
+    manifest: Manifest,
+    kept: list,
+    loaded_profile: Any,
+    knobs: Mapping[str, Any],
+    repo_root: Path,
+    open_rows: int,
+) -> int:
+    """How many leading `kept` rows' triage batches stay within their share of the whole-backlog bar."""
+    from coordinator_core.ops.dispatch_emit.grind_compose import _group_into_batches
+
+    def batches_for(n: int) -> int:
+        part = restrict_manifest(manifest, kept[:n])
+        return len(_group_into_batches(part, knobs, loaded_profile, repo_root=repo_root))
+
+    return run_budget.fit_to_share(
+        run_budget.load(grind_cost.CEREMONY),
+        grind_cost.profile_unit_cost(loaded_profile, knobs),
+        batches_for,
+        len(kept),
+        open_rows,
+    )
+
+
+def _close_mechanically(
+    manifest: Manifest,
+    loaded_profile: Any,
+    profile_dir: Path,
+    repo_root: Path,
+    limit: Optional[int],
+    knobs: Optional[Mapping[str, Any]] = None,
+) -> tuple[Manifest, list, int]:
+    """Close what `mechanical_close` can with no LLM, drop those rows, then apply `limit` and the
+    learn-lessons run budget to the survivors in queue order (the smaller wins). Returns the
+    narrowed manifest, the closed rows' receipt entries and the survivor count before narrowing;
+    rows left out stay in the queue for the next run."""
+    verdicts = mechanical_close.close_candidates(manifest, repo_root)
+    closed_ids = set(
+        mechanical_close.apply_closures(
+            verdicts,
+            manifest,
+            profile_dir=profile_dir,
+            profile=loaded_profile.name,
+            repo_root=repo_root,
+            run_stamp=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        )
+    )
+    survivors = [e.row_id for e in manifest.entries if e.row_id not in closed_ids]
+    total_survivors = len(survivors)
+    kept = survivors if limit is None else survivors[:limit]
+    kept = grind_cost.fit_survivors(
+        manifest, kept, loaded_profile, knobs or {}, repo_root, run_budget.load(grind_cost.CEREMONY)
+    )
+    if kept:
+        kept = kept[: _fit_to_admitted_share(manifest, kept, loaded_profile, knobs or {}, repo_root, total_survivors)]
+    narrowed = restrict_manifest(manifest, kept)
+    narrowed = replace(
+        narrowed,
+        unselected=tuple(sorted(set(narrowed.unselected) | (set(survivors) - set(kept)))),
+    )
+    return narrowed, [
+        {"row_id": v.row_id, "verdict": v.verdict, "covered_by": v.covered_by, "reason": v.reason}
+        for v in verdicts
+        if v.row_id in closed_ids
+    ], total_survivors
+
+
+def _budget_receipt(
+    manifest: Manifest,
+    loaded_profile: Any,
+    knobs: Mapping[str, Any],
+    repo_root: Path,
+    run_id: str,
+    total_survivors: int,
+) -> dict:
+    """The receipt's `budget` and `deferred`, and the backlog-pass ledger line for this run."""
+    from coordinator_core.ops.dispatch_emit.grind_compose import _group_into_batches
+
+    batches = len(_group_into_batches(manifest, knobs, loaded_profile, repo_root=repo_root))
+    unit = grind_cost.profile_unit_cost(loaded_profile, knobs)
+    prevet = int(getattr(getattr(loaded_profile, "prevet", None), "batch_size", 0) or 0)
+    rates = grind_cost.role_rates(prevet > 0)
+    rows = len(manifest.entries)
+    has_verify = any(n.kind == "verify" for n in loaded_profile.graph.values())
+    spawns = {
+        "prevet": -(-rows // prevet) if prevet > 0 else 0,
+        "triage": batches,
+        "verify": batches if has_verify else 0,
+    }
+    projected = grind_cost.projected_cost(unit, batches, spawns, rates)
+    budget = run_budget.scaled_budget(run_budget.load(grind_cost.CEREMONY), rows, total_survivors)
+    deferred = total_survivors - len(manifest.entries)
+    backlog_pass_ledger.append(
+        str(repo_root), grind_cost.CEREMONY, run_id, projected.tokens, len(manifest.entries), deferred
+    )
+    return {"budget": run_budget.budget_report(budget, projected), "deferred": deferred}
+
+
 def emit_queue_script(
     profile: str,
     appetite: str = "standard",
@@ -198,11 +308,16 @@ def emit_queue_script(
         loaded_profile, appetite, dict(overrides) if overrides else None
     )
 
+    # A mechanical-close profile selects its whole eligible set: the limit applies to the
+    # survivors, so closing duplicates frees admission slots instead of shrinking the capped set.
+    close_mechanically = loaded_profile.name in mechanical_close.PROFILES
+    profile_limit = resolved_knobs.get("limit")
+
     manifest = select_rows(
         guarded_queue_dirs,
         where=resolved_knobs.get("where"),
         order=(loaded_profile.priority["field"], loaded_profile.priority["order"]),
-        limit=resolved_knobs.get("limit"),
+        limit=None if close_mechanically else profile_limit,
         batch_key=list(loaded_profile.batch_key),
         batch_sizes=_resolved_batch_sizes(resolved_knobs),
         row_id_key=loaded_profile.row_id_key,
@@ -213,7 +328,15 @@ def emit_queue_script(
         source_row_dir=Path(guarded_run_dir) / "source-rows",
         claimant_sid=core.resolve_session_id(str(repo_root)) or None,
         row_schema_gate=load_row_schema_gate(loaded_profile, repo_root),
+        write_handback_marks=True,
     )
+
+    mechanically_closed: list = []
+    total_survivors = len(manifest.entries)
+    if close_mechanically:
+        manifest, mechanically_closed, total_survivors = _close_mechanically(
+            manifest, loaded_profile, Path(profile_dir), repo_root, profile_limit, resolved_knobs
+        )
 
     run_order = [
         entry.row_id
@@ -227,6 +350,12 @@ def emit_queue_script(
         batch_size=int(_resolved_batch_sizes(resolved_knobs).get("default", 4)),
     )
     manifest = restrict_manifest(manifest, admission.admitted)
+
+    budget_extra = None
+    if close_mechanically:
+        budget_extra = _budget_receipt(
+            manifest, loaded_profile, resolved_knobs, repo_root, Path(guarded_run_dir).name, total_survivors
+        )
 
     script = compose_grind_script(
         manifest,
@@ -262,6 +391,8 @@ def emit_queue_script(
 
     receipt_extras = {
         "declined": declined,
+        "mechanically_closed": mechanically_closed,
+        **(budget_extra or {}),
         "queue": [str(q) for q in queue],
         "profile": loaded_profile.name,
         "profile_digest": profile_digest,

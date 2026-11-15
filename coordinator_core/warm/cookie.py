@@ -116,6 +116,81 @@ def curl_config_path(engine_root: Optional[Path] = None) -> Path:
     return breadcrumb.svc_dir(engine_root) / CURL_CONFIG_FILENAME
 
 
+def grant_logon_sid_read(path: Path) -> bool:
+    """Add ONE allow ACE, FILE_GENERIC_READ (`FR`), for this process's logon
+    SID to `path`'s own DACL; Windows only. True when the ACE is present
+    afterwards, False when there is no logon SID, no Windows, or the grant
+    failed (best effort: a failed grant must not stop a boot).
+
+    A codex workspace-write restricted token lists the logon SID among its
+    restricting SIDs, and must pass the file's DACL for them as well as for
+    the user. Touches exactly `path`: never its directory, never a write or
+    delete right, no other trustee.
+    """
+    if sys.platform != "win32":
+        return False
+    from coordinator_core.warm.election import current_logon_sid
+
+    logon_sid = current_logon_sid()
+    if not logon_sid:
+        return False
+    try:
+        sddl = _directory_dacl_sddl(path)
+        for match in _ACE_RE.finditer(sddl):
+            fields = match.group(1).split(";")
+            if len(fields) >= 6 and fields[0] == "A" and fields[2] == "FR" and fields[5] == logon_sid:
+                return True
+        return _set_dacl_from_sddl(path, _dacl_part(sddl) + f"(A;;FR;;;{logon_sid})")
+    except OSError:
+        return False
+
+
+def _dacl_part(sddl: str) -> str:
+    """The `D:...` component of an SDDL string that may lead with `O:`."""
+    return sddl[sddl.index("D:"):]
+
+
+def _set_dacl_from_sddl(path: Path, dacl_sddl: str) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.ULONG),
+    ]
+    advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
+    advapi32.GetSecurityDescriptorDacl.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(wintypes.BOOL), ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    advapi32.GetSecurityDescriptorDacl.restype = wintypes.BOOL
+    advapi32.SetNamedSecurityInfoW.argtypes = [
+        wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_void_p, ctypes.c_void_p,
+    ]
+    advapi32.SetNamedSecurityInfoW.restype = wintypes.DWORD
+
+    psd = ctypes.c_void_p()
+    if not advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        dacl_sddl, _SDDL_REVISION_1, ctypes.byref(psd), None
+    ):
+        return False
+    try:
+        present, defaulted = wintypes.BOOL(), wintypes.BOOL()
+        pdacl = ctypes.c_void_p()
+        if not advapi32.GetSecurityDescriptorDacl(
+            psd, ctypes.byref(present), ctypes.byref(pdacl), ctypes.byref(defaulted)
+        ) or not present.value:
+            return False
+        rc = advapi32.SetNamedSecurityInfoW(
+            str(path), _SE_FILE_OBJECT, _DACL_SECURITY_INFORMATION, None, None, pdacl, None
+        )
+        return rc == 0
+    finally:
+        kernel32.LocalFree(psd)
+
+
 def _write_private_atomically(path: Path, content: str) -> None:
     """Write `content` to `path` via a `.tmp` sibling + `os.replace`.
 
@@ -134,6 +209,8 @@ def _write_private_atomically(path: Path, content: str) -> None:
         os.write(fd, content.encode("ascii"))
     finally:
         os.close(fd)
+    # Granted on the tmp so the ACE rides the rename: no window without it.
+    grant_logon_sid_read(tmp_path)
     os.replace(str(tmp_path), str(path))
 
 

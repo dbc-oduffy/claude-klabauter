@@ -106,9 +106,11 @@ def _environment() -> dict[str, str]:
         env["COORDINATOR_PARENT_SESSION_ID"] = source["COORDINATOR_PARENT_SESSION_ID"]
     if source.get(FIRE_TOKEN_ENV):
         env[FIRE_TOKEN_ENV] = source[FIRE_TOKEN_ENV]
-    # The executor does not own shared daemon lifecycle. CLI calls run cold and
-    # must never start/respawn a warm service as an implicit side effect.
-    env['COORDINATOR_WARM'] = '0'
+    # Reach a live engine, never start one: warmth stays on (an inherited WARM=0
+    # is dropped) while both autostart gates are pinned off.
+    env.pop('COORDINATOR_WARM', None)
+    env['COORDINATOR_WARM_LISTENER_AUTOSTART'] = '0'
+    env['COORDINATOR_WARM_SERVER_AUTOSTART'] = '0'
     # Native operation doors validate this stamped build using their normal
     # bootstrap ladder; never silently dispatch back into another live clone.
     from coordinator_core.warm.engine_root import current_engine_clone

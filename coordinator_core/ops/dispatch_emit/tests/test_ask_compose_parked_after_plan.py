@@ -82,7 +82,9 @@ def _assert_stage_wait_park(out: dict) -> None:
     assert halt["halted"] == HALT_PARKED, halt
     assert "ask-blocker-1" in halt["reason"] and "stage-wait" in halt["reason"]
     assert "stage refused" not in str(halt) and "not whole" not in str(halt)
-    assert "resume_run_id" in halt["next_action"] and halt["run_id"] in halt["next_action"]
+    assert "resume_run_id" not in halt["next_action"]
+    assert "Workflow(" in halt["next_action"] and "engine-ask" in halt["next_action"]
+    assert halt["sizing"] in halt["next_action"]
     assert "ask-blocker-1" in halt["next_action"]
     assert "mise-prep" not in halt["next_action"]
     assert 'dispatch.release_run_token {"run_id": "ask-blocker-1"}' in halt["next_action"]

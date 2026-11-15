@@ -24,14 +24,16 @@ def released_holder(root: Path, holder: str, own_run_id: Optional[str], own_plan
     """True when ``holder`` names a run record whose claim no longer holds against ``own_run_id``'s landing.
 
     A halted or resumed run that ``halted_hold_release.release_reason`` frees (successor, superseded or
-    shipped sizing, recorded landed) is released; a holder that is not a run record (a session id) or
+    shipped sizing, recorded landed) is released, and so is a run with no halt marker whose
+    ``run-stage.json`` reads ``landed``; a holder that is not a run record (a session id) or
     whose record is unreadable (OSError or ValueError) is not."""
     try:
         from coordinator_core.ops.dispatch_emit import halted_hold_release
-        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+        from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage, record_dir
 
         if not (record_dir(Path(root), holder) / "halted.json").is_file():
-            return False
+            stage = read_run_stage(Path(root), holder)
+            return bool(stage) and stage.get("stage") == "landed"
         return halted_hold_release.release_reason(Path(root), holder, own_run_id, own_plan) is not None
     except (OSError, ValueError):  # unreadable record: the holder holds
         return False

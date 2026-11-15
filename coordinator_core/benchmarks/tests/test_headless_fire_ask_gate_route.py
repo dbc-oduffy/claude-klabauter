@@ -19,7 +19,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -28,6 +27,7 @@ import pytest
 
 from coordinator_core.benchmarks import headless_fire_ask_gate_route as bench
 from coordinator_core.ops.workflow_fire import headless as real_headless
+from coordinator_core.temp_layout import mkdtemp_in
 from coordinator_core.warm import breadcrumb, client, election, engine_root as engine_root_mod, skew
 
 pytestmark = pytest.mark.cadence
@@ -121,7 +121,9 @@ def test_bounded_call_reports_timeout_on_cold_route(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_WARM", "0")
     report = bench.measure(timeout=0.05)
     assert report["route"] == "cold"
-    assert report["error_code"] == "timeout"
+    # Trap: a race, not a constant. An unstamped dev checkout's cold interpreter can refuse
+    # (-32005) inside the 50ms timeout; either answer is bounded, and a hang fails both.
+    assert report["error_code"] in ("timeout", bench.UNSTAMPED_ENGINE_ROOT_CODE)
     assert report["spawns"] >= 1
     assert report["process_ms"] > 0
     assert set(report) >= {"route", "process_ms", "spawns", "error_code", "fallthrough_reason"}
@@ -163,7 +165,7 @@ def _run_as_interpreter_at(monkeypatch, root: Path) -> None:
 @pytest.fixture()
 def warm_world(tmp_path, monkeypatch):
     """Real-client env on a short runtime base, a `_spawn_once` the client cannot use to start servers, and teardown."""
-    rt = Path(tempfile.mkdtemp(prefix="hf-", dir=None if os.name == "nt" else "/tmp"))
+    rt = mkdtemp_in("hf-", None if os.name == "nt" else "/tmp")
     monkeypatch.setenv("COORDINATOR_WARM", "1")
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(rt))
     monkeypatch.setattr(client, "_spawn_once", lambda: None)

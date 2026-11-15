@@ -272,18 +272,19 @@ _INTERPRETER_RE = re.compile(
     r"(?<![\w./\\-])(?:python(?:3(?:\.\d+)?)?|py|pythonw|node|nodejs|deno|bun|ruby|perl)(?:\.exe)?(?=[\s;&|]|$)",
     re.IGNORECASE,
 )
-_LEADING_CD_RE = re.compile(r"""^\s*cd\s+(?:/d\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)\s*(?:&&|;)""")
+_LEADING_CD_RE = re.compile(r"""\s*cd\s+(?:/d\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)\s*(?:&&|;)""")
 _MSYS_DRIVE_CAND_RE = re.compile(r"^/[A-Za-z](?:/|$)")
 
 
 def _effective_cwd(cmd: str, cwd: Optional[str]) -> Optional[str]:
-    """`cwd` after a leading `cd <dir> &&` in the same command."""
-    m = _LEADING_CD_RE.match(cmd)
-    if not m:
-        return cwd
-    target = m.group(1).strip("\"'")
-    resolved = resolve_relative(cwd or "", target)
-    return resolved or cwd
+    """`cwd` after the leading `cd <dir> &&` chain: `cd /tmp && cd / && w` writes under `/`."""
+    pos = 0
+    while True:
+        m = _LEADING_CD_RE.match(cmd, pos)
+        if not m:
+            return cwd
+        cwd = resolve_relative(cwd or "", m.group(1).strip("\"'")) or cwd
+        pos = m.end()
 
 
 def _invoked_heads(cmd: str) -> frozenset:
@@ -407,6 +408,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if name:
             return _warn(name)
         cmd = _strip_heredoc_bodies(cmd)
+        cwd = _effective_cwd(cmd, cwd)
         if not _can_create_new(cmd, cwd, dialect, env):
             return None
         name = _new_entry(cmd, cwd, dialect, env)

@@ -45,6 +45,11 @@ Wire params:
         clear the bar and flip to 1. Pure function of tag_counts only — no
         wallclock, no randomness, no I/O (DR-208 COMPUTE_ONLY).
 
+    wiki_names (list[str], optional) — top-level wiki page stems and folder names of the
+        target repo, supplied by the caller (this op reads no disk). A bare tag sharing a stem
+        with one (see ``_wiki_home``) is kept rather than dropped ``bare-no-sibling``. Absent
+        or empty: verdicts are unchanged.
+
 Reply fields:
     {
       "verdicts": [
@@ -230,6 +235,47 @@ def _leading_token(slug: str) -> str:
     return slug.split("-", 1)[0]
 
 
+def _shared_prefix_len(a: str, b: str) -> int:
+    n = 0
+    for x, y in zip(a.split("-"), b.split("-")):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
+_WIKI_STEM_MIN_PREFIX = 6
+_WIKI_STEM_MIN_SHARE = 0.6
+
+
+def _wiki_home(slug: str, wiki_leads: dict) -> Optional[str]:
+    """The wiki name a bare slug shares a stem with, else None.
+
+    A stem is shared when the slug and a wiki name's leading token agree on a
+    common character prefix of at least ``_WIKI_STEM_MIN_PREFIX`` characters
+    covering at least ``_WIKI_STEM_MIN_SHARE`` of the shorter token
+    (``installer`` ~ ``installation``; ``meta`` !~ ``metadata``).
+    """
+    for lead, name in wiki_leads.items():
+        n = 0
+        for x, y in zip(slug, lead):
+            if x != y:
+                break
+            n += 1
+        if n >= _WIKI_STEM_MIN_PREFIX and n >= _WIKI_STEM_MIN_SHARE * min(len(slug), len(lead)):
+            return name
+    return None
+
+
+def _wiki_leads(wiki_names) -> dict:
+    leads: dict[str, str] = {}
+    for name in sorted(str(n) for n in (wiki_names or ())):
+        norm = _normalize_shape(name)
+        if norm:
+            leads.setdefault(_leading_token(norm), name)
+    return leads
+
+
 def _degraded_reply() -> dict:
     return {
         "verdicts": [],
@@ -249,7 +295,8 @@ def _degraded_reply() -> dict:
     }
 
 
-def _classify(tag_counts: dict, keep_threshold: int) -> list:
+def _classify(tag_counts: dict, keep_threshold: int, wiki_names=()) -> list:
+    wiki_leads = _wiki_leads(wiki_names)
     raw_to_slug: dict[str, Optional[str]] = {}
     placeholders: set[str] = set()
     for raw in tag_counts:
@@ -275,6 +322,24 @@ def _classify(tag_counts: dict, keep_threshold: int) -> list:
 
         if not compound_members:
             for slug in bare_members:
+                home = _wiki_home(slug, wiki_leads)
+                if home is not None:
+                    if slug_counts[slug] < keep_threshold:
+                        slug_disposition[slug] = (
+                            "drop",
+                            None,
+                            f"count {slug_counts[slug]} < keep_threshold {keep_threshold}"
+                            f" (wiki home {home!r}), no merge target",
+                            "below-threshold",
+                        )
+                    else:
+                        slug_disposition[slug] = (
+                            "keep",
+                            None,
+                            f"bare token with an existing wiki home {home!r}",
+                            None,
+                        )
+                    continue
                 note = ""
                 if slug in _BARE_ABSTRACTION_VOCAB:
                     note = " (also matches the closed bare-abstraction word list — secondary, non-gating confirmation)"
@@ -315,12 +380,44 @@ def _classify(tag_counts: dict, keep_threshold: int) -> list:
         for slug in members_sorted:
             if slug == primary:
                 continue
-            slug_disposition[slug] = (
-                "merge",
-                primary,
-                f"shares leading token {_leading!r} with larger/canonical sibling {primary!r}",
-                None,
-            )
+            if slug_counts[primary] > slug_counts[slug]:
+                slug_disposition[slug] = (
+                    "merge",
+                    primary,
+                    f"shares leading token {_leading!r} with larger sibling {primary!r}"
+                    f" ({slug_counts[primary]} > {slug_counts[slug]})",
+                    None,
+                )
+            elif _shared_prefix_len(slug, primary) >= 2:
+                slug_disposition[slug] = (
+                    "merge",
+                    primary,
+                    f"shares a multi-token prefix with canonical sibling {primary!r}",
+                    None,
+                )
+            elif slug in bare_members and (home := _wiki_home(slug, wiki_leads)) is not None:
+                slug_disposition[slug] = (
+                    "keep",
+                    None,
+                    f"bare token with an existing wiki home {home!r}",
+                    None,
+                )
+            elif slug in bare_members:
+                slug_disposition[slug] = (
+                    "drop",
+                    None,
+                    "bare token not smaller than its top compound sibling"
+                    f" {primary!r} and shares no multi-token prefix (no merge target)",
+                    "bare-no-sibling",
+                )
+            else:
+                slug_disposition[slug] = (
+                    "keep",
+                    None,
+                    f"ties {primary!r} in count and shares only leading token {_leading!r};"
+                    " not merged",
+                    None,
+                )
 
     verdicts = []
     for raw in placeholders:
@@ -391,7 +488,7 @@ def _classify(tag_counts: dict, keep_threshold: int) -> list:
     return verdicts
 
 
-def _resolve_keep_threshold(tag_counts: dict, keep_threshold) -> tuple:
+def _resolve_keep_threshold(tag_counts: dict, keep_threshold, wiki_names=()) -> tuple:
     if keep_threshold is not _AUTO:
         return keep_threshold, False
 
@@ -399,7 +496,7 @@ def _resolve_keep_threshold(tag_counts: dict, keep_threshold) -> tuple:
     if total_nuggets == 0:
         return _COLD_START_FALLBACK_THRESHOLD, True
 
-    probe_verdicts = _classify(tag_counts, _DEFAULT_KEEP_THRESHOLD)
+    probe_verdicts = _classify(tag_counts, _DEFAULT_KEEP_THRESHOLD, wiki_names)
     dropped_nuggets = sum(v["count"] for v in probe_verdicts if v["verdict"] == "drop")
     drop_share = dropped_nuggets / total_nuggets
     if drop_share > _AUTO_THRESHOLD_DROP_SHARE_CAP:
@@ -430,12 +527,13 @@ def curate_clusters(
     tag_counts: dict,
     *,
     keep_threshold=_AUTO,
+    wiki_names=(),
 ) -> dict:
     if not isinstance(tag_counts, dict) or not tag_counts:
         return _degraded_reply()
 
-    threshold, threshold_auto = _resolve_keep_threshold(tag_counts, keep_threshold)
-    verdicts = _classify(tag_counts, threshold)
+    threshold, threshold_auto = _resolve_keep_threshold(tag_counts, keep_threshold, wiki_names)
+    verdicts = _classify(tag_counts, threshold, wiki_names)
 
     verdicts.sort(key=lambda v: v["tag"])
     drop_by_cause = {"placeholder": 0, "bare-no-sibling": 0, "below-threshold": 0}
@@ -494,4 +592,7 @@ def _handler(params: dict, repo_root=None) -> dict:
         or keep_threshold < 1
     ):
         keep_threshold = _AUTO
-    return curate_clusters(tag_counts, keep_threshold=keep_threshold)
+    wiki_names = params.get("wiki_names")
+    if not isinstance(wiki_names, (list, tuple)):
+        wiki_names = ()
+    return curate_clusters(tag_counts, keep_threshold=keep_threshold, wiki_names=wiki_names)

@@ -556,3 +556,134 @@ def test_a_refused_boot_returns_nonzero_before_binding() -> None:
         src.index("_assert_credential_ready") : src.index("ThreadingHTTPServer(")
     ]
     assert "return 3" in guard_block, "the guard must refuse with a non-zero exit"
+
+
+# ---------------------------------------------------------------------------
+# Logon-SID read ACE on the credential files
+# ---------------------------------------------------------------------------
+
+_BROAD_TRUSTEES = ("WD", "AU", "BU", "IU", "RC", "S-1-1-0")
+
+
+def _aces(path: Path) -> list:
+    sddl = cookie._directory_dacl_sddl(path)
+    return [m.group(1).split(";") for m in cookie._ACE_RE.finditer(sddl)]
+
+
+def read_file_as_restricted_token(path: Path, restricting_sids: list) -> bool:
+    """True when `path` opens for read under a token restricted to
+    `restricting_sids` (the codex workspace-write shape); False on denial."""
+    import ctypes
+    from ctypes import wintypes
+
+    import _winapi
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    advapi32.OpenProcessToken.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)
+    ]
+    advapi32.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+    advapi32.CreateRestrictedToken.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    advapi32.DuplicateTokenEx.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    advapi32.SetThreadToken.argtypes = [ctypes.c_void_p, wintypes.HANDLE]
+
+    class _SID_AND_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", wintypes.DWORD)]  # noqa: identity-names -- Windows SID_AND_ATTRIBUTES field
+
+    base = wintypes.HANDLE()
+    assert advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x2 | 0x8 | 0x1, ctypes.byref(base))
+    entries = (_SID_AND_ATTRIBUTES * len(restricting_sids))()
+    for i, text in enumerate(restricting_sids):
+        psid = ctypes.c_void_p()
+        assert advapi32.ConvertStringSidToSidW(text, ctypes.byref(psid))
+        entries[i].Sid = psid  # noqa: identity-names -- Windows SID_AND_ATTRIBUTES field
+    restricted = wintypes.HANDLE()
+    assert advapi32.CreateRestrictedToken(
+        base, 0, 0, None, 0, None, len(entries), entries, ctypes.byref(restricted)
+    )
+    impersonation = wintypes.HANDLE()
+    assert advapi32.DuplicateTokenEx(restricted, 0x02000000, None, 2, 2, ctypes.byref(impersonation))
+    assert advapi32.SetThreadToken(None, impersonation)
+    try:
+        handle = _winapi.CreateFile(
+            str(path), _winapi.GENERIC_READ, 0x7, 0, _winapi.OPEN_EXISTING, 0, 0
+        )
+    except PermissionError:
+        return False
+    else:
+        _winapi.CloseHandle(handle)
+        return True
+    finally:
+        advapi32.SetThreadToken(None, None)
+        for h in (impersonation, restricted, base):
+            kernel32.CloseHandle(h)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DACL semantics are Windows-only")
+def test_mint_grants_the_logon_sid_read_only_on_cookie_and_curlrc(tmp_path: Path) -> None:
+    from coordinator_core.warm import election
+
+    logon = election.current_logon_sid()
+    assert logon is not None
+    cookie.mint(tmp_path, port=1234)
+    for path in (cookie.cookie_path(tmp_path), cookie.curl_config_path(tmp_path)):
+        aces = _aces(path)
+        logon_aces = [a for a in aces if a[5] == logon]
+        assert [(a[0], a[2]) for a in logon_aces] == [("A", "FR")]
+        for ace in aces:
+            assert ace[5] not in _BROAD_TRUSTEES
+        # only the file is granted: the directory carries no logon-SID ACE
+        assert not [a for a in _aces(path.parent) if a[5] == logon]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DACL semantics are Windows-only")
+def test_grant_is_idempotent_and_adds_no_second_ace(tmp_path: Path) -> None:
+    from coordinator_core.warm import election
+
+    cookie.mint(tmp_path)
+    path = cookie.cookie_path(tmp_path)
+    before = _aces(path)
+    assert cookie.grant_logon_sid_read(path) is True
+    assert _aces(path) == before
+    assert len([a for a in before if a[5] == election.current_logon_sid()]) == 1
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DACL semantics are Windows-only")
+def test_no_logon_sid_means_no_ace_added(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.warm import election
+
+    logon = election.current_logon_sid()
+    monkeypatch.setattr(election, "current_logon_sid", lambda: None)
+    cookie.mint(tmp_path)
+    assert not [a for a in _aces(cookie.cookie_path(tmp_path)) if a[5] == logon]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="restricted tokens are Windows-only")
+def test_restricted_token_with_logon_sid_reads_the_cookie_and_curlrc(tmp_path: Path) -> None:
+    from coordinator_core.warm import election
+
+    logon = election.current_logon_sid()
+    assert logon is not None
+    cookie.mint(tmp_path, port=1234)
+    for path in (cookie.cookie_path(tmp_path), cookie.curl_config_path(tmp_path)):
+        assert read_file_as_restricted_token(path, [logon, "S-1-1-0"]) is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="restricted tokens are Windows-only")
+def test_restricted_token_is_refused_a_credential_file_without_the_grant(tmp_path: Path) -> None:
+    from coordinator_core.warm import election
+
+    logon = election.current_logon_sid()
+    assert logon is not None
+    plain = tmp_path / "plain-secret"
+    plain.write_text("x")
+    assert read_file_as_restricted_token(plain, [logon, "S-1-1-0"]) is False

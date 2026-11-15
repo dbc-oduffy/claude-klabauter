@@ -1011,3 +1011,37 @@ def test_chain_hop_keeps_the_hand_off_run_id_when_its_path_is_not_a_run_script(t
 @pytest.mark.parametrize("kind", ["warp", "handoffs"])
 def test_home_prefix_is_repo_relative_state_home_slash_terminated(kind: str) -> None:
     assert fl._home_prefix(kind) == f"state/{kind}/"
+
+
+def _chain_emit(repo, sizing_rel, chain_parent=None):
+    from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+
+    params = {"ask": True, "sizing_path": sizing_rel, "target_root": str(repo), LAUNCHER_CHILD_EMIT_PARAM: True}
+    return _dispatch_emit({**params, "chain_parent": chain_parent} if chain_parent else params)
+
+
+def test_a_chain_emit_for_a_halted_entry_run_mints_a_fresh_run_the_launcher_accepts(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.tests.test_stop_after_survives_chained_runs_e2e import REL, _SIZING_DOC, _BASE, _BLITZ
+    from coordinator_core.ops.dispatch_emit import ask_compose
+    import yaml
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / REL).parent.mkdir(parents=True)
+    (tmp_path / REL).write_text(yaml.safe_dump(_SIZING_DOC, sort_keys=False), encoding="utf-8", newline="\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: _BLITZ)
+    monkeypatch.setattr(halted_run, "_RESUME_SPAWNER", lambda root, run_id: None)
+
+    entry = _chain_emit(tmp_path, REL)
+    halted_run.write_halt_marker(record_dir(tmp_path, entry["run_id"]), halted="criterion", sizing_rel=REL, run_base_sha=_BASE)
+
+    chained = _chain_emit(tmp_path, REL, chain_parent=entry["run_id"])
+
+    assert chained["run_id"] != entry["run_id"]
+    assert Path(chained["path"]).name != Path(entry["path"]).name
+    assert Path(chained["path"]).name == chained["run_id"] + ".workflow.mjs"
+    rebound = _chain_emit(tmp_path, REL)
+    assert rebound["run_id"] == chained["run_id"]

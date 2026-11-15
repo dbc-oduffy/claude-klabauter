@@ -1013,15 +1013,37 @@ class _Reading:
         self.trusted = trusted
 
 
+_UNIT = 10_000_000
+_NOW = 10_000 * _UNIT
+_AGED_CTIME = _NOW - 3600 * _UNIT
+_YOUNG_CTIME = _NOW - 60 * _UNIT
+
+
 class _Proc:
-    def __init__(self, name):
+    def __init__(self, name, ctime=_AGED_CTIME):
         self.name = name
+        self.pid = id(self) % 1_000_000 + 10
+        self.ppid = 999_999_999
+        self.ctime = ctime
 
 
-def _memory_tick_lines(tmp_path, monkeypatch, avail_mb=None, floor=4096, procs=(), reaped=(), trusted=True):
+class _DeadHost:
+    @staticmethod
+    def creation_time(pid):
+        return None
+
+
+def _memory_tick_lines(tmp_path, monkeypatch, avail_mb=None, floor=4096, procs=(), reaped=(), trusted=True,
+                       ctime=_AGED_CTIME):
+    from coordinator_core.bash_guards import _host_probe
+    from coordinator_core.box_memory import pressure
+
+    monkeypatch.setattr(_host_probe, "ctime_units_per_second", lambda: _UNIT)
+    monkeypatch.setattr(pressure, "now_ctime", lambda: _NOW)
+    monkeypatch.setattr(watch, "_host_primitives", lambda: _DeadHost)
     monkeypatch.setattr(watch, "_read_memory", lambda: _Reading(avail_mb, trusted))
     monkeypatch.setattr(watch, "_memory_floor_mb", lambda: floor)
-    monkeypatch.setattr(watch, "_process_census", lambda: [_Proc(n) for n in procs])
+    monkeypatch.setattr(watch, "_process_census", lambda: [_Proc(n, ctime) for n in procs])
     monkeypatch.setattr(watch, "_reap_orphans", lambda: list(reaped))
     stream = io.StringIO()
     with mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
@@ -1062,6 +1084,12 @@ def test_tick_once_storm_emits_grep_storm_line_naming_the_reap(tmp_path, monkeyp
     assert len(lines) == 1
     assert lines[0].startswith("MEMORY grep-storm")
     assert "orphan_reap" in lines[0]
+    assert "30 min" in lines[0]
+
+
+def test_tick_once_young_dead_parent_searches_do_not_storm(tmp_path, monkeypatch):
+    assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=9000, procs=["grep.exe"] * 9,
+                              ctime=_YOUNG_CTIME) == []
 
 
 def test_tick_once_below_storm_threshold_stays_quiet(tmp_path, monkeypatch):
@@ -1205,7 +1233,7 @@ def test_poll_once_reports_a_departed_peer_by_name():
     (_parked, _decl, notes, _inbox_open), emitted = _gone_poll(
         prev_parked={"peer-1": False, "peer-gone": False},
         agents=[_agent("peer-1")],
-        prev_names={"peer-gone": {"name": "claude-klabauter-3e", "last_seen": last_seen}},
+        prev_names={"peer-gone": {"name": "claude-klabauter-3e", "last_seen": last_seen, "absent_ticks": 1}},
     )
     assert len(emitted) == 1
     assert emitted[0].startswith("GONE session=claude-klabauter-3e [peer-gone]")
@@ -1248,7 +1276,7 @@ def test_non_sandbox_lookalike_dirs_stay_peers():
 def test_gone_fires_once_per_session_id_across_a_name_flip():
     """Replay of w-774f66365f5e-9e -> w-774f66365f5e-84 on one session id."""
     t0 = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
-    prev_names = {SANDBOX_ID: {"name": "w-774f66365f5e-9e", "last_seen": t0}}
+    prev_names = {SANDBOX_ID: {"name": "w-774f66365f5e-9e", "last_seen": t0, "absent_ticks": 1}}
     (parked, _d, notes, _io), emitted = _gone_poll(
         prev_parked={SANDBOX_ID: False}, agents=[], prev_names=prev_names
     )
@@ -1271,9 +1299,45 @@ def test_a_different_real_peer_leaving_still_fires_one_gone():
     (parked, _d, notes, _io), emitted = _gone_poll(
         prev_parked={SANDBOX_ID: False, "peer-2": False},
         agents=[],
-        prev_names={SANDBOX_ID: {"gone_reported": True, "gone_at": 1.0}},
+        prev_names={
+            SANDBOX_ID: {"gone_reported": True, "gone_at": 1.0},
+            "peer-2": {"absent_ticks": 1},
+        },
     )
     assert len(emitted) == 1 and "peer-2" in emitted[0]
+
+
+def test_one_tick_absence_emits_no_gone_and_carries_the_session():
+    (parked, _d, notes, _io), emitted = _gone_poll(
+        prev_parked={"peer-1": False, "peer-x": False},
+        agents=[_agent("peer-1")],
+        prev_names={"peer-x": {"name": "claude-klabauter-x", "last_seen": 1.0}},
+    )
+    assert emitted == []
+    assert parked["peer-x"] is False
+    assert notes["peer-x"]["absent_ticks"] == 1 and notes["peer-x"]["name"] == "claude-klabauter-x"
+
+
+def test_a_session_back_after_one_absent_tick_resets_and_a_later_blip_is_silent_again():
+    (parked, _d, notes, _io), emitted = _gone_poll(
+        prev_parked={"peer-x": False}, agents=[], prev_names={}
+    )
+    assert emitted == []
+    (parked, _d, notes, _io), emitted = _gone_poll(
+        prev_parked=parked, agents=[_agent("peer-x")], prev_names=notes
+    )
+    assert emitted == [] and "absent_ticks" not in notes["peer-x"]
+    (parked, _d, notes, _io), emitted = _gone_poll(prev_parked=parked, agents=[], prev_names=notes)
+    assert emitted == []
+
+
+def test_two_consecutive_absent_ticks_emit_exactly_one_gone():
+    (parked, _d, notes, _io), emitted = _gone_poll(prev_parked={"peer-x": False}, agents=[], prev_names={})
+    assert emitted == []
+    (parked, _d, notes, _io), emitted = _gone_poll(prev_parked=parked, agents=[], prev_names=notes)
+    assert len(emitted) == 1 and "peer-x" in emitted[0]
+    (parked, _d, notes, _io), emitted = _gone_poll(prev_parked=parked, agents=[], prev_names=notes)
+    assert emitted == []
 
 
 @pytest.mark.parametrize("key", ["peer-codex-codex-01a1b601-38da-71791", "box-b:peer-codex-codex-01a1b601-38da-71791"])
@@ -1290,7 +1354,7 @@ def test_named_session_departure_still_emits_gone_beside_a_transient_codex_peer(
     (_p, _d, _n, _io), emitted = _gone_poll(
         prev_parked={"peer-codex-codex-x-1": False, "peer-gone": False},
         agents=[],
-        prev_names={"peer-gone": {"name": "claude-klabauter-3e", "last_seen": 1.0}},
+        prev_names={"peer-gone": {"name": "claude-klabauter-3e", "last_seen": 1.0, "absent_ticks": 1}},
     )
     assert len(emitted) == 1 and "[peer-gone]" in emitted[0]
 
@@ -1299,7 +1363,7 @@ def test_poll_once_still_reports_a_departure_it_cannot_name():
     """An unnameable departure is still worth a line -- silence was the defect,
     and the uuid at least tells a reader which roster row to drop."""
     (_p, _d, _n, _io), emitted = _gone_poll(
-        prev_parked={"peer-gone": True}, agents=[], prev_names=None
+        prev_parked={"peer-gone": True}, agents=[], prev_names={"peer-gone": {"absent_ticks": 1}}
     )
     assert len(emitted) == 1
     assert emitted[0].startswith("GONE session=peer-gone ")
@@ -1314,6 +1378,7 @@ def test_poll_once_never_reports_the_watcher_or_the_group_em_as_gone():
     (_p, _d, _n, _io), emitted = _gone_poll(
         prev_parked={"waker-1": False, "group-em-1": False, "peer-1": False},
         agents=[],
+        prev_names={"peer-1": {"absent_ticks": 1}},
     )
     assert len(emitted) == 1
     assert "peer-1" in emitted[0]
@@ -1437,7 +1502,9 @@ def test_no_spawn_event_exists_so_a_mass_arrival_cannot_be_reported():
 def test_a_genuinely_empty_repo_still_reports_its_departures():
     """The flag must separate "unreadable" from "empty", not collapse both into
     a raise -- a fleet that really did drain is exactly what GONE is for."""
-    (_p, _d, _n, _io), emitted = _gone_poll(prev_parked={"peer-1": False}, agents=[])
+    (_p, _d, _n, _io), emitted = _gone_poll(
+        prev_parked={"peer-1": False}, agents=[], prev_names={"peer-1": {"absent_ticks": 1}}
+    )
     assert len(emitted) == 1
     assert "peer-1" in emitted[0]
 
@@ -1503,10 +1570,13 @@ def test_two_stateless_wakes_report_a_departure_by_the_name_the_first_one_saw():
         assert emitted == []
 
         assert _gone_tick(root, [], emitted, t0 + timedelta(minutes=5)) == 0
+        assert emitted == []
+
+        assert _gone_tick(root, [], emitted, t0 + timedelta(minutes=10)) == 0
         assert len(emitted) == 1
         assert emitted[0].startswith("GONE session=claude-klabauter-3e [sid-3e]")
         assert "last_seen=2026-09-01T12:00:00Z" in emitted[0]
-        assert "gap=300s" in emitted[0]
+        assert "gap=600s" in emitted[0]
 
 
 def test_a_wake_diffing_against_a_long_dead_watchs_map_reports_every_departure():
@@ -1531,13 +1601,15 @@ def test_a_wake_diffing_against_a_long_dead_watchs_map_reports_every_departure()
 
         # Ten hours later: the prior map is old, but every departure is real.
         _gone_tick(root, [], emitted, t0 + timedelta(hours=10), tick_interval_seconds=60.0)
+        assert emitted == []
+        _gone_tick(root, [], emitted, t0 + timedelta(hours=10, minutes=1), tick_interval_seconds=60.0)
         assert len(emitted) == 3
         assert all(line.startswith("GONE") for line in emitted)
         assert not any(line.startswith("STALE-PRIOR") for line in emitted)
 
         # And the very next tick is clean, as it always was.
         emitted.clear()
-        _gone_tick(root, [_agent("sid-new")], emitted, t0 + timedelta(hours=10, minutes=1), tick_interval_seconds=60.0)
+        _gone_tick(root, [_agent("sid-new")], emitted, t0 + timedelta(hours=10, minutes=2), tick_interval_seconds=60.0)
         assert emitted == []
 
 
@@ -1560,6 +1632,8 @@ def test_a_departure_across_two_wakes_is_reported_whatever_the_cadence():
         _gone_tick(root, [_agent("sid-1")], emitted, t0, tick_interval_seconds=60.0)
         emitted.clear()
         _gone_tick(root, [], emitted, t0 + timedelta(seconds=90), tick_interval_seconds=60.0)
+        assert emitted == []
+        _gone_tick(root, [], emitted, t0 + timedelta(seconds=150), tick_interval_seconds=60.0)
         assert len(emitted) == 1
         assert emitted[0].startswith("GONE session=sid-1")
 
@@ -1580,7 +1654,7 @@ def test_gone_emits_even_when_persistence_raises(tmp_path):
     does not depend on persistence succeeding.
     """
     now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
-    watch.save_prev_parked(str(tmp_path), {"peer-1": False})
+    watch.save_prev_parked(str(tmp_path), {"peer-1": False}, peers={"peer-1": {"absent_ticks": 1}})
 
     stream = io.StringIO()
     with mock.patch.object(
@@ -2976,7 +3050,9 @@ def test_session_gone_from_a_readable_box_is_reported_by_key():
     (parked, _d, _n, _io), emitted = _xbox_poll(
         {"peer-1": False, "boxB:s9": False},
         _xbox_snapshot(boxB=(True, [("s2", 5)])),
-        prev_names={"boxB:s9": {"name": "n-s9", "last_seen": _XBOX_NOW.timestamp() - 60}},
+        prev_names={
+            "boxB:s9": {"name": "n-s9", "last_seen": _XBOX_NOW.timestamp() - 60, "absent_ticks": 1}
+        },
     )
     assert "boxB:s9" not in parked
     assert len(emitted) == 1 and emitted[0].startswith("GONE session=n-s9 [boxB:s9]")

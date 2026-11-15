@@ -99,9 +99,42 @@ def test_a_manifest_declared_path_released_per_path_is_dropped_from_holds(tmp_pa
     assert halted_hold_release.without_released_paths(root, holds) == [(HELD, RUN)]
 
 
-def test_a_run_that_is_not_halted_is_refused(tmp_path):
+def test_a_landed_run_is_an_idempotent_ok_and_writes_nothing(tmp_path):
     root = _repo(tmp_path, status="landed")
+    before = _marker(root)
+
+    first = _call(root, run_id=RUN, path=HELD, reason="r")
+    again = _call(root, run_id=RUN, path=HELD, reason="r")
+
+    expected = {"ok": True, "run_id": RUN, "path": HELD, "released": False, "reason": "recorded-landed"}
+    assert first == expected and again == expected
+    assert _marker(root) == before
+
+
+def test_a_run_with_no_marker_whose_stage_reads_landed_is_ok(tmp_path):
+    root = _repo(tmp_path)
+    (record_dir(root, RUN) / "halted.json").unlink()
+    (record_dir(root, RUN) / "run-stage.json").write_text(json.dumps({"stage": "landed"}), encoding="utf-8")
 
     out = _call(root, run_id=RUN, path=HELD, reason="r")
 
-    assert out["ok"] is False and "halted" in out["error"]
+    assert out["ok"] is True and out["released"] is False
+
+
+@pytest.mark.parametrize("status", ["resumed", "superseded"])
+def test_a_run_that_is_neither_halted_nor_landed_is_still_refused(tmp_path, status):
+    root = _repo(tmp_path, status=status)
+    before = _marker(root)
+
+    out = _call(root, run_id=RUN, path=HELD, reason="r")
+
+    assert out["ok"] is False and "neither halted nor landed" in out["error"]
+    assert _marker(root) == before
+
+
+def test_a_run_with_no_marker_and_a_staged_stage_is_refused(tmp_path):
+    root = _repo(tmp_path)
+    (record_dir(root, RUN) / "halted.json").unlink()
+    (record_dir(root, RUN) / "run-stage.json").write_text(json.dumps({"stage": "staged"}), encoding="utf-8")
+
+    assert _call(root, run_id=RUN, path=HELD, reason="r")["ok"] is False

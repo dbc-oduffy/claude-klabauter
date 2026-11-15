@@ -122,11 +122,11 @@ def test_a_truncated_stage_reply_is_recovered_from_disk_before_the_no_gate_repor
     assert "label: 'frozen-waves'" in script and script.index("if (!_rb || !_rb.gate_report_path)") < script.index("label: 'frozen-waves'")
 
 
-def test_roadmap_gate_leg_is_haiku_on_the_mechanical_type(repo):
+def test_roadmap_gate_leg_is_haiku_on_the_gate_type(repo):
     _put(repo)
     script = _compose(repo)
     gate_call = script[script.index("const _gate = await agent("):].split("\n", 1)[0]
-    assert ask_compose._lit(ask_compose._MECHANICAL_AGENT_TYPE) in gate_call
+    assert ask_compose._lit(ask_compose._GATE_AGENT_TYPE) in gate_call
     assert ask_compose._lit(ask_compose._MECHANICAL_MODEL) in gate_call
 
 

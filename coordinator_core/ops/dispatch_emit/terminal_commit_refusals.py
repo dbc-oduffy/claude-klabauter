@@ -495,7 +495,10 @@ def _tests_not_run_refusal(
     None. Runs declaring no test file are not gated."""
     from coordinator_core.ops.dispatch_emit.terminal_commit_review import review_owed_refusal
 
-    owed = review_owed_refusal(worktree_root, inline_review)
+    chunks = getattr(request, "chunks", None)
+    unfinished = set(params.get("incomplete_chunks") or ()) - set(params.get("landed_chunks") or ())
+    within = [p for c in chunks if c.id not in unfinished for p in c.paths] if chunks is not None else None
+    owed = review_owed_refusal(worktree_root, inline_review, within)
     if owed is not None:
         return _error(
             f"{owed}; apply them or dispose each (rejected/suspended) in the reviewer's ledger, then re-fire",
@@ -1112,7 +1115,10 @@ def _peer_held(
 ) -> set:
     """The paths another session's touch claim, or a live peer run's declared writes, holds: a
     peer's in-flight edit sitting in one of this run's directories, not this run's residue.
-    ``run_id`` keeps the caller's own run from holding its own declared paths. No git spawn."""
+    ``run_id`` keeps the caller's own run from holding its own declared paths. A peer whose last-seen
+    hash is the HEAD blob's holds nothing (``land_run._without_landed_claimants``): at most one batched
+    blob read, only when a peer holds; that read is in-process, and spawns one ``git cat-file`` only
+    when the object store cannot resolve it."""
     if not paths:
         return set()
     held: set = set()
@@ -1123,7 +1129,14 @@ def _peer_held(
             answer = claim_index.classify_paths(session_id, paths, cwd=str(worktree_root))
         except Exception:
             return set()
-        held = {p for p, o in answer.by_path.items() if o.verdict == claim_index.OWNERSHIP_PEER}
+        from coordinator_core.ops.dispatch_emit.land_run import _without_landed_claimants
+
+        held = set(
+            _without_landed_claimants(
+                worktree_root,
+                {p: list(o.peers) for p, o in answer.by_path.items() if o.verdict == claim_index.OWNERSHIP_PEER},
+            )
+        )
     from coordinator_core.ops import warp_run_deliverable
 
     try:

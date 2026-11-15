@@ -1630,3 +1630,16 @@ def test_verify_drain_ordering_returns_the_harvest_commit_paths(tmp_path: Path):
     shas = _init_repo_with_commits(tmp_path)
 
     assert _run(verify_drain_ordering(tmp_path, shas["harvest"])) == ["state/distillation-log.md"]
+
+
+def test_missing_run_id_error_names_the_producing_op(tmp_path: Path):
+    (tmp_path / ".git").mkdir()
+    with pytest.raises(ValueError, match="distill.assemble_disposal_manifest"):
+        _run(_handler({"harvest_committed_sha": "abc"}, repo_root=tmp_path / ".git"))
+    assert not (tmp_path / "state").exists()
+
+
+def test_absent_manifest_error_names_assemble_not_stamp_as_producer(tmp_path: Path):
+    (tmp_path / ".git").mkdir()
+    with pytest.raises(ValueError, match="run distill.assemble_disposal_manifest"):
+        _run(_handler({"run_id": "r1", "harvest_committed_sha": "abc"}, repo_root=tmp_path / ".git"))

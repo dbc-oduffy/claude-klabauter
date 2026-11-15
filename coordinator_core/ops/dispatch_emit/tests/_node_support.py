@@ -6,26 +6,24 @@ path is passed in the environment."""
 
 from __future__ import annotations
 
-import atexit
 import os
 import tempfile
 
 _made: list[str] = []
 
 
-def _cleanup() -> None:
-    for p in _made:
+def release_payload_files() -> None:
+    """Unlink every file `payload_file` made since the last release (the conftest autouse fixture
+    calls it per test: an atexit hook runs after the session's managed-temp leak check)."""
+    while _made:
         try:
-            os.unlink(p)
+            os.unlink(_made.pop())
         except OSError:
             pass
 
 
-atexit.register(_cleanup)
-
-
 def payload_file(text: str) -> str:
-    """Path of a temp file holding `text` (utf-8); removed at interpreter exit."""
+    """Path of a temp file holding `text` (utf-8); removed when the calling test ends."""
     fd, path = tempfile.mkstemp(suffix=".txt")
     _made.append(path)
     with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:

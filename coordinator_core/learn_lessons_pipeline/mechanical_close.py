@@ -24,18 +24,22 @@ Rules (one verdict per row; precedence discard > dedupe > retag):
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Sequence
 
 import yaml
 
 from coordinator_core.distill.prompt_tier import estimate_tokens
+from coordinator_core.frontmatter import primitives as fm_primitives
 from coordinator_core.session import record_homes
+from coordinator_core.session.declared_writes import declare_write
 
 Verdict = Literal["dedupe", "discard", "wiki-append", "retag"]
 
@@ -58,6 +62,11 @@ _META_KEYS = frozenset(
 
 # Base loader: every scalar stays a string (no date/bool resolution), and it builds faster.
 _YAML_LOADER = getattr(yaml, "CBaseLoader", yaml.BaseLoader)
+# The grind profiles whose emit closes rows here before any agent spawns.
+PROFILES = frozenset({"lessons"})
+CLOSED_BY = "mechanical"
+# Verdicts the grind closes through `grind_rows.cmd_close`; the others need `apply_verdicts`' write.
+GRIND_CLOSABLE = frozenset({"dedupe", "discard"})
 
 
 @dataclass(frozen=True)
@@ -481,3 +490,76 @@ def apply_verdicts(verdicts: list[MechanicalVerdict], repo_root: Path) -> dict:
     report["tokens_before"] = tokens_before
     report["tokens_after"] = _queue_tokens(repo_root)
     return report
+
+
+def _annotated(text: str, verdict: MechanicalVerdict) -> str:
+    """`text` with the paper trail written into the row: `covered_by` when absent, always `closure_reason`."""
+    if verdict.covered_by and fm_primitives.read_fm_field(text, "covered_by") is None:
+        text = fm_primitives.insert_fm_field(text, "covered_by", verdict.covered_by)
+    if fm_primitives.read_fm_field(text, "closure_reason") is not None:
+        return fm_primitives.replace_fm_field(text, "closure_reason", verdict.reason)
+    return fm_primitives.insert_fm_field(text, "closure_reason", verdict.reason)
+
+
+def apply_closures(
+    verdicts: Sequence[MechanicalVerdict],
+    manifest: Any,
+    *,
+    profile_dir: Path,
+    profile: str,
+    repo_root: Path,
+    run_stamp: str,
+) -> list[str]:
+    """Close each verdict's row through `grind_rows.cmd_close` and return the row ids closed.
+
+    A dedupe or discard closes on the profile's `refute-close` branch (status `discarded`); the
+    row carries `covered_by` and `closure_reason`, so the archived copy states why. A row
+    whose closure is refused is restored byte-for-byte and stays out of the returned list.
+    Trap: a `wiki-append` or `retag` verdict is not a closure here -- it needs `apply_verdicts`'
+    write, so the grind leaves that row for its agent rather than archiving unappended content.
+    """
+    from coordinator_core.backlog_grind_assemble import grind_rows
+
+    repo_root = Path(repo_root)
+    entries = {e.row_id: e for e in manifest.entries}
+    evidence = f"{profile}-mechanical-close.evidence"
+    closed: list[str] = []
+    for verdict in verdicts:
+        entry = entries.get(verdict.row_id)
+        if entry is None or verdict.verdict not in GRIND_CLOSABLE:
+            continue
+        row_path = repo_root / entry.path
+        try:
+            original = row_path.read_bytes()
+            if entry.digest and hashlib.sha256(original).hexdigest() != entry.digest:
+                continue  # edited since selection: the digest passed to cmd_close must be the frozen one
+            annotated = _annotated(original.decode("utf-8"), verdict)
+        except Exception:  # noqa: BLE001 -- not annotatable: leave the row for the LLM path
+            continue
+        declare_write(row_path)
+        row_path.write_bytes(annotated.encode("utf-8"))
+        argv = [
+            "--profile-dir", str(profile_dir),
+            "--profile", profile,
+            "--row", entry.path,
+            "--digest", _sha256(row_path),
+            "--verdict", "refute-close",
+            "--evidence-file", evidence,
+            "--closed-by", CLOSED_BY,
+            "--run-stamp", run_stamp,
+            "--repo-root", str(repo_root),
+        ]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                code = grind_rows.cmd_close(argv)
+        except Exception:  # noqa: BLE001 -- restored below, same as a refusal
+            code = -1
+        if code == 0:
+            closed.append(verdict.row_id)
+        elif row_path.exists():
+            row_path.write_bytes(original)
+    return closed
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()

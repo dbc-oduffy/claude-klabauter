@@ -39,6 +39,15 @@ _BASELINE_REASON = (
 )
 
 _SPAWN_COUNT_HIGH_WATER = {
+    "post_run.finish": {
+        "commit_scoped": {
+            "ceiling": 0,
+            "reason": (
+                "Floor of 0: the gitignore verdict is computed in process and "
+                "handed to commit_v2, so the scoped commit spawns nothing."
+            ),
+        },
+    },
     "changelog.cited_in_range_count": {
         "n_tokens": {"ceiling": 1, "reason": _BASELINE_REASON},
         "no_tokens": {
@@ -313,6 +322,14 @@ _SPAWN_COUNT_HIGH_WATER = {
             "ceiling": 0,
             "reason": (
                 "First recorded 2026-10-06 at the value it entered with: staging stubs and reporting is filesystem-only with no git spawn."
+            ),
+        },
+    },
+    "post_run.finish": {
+        "commit_scoped": {
+            "ceiling": 0,
+            "reason": (
+                "First recorded 2026-11-15 at the value it entered with: the scoped commit runs through ceremony.commit_v2's in-process handler, no git spawn."
             ),
         },
     },

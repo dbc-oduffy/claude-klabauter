@@ -778,3 +778,9 @@ def test_dispatch_queue_emit_carries_repo_trailer_into_script(tmp_path):
         repo_root=repo_root,
     )
     assert json.dumps([_TRAILER]) in output_path.read_text()
+
+
+def test_a_profile_outside_the_mechanical_close_set_carries_no_run_budget(tmp_path):
+    emission = _emit(tmp_path, n_rows=20)
+    assert "budget" not in emission.receipt_extras and "deferred" not in emission.receipt_extras
+    assert len(_batched_row_ids(emission.script)) == _admitted_at(20, _STANDARD_CEILING)

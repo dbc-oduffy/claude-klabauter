@@ -64,3 +64,14 @@ def test_discover_files_finds_test_modules_under_scope(tmp_path: Path):
     (tmp_path / "helper.py").write_text("", encoding="utf-8")
     found = peak_rss.discover_files([str(tmp_path)])
     assert [Path(p).name for p in found] == ["test_a.py"]
+
+
+def test_timeout_is_recorded_per_file_and_the_sweep_continues(tmp_path: Path, capsys):
+    slow = tmp_path / "test_slow.py"
+    slow.write_text("import time\n\ndef test_slow():\n    time.sleep(60)\n", encoding="utf-8")
+    fast = tmp_path / "test_fast.py"
+    fast.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    timed = peak_rss.measure_file(str(slow), timeout_s=3)
+    assert timed.timed_out and timed.returncode == -1
+    after = peak_rss.measure_file(str(fast))
+    assert after.returncode == 0 and not after.timed_out

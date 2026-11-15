@@ -65,28 +65,6 @@ _SUBCOMMAND_WORD = re.compile(r"\b(" + "|".join(sorted(_SUBCOMMANDS, key=len, re
 # site left here fails `test_inventory_has_no_stale_entries`).
 KNOWN_UNBOUNDED_SITES: frozenset[str] = frozenset(
     {
-        "coordinator/bin/fan-out-dispatch.py::_machine_local_get",
-        "coordinator/bin/lib/unimatrix_box_mux.py::machine_local_value",
-        "coordinator/bin/resolve-repo-path.py::_resolve_registry_value",
-        "coordinator/bin/unimatrix-install.py::_write_pin",
-        "coordinator/bin/unimatrix-install.py::pair_key",
-        "coordinator/bin/unimatrix-install.py::recorded_pair_keys",
-        "coordinator/bin/unimatrix-passphrase.py::_vault",
-        "coordinator/bin/unimatrix-relay.py::_pin_value",
-        "coordinator/bin/workday-start-health-probes.py::cmd_working_repo_registration",
-        "coordinator/bin/workday-start-step0.py::_slug_self_heal",
-        "coordinator/bin/workday-start-step0.py::_slug_self_heal#2",
-        "coordinator/bin/workday-start-step0.py::_slug_self_heal#3",
-        "coordinator/lib/install/coordinator_install.py::_machine_local_set",
-        "coordinator_core/benchmarks/percolate_round_ab.py::_real_machine_local_dump",
-        "coordinator_core/install/_shared.py::ml_set",
-        "coordinator_core/ops/capture_fan_out_threshold.py::capture",
-        "coordinator_core/ops/detect_hardware.py::_ml_set",
-        "coordinator_core/ops/new_project_scaffold.py::_register_repo",
-        "scripts/setup.py::install_machine_identity",
-        "scripts/setup.py::install_machine_identity~retry",
-        "scripts/setup.py::offer_warm_opt_in",
-        "scripts/setup.py::register_claude_klabauter_root",
     }
 )
 

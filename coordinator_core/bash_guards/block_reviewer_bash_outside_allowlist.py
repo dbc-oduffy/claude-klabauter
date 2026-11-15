@@ -1128,6 +1128,8 @@ _GIT_SHORT_FORM_OUTPUT_FLAG = "-o"
 #: ``_DEFAULT_RULESET_TYPE_OVERRIDES`` -- see the module docstring's
 #: Amendment 2 entry for why it gets a pytest allowance.
 _REVIEWER_TYPE = "coordinator:code-reviewer"
+_DISTILL_WRITER_TYPE = "coordinator:distill-writer"
+_DISTILL_WRITER_REQUIRED_TYPE_ARG = "--type decision"
 
 #: (Amendment 1, 2026-08-01, reversed 2026-08-02, its ``coordinator:executor``
 #: entry deleted 2026-09-23 by this plan's C1) Per-``effective_type``
@@ -1161,7 +1163,18 @@ _DEFAULT_RULESET_TYPE_OVERRIDES: Dict[str, Dict[str, Any]] = {
     _REVIEWER_TYPE: {
         "interpreter_allowed_modules": ("pytest",),
     },
+    _DISTILL_WRITER_TYPE: {
+        "git_readonly_subcommands": frozenset(),
+        "readonly_fs_binaries": (),
+        "machine_local_readonly_subcommands": frozenset(),
+        "scaffolder_required_arg": _DISTILL_WRITER_REQUIRED_TYPE_ARG,
+    },
 }
+
+#: Guard-local confined types: Bash is confined to the scaffolder with one exact
+#: ``--type`` value and nothing else. Deliberately not members of
+#: ``_helpers._CONFINED_FINDINGS_AGENTS``, which also denies their Write/Edit.
+_SCAFFOLDER_ONLY_TYPES = frozenset({_DISTILL_WRITER_TYPE})
 
 
 #: The one engine op a review-wave agent is emitted to run itself: it partitions the frozen diff
@@ -1486,6 +1499,8 @@ def _is_confined_type(effective_type: str, policy: Any) -> bool:
     unenumerated type reach dispatch at all, so leg 3 only fires for a
     caller that bypassed or predates that gate.
     """
+    if effective_type in _SCAFFOLDER_ONLY_TYPES:
+        return True
     raw = getattr(policy, "bash_policy", None)
     if effective_type and isinstance(raw, dict) and effective_type in raw:
         return True
@@ -1512,6 +1527,8 @@ def _is_type_known(effective_type: str, policy: Any) -> bool:
     """
     if not effective_type:
         return False
+    if effective_type in _SCAFFOLDER_ONLY_TYPES:
+        return True
     raw = getattr(policy, "bash_policy", None)
     if isinstance(raw, dict) and effective_type in raw:
         return True
@@ -2802,6 +2819,8 @@ def _confinement_cause(effective_type: str, policy: Any) -> str:
     Never raises: a resolver that throws yields ``"unenumerated"``, the
     weaker of the two leg-3 claims, so a failure here can only make the
     message less specific, never wrong."""
+    if effective_type in _SCAFFOLDER_ONLY_TYPES:
+        return "scaffolder-only"
     raw = getattr(policy, "bash_policy", None)
     if effective_type and isinstance(raw, dict) and effective_type in raw:
         return "policy"
@@ -2894,6 +2913,31 @@ def _is_fork_identity(agent_type: str, subagent_type: str) -> bool:
     if subagent_type:
         return subagent_type == _FORK_AGENT_TYPE
     return agent_type == _FORK_AGENT_TYPE
+
+
+def _evaluate_scaffolder_only(cmd: str, ruleset: Dict[str, Any]) -> Optional[str]:
+    """Deny reason for a scaffolder-only type's command, or ``None`` when it is
+    exactly one ``coordinator-doc-new`` invocation carrying a single ``--type``
+    whose value is the ruleset's required one. No pipe, no other binary, no other
+    ``--type`` value (``review-probe`` included)."""
+    found, splits, fixup_index = _scan_for_unquoted_metacharacter(cmd)
+    if found is not None:
+        return _metacharacter_deny_reason(found, cmd, fixup_index)
+    required = ruleset["scaffolder_required_arg"]
+    if splits:
+        return f"a pipeline is not allowed -- only a single coordinator-doc-new {required} invocation"
+    if not _first_token_is_allowlisted_binary(cmd, ruleset):
+        return f"not coordinator-doc-new (got: {_extract_first_token(cmd) or 'empty'})"
+    tokens = peel_env_assignment_prefix(_tokenize_segment(cmd))
+    type_values = []
+    for index, token in enumerate(tokens):
+        if token == "--type":
+            type_values.append(tokens[index + 1] if index + 1 < len(tokens) else "")
+        elif token.startswith("--type="):
+            type_values.append(token[len("--type="):])
+    if type_values != [required.split(" ", 1)[1]]:
+        return f"missing required argument: {required} (exact type value required, given once)"
+    return None
 
 
 def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -3036,6 +3080,13 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
         cmd_for_check = _normalize_windows_argv0_head_path_with_spaces(cmd_for_check, ruleset)
         cmd_for_check = _normalize_windows_git_argv0(cmd_for_check, ruleset)
         cmd_for_check = _strip_leading_cd_before_review_prep(cmd_for_check)
+
+    if not deny and effective_type in _SCAFFOLDER_ONLY_TYPES:
+        scaffolder_only_reason = _evaluate_scaffolder_only(cmd_for_check, ruleset)
+        if scaffolder_only_reason is None:
+            return None
+        deny = True
+        deny_reason = scaffolder_only_reason
 
     pipeline_splits: list = []
     if not deny:

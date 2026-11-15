@@ -389,15 +389,25 @@ def _collect_violations(
 
     def walk(node: Any) -> None:
         if isinstance(node, str):
-            for span in _find_absolute_paths(node):
-                if not _is_exempt(
-                    span,
-                    row_input=row_input,
-                    interpreter_text=interpreter_text,
+            spans = _find_absolute_paths(node)
+            exempt = {
+                s
+                for s in spans
+                if _is_exempt(s, row_input=row_input, interpreter_text=interpreter_text)
+            }
+            for span in spans:
+                if span in exempt:
+                    continue
+                # An engine size-cap overflow head-truncates a message's first line to
+                # `<head>...`; that stem is exempt only as a prefix of an exempt span in the
+                # same string, never by shape.
+                if span.endswith("...") and any(
+                    e.startswith(span[:-3]) for e in exempt
                 ):
-                    violations.append(
-                        "%s/%s: leaked %r in message text" % (guard_name, row_id, span)
-                    )
+                    continue
+                violations.append(
+                    "%s/%s: leaked %r in message text" % (guard_name, row_id, span)
+                )
         elif isinstance(node, dict):
             for v in node.values():
                 walk(v)

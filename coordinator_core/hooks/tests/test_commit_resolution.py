@@ -57,7 +57,7 @@ def test_second_call_with_unchanged_index_spawns_zero(repo, spawns):
     second = cr.staged_raw(git_dir)
     assert first == second
     assert [(r.status, r.path) for r in first] == [("A", "a.txt")]
-    assert spawns == [["diff", "--cached", "--raw", "-z", "-M"]]
+    assert spawns == [["diff-index", "--cached", "--raw", "-z", "-M", "HEAD"]]
     assert cr.names(git_dir) == ["a.txt"]
     assert len(spawns) == 1
 
@@ -202,6 +202,36 @@ def test_toplevel_one_spawn_then_cached_for_linked_worktree(repo, spawns, monkey
     top2 = cr.toplevel(git_dir)
     assert os.path.realpath(top1) == os.path.realpath(wt) == os.path.realpath(top2)
     assert spawns == [["rev-parse", "--show-toplevel"]]
+
+
+_WORKTREE_TOUCHING = {"diff", "status", "update-index", "add", "--refresh", "ls-files"}
+
+
+def test_derivation_is_index_only_and_ignores_dirty_worktree_files(repo, spawns):
+    for i in range(50):
+        (repo / f"t{i}.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "more")
+    for i in range(50):
+        (repo / f"t{i}.txt").write_text("v2\n")
+    (repo / "staged.txt").write_text("s\n")
+    _git(repo, "add", "staged.txt")
+    assert cr.names(str(repo / ".git")) == ["staged.txt"]
+    (argv,) = spawns
+    assert argv[0] == "diff-index" and "--cached" in argv
+    assert not _WORKTREE_TOUCHING & set(argv)
+
+
+def test_unborn_head_diffs_against_the_empty_tree(tmp_path, monkeypatch, spawns):
+    monkeypatch.delenv("GIT_INDEX_FILE", raising=False)
+    root = tmp_path / "u"
+    root.mkdir()
+    _git(root, "init", "-q")
+    (root / "a.txt").write_text("a\n")
+    _git(root, "add", "a.txt")
+    monkeypatch.chdir(root)
+    assert cr.names(str(root / ".git")) == ["a.txt"]
+    assert spawns[-1][-1] == cr._EMPTY_TREE
 
 
 def test_live_spawn_failure_raises_resolution_error(tmp_path, monkeypatch):

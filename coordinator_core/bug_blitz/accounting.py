@@ -36,6 +36,14 @@ def _nodeid(test: FailingTest) -> str:
     return f"{test.file}::{test.name}" if test.name else test.file
 
 
+def distinct_targets(tests: tuple[FailingTest, ...]) -> list[FailingTest]:
+    """One test per distinct node id, first-seen order: the row grain shared by the mint and the pairing."""
+    seen: dict[str, FailingTest] = {}
+    for test in tests:
+        seen.setdefault(_nodeid(test), test)
+    return list(seen.values())
+
+
 def _declined_reasons(declined: list[Mapping]) -> dict[str, str]:
     out: dict[str, str] = {}
     for entry in declined:
@@ -54,26 +62,25 @@ def account_targets(
 ) -> list[TargetAccount]:
     """One account per test, in `tests` order. Never raises.
 
-    `minted_ids` pair with the distinct test files in first-seen order (mint_tf_rows' contract). On a
-    count mismatch the files that have an id keep it (the mint emits in file order, so a shortfall
-    is a tail loss) and each file left without one is dropped by name; a surplus id is ignored. Trap: a
-    mint that skipped a middle file shifts every later pairing, so the pairing is trusted only on that
-    tail-loss assumption.
+    `minted_ids` pair with the distinct node ids in first-seen order (mint_tf_rows' contract), so each
+    account names its own row. On a count mismatch the targets that have an id keep it (the mint emits
+    in target order, so a shortfall is a tail loss) and each target left without one is dropped by name;
+    a surplus id is ignored. Trap: a mint that skipped a middle target shifts every later pairing, so
+    the pairing is trusted only on that tail-loss assumption.
     """
-    files: list[str] = []
-    for test in tests:
-        if test.file not in files:
-            files.append(test.file)
+    targets = [_nodeid(t) for t in distinct_targets(tests)]
     mismatch = (
-        f"mint returned {len(minted_ids)} ids for {len(files)} files" if len(minted_ids) != len(files) else None
+        f"mint returned {len(minted_ids)} ids for {len(targets)} targets"
+        if len(minted_ids) != len(targets)
+        else None
     )
-    row_by_file = dict(zip(files, minted_ids))
+    row_by_node = dict(zip(targets, minted_ids))
     declined_by_id = _declined_reasons(declined)
     entry_set = set(entries)
     refused = set(not_admitted)
     accounts: list[TargetAccount] = []
     for test in tests:
-        row_id = row_by_file.get(test.file)
+        row_id = row_by_node.get(_nodeid(test))
         if row_id is None:
             account = TargetAccount(_nodeid(test), test.file, None, "dropped", mismatch or "no row minted")
         elif row_id in refused:

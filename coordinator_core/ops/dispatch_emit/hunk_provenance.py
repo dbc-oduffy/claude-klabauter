@@ -9,8 +9,10 @@ has no producing row. Zero spawn; unknown (unreadable baseline, coarse delta) ho
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Iterator, Mapping, Optional, Sequence
 
 FOREIGN_HUNK_UNPRODUCED = "foreign-hunk-unproduced"
 UNATTRIBUTABLE_LINES = "all (provenance unreadable)"
@@ -33,6 +35,137 @@ class NoWriteBaseline(ValueError):
         self.head_sha = head_sha
 
 
+class RunInvariants:
+    """What a run owns, declares and baselined: read once per instance, on first use, however many
+    paths ask. A read that raised re-raises the same error on every later ask, so a per-path
+    caller keeps its per-path failure semantics. Scoped to one landing by the caller; never cached
+    across landings."""
+
+    def __init__(self, root: Path, run_id: str) -> None:
+        self.root = Path(root)
+        self.run_id = run_id
+        self._memo: dict = {}
+
+    def _once(self, key: object, fn):
+        if key not in self._memo:
+            try:
+                self._memo[key] = (True, fn())
+            except Exception as exc:  # noqa: BLE001 -- replayed to every asker
+                self._memo[key] = (False, exc)
+        ok, value = self._memo[key]
+        if not ok:
+            raise value
+        return value
+
+    def own_artifacts(self):
+        from coordinator_core.ops.dispatch_emit import run_artifact_ownership
+
+        return self._once("own", lambda: run_artifact_ownership.own_artifact_paths(self.root, self.run_id))
+
+    def manifest(self) -> dict:
+        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
+
+        return self._once("manifest", lambda: hha._manifest(self.root, self.run_id))
+
+    def baseline(self) -> Optional[dict]:
+        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
+
+        def build():
+            with hha.pinned_manifest(self.root, self.run_id, self.manifest()):
+                return hha._baseline(self.root, self.run_id)
+
+        return self._once("baseline", build)
+
+    def declared(self) -> frozenset:
+        """Normalised manifest `rows[].writes` paths."""
+        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
+
+        def build():
+            rows = self.manifest().get("rows")
+            return frozenset(
+                hha._norm(w)
+                for row in (rows if isinstance(rows, list) else ())
+                for w in ((row.get("writes") if isinstance(row, dict) else None) or ())
+                if isinstance(w, str)
+            )
+
+        return self._once("declared", build)
+
+    def kept(self, run: Optional[str] = None) -> dict:
+        """`kept_work.kept_fingerprints` of `run` (default this run), read once per run."""
+        from coordinator_core.ops.dispatch_emit import kept_work
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+        target = run or self.run_id
+        return self._once(("kept", target), lambda: kept_work.kept_fingerprints(record_dir(self.root, target)))
+
+    def predecessors(self) -> tuple:
+        """Earlier runs of this run's lineage: those bound to its sizing, plus `ask_stage._lineage_kin`
+        (the `resumed_from` chain, earlier-sizing runs, an unbound first-fire ask). Empty when unreadable."""
+
+        def build() -> tuple:
+            out: dict = {}
+            try:
+                out.update(dict.fromkeys(self.own_artifacts().predecessors))
+            except Exception:  # noqa: BLE001 -- unreadable lineage names no predecessor
+                pass
+            try:
+                from coordinator_core.ops.dispatch_emit.ask_stage import _lineage_kin
+
+                out.update(dict.fromkeys(_lineage_kin(self.root, self.run_id)))
+            except Exception:  # noqa: BLE001
+                pass
+            return tuple(out)
+
+        return self._once("predecessors", build)
+
+    def own_kept(self) -> dict:
+        """`kept(path)` blobs of this run and its same-sizing predecessors: the bytes a predecessor fire
+        wrote are this run's work. A predecessor whose kept record cannot be read contributes nothing."""
+
+        def build() -> dict:
+            out: dict = {k: set(v) for k, v in self.kept().items()}
+            for pred in self.predecessors():
+                try:
+                    for rel, blobs in self.kept(pred).items():
+                        out.setdefault(rel, set()).update(blobs)
+                except Exception:  # noqa: BLE001 -- unreadable evidence is none
+                    continue
+            return {k: frozenset(v) for k, v in out.items()}
+
+        return self._once("own_kept", build)
+
+
+_ACTIVE: ContextVar[Optional[RunInvariants]] = ContextVar("hunk_provenance_invariants", default=None)
+
+
+def run_invariants(root: Path, run_id: str) -> RunInvariants:
+    """A fresh `RunInvariants` for `run_id`; pass it as `invariants=` or open `invariants_scope`."""
+    return RunInvariants(root, run_id)
+
+
+@contextmanager
+def invariants_scope(root: Path, run_id: str, invariants: Optional[RunInvariants] = None) -> Iterator[RunInvariants]:
+    """Within the block every provenance helper for `run_id` under `root` shares one `RunInvariants`
+    (the one given, else the enclosing scope's, else a new one)."""
+    inv = invariants or _active(root, run_id) or RunInvariants(root, run_id)
+    token = _ACTIVE.set(inv)
+    try:
+        yield inv
+    finally:
+        _ACTIVE.reset(token)
+
+
+def _active(root: Path, run_id: str) -> Optional[RunInvariants]:
+    inv = _ACTIVE.get()
+    return inv if inv is not None and inv.run_id == run_id and inv.root == Path(root) else None
+
+
+def _inv(root: Path, run_id: str) -> RunInvariants:
+    """The enclosing scope's invariants for this run, else a one-shot instance (no sharing)."""
+    return _active(root, run_id) or RunInvariants(root, run_id)
+
+
 def unproduced_hunks(
     root: Path,
     run_id: str,
@@ -41,6 +174,7 @@ def unproduced_hunks(
     own_plan: Optional[str],
     advisories: Optional[list] = None,
     settled: Optional[dict] = None,
+    invariants: Optional[RunInvariants] = None,
 ) -> list:
     """`[landing_integrity.Finding(path, FOREIGN_HUNK_UNPRODUCED, detail)]` per path whose committed
     blob holds a hunk no row of `run_id` produced; the detail names the probable owner (first
@@ -54,7 +188,17 @@ def unproduced_hunks(
     (its write_baseline names it, or it is a run-own artifact): there the unattributable read is
     appended to `advisories` as `{"path", "detail"}` and yields no finding. DR-467: a path the run
     neither baselined nor declared in its manifest rows stays a finding. Trap: a peer write
-    landing after this run's stage inside the run's own delta span is indistinguishable here."""
+    landing after this run's stage inside the run's own delta span is indistinguishable here.
+    `invariants` (see `run_invariants`) is shared across calls of one landing; absent, the enclosing
+    `invariants_scope` or a per-call instance serves."""
+    with invariants_scope(root, run_id, invariants):
+        return _unproduced_hunks(root, run_id, paths, own_plan, advisories, settled)
+
+
+def _unproduced_hunks(
+    root: Path, run_id: str, paths: Sequence[str], own_plan: Optional[str],
+    advisories: Optional[list], settled: Optional[dict],
+) -> list:
     from coordinator_core.ops.dispatch_emit.landing_targeted_tests import Finding
 
     out: list = []
@@ -173,43 +317,16 @@ def _kept_blocks(root: Path, common: Path, path: str, head: list, blobs: Sequenc
     return out
 
 
-def _predecessors(root: Path, run_id: str) -> tuple:
-    """Earlier runs bound to this run's sizing; empty when they cannot be read."""
-    try:
-        from coordinator_core.ops.dispatch_emit import run_artifact_ownership
-
-        return tuple(run_artifact_ownership.own_artifact_paths(root, run_id).predecessors)
-    except Exception:  # noqa: BLE001 -- unreadable lineage names no predecessor
-        return ()
-
-
-def _own_kept(root: Path, run_id: str) -> dict:
-    """`kept_fingerprints` of this run and its same-sizing predecessors, unioned per path: the bytes a
-    predecessor fire wrote are this run's work. A predecessor whose kept record cannot be read contributes nothing."""
-    from coordinator_core.ops.dispatch_emit import kept_work
-    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
-
-    out: dict = {k: set(v) for k, v in kept_work.kept_fingerprints(record_dir(root, run_id)).items()}
-    for pred in _predecessors(root, run_id):
-        try:
-            for rel, blobs in kept_work.kept_fingerprints(record_dir(root, pred)).items():
-                out.setdefault(rel, set()).update(blobs)
-        except Exception:  # noqa: BLE001 -- unreadable evidence is none
-            continue
-    return {k: frozenset(v) for k, v in out.items()}
-
-
 def _own_hunk_evidence(
     root: Path, common: Path, run_id: str, path: str, head: list, own_plan: Optional[str],
 ) -> tuple:
     """`(mine, peers)`: kept-blob blocks of `run_id` for `path`, and of every other run holding it
     (co-declaring owners, the halted holder). Never raises: unreadable evidence is empty."""
-    from coordinator_core.ops.dispatch_emit import kept_work
-    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    inv = _inv(root, run_id)
 
     def blocks(run: Optional[str]) -> set:
         try:
-            blobs = (kept_work.kept_fingerprints(record_dir(root, run)) if run else _own_kept(root, run_id)).get(path)
+            blobs = (inv.kept(run) if run else inv.own_kept()).get(path)
             return _kept_blocks(root, common, path, head, sorted(blobs)) if blobs else set()
         except Exception:  # noqa: BLE001 -- unreadable evidence is none
             return set()
@@ -217,7 +334,7 @@ def _own_hunk_evidence(
     mine = blocks(None)
     if not mine:
         return mine, set()
-    kin = {run_id, *_predecessors(root, run_id)}
+    kin = {run_id, *inv.predecessors()}
     others = [o for o in _owners(root, run_id, path, own_plan) if o not in kin]
     holder = _halted_holder(root, run_id, own_plan, path)
     if holder is not None and holder not in kin:
@@ -243,15 +360,18 @@ def landable_under_hold(
     the holder's hunks. A `split_only` path (a reviewer flagged its peer hunks out of the ask) is
     carried only through the split blob: an unrecorded peer hunk does not release it."""
     keep: set = set()
-    for path, holder in held.items():
-        if path not in split_only and not peer_hunks_present(root, holder, path):
-            keep.add(path)
-            continue
-        settled: dict = {}
-        found = unproduced_hunks(root, run_id, [path], own_plan=own_plan, advisories=[], settled=settled)
-        entry = settled.get(path)
-        if not found and entry is not None and entry["lines"] not in ("", UNATTRIBUTABLE_LINES):
-            keep.add(path)
+    with invariants_scope(root, run_id) as inv:
+        for path, holder in held.items():
+            if path not in split_only and not peer_hunks_present(root, holder, path):
+                keep.add(path)
+                continue
+            settled: dict = {}
+            found = unproduced_hunks(
+                root, run_id, [path], own_plan=own_plan, advisories=[], settled=settled, invariants=inv,
+            )
+            entry = settled.get(path)
+            if not found and entry is not None and entry["lines"] not in ("", UNATTRIBUTABLE_LINES):
+                keep.add(path)
     return keep
 
 
@@ -264,7 +384,11 @@ def peer_split(
     a path carrying a peer's hunks (or whose provenance is unreadable while a peer co-declares it) that cannot
     be split, naming the probable owner run. A path with no peer evidence appears in neither. Zero spawn;
     never raises."""
-    root = Path(root)
+    with invariants_scope(root, run_id):
+        return _peer_split(Path(root), run_id, paths, own_plan)
+
+
+def _peer_split(root: Path, run_id: str, paths: Sequence[str], own_plan: Optional[str]) -> tuple:
     split: dict = {}
     unsettled: dict = {}
     for raw in paths:
@@ -360,23 +484,14 @@ def _settled_blob(root: Path, path: str, head_bytes: bytes, own: list) -> str:
 def _is_run_own_artifact(root: Path, run_id: str, path: str) -> bool:
     """A stage, not a row, wrote the run's record dir, delivery note and sizings: no baseline exists
     for them and the run is their producer."""
-    from coordinator_core.ops.dispatch_emit import run_artifact_ownership
-
-    return run_artifact_ownership.own_artifact_paths(root, run_id).covers(path)
+    return _inv(root, run_id).own_artifacts().covers(path)
 
 
 def _declares(root: Path, run_id: str, path: str) -> bool:
     """The run's manifest `rows[].writes` names `path`; a run with no baseline for it still owns
     the edits it declared. False on any read failure."""
     try:
-        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
-
-        rows = hha._manifest(root, run_id).get("rows")
-        for row in rows if isinstance(rows, list) else ():
-            writes = row.get("writes") if isinstance(row, dict) else None
-            if any(isinstance(w, str) and hha._norm(w) == path for w in writes or ()):
-                return True
-        return False
+        return path in _inv(root, run_id).declared()
     except Exception:  # noqa: BLE001 -- unknown is not declared
         return False
 
@@ -385,9 +500,7 @@ def _run_produced(root: Path, run_id: str, path: str) -> bool:
     """The run's own record produced `path`: its write_baseline names it, its manifest declares it,
     or it is a run-own artifact. False on any read failure (unknown is not attributable)."""
     try:
-        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
-
-        base = hha._baseline(root, run_id)
+        base = _inv(root, run_id).baseline()
         if base is not None and path in base:
             return True
         return _declares(root, run_id, path) or _is_run_own_artifact(root, run_id, path)
@@ -412,10 +525,8 @@ def _unproduced(root: Path, run_id: str, path: str, own_plan: Optional[str] = No
     from coordinator_core.git import git_objects
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.git.git_state import head_blobs
-    from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
     from coordinator_core.ops.dispatch_emit import kept_work
     from coordinator_core.ops.dispatch_emit import run_hunk_claims as rhc
-    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
     common = resolve_git_common_dir(root)
     try:
@@ -441,11 +552,12 @@ def _unproduced(root: Path, run_id: str, path: str, own_plan: Optional[str] = No
         return "", [], head_bytes
 
     committed_sha = kept_work.blob_sha(form)
-    for kept in _own_kept(root, run_id).get(path, ()):
+    inv = _inv(root, run_id)
+    for kept in inv.own_kept().get(path, ()):
         if kept_work.matches_committed(root, path, kept, committed_sha):
             return "", [], head_bytes
 
-    base = hha._baseline(root, run_id)
+    base = inv.baseline()
     if base is None or path not in base:
         if _is_run_own_artifact(root, run_id, path):
             return "", [], head_bytes

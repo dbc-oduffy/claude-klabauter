@@ -326,6 +326,43 @@ def _stamp_ignored_excluded(record_dir: Path, names: list) -> None:
         pass
 
 
+#: halted.json key a halt carrying the script's review `prep` reply records its summary under.
+HALT_PREP_REPLY_FIELD = "prep_reply"
+
+
+def _prep_reply_summary(prep: object) -> Optional[dict]:
+    """The diagnosable shape of a review prep reply: None for an absent reply, else its verdict,
+    error, basis, product count, slice count, excluded paths and claim/peer counts."""
+    if not isinstance(prep, dict):
+        return None
+    slices = prep.get("slices")
+    return {
+        "verdict": prep.get("verdict"),
+        "error": prep.get("error"),
+        "basis": prep.get("basis"),
+        "product_files": prep.get("product_files"),
+        "slices": len(slices) if isinstance(slices, list) else slices,
+        "excluded": prep.get("excluded") if isinstance(prep.get("excluded"), list) else [],
+        "foreign_claims": len(prep.get("foreign_claims") or []),
+        "whole_diff_path": prep.get("whole_diff_path"),
+    }
+
+
+def _stamp_prep_reply(record_dir: Path, halted: dict) -> None:
+    """Record the halt's review `prep` reply into the halted marker (a null reply as null) so a
+    no-slices halt is diagnosable. No write for a halt that carries no `prep` key. Advisory: never
+    fails the landing."""
+    if "prep" not in halted:
+        return
+    try:
+        marker = halted_run._read(record_dir)
+        if marker is None:
+            return
+        halted_run._write(record_dir, {**marker, HALT_PREP_REPLY_FIELD: _prep_reply_summary(halted.get("prep"))})
+    except Exception:  # noqa: BLE001 -- an advisory stamp must not fail the landing
+        pass
+
+
 def _reland_late_writes(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict,
     sizing_rel: Optional[str], session_id: Optional[str], withheld: dict, process_withheld: dict,
@@ -501,6 +538,7 @@ def _land(
             next_action=halted.get("next_action") if isinstance(halted.get("next_action"), dict) else None,
             held_rows=held_rows_for(worktree_root, run_id, plan_rel),
         )
+        _stamp_prep_reply(worktree_root / record_dir_rel, halted)
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
     artifacts = within_handoffs_home(worktree_root, run_artifacts.candidate_paths(
         worktree_root, run_id,

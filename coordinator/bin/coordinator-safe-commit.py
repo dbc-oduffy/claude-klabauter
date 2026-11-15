@@ -776,6 +776,10 @@ def do_pathspec(args: "Args") -> None:
     # "never considered it".
     if args.declared_reverts:
         params["declared_reverts"] = args.declared_reverts
+    if (args.invoking_command or os.environ.get("CLAUDE_INVOKING_COMMAND", "")).strip().lstrip(
+        "/"
+    ).removesuffix(".md") in ("distill", "distillation"):
+        params["one_commit"] = True
     # Bounded retry (2 extra attempts, short fixed backoff -- never an
     # unbounded loop) on `.git/index.lock` contention, expected under the
     # ~50-session load norm: `preflight_reap_stale_lock`
@@ -2800,6 +2804,11 @@ def do_blanket(session_id: str, args: "Args", cs_core, cs_liveness, cs_claims) -
         for f in dirty:
             print(f"  {f}", file=sys.stderr)
         print(f"Would commit with subject: {args.subject}", file=sys.stderr)
+        print(
+            "(the live-peer withhold also acts on the staged index and may unstage "
+            "further paths)",
+            file=sys.stderr,
+        )
         print("(no git add or commit executed)", file=sys.stderr)
         sys.exit(0)
 
@@ -2903,6 +2912,8 @@ def do_blanket(session_id: str, args: "Args", cs_core, cs_liveness, cs_claims) -
             sys.exit(1)
 
         sibling_set: Set[str] = set()
+        peer_starts: Dict[str, "datetime"] = {}
+        root = None
         if base and os.path.isdir(base):
             # This feeds the F0/F1
             # foreign-path subtract, the only correction preventing a
@@ -2938,6 +2949,11 @@ def do_blanket(session_id: str, args: "Args", cs_core, cs_liveness, cs_claims) -
                 own_lines
             )
             root = _git_root_core.git_root()
+            from coordinator_core.session.blanket_withhold import (  # noqa: PLC0415
+                read_peer_starts,
+            )
+
+            peer_starts = read_peer_starts(base, live_ids, session_id)
             for sl_sid in live_ids:
                 if sl_sid == session_id:
                     continue
@@ -3000,6 +3016,27 @@ def do_blanket(session_id: str, args: "Args", cs_core, cs_liveness, cs_claims) -
             )
             for p in excluded_paths:
                 print(f"  {p}", file=sys.stderr)
+
+        if peer_starts:
+            from coordinator_core.session.blanket_withhold import (  # noqa: PLC0415
+                withheld_paths,
+            )
+
+            excluded_set = set(excluded_paths)
+            remaining_staged = [
+                p for p in _git_diff_cached_names() if p and p not in excluded_set
+            ]
+            withheld = withheld_paths(root, remaining_staged, own_set, peer_starts)
+            if withheld:
+                _git_reset_unstage_many(withheld)
+                subtracted_count += len(withheld)
+                print(
+                    f"INFO: blanket: withheld {len(withheld)} path(s) written after a "
+                    "live peer started:",
+                    file=sys.stderr,
+                )
+                for p in withheld:
+                    print(f"  {p}", file=sys.stderr)
 
         if subtracted_count > 0 and _git_diff_cached_is_empty():
             print(

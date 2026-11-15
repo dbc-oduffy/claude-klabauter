@@ -262,27 +262,58 @@ def _closed_status_decline_reason(parsed: Mapping[str, Any], gate: RowSchemaGate
     return None
 
 
-def _row_schema_decline_reason(
+def _row_schema_decline(
     parsed: Mapping[str, Any], gate: RowSchemaGate, default_from_repo: str = ""
-) -> Optional[str]:
+) -> tuple[Optional[str], str]:
+    """`(decline_reason, handback)`: `handback` is the normaliser's non-derivable-field text,
+    non-empty only when the row also fails its schema."""
     from coordinator_core.backlog_grind_assemble.legacy_row_normalize import normalize_legacy_row
 
     normalized = normalize_legacy_row(parsed, gate.schema, default_from_repo)
     result = schema_validate.validate_frontmatter_obj(normalized.row, dict(gate.schema))
     if isinstance(result, dict) and result.get("ok"):
-        return None
+        return None, ""
     errors = [
         e for e in (result.get("errors") or [] if isinstance(result, dict) else [])
         if not (isinstance(e, dict) and e.get("field") in gate.closure_fields)
     ]
     if not errors and isinstance(result, dict) and result.get("errors"):
-        return None
+        return None, ""
     detail = "; ".join(
         f"{e.get('field')}: {e.get('error')}" if isinstance(e, dict) else str(e) for e in errors
     ) or "schema validation failed"
     if normalized.handback:
         detail = f"{normalized.handback}; {detail}"
-    return f"admission: row fails its schema and cannot be closed ({detail})"
+    return f"admission: row fails its schema and cannot be closed ({detail})", normalized.handback
+
+
+def _row_schema_decline_reason(
+    parsed: Mapping[str, Any], gate: RowSchemaGate, default_from_repo: str = ""
+) -> Optional[str]:
+    return _row_schema_decline(parsed, gate, default_from_repo)[0]
+
+
+_SCHEMA_MARK_SOURCE = "admission-schema"
+
+
+def _write_schema_handback_mark(
+    profile: str, repo_root: Path, row_id: str, digest: str, reason: str
+) -> None:
+    """One `needs-judgment` mark for a row the schema gate cannot derive a field for, keyed to the
+    row's digest so an edited row is re-validated rather than declined by a stale mark."""
+    handback_dir = repo_root / "state" / "queue-grind" / profile / "_handback"
+    handback_dir.mkdir(parents=True, exist_ok=True)
+    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in row_id)
+    record = {
+        "row": row_id,
+        "type": "needs-judgment",
+        "reason": reason,
+        "source": _SCHEMA_MARK_SOURCE,
+        "digest": digest,
+    }
+    (handback_dir / f"schema-{safe}.json").write_text(
+        json.dumps(record, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 @dataclass(frozen=True)
@@ -418,10 +449,15 @@ def _read_handback_marks(profile: str, repo_root: Path) -> dict[str, str]:
     marked `route-to-*` here is refused the same way a `route-to-*` ledger
     line already is (`_fold_in_ledger`) -- fold-in must not re-enter a row
     the LAST run already handed off elsewhere."""
+    return {row: record["type"] for row, record in _read_handback_records(profile, repo_root).items()}
+
+
+def _read_handback_records(profile: str, repo_root: Path) -> dict[str, dict]:
+    """Every well-formed `_handback/*.json` record keyed by its `row` field (last file wins)."""
     handback_dir = (repo_root / "state" / "queue-grind" / profile / "_handback").resolve()
-    marks: dict[str, str] = {}
+    records: dict[str, dict] = {}
     if not handback_dir.is_dir():
-        return marks
+        return records
     for name in sorted(os.listdir(handback_dir)):
         if not name.endswith(".json"):
             continue
@@ -432,11 +468,13 @@ def _read_handback_marks(profile: str, repo_root: Path) -> dict[str, str]:
             record = json.loads(record_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
             continue
+        if not isinstance(record, dict):
+            continue
         row_id = record.get("row")
         htype = record.get("type")
         if isinstance(row_id, str) and isinstance(htype, str):
-            marks[row_id] = htype
-    return marks
+            records[row_id] = record
+    return records
 
 
 def _fold_in_ledger(
@@ -765,6 +803,7 @@ def select_rows(
     source_row_dir: Optional[Path] = None,
     claimant_sid: Optional[str] = None,
     row_schema_gate: Optional[RowSchemaGate] = None,
+    write_handback_marks: bool = False,
 ) -> Manifest:
     """Turn one or more queue directories into a frozen `Manifest`.
 
@@ -795,7 +834,10 @@ def select_rows(
     is dropped after `where`/`order` and before `limit`, and listed in
     `Manifest.claimed`; `claimant_sid=None` treats every live claim as blocking.
     `row_schema_gate`, when given, declines (reason named, never raised) a row whose
-    fields fail the profile schema outside the closure-stamped fields.
+    fields fail the profile schema outside the closure-stamped fields. With
+    `write_handback_marks`, such a row whose required field is not derivable also gets one
+    `needs-judgment` mark under `state/queue-grind/<profile>/_handback/`, and later selects
+    decline it by that mark while its digest is unchanged; default off keeps the call read-only.
     """
     absent_sentinels = absent_sentinels or {}
     repo_root = Path(repo_root)
@@ -915,7 +957,8 @@ def select_rows(
     )
 
     ledger_by_row = _read_ledger_lines(profile, repo_root)
-    handback_marks = _read_handback_marks(profile, repo_root)
+    handback_records = _read_handback_records(profile, repo_root)
+    handback_marks = {row: rec["type"] for row, rec in handback_records.items()}
 
     entries: list[ManifestEntry] = []
     declined: list[DeclinedEntry] = []
@@ -964,17 +1007,28 @@ def select_rows(
                 continue
         if row_schema_gate is not None:
             # The raw row: sentinel normalisation must not make a present field look missing.
+            malformed = _closed_status_decline_reason(raw_row, row_schema_gate)
             archived_copy = row_schema_gate.archived.get(row_path.name)
-            malformed = (
-                _closed_status_decline_reason(raw_row, row_schema_gate)
-                or (
-                    f"admission: row is already archived at {archived_copy}; the open copy is a resurrected duplicate"
-                    if archived_copy is not None
-                    else None
+            if malformed is None and archived_copy is not None:
+                malformed = f"admission: row is already archived at {archived_copy}; the open copy is a resurrected duplicate"
+            handback = ""
+            if malformed is None:
+                record = handback_records.get(row_id) or {}
+                if record.get("source") == _SCHEMA_MARK_SOURCE and record.get("digest") == digest:
+                    declined.append(
+                        DeclinedEntry(
+                            row_id=row_id,
+                            path=rel_path,
+                            reason=f"admission: row carries a schema hand-back mark ({record.get('reason', '')})",
+                        )
+                    )
+                    continue
+                malformed, handback = _row_schema_decline(
+                    raw_row, row_schema_gate, owning_repo_default(resolved_root, rel_path)
                 )
-                or _row_schema_decline_reason(raw_row, row_schema_gate, owning_repo_default(resolved_root, rel_path))
-            )
             if malformed is not None:
+                if handback and write_handback_marks:
+                    _write_schema_handback_mark(profile, repo_root, row_id, digest, handback)
                 declined.append(DeclinedEntry(row_id=row_id, path=rel_path, reason=malformed))
                 continue
         skip_stages, declined_reason = _fold_in_ledger(row_id, digest, ledger_by_row)

@@ -651,3 +651,71 @@ def test_cached_get_reads_the_real_kernel_in_process(tmp_path, monkeypatch):
     _no_popen(monkeypatch)
     assert mls.cached_get(str(KERNEL), "alpha") == ("one", True)
     assert mls.cached_get(str(KERNEL), "gamma.none") == (None, True)
+
+
+_STORE_TOML = '[stores.alpha]\npath = "{root}"\nowner = "me"\npurpose = "keeps   the\\ttabs"\n'
+
+STORE_STUB = '''\
+import os, sys
+sys.stdout.write(os.environ["STUB_OUT"])
+sys.exit(int(os.environ["STUB_RC"]))
+'''
+
+
+def _store_stub(tmp_path, monkeypatch, rc: int, out: str = "") -> str:
+    stub = tmp_path / "store_stub.py3"
+    stub.write_text(STORE_STUB, encoding="utf-8")
+    monkeypatch.setenv("STUB_RC", str(rc))
+    monkeypatch.setenv("STUB_OUT", out)
+    monkeypatch.setenv("MACHINE_LOCAL_SLOT_DIR", str(tmp_path / "slots"))
+    return str(stub)
+
+
+def test_store_registered_answers_in_process_without_spawning(tmp_path, monkeypatch):
+    root = tmp_path / "data"
+    _kernel_env(tmp_path, monkeypatch, _STORE_TOML.format(root=root.as_posix()))
+    _no_popen(monkeypatch)
+    expected = (root.as_posix(), "me", "keeps the tabs")
+    assert mls.store(str(KERNEL), "alpha") == expected
+    assert mls.store(str(KERNEL), str(root / "sub" / "file")) == expected
+
+
+def test_store_unregistered_is_none_in_process(tmp_path, monkeypatch):
+    _kernel_env(tmp_path, monkeypatch, _STORE_TOML.format(root=(tmp_path / "data").as_posix()))
+    _no_popen(monkeypatch)
+    assert mls.store(str(KERNEL), "beta") is None
+
+
+def test_store_spawned_registered_parses_crlf_row(tmp_path, monkeypatch):
+    impl = _store_stub(tmp_path, monkeypatch, 0, "alpha\t/x/a\tme\tthe purpose\r\n")
+    assert mls.store(impl, "alpha") == ("/x/a", "me", "the purpose")
+
+
+def test_store_spawned_exit_1_is_none(tmp_path, monkeypatch):
+    assert mls.store(_store_stub(tmp_path, monkeypatch, 1), "nope") is None
+
+
+def test_store_spawned_exit_2_raises_naming_the_store(tmp_path, monkeypatch):
+    impl = _store_stub(tmp_path, monkeypatch, 2)
+    with pytest.raises(mls.StoreRootRefused, match="'alpha'"):
+        mls.store(impl, "alpha")
+    assert issubclass(mls.StoreRootRefused, OSError)
+
+
+def test_store_spawned_malformed_row_raises(tmp_path, monkeypatch):
+    impl = _store_stub(tmp_path, monkeypatch, 0, "alpha\t/x/a\n")
+    with pytest.raises(mls.StoreRootRefused, match="'alpha'"):
+        mls.store(impl, "alpha")
+
+
+def test_store_missing_kernel_raises_without_spawning(tmp_path, monkeypatch):
+    _no_popen(monkeypatch)
+    with pytest.raises(mls.StoreRootRefused, match="'alpha'"):
+        mls.store(str(tmp_path / "absent" / "_machine_local.py"), "alpha")
+
+
+def test_store_spawn_timeout_raises(tmp_path, monkeypatch):
+    impl = _store_stub(tmp_path, monkeypatch, 0)
+    monkeypatch.setattr(mls, "_run", lambda argv, timeout, env=None: None)
+    with pytest.raises(mls.StoreRootRefused, match="'alpha'"):
+        mls.store(impl, "alpha")

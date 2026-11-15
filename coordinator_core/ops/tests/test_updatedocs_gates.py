@@ -356,12 +356,12 @@ def test_distill_threshold_does_not_count_unripe_plans(tmp_path):
     assert result.verdict == udg.GateVerdict.CLEAN
 
 
-def test_distill_threshold_missing_log_is_unavailable_not_a_count(tmp_path):
-    """distill.scope refuses an absent log, so the gate reports UNAVAILABLE rather than a debt-free count."""
+def test_distill_threshold_missing_log_counts_against_an_empty_baseline(tmp_path):
+    """An absent log is distill.scope's empty baseline (dd57eaf5f8), so a fresh repo's backlog fires."""
     _implemented_plans(tmp_path, 60)
     result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
-    assert result.verdict == udg.GateVerdict.UNAVAILABLE
-    assert "distillation log" in result.summary
+    assert result.verdict == udg.GateVerdict.FINDING
+    assert result.detail["days_ago"] is None and result.detail["total"] >= 20
 
 
 def test_distill_threshold_total_equals_compute_scope_scannable(tmp_path):
@@ -945,6 +945,7 @@ def test_repomap_gate_default_route_reads_check_rag_state_in_process(tmp_path, m
     from coordinator_core.ops import check_rag_state
 
     monkeypatch.setattr(udg, "_run", _no_spawn)
+    monkeypatch.setattr(udg, "_run_reporting", _no_spawn)
     monkeypatch.setattr(check_rag_state, "main", lambda argv: (print("fresh"), 0)[1])
     result = udg._gate_repomap(tmp_path, tmp_path, {})
     assert result.verdict == udg.GateVerdict.CLEAN

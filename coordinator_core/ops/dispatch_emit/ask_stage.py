@@ -1029,6 +1029,9 @@ def _chain_kin(root: Path, run_id: str, candidates: Iterable[str]) -> set[str]:
     stage call with a suffixed id), runs bound to the same sizing (a chained
     run's `chained_from` ancestor and descendants carry the sizing it hands on) and any run on its
     `resumed_from` chain. Their claims are the same work, never a peer's overlap.
+    A run's sizings are its bound one plus its `earlier_sizings`, so a refire rebound to a newer sizing
+    still owns the runs bound to the one it replaced; an `ask-` run with no recorded sizing at all is
+    kin when its trailing hex is the hex a sizing of this run carries.
     Trap: a run with no bound sizing has no kin by sizing."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
     from coordinator_core.ops.dispatch_emit import run_token
@@ -1039,14 +1042,16 @@ def _chain_kin(root: Path, run_id: str, candidates: Iterable[str]) -> set[str]:
     except (OSError, ValueError, KeyError, TypeError):
         tokens = {}
 
-    def sizing_of(rid: str) -> Optional[str]:
+    def sizings_of(rid: str) -> set[str]:
         try:
-            bound = (rl.read_run(record_dir(root, rid)) or {}).get("sizing_rel") or tokens.get(rid)
+            rec = rl.read_run(record_dir(root, rid)) or {}
         except ValueError:
-            bound = tokens.get(rid)
-        return str(bound).replace("\\", "/") if bound else None
+            rec = {}
+        rels = [rec.get("sizing_rel") or tokens.get(rid), *(rec.get(rl.EARLIER_SIZINGS_FIELD) or ())]
+        return {str(r).replace("\\", "/") for r in rels if r and isinstance(r, (str, Path))}
 
-    mine = sizing_of(run_id)
+    mine = sizings_of(run_id)
+    my_hexes = _sizing_hexes(mine)
     chain: set[str] = set()
     cur = run_id
     for _ in range(rl.CARRIED_HOP_CAP):
@@ -1059,10 +1064,54 @@ def _chain_kin(root: Path, run_id: str, candidates: Iterable[str]) -> set[str]:
         chain.add(prev)
         cur = prev
     own_prefix = run_id + "-"
-    return {
-        rid for rid in candidates
-        if rid in chain or rid.startswith(own_prefix) or (mine is not None and sizing_of(rid) == mine)
-    }
+    out: set[str] = set()
+    for rid in candidates:
+        if rid in chain or rid.startswith(own_prefix):
+            out.add(rid)
+            continue
+        theirs = sizings_of(rid)
+        if (mine & theirs) or (not theirs and rid.startswith("ask-") and rid.rsplit("-", 1)[-1] in my_hexes):
+            out.add(rid)
+    return out
+
+
+def _sizing_hexes(sizing_rels: Iterable[str]) -> set[str]:
+    """The trailing 6-hex token of each sizing's stem: the hex an `ask-<stamp>-<hex>` run minted with it carries."""
+    out: set[str] = set()
+    for rel in sizing_rels:
+        tail = PurePosixPath(rel).stem.rsplit("-", 1)[-1]
+        if re.fullmatch(r"[0-9a-f]{6}", tail):
+            out.add(tail)
+    return out
+
+
+def _lineage_kin(root: Path, run_id: str) -> tuple[str, ...]:
+    """The earlier runs `_chain_kin` reads as `run_id`'s own, discovered from one listing of the record
+    homes: the `resumed_from` chain plus each record dir whose stamp precedes `run_id`'s and whose name
+    is `warp-<sizing stem>-...` or `ask-<stamp>-<sizing hex>`. Never raises; unreadable lineage is empty."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
+
+    try:
+        rec = rl.read_run(record_dir(root, run_id)) or {}
+        rels = {str(r).replace("\\", "/") for r in (rec.get("sizing_rel"), *(rec.get(rl.EARLIER_SIZINGS_FIELD) or ())) if r}
+        stems = {PurePosixPath(r).stem for r in rels}
+        hexes = _sizing_hexes(rels)
+        mine = (re.findall(r"\d{8}T\d{6}", run_id) or [""])[-1]
+        names = [p.name for p in record_dir(root, run_id).parent.iterdir()] if (stems and mine) else []
+        found: list[str] = list(_resumed_chain(root, run_id))
+        for name in sorted(names):
+            stamp = (re.findall(r"\d{8}T\d{6}", name) or [""])[-1]
+            if name == run_id or not safe_id(name) or not stamp or stamp >= mine:
+                continue
+            if any(name.startswith(f"warp-{s}-") for s in stems) or (
+                name.startswith("ask-") and name.rsplit("-", 1)[-1] in hexes
+            ):
+                found.append(name)
+        return tuple(sorted(_chain_kin(root, run_id, found)))
+    except (OSError, ValueError, TypeError):
+        return ()
 
 
 STAGE_WAIT_PARKED = "stage-wait"

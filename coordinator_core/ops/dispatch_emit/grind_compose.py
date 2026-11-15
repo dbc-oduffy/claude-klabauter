@@ -677,7 +677,7 @@ def run_admission(
         if tradeoff:
             entry["tradeoff"] = tradeoff
         if ruling:
-            entry["ruling"] = ruling
+            entry["pm_ruling"] = ruling
         handed_back.append(entry)
 
     def _apply_route(row: Row, action: tuple[str, str], reason: str, tradeoff: str = "", ruling: str = "") -> None:
@@ -2474,7 +2474,7 @@ def compose_grind_script(
         "  }\n"
         "  if (_handedBack.some((h) => h.row === rowId && h.type === type)) return;\n"
         "  const _entry = tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason };\n"
-        "  if (ruling) { _entry.ruling = ruling; }\n"
+        "  if (ruling) { _entry.pm_ruling = ruling; }\n"
         "  _handedBack.push(_entry);\n"
         "}\n"
         "function _normalizeRowRef(items, ref) {\n"

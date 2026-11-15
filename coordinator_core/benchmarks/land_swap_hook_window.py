@@ -978,8 +978,13 @@ def swap_window_method_defined(source: Path) -> Optional[bool]:
 
 def _short_runtime_parent() -> Optional[Path]:
     """Parent of the runtime base. TRAP: the pair's unix socket lives under the runtime base and
-    `sun_path` caps at 100 bytes, which a repo scratch dir or macOS's per-user temp dir overruns."""
-    return None if sys.platform == "win32" else Path("/tmp")
+    `sun_path` caps at 100 bytes, which a repo scratch dir or macOS's per-user temp dir overruns;
+    the warm engine's own runtime base (`~/.cache` by default) is short and user-local."""
+    if sys.platform == "win32":
+        return None
+    parent = breadcrumb.runtime_base()
+    parent.mkdir(parents=True, exist_ok=True)
+    return parent
 
 
 def run_publish_round(

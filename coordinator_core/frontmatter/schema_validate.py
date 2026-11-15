@@ -8542,8 +8542,12 @@ def validate_frontmatter_obj(fm_dict: dict, schema_obj: dict) -> dict:
 _LINT_SIDECAR_RE = re.compile(
     r'\.(prior-art-check|docs-check|coverage-check|plan-coverage-check|'
     r'plan-review-check|schema-migration-audit|review-[^./]+|[^./]*-review|review|'
-    r'phase0|node-map|execution-record|annotations|premise-check)\b'
+    r'phase0|node-map|execution-record|annotations|premise-check|'
+    r'[^./]*-ledger|[^./]*-matrix|evidence)\b'
 )
+
+#: Index files that only redirect moved artifacts; they live beside plans/handoffs but are neither.
+_LINT_INDEX_BASENAMES = frozenset({"REDIRECTS.md"})
 
 
 def _lint_is_sidecar_file(repo_rel: str) -> bool:
@@ -8556,6 +8560,8 @@ def _lint_is_sidecar_file(repo_rel: str) -> bool:
     `plan_id`/`deliverable_id`, not plans in their own right, and routing them
     to `plan` reports every required plan field as missing.
     """
+    if repo_rel.replace("\\", "/").rsplit("/", 1)[-1] in _LINT_INDEX_BASENAMES:
+        return True
     return bool(_LINT_SIDECAR_RE.search(repo_rel))
 
 

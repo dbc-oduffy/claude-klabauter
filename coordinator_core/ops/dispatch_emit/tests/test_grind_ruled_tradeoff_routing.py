@@ -118,7 +118,7 @@ def test_repeat_hand_back_on_a_rejected_ruling_is_refused_naming_the_ruling():
     (hand,) = result["handed_back"]
     assert hand["type"] == "repeat-refused"
     assert _RULING in hand["reason"]
-    assert hand["ruling"] == _RULING
+    assert hand["pm_ruling"] == _RULING and "ruling" not in hand
     assert hand["tradeoff"] == "a corner"
     assert result["by_triage_check"]["repeat_refused"] == 1
     assert ("fix", "r0") not in result["call_log"]
@@ -130,14 +130,14 @@ def test_repeat_hand_back_at_fix_exit_is_refused_naming_the_ruling():
         {"outcome": "done", "has_tradeoff": True, "tradeoff": "late", "ruling_on_tradeoff": "rejects"},
     )
     (hand,) = result["handed_back"]
-    assert hand["type"] == "repeat-refused" and hand["ruling"] == _RULING and _RULING in hand["reason"]
+    assert hand["type"] == "repeat-refused" and hand["pm_ruling"] == _RULING and _RULING in hand["reason"]
     assert result["by_triage_check"]["repeat_refused"] == 1
 
 
 def test_unruled_tradeoff_row_still_routes_to_needs_judgment():
     result = _run(_tradeoff_triage("no-ruling"), pm_ruling="")
     (hand,) = result["handed_back"]
-    assert hand["type"] == "needs-judgment" and "ruling" not in hand
+    assert hand["type"] == "needs-judgment" and "pm_ruling" not in hand and "ruling" not in hand
 
 
 def test_agent_claim_of_accepts_without_an_engine_read_ruling_stays_needs_judgment():

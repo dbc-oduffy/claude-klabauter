@@ -235,6 +235,16 @@ def test_mkdtemp_in_creates_under_chosen_parent(tmp_path):
     assert d.parent == tmp_path and d.name.startswith("pre-") and d.is_dir()
 
 
+def test_mkdtemp_in_is_private_and_retries_on_name_collision(tmp_path, monkeypatch):
+    tokens = iter(["aaaaaaaa", "aaaaaaaa", "bbbbbbbb"])
+    monkeypatch.setattr(temp_layout.secrets, "token_hex", lambda _n: next(tokens))
+    first = temp_layout.mkdtemp_in("c-", tmp_path)
+    second = temp_layout.mkdtemp_in("c-", tmp_path)
+    assert first.name == "c-aaaaaaaa" and second.name == "c-bbbbbbbb"
+    if os.name != "nt":
+        assert stat.S_IMODE(first.stat().st_mode) == 0o700
+
+
 def test_strict_managed_temp_dir_raises_naming_leaked_path_on_failed_removal(fake_temp, monkeypatch):
     def boom(_path):
         raise PermissionError("held")

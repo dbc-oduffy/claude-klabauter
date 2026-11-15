@@ -96,7 +96,7 @@ def own_left_behind(
             if entry is None:
                 if f.is_file():
                     dirty.append(p)
-            elif f.is_file() and _differs_from_index(f, entry):
+            elif f.is_file() and landing_halted_view.differs_from_index(f, entry):
                 dirty.append(p)
         except OSError:
             continue

@@ -3047,14 +3047,18 @@ def _resume_route(
 
     from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
-    from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
+    from coordinator_core.ops.dispatch_emit.halted_run import AmbiguousHaltedRuns, halted_run_to_resume
 
     named_id = _resume_run_id(payload.get("tool_input") or {})
     try:
         halted_id = _bounded_call(
             ("halted", str(root), sizing_rel),
-            lambda: halted_run_to_resume(root, sizing_rel, build=False, run_id=named_id),
+            lambda: halted_run_to_resume(
+                root, sizing_rel, build=False, run_id=named_id, caller_session=session_id or None
+            ),
         )
+    except AmbiguousHaltedRuns as exc:
+        return _refuse(str(exc)), None
     except (OSError, ValueError):
         return None, None
     if halted_id is hrr.STALLED:

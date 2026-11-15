@@ -52,6 +52,22 @@ def _confirm_grace_secs() -> float:
 
     return lifecycle._drain_ceiling_secs() + _CONFIRM_GRACE_MARGIN_SECS
 
+
+def _drain_wait_secs(outcome) -> float:
+    """How long to wait for a server that answered the stop ask. An acknowledged server is draining
+    and waits out its own admitted ops (the longest bounded by `warm.client.MUTATION_READ_DEADLINE_SECS`
+    or an `ipc._OP_TIMEOUT_OVERRIDES` row), so it is never signalled before that bound; an unanswered
+    ask keeps the plain confirm grace."""
+    grace = _confirm_grace_secs()
+    if outcome is not True:
+        return grace
+    from coordinator_core import ipc
+    from coordinator_core.warm import client
+
+    longest = max([client.MUTATION_READ_DEADLINE_SECS, *ipc._OP_TIMEOUT_OVERRIDES.values()])
+    return max(grace, longest + _CONFIRM_GRACE_MARGIN_SECS)
+
+
 # A deliberately wrong token: warm.server._serve_line evicts (drain and exit) on any mismatch.
 _STOP_REQUEST_TOKEN = "warm-engine-stop-requested-0000"
 
@@ -589,7 +605,7 @@ def stop_warm_pair(
             if outcome is not _ASK_WEDGED and not outcome:
                 outcome = ask(pipe)
             if outcome is not _ASK_WEDGED:
-                gone = _wait_for_pid_gone(pid, epoch_str, deadline_secs=_confirm_grace_secs())
+                gone = _wait_for_pid_gone(pid, epoch_str, deadline_secs=_drain_wait_secs(outcome))
         if not gone:
             _terminate_pid(pid, psutil_module=psutil_module)
     elif server_pipe is not None and server_pids:
@@ -597,7 +613,7 @@ def stop_warm_pair(
         if outcome is not _ASK_WEDGED and not outcome:
             outcome = ask(server_pipe)
         if outcome is not _ASK_WEDGED:
-            grace = time.monotonic() + _confirm_grace_secs()
+            grace = time.monotonic() + _drain_wait_secs(outcome)
             while time.monotonic() < grace and not all(
                 _pid_gone(p, psutil_module=psutil_module) for p in server_pids
             ):

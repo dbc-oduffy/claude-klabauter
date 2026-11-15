@@ -1,4 +1,4 @@
-"""Bounded machine-local reads: run_bounded, dump, get.
+"""Bounded machine-local reads: run_bounded, dump, get, store.
 
 Every `_machine_local.py` spawn a claude-klabauter-owned caller makes goes through here: a hard kill
 ceiling that reaps the child and never retries, an in-process read where the impl is a `.py`,
@@ -784,3 +784,55 @@ def _get_spawned(impl: str, key: str):
     if cp.returncode == 1:
         return None, True
     return None, False
+
+
+class StoreRootRefused(OSError):
+    """The store registry could not be read: kernel missing, spawn killed at the ceiling, or exit 2."""
+
+
+def _store_row(entry: dict) -> tuple[str, str, str]:
+    return entry["effective_path"], entry["owner"], " ".join(entry["purpose"].split())
+
+
+def _store_in_process(impl: str, name: str):
+    """(path, owner, purpose) | None, or _MISS when the kernel could not answer in-process."""
+    try:
+        mod = _load_kernel(impl)
+        entries = mod._stores(mod._build_resolution_layers(mod._registry_dir()))
+        found = name if name in entries else mod._store_containing(name, entries)
+        return None if found is None else _store_row(entries[found])
+    except (SystemExit, Exception):
+        return _MISS
+
+
+def _store_spawned(impl: str, name: str):
+    cp = _run(_argv(impl, "store", name), ML_SPAWN_TIMEOUT_S)
+    if cp is _CONTENDED or cp is None:
+        raise StoreRootRefused(f"store '{name}': machine-local did not answer within the kill ceiling")
+    if cp.returncode == 1:
+        return None
+    if cp.returncode != 0:
+        raise StoreRootRefused(f"store '{name}': machine-local exited {cp.returncode}")
+    lines = cp.stdout.splitlines()
+    fields = lines[0].split("\t") if lines else []
+    if len(fields) != 4:
+        raise StoreRootRefused(f"store '{name}': machine-local printed an unparseable row")
+    return fields[1], fields[2], fields[3]
+
+
+def store(impl, name: str):
+    """(path, owner, purpose) for a registered store, None when unregistered.
+
+    `name` is a store name or a path equal to or under a store root, as `machine-local store`
+    accepts. A `.py` impl is read in-process; a spawn (one, bounded, never retried) happens only
+    when the kernel cannot answer in-process. Raises StoreRootRefused (an OSError) naming the
+    store on a missing kernel, a kill-ceiling timeout, or exit 2.
+    """
+    impl = str(impl)
+    if impl.endswith(".py"):
+        if not os.path.isfile(impl):
+            raise StoreRootRefused(f"store '{name}': machine-local kernel missing: {impl}")
+        answered = _store_in_process(impl, name)
+        if answered is not _MISS:
+            return answered
+    return _store_spawned(impl, name)
