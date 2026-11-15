@@ -111,3 +111,16 @@ def test_ownerless_names_undeclared_dirty_paths(tmp_path):
     )
     assert ss.ownerless(tmp_path, [MOD, TST, "d.md", "stray.py"]) == ["stray.py"]
     assert ss.ownerless(tmp_path / "none", ["stray.py"]) == []
+
+
+def test_recent_run_dirs_skips_runs_older_than_the_cap(tmp_path):
+    n = ss.OWNERLESS_SCAN_CAP + 1
+    for i in range(n):
+        d = tmp_path / f"r{i:03d}"
+        d.mkdir()
+        os.utime(d, (1_000_000 + i, 1_000_000 + i))
+    names = [name for name, _ in ss.recent_run_dirs(tmp_path)]
+    assert len(names) == ss.OWNERLESS_SCAN_CAP
+    assert "r000" not in names
+    assert f"r{n - 1:03d}" in names
+    assert [name for name, _ in ss.recent_run_dirs(tmp_path, exclude=f"r{n - 1:03d}")][-1] == f"r{n - 2:03d}"

@@ -31,6 +31,7 @@ from coordinator_core.locked_write import LockTimeout, held_lock
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
 from coordinator_core.ops.dispatch_emit.interpreter_pin import REMEDY, SOURCE_KEY, resolve_targeted_test_python
+from coordinator_core.session.record_homes import home_rel
 from coordinator_core.testing import scoped_pytest
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -53,7 +54,9 @@ _ADD_BATCH = 200
 @dataclass(frozen=True)
 class OverlayVerdict:
     """`verdict` is "green" (tests ran and passed), "red" (a test failed or a test file failed to collect),
-    "pre_existing" (every failing test also fails at the base sha: lands with an advisory) or "inconclusive"
+    "pre_existing" (every failing test also fails at the base sha: lands with an advisory),
+    "environment_defect" (the pinned interpreter does not resolve, or a dependency the repo does not carry is
+    not installed under the interpreter: the tests could not judge the candidate; lands with an advisory) or "inconclusive"
     (no mirror or no test ran: land_run refuses it unless `timed_out`). "missing" (no verdict was produced) is
     built by `check_verdict`: land_run lands it with an advisory. `detail` is the tail of the runner output or
     the reason. `timed_out` is True only on an "inconclusive" whose seeds pytest hit `TEST_TIMEOUT_S`; every
@@ -99,6 +102,7 @@ def _run(
 def _gate_python(root: Path) -> str:
     """The interpreter the repo's test gate pins (same ladder as `retest_targeted`), read from the live
     repo's coordinator.local.md; `sys.executable` when none is pinned or the pin does not resolve.
+    `verify` never reaches the unresolved-pin fallback: it returns an environment defect first.
     Trap: under the pythonw engine `sys.executable` is windowless; a windowless pytest hands its own
     children invalid std handles (WinError 6 on any test that spawns git), so the console sibling runs it."""
     from coordinator_core.pyresolve import _console_sibling
@@ -107,6 +111,61 @@ def _gate_python(root: Path) -> str:
     if pin.command and pin.defect is None:
         return pin.command
     return _console_sibling(sys.executable) or sys.executable
+
+
+ENV_DEFECT = "environment_defect"
+
+_MISSING_MODULE_RE = re.compile(r"\b(?:ModuleNotFoundError|ImportError): No module named ['\"]([\w.]+)['\"]")
+_WALK_SKIP = frozenset({".git", "__pycache__", "node_modules", ".venv", "venv", "site-packages"})
+
+
+def _repo_module_names(root: Path) -> frozenset:
+    """Every top-level-importable name the repo carries (each directory component and each `.py` stem of
+    every tracked or untracked path), from one `git ls-files` listing; one `os.walk` when git fails."""
+    names: set = set()
+    try:
+        out = run_git(
+            ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=str(root), timeout=30,
+        ).stdout
+        paths = [p for p in out.split("\0") if p]
+    except (OSError, subprocess.SubprocessError):
+        paths = []
+    if not paths:
+        for dirpath, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in _WALK_SKIP]
+            names.update(dirs)
+            names.update(f[:-3] for f in files if f.endswith(".py"))
+        return frozenset(names)
+    for path in paths:
+        parts = path.split("/")
+        names.update(parts[:-1])
+        if parts[-1].endswith(".py"):
+            names.add(parts[-1][:-3])
+    return frozenset(names)
+
+
+_SUMMARY_LINE_RE = re.compile(r"^(?:FAILED|ERROR) .*$", re.MULTILINE)
+
+
+def _is_non_import_failure(line: str) -> bool:
+    """A pytest FAILED/ERROR summary line that is not an import failure; a bare `ERROR <file>` (a collection
+    error pytest prints without its message) is not counted, its message sits in the output body."""
+    if "ImportError" in line or "No module named" in line:
+        return False
+    return line.startswith("FAILED") or " - " in line
+
+
+def _missing_dependencies(output: str, root: Path) -> list:
+    """Top-level modules the test output reports as not installed that the repo does not carry, sorted; empty
+    when nothing is missing, any missing module belongs to the repo (a red), or any FAILED/ERROR summary
+    line is not an import failure (a real red the missing module would otherwise mask)."""
+    names = {m.split(".")[0] for m in _MISSING_MODULE_RE.findall(output)}
+    if not names:
+        return []
+    if any(_is_non_import_failure(ln) for ln in _SUMMARY_LINE_RE.findall(output)):
+        return []
+    carried = _repo_module_names(root)
+    return [] if names & carried else sorted(names)
 
 
 def engine_python_command(root: Path) -> str:
@@ -174,7 +233,7 @@ class _MirrorStale(Exception):
     """The mirror's recorded state no longer matches its worktree; the caller rebuilds it once."""
 
 
-_SPARSE_EXCLUDE = ("state/warp/", "state/plan-blitz/", "state/queue-grind/", "state/cross-repo/", "state/sizings/", "archive/")
+_SPARSE_EXCLUDE = tuple(home_rel(k) + "/" for k in ("warp", "plan-blitz", "queue-grind", "cross-repo", "sizings")) + ("archive/",)
 
 
 def _write_sparse(dest: Path) -> None:
@@ -593,9 +652,9 @@ def verify(
     if not seeds:
         return OverlayVerdict("inconclusive", "the landing set has no test seeds", seeds)
     pin = resolve_targeted_test_python(root)
-    if pin.defect and pin.source == SOURCE_KEY:
+    if pin.command and pin.defect is not None:
         return OverlayVerdict(
-            "inconclusive", f"declared {SOURCE_KEY} `{pin.command}` does not resolve: {pin.defect}; pytest was not run", seeds,
+            ENV_DEFECT, f"interpreter defect: the repo pins `{pin.command}` (from {pin.source}) but {pin.defect}", seeds,
         )
     run_dirs: list = []
     in_seeds = False
@@ -647,6 +706,15 @@ def verify(
             ids = tuple(dict.fromkeys(i for r in runs for i in failing_ids(r.stdout + r.stderr)))
             collected = any(collection_error(r.returncode, r.stdout + r.stderr) for r in bad)
             failed = collected or any(r.returncode == _PYTEST_FAILED for r in bad)
+            if bad:
+                absent = _missing_dependencies("".join(r.stdout + r.stderr for r in bad), root)
+                if absent:
+                    return OverlayVerdict(
+                        ENV_DEFECT,
+                        f"interpreter defect: {_gate_python(root)} lacks module(s) {', '.join(absent)}"
+                        f"{' (the repo declares no resolvable pin)' if not pin.command else ''}: {tail}",
+                        seeds,
+                    )
             if failed and ids and isinstance(base_sha, str) and base_sha and base_sha != sha:
                 at_base = _base_failing(dest, mroot, root, run_id, base_sha, ids, leg)
     except ExportError as exc:
@@ -784,7 +852,7 @@ def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
     verdict = data.get("verdict")
     if verdict == "inconclusive":
         return OverlayVerdict("inconclusive", str(data.get("detail", "")), seeds, data.get("timed_out") is True)
-    if verdict not in ("green", "red", "pre_existing"):
+    if verdict not in ("green", "red", "pre_existing", ENV_DEFECT):
         return OverlayVerdict("missing", f"overlay verdict was {verdict!r}: {data.get('detail', '')}", seeds)
     return OverlayVerdict(verdict, str(data.get("detail", "")), seeds)
 
@@ -855,7 +923,7 @@ def reverify_on_mismatch(
     argv = ["--run-id", run_id, "--repo-root", str(root)]
     with land_deadline.step(REVERIFY_STEP, REVERIFY_STEP_SECS):
         fresh = check_verdict(root, run_id, measured)
-        if fresh.verdict in ("green", "red", "pre_existing"):
+        if fresh.verdict in ("green", "red", "pre_existing", ENV_DEFECT):
             return fresh
         if fresh.verdict == "inconclusive":
             return stale
@@ -936,7 +1004,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     finally:
         _release_inflight(root, args.run_id)
     print(f"overlay verdict: {outcome.verdict}")
-    return {"green": 0, "pre_existing": 0, "red": 1}.get(outcome.verdict, 2)
+    if outcome.verdict == ENV_DEFECT:
+        print(outcome.detail, file=sys.stderr)
+    return {"green": 0, "pre_existing": 0, ENV_DEFECT: 0, "red": 1}.get(outcome.verdict, 2)
 
 
 if __name__ == "__main__":

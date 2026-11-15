@@ -139,12 +139,16 @@ def inject_port(frame, box=None):
     return candidates[0]["injectPort"] if len(candidates) == 1 else DEFAULT_PORT
 
 
-def _readdress(frame, src, new):
-    """Point `frame` and its cross-session-message `from=` attribute at `new` (a full address string)."""
-    frame["from"] = new
+def _readdress(frame, src, new, content_from=None):
+    """Point `frame` and its cross-session-message `from=` attribute at `new` (a full address string).
+
+    With `new` None only the attribute moves, to `content_from`: the frame-level `from` stays, since
+    the receiving inbox checks it, and the attribute is what a reply copies."""
+    if new is not None:
+        frame["from"] = new
     if isinstance(frame.get("message"), dict):
         c = frame["message"]["content"]
-        frame["message"]["content"] = c.replace(f'from="uds:{src}"', f'from="{new}"', 1)
+        frame["message"]["content"] = c.replace(f'from="uds:{src}"', f'from="{content_from or new}"', 1)
     return json.dumps(frame).encode() + b"\n"
 
 
@@ -160,8 +164,9 @@ def localize(frame, line, box=None):
     A mirror holding the sender's far socket wins. Failing that, the mirror of the same
     session found by `from-name` (the far socket can be a cc-msg path no mirror lists).
     Failing that, the sending box's single reply-inbox mirror endpoint (the one address that routes back
-    to that box). With none or several the frame is left as is, its far address visibly unroutable,
-    and the miss is logged: a name label is never substituted, it is not an endpoint.
+    to that box). With none or several the attribute a reply copies becomes the sender's `from-name`
+    (a name SendMessage resolves on this box; no endpoint, so the frame-level `from` is untouched)
+    and the miss is logged. Without a `from-name` the frame is left as is.
     """
     src = str(frame.get("from", "")).removeprefix("uds:")
     all_mirrors = list(_mirrors())
@@ -186,8 +191,8 @@ def localize(frame, line, box=None):
         if len(replies) == 1:
             return _readdress(frame, src, "uds:" + replies[0]["messagingSocketPath"])
     if log:
-        log.write(f"localize: no routable reply endpoint for {src!r} from box {box!r}; frame left unrouted\n")
-    return line
+        log.write(f"localize: no routable reply endpoint for {src!r} from box {box!r}; reply address is the name {name!r}\n")
+    return _readdress(frame, src, None, content_from=name)
 
 
 def registration_payload(entry, key):

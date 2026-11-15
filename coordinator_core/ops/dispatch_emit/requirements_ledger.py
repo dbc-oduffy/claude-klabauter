@@ -842,7 +842,11 @@ def _validated(text: str) -> str:
     from coordinator_core.locked_write import MutateAbort
 
     try:
-        errors = validate_frontmatter(yaml.safe_load(text) or {}, _SIZING_SCHEMA)
+        obj = yaml.safe_load(text) or {}
+        if isinstance(obj, dict):
+            # `family` routes the family-stage arm and is not in the vendored schema.
+            obj = {k: v for k, v in obj.items() if k != "family"}
+        errors = validate_frontmatter(obj, _SIZING_SCHEMA)
     except Exception as exc:  # noqa: BLE001 -- surfaced as a refusal
         raise MutateAbort(f"register write refused: {exc}")
     if errors:

@@ -846,7 +846,8 @@ def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path, monkey
     bridge.relay_send(Conn())
     digest = hashlib.sha256(far_socket.encode("utf-8")).hexdigest()[:16]
     name_digest = hashlib.sha256(b"far").hexdigest()[:16]
-    assert argvs[-1][-1] == f"send-session {expect} {digest} {name_digest} sid-far"
+    # argvs[0]: a bare-ok reply is then reconciled by a `receipts` call, which comes second.
+    assert argvs[0][-1] == f"send-session {expect} {digest} {name_digest} sid-far"
 
 
 def test_roster_sync_unmirrors_a_vanished_far_session(sessions, monkeypatch):

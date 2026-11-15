@@ -21,6 +21,9 @@ reads only on the refusal path; ``start`` also writes one ``scratch/warp/defer-*
 
 from __future__ import annotations
 
+import json
+import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -28,7 +31,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
-from coordinator_core.ops.dispatch_emit.halted_run import _is_shell, write_halt_marker
+from coordinator_core.ops.dispatch_emit.halted_run import _is_shell, is_unstarted_mint_halt, write_halt_marker
 from coordinator_core.ops.dispatch_emit.nested_run_contract import RUN_SCRIPT_SUFFIX
 
 OP_NAME = "dispatch.minted_run"
@@ -42,6 +45,7 @@ REFUSAL_NOT_FOUND = "run-not-found"
 REFUSAL_PAST_MINTED = "run-past-minted"
 REFUSAL_NO_SCRIPT = "script-missing"
 REFUSAL_REAP_FAILED = "reap-failed"
+REFUSAL_CHILD_LIVE = "child-run-live"
 ABANDON_REASON = "minted-run-abandoned-by-em"
 
 
@@ -68,6 +72,18 @@ def reply(run_id: str, action: Optional[str], *, fire_args: Optional[dict] = Non
 def is_minted_only(run_dir: Path) -> bool:
     """True when ``run_dir`` exists and holds no work past ``minted`` (the halted_run shell predicate)."""
     return run_dir.is_dir() and _is_shell(run_dir)
+
+
+_WORKFLOW_READER = re.compile(r"\bawait\s+workflow\s*\(")
+
+
+def holds_workflow_reader(repo_root: Path, script_rel: str) -> bool:
+    """True when the run script awaits its own `workflow()` reader. Such a script must be started directly:
+    a wrapper would put that reader at a second nesting level. A launcher child holds none. An unreadable script reads False."""
+    try:
+        return bool(_WORKFLOW_READER.search((repo_root / script_rel).read_text(encoding="utf-8")))
+    except OSError:
+        return False
 
 
 def start_args(repo_root: Path, run_id: str) -> dict:
@@ -99,11 +115,38 @@ def _start(repo_root: Path, run_id: str) -> dict:
     return out
 
 
+def live_chained_child(repo_root: Path, run_id: str) -> Optional[str]:
+    """Run id of a live run whose ``run.json`` ``chain_parent`` is ``run_id``, else None. Trap: only
+    warp dirs dated on or after the ask are opened: a chained child's id need not embed the ask's hash
+    (6 of 15 real children do not), but it is minted after the ask."""
+    from coordinator_core.session import record_homes
+    from coordinator_core.warm.live_runs import run_owner_holds
+
+    stamp = run_id.split("-")[1][:8] if run_id.count("-") >= 2 else ""
+    since = f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]}" if stamp.isdigit() and len(stamp) == 8 else ""
+    try:
+        names = sorted(e.name for e in os.scandir(record_homes.home_dir(str(repo_root), "warp")) if e.name != run_id and (not since or e.name[5:15] >= since))
+    except OSError:
+        return None
+    for name in names:
+        try:
+            data = json.loads((repo_root / RECORD_DIR_ROOT / name / "run.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and data.get("chain_parent") == run_id and run_owner_holds(repo_root, name):
+            return name
+    return None
+
+
 def _abandon(repo_root: Path, run_id: str, dry_run: bool) -> dict:
     """Halt marker, token discard, then ``abandoned_runs`` reaps just this run. Trap: the marker lands
-    before the reap, so a reap that skips (quiet window) still leaves the run unstartable."""
+    before the reap, so a reap that skips (quiet window) still leaves the run unstartable. A live
+    chained child refuses first, dry run included: the engine cannot stop its Workflow task."""
     from coordinator_core.ops.dispatch_emit import abandoned_runs, run_token
 
+    child = live_chained_child(repo_root, run_id)
+    if child:
+        return reply(run_id, ACTION_ABANDON, refusal=f"{REFUSAL_CHILD_LIVE}: chained child run {child} is running; stop its Workflow task, then abandon")
     if dry_run:
         return reply(run_id, ACTION_ABANDON, note="dry-run: no marker written")
     write_halt_marker(repo_root / RECORD_DIR_ROOT / run_id, halted="abandoned", sizing_rel=None, reason=ABANDON_REASON)
@@ -153,7 +196,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             if cleared is not None:
                 return cleared
         return reply(run_id, action, refusal=f"{REFUSAL_NOT_FOUND}: no {RECORD_DIR_ROOT}/{run_id}")
-    if not is_minted_only(run_dir):
+    if not is_minted_only(run_dir) and not (action == ACTION_START and is_unstarted_mint_halt(run_dir)):
         return reply(run_id, action, refusal=f"{REFUSAL_PAST_MINTED}: {run_id} is past stage minted or halt-marked")
     if action == ACTION_START:
         return _start(root, run_id)

@@ -753,3 +753,26 @@ def test_a_rehalt_over_the_same_split_does_not_realert_but_a_changed_split_does(
     os.utime(lock, (1_700_002_000,) * 2)
     hr.write_halt_marker(d, halted="ledger-check", sizing_rel=SIZING)
     assert len(calls) == 2
+
+
+def test_unstarted_mint_halt_reads_the_real_marker_and_stage(tmp_path):
+    d = tmp_path / "run"
+    d.mkdir()
+    hr.write_halt_marker(d, halted="minted, not started: dispatch.minted_run start x (no receipt)", sizing_rel=None)
+    assert hr.is_unstarted_mint_halt(d) is True
+    assert hr._is_shell(d) is False
+
+
+def test_unstarted_mint_halt_refuses_other_halts_and_staged_runs(tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    hr.write_halt_marker(other, halted="emit_refused", sizing_rel=None)
+    assert hr.is_unstarted_mint_halt(other) is False
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    hr.write_halt_marker(staged, halted="minted, not started: x", sizing_rel=None)
+    stage_file = staged / "run-stage.json"
+    data = json.loads(stage_file.read_text(encoding="utf-8"))
+    stage_file.write_text(json.dumps({**data, "staged_at": "2026-11-15T00:00:00Z"}), encoding="utf-8")
+    assert hr.is_unstarted_mint_halt(staged) is False
+    assert hr.is_unstarted_mint_halt(tmp_path / "absent-run") is False

@@ -126,6 +126,7 @@ HOMES = frozenset({
     "roadmap",
     "rulings",
     "run-evidence",
+    "run-watermarks",
     "sizings",
     "spawn-deletions",
     "stand-downs",

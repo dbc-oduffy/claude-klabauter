@@ -384,8 +384,9 @@ def relay_send(conn):
                 _record_outcome(line, target, ts, ms, skew, box, transport)
             return
     acks = _caps().ingest_acked(lines, replies)
-    # A pre-ack far relay delivers and exits 0 with no reply at all; its `receipts` rows still prove the write.
-    if not all(ok for ok, _ in acks) and (r.returncode or not replies):
+    # A pre-ack far relay delivers and replies bare {"ok": true} (or nothing); its `receipts` rows still
+    # prove the write. A line the far side explicitly refused is never reconciled.
+    if any(not ok and not (i < len(replies) and replies[i].get("ok") is False) for i, (ok, _) in enumerate(acks)):
         acks = _reconcile_acks(lines, acks, far_sid, started_wall)
     for i, (line, (ok, unacked)) in enumerate(zip(lines, acks)):
         error = None
@@ -544,11 +545,29 @@ def serve_one(conn):
     conn.close()
 
 
-def mirror_for(src):
-    entries = [d for d in map(_load, os.listdir(os.path.expanduser(SESSIONS))) if d]
+def _entries():
+    return [d for d in map(_load, os.listdir(os.path.expanduser(SESSIONS))) if d]
+
+
+def mirror_for(src, entries=None):
+    entries = _entries() if entries is None else entries
     candidates = [d for d in _roster().remote_mirrors(entries, getattr(cfg, "remote", None))
                   if d.get(FAR_SOCKET_FIELD) == src]
     return candidates[0] if len(candidates) == 1 else None
+
+
+def _name_routed(msg, src):
+    """`msg` with its content `from="uds:<src>"` replaced by the sender's `from-name`, else None.
+
+    The frame-level `from` stays: the local inbox checks it. A session name resolves on any box."""
+    body = msg.get("message")
+    if not isinstance(body, dict) or not isinstance(body.get("content"), str):
+        return None
+    found = re.search(r'from-name="([^"]+)"', body["content"])
+    if not found:
+        return None
+    body["content"] = body["content"].replace(f'from="uds:{src}"', f'from="{found.group(1)}"', 1)
+    return msg
 
 
 def localize_from(data):
@@ -563,13 +582,15 @@ def localize_from(data):
         return data, None
     head = b"".join(l + b"\n" for l in lines[:-1])
     frm = msg.get("from", "")
-    if frm.startswith("uds:\\\\"):
-        return data, None  # already localized by a sibling bridge
     src = frm.removeprefix("uds:")
-    m = mirror_for(src)
+    entries = _entries()
+    if any(d.get("messagingSocketPath") == src for d in entries):
+        return data, None  # already localized: a mirror of this box owns the address
+    m = mirror_for(src, entries)
     if not m:
         log.write(f"no mirror for sender {src}\n")
-        return data, None
+        named = _name_routed(msg, src)
+        return (head + json.dumps(named).encode() + b"\n" if named else data), None
     local = m["messagingSocketPath"]
     msg["from"] = "uds:" + local
     if isinstance(msg.get("message"), dict):

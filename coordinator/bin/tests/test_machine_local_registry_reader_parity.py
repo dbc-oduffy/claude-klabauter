@@ -195,6 +195,125 @@ def test_registry_get_repairs_msys_mount_form_for_repos_key(monkeypatch, tmp_pat
     assert mine != theirs
 
 
+# ---------------------------------------------------------------------------
+# Concern files: <c>.local.toml / <c>.toml layered above the registry files,
+# pinned to the machine-local CLI's own layer resolution.
+# ---------------------------------------------------------------------------
+
+_CLI_SRC = os.path.join(_REPO_ROOT, "templates", "bin", "_machine_local.py")
+
+CONCERN_REGISTRY_TOML = """
+schema = 1
+concerns = ["project_rag", "unreal"]
+
+[example_retrieval_repo]
+python = "registry-shadowed"
+"""
+
+CONCERN_REGISTRY_LOCAL_TOML = """
+[example_retrieval_repo]
+python = "registry-local-shadowed"
+only_in_registry_local = "dropped"
+"""
+
+CONCERN_LOCAL_TOML = """
+schema = 1
+
+[example_retrieval_repo]
+python = "/concern/local/python"
+empty_here = ""
+
+[example_retrieval_repo.bin]
+cli = "/concern/local/cli"
+"""
+
+CONCERN_BASE_TOML = """
+schema = 1
+base_only = "concern-base"
+python = "concern-base-python"
+"""
+
+
+def _cli_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_machine_local_parity_oracle", _CLI_SRC)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _seed_concern_dir(tmp_path):
+    reg_dir = _seed_registry_dir(tmp_path, CONCERN_REGISTRY_TOML, CONCERN_REGISTRY_LOCAL_TOML)
+    (reg_dir / "example_retrieval_repo.local.toml").write_text(CONCERN_LOCAL_TOML, encoding="utf-8")
+    (reg_dir / "example_retrieval_repo.toml").write_text(CONCERN_BASE_TOML, encoding="utf-8")
+    return reg_dir
+
+
+def _three_way(monkeypatch, tmp_path, key):
+    _reset_env(monkeypatch)
+    reg_dir = _seed_concern_dir(tmp_path)
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    cli = _cli_module()
+    cli_val = cli._resolve_key(key, cli._build_resolution_layers(str(reg_dir)))
+    mine = mlir.registry_get(key)
+    theirs = machine_resolver.registry_get(key)
+    return cli_val, mine, theirs
+
+
+def test_parity_concern_local_key_resolves_in_both_readers_and_cli(monkeypatch, tmp_path):
+    cli_val, mine, theirs = _three_way(monkeypatch, tmp_path, "example_retrieval_repo.python")
+    assert cli_val == mine == theirs == "/concern/local/python"
+
+
+def test_parity_concern_nested_table_key(monkeypatch, tmp_path):
+    cli_val, mine, theirs = _three_way(monkeypatch, tmp_path, "example_retrieval_repo.bin.cli")
+    assert cli_val == mine == theirs == "/concern/local/cli"
+
+
+def test_parity_concern_base_file_key_without_namespace_table(monkeypatch, tmp_path):
+    cli_val, mine, theirs = _three_way(monkeypatch, tmp_path, "example_retrieval_repo.base_only")
+    assert cli_val == mine == theirs == "concern-base"
+
+
+def test_parity_registry_key_under_concern_prefix_does_not_resolve(monkeypatch, tmp_path):
+    cli_val, mine, theirs = _three_way(
+        monkeypatch, tmp_path, "example_retrieval_repo.only_in_registry_local"
+    )
+    assert cli_val is None
+    assert mine is None
+    assert theirs is None
+
+
+def test_parity_concern_env_override_beats_concern_file(monkeypatch, tmp_path):
+    _reset_env(monkeypatch)
+    reg_dir = _seed_concern_dir(tmp_path)
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    monkeypatch.setenv("MACHINE_LOCAL_EXAMPLE_RETRIEVAL_REPO_PYTHON", "env-wins")
+    assert mlir.registry_get("example_retrieval_repo.python") == "env-wins"
+    assert machine_resolver.registry_get("example_retrieval_repo.python") == "env-wins"
+
+
+def test_parity_non_concern_key_still_reads_registry_files(monkeypatch, tmp_path):
+    cli_val, mine, theirs = _three_way(monkeypatch, tmp_path, "coordinator.machine_slug")
+    assert cli_val is None and mine is None and theirs is None
+
+
+def test_parity_empty_concern_value_is_not_found(monkeypatch, tmp_path):
+    _, mine, theirs = _three_way(monkeypatch, tmp_path, "example_retrieval_repo.empty_here")
+    assert mine is None
+    assert theirs is None
+
+
+def test_parity_key_not_listed_in_concerns_ignores_concern_file(monkeypatch, tmp_path):
+    _reset_env(monkeypatch)
+    reg_dir = _seed_registry_dir(tmp_path, "schema = 1\n")
+    (reg_dir / "example_retrieval_repo.local.toml").write_text(CONCERN_LOCAL_TOML, encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    assert mlir.registry_get("example_retrieval_repo.python") is None
+    assert machine_resolver.registry_get("example_retrieval_repo.python") is None
+
+
 def _load_module_ast():
     module_path = os.path.join(_LIB_DIR, "machine_local_impl_resolve.py")
     with open(module_path, "r", encoding="utf-8") as f:

@@ -98,10 +98,11 @@ def _verify(reply: dict, receipts: dict) -> dict:
         f"const RECEIPTS = {json.dumps(receipts)};\n"
         "const asked = [];\n"
         "const agent = async (prompt) => {\n"
-        "  const cand = /hexdigest\\(\\)\\)\" \"([^\"]+)\"/.exec(prompt)[1];\n"
+        "  const cand = /\" \"([^\"]+)\"` \\(/.exec(prompt)[1];\n"
         "  asked.push(cand);\n"
         "  const r = RECEIPTS[cand];\n"
-        "  return r ? { found: true, receipt_sha256: r[0], script_sha256: r[1] } : { found: false, error: 'No such file' };\n"
+        "  if (!r) return { found: false, error: 'No such file' };\n"
+        "  return r[0] === r[1] ? { found: true, verdict: 'MATCH' } : { found: true, verdict: 'MISMATCH', detail: 'MISMATCH receipt sha256 ' + r[0] + ' != script sha256 ' + r[1] };\n"
         "};\n"
         + block
         + f"_verifiedScriptPath({json.dumps(reply)}).then((v) => console.log(JSON.stringify([v, asked])));\n"
@@ -138,6 +139,14 @@ def test_a_windows_style_relay_path_with_doubled_backslashes_is_normalised_and_v
 def test_a_receipt_whose_sha_disagrees_with_the_script_bytes_is_refused_by_name():
     verdict, _ = _verify({"path": _REAL, "run_id": "ask-r1"}, {_REAL: [_SHA, "cd" * 32]})
     assert "error" in verdict and "emit receipt sha mismatch" in verdict["error"] and "path" not in verdict
+
+
+def test_a_match_verdict_starts_without_the_relay_copying_any_digest():
+    """The relay returns only the command's MATCH token; no sha256 string crosses the relay."""
+    block = des._RECEIPT_PATH_JS
+    assert "receipt_sha256" not in block and "script_sha256" not in block
+    verdict, _ = _verify({"path": _REAL, "run_id": "ask-r1"}, {_REAL: [_SHA, _SHA]})
+    assert verdict == {"path": _REAL}
 
 
 def test_a_missing_receipt_is_refused_by_name():
@@ -187,4 +196,9 @@ def test_the_receipt_check_command_reads_the_top_level_sha_not_em_brief(tmp_path
     out = subprocess.run([sys.executable, "-c", argv_code, str(script)], capture_output=True, text=True, timeout=30,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     assert out.returncode == 0, out.stderr
-    assert out.stdout.split() == [digest, digest]
+    assert out.stdout.strip() == "MATCH"
+    (tmp_path / "ask-r1.workflow.mjs.emitted.json").write_text(
+        json.dumps({"em_brief": {"sha256": digest}, "sha256": "7b" * 32}), encoding="utf-8")
+    out = subprocess.run([sys.executable, "-c", argv_code, str(script)], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.stdout.strip() == f"MISMATCH receipt sha256 {'7b' * 32} != script sha256 {digest}"

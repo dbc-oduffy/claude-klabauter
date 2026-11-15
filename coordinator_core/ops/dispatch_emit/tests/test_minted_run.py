@@ -92,6 +92,38 @@ def test_both_actions_refuse_a_halt_marked_run(tmp_path):
         assert _call(tmp_path, action)["refusal"].startswith(minted_run.REFUSAL_PAST_MINTED)
 
 
+def _halt(rdir, halted, stage_extra=None):
+    (rdir / halted_run.HALTED_FILE).write_text(json.dumps({"status": "halted", "halted": halted}), encoding="utf-8")
+    stage = {"stage": "halted", **(stage_extra or {})}
+    (rdir / "run-stage.json").write_text(json.dumps(stage), encoding="utf-8")
+
+
+def test_start_admits_a_run_halted_as_minted_not_started(tmp_path):
+    rdir = _repo(tmp_path)
+    _halt(rdir, "minted, not started: dispatch.minted_run start " + RUN + " (no receipt)")
+    out = _call(tmp_path, "start")
+    assert out["ok"] is True and out["script_path"].startswith("scratch/warp/")
+    assert (rdir / halted_run.HALTED_FILE).exists()
+
+
+def test_abandon_still_refuses_a_run_halted_as_minted_not_started(tmp_path):
+    rdir = _repo(tmp_path)
+    _halt(rdir, "minted, not started: x")
+    assert _call(tmp_path, "abandon")["refusal"].startswith(minted_run.REFUSAL_PAST_MINTED)
+
+
+def test_start_refuses_minted_not_started_that_was_staged(tmp_path):
+    rdir = _repo(tmp_path)
+    _halt(rdir, "minted, not started: x", {"staged_at": "2026-11-15T00:00:00Z"})
+    assert _call(tmp_path, "start")["refusal"].startswith(minted_run.REFUSAL_PAST_MINTED)
+
+
+def test_start_refuses_other_halts_at_minted(tmp_path):
+    rdir = _repo(tmp_path)
+    _halt(rdir, "emit_refused")
+    assert _call(tmp_path, "start")["refusal"].startswith(minted_run.REFUSAL_PAST_MINTED)
+
+
 def test_unknown_run_is_a_named_refusal(tmp_path):
     (tmp_path / ".git").mkdir()
     out = minted_run._handler({"run_id": "nope", "action": "start"}, tmp_path)
@@ -224,3 +256,64 @@ def test_start_process_time_is_under_the_brightline(tmp_path):
     t0 = time.process_time()
     _call(tmp_path, "start")
     assert time.process_time() - t0 < 0.5
+
+
+CHILD = "warp-2026-11-02-some-plan-abcdef-20261102T120500-123456"
+
+
+def _child(tmp_path, chain_parent=RUN, stage="executing", session="sess-1"):
+    cdir = tmp_path / "state" / "warp" / CHILD
+    cdir.mkdir(parents=True)
+    (cdir / "run.json").write_text(json.dumps({"chain_parent": chain_parent}), encoding="utf-8")
+    (cdir / "run-stage.json").write_text(json.dumps({"stage": stage, "session_id": session}), encoding="utf-8")
+
+
+def _owner(monkeypatch, live):
+    from coordinator_core.warm import live_runs
+
+    monkeypatch.setattr(live_runs, "_owner_live", lambda sid, memo=None: live)
+
+
+def test_abandon_refuses_naming_a_live_chained_child_and_writes_nothing(tmp_path, monkeypatch):
+    rdir = _repo(tmp_path)
+    _child(tmp_path)
+    _owner(monkeypatch, True)
+    monkeypatch.setattr(abandoned_runs, "_handler", lambda *a, **k: (_ for _ in ()).throw(AssertionError("reaped")))
+    run_token.mint(tmp_path, RUN, f"scratch/warp/{RUN}.workflow.mjs")
+    for extra in ({}, {"dry_run": True}):
+        out = _call(tmp_path, "abandon", **extra)
+        assert out["ok"] is False and out["refusal"].startswith(minted_run.REFUSAL_CHILD_LIVE) and CHILD in out["refusal"]
+    assert not (rdir / halted_run.HALTED_FILE).exists()
+    assert run_token.is_live(tmp_path, RUN)
+
+
+def test_abandon_proceeds_past_a_dead_terminal_or_foreign_child(tmp_path, monkeypatch):
+    _repo(tmp_path)
+    monkeypatch.setattr(abandoned_runs, "_handler", lambda p, r=None: {"ok": True, "skipped": [], "committed_sha": "b" * 40})
+    _child(tmp_path)
+    _owner(monkeypatch, False)
+    assert _call(tmp_path, "abandon", dry_run=True)["ok"] is True
+    _owner(monkeypatch, True)
+    stage_file = tmp_path / "state" / "warp" / CHILD / "run-stage.json"
+    stage_file.write_text(json.dumps({"stage": "halted", "session_id": "s"}), encoding="utf-8")
+    assert _call(tmp_path, "abandon", dry_run=True)["ok"] is True
+    stage_file.write_text(json.dumps({"stage": "executing", "session_id": "s"}), encoding="utf-8")
+    (tmp_path / "state" / "warp" / CHILD / "run.json").write_text(json.dumps({"chain_parent": "ask-other-abcdef"}), encoding="utf-8")
+    assert _call(tmp_path, "abandon")["ok"] is True
+
+
+def test_abandon_with_no_child_is_unchanged(tmp_path, monkeypatch):
+    _repo(tmp_path)
+    monkeypatch.setattr(abandoned_runs, "_handler", lambda p, r=None: {"ok": True, "skipped": [], "committed_sha": "c" * 40})
+    assert minted_run.live_chained_child(tmp_path, RUN) is None
+    assert _call(tmp_path, "abandon")["landed_sha"] == "c" * 40
+
+
+def test_live_chained_child_is_found_when_its_id_omits_the_ask_hash(tmp_path, monkeypatch):
+    _repo(tmp_path)
+    other = "warp-2026-11-03-no-hash-here-20261103T010101-111111"
+    (tmp_path / "state" / "warp" / other).mkdir(parents=True)
+    (tmp_path / "state" / "warp" / other / "run.json").write_text(json.dumps({"chain_parent": RUN}), encoding="utf-8")
+    (tmp_path / "state" / "warp" / other / "run-stage.json").write_text(json.dumps({"stage": "executing", "session_id": "s"}), encoding="utf-8")
+    _owner(monkeypatch, True)
+    assert minted_run.live_chained_child(tmp_path, RUN) == other

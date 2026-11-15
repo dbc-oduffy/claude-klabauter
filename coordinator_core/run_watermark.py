@@ -30,9 +30,10 @@ from typing import Optional, Sequence
 from coordinator_core.git.run import git_out
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.session.claimed_write import replace_bytes
+from coordinator_core.session.record_homes import home_rel
 
 DOC_FILES_DB_KEY = "paths.project_rag_doc_files_db"
-WATERMARK_DIR_REL = "state/run-watermarks"
+WATERMARK_DIR_REL = home_rel("run-watermarks")
 PENDING_NAME = "watermark.pending.json"
 
 _GENERATION_QUERIES = (

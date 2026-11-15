@@ -45,13 +45,15 @@ _ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
         1, "abandon of a mint whose run dir never landed (never launched)"),
     ("ops/dispatch_emit/ask_stage.py", "_refuse_live_write_overlap"): (
         1, "write-overlap refusal ending this run; reached only when a blocker is not a live engine run or the wait expired"),
+    ("ops/dispatch_emit/ask_stage.py", "_end_refused_run"): (
+        1, "a refused stage ends its run; an escrowed launcher-child token is kept for its parked script"),
     ("ops/dispatch_emit/terminal_commit.py", "_settle_token"): (
         1, "commit landed (sha present)"),
     ("ops/dispatch_emit/run_landing.py", "_settle_token"): (
         1, "commit landed (sha present)"),
     ("ops/dispatch_emit/land_run.py", "_settle_token"): (
         1, "commit landed (sha present)"),
-    ("ops/dispatch_emit/land_run_grind.py", "commit_grind_rows"): (
+    ("ops/dispatch_emit/land_run_grind.py", "_commit_grind_rows"): (
         1, "grind commit landed (landed set only on committed reply)"),
     ("ops/dispatch_emit/land_run_fanout.py", "land"): (
         1, "fan-out commit landed (landed set only on committed reply)"),

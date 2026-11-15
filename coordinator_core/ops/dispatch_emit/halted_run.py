@@ -476,6 +476,35 @@ def _is_shell(run_dir: Path) -> bool:
     return isinstance(stage, dict) and stage.get("stage") in (None, "minted")
 
 
+#: Prefix of the `halted` value the deferred-emit launcher records when it minted a run but could not verify its script.
+MINTED_NOT_STARTED_HALT = "minted, not started"
+
+
+def is_unstarted_mint_halt(run_dir: Path) -> bool:
+    """A run the launcher halted as minted-not-started: the marker's `halted` names that halt and the
+    progress record never left `minted` (a `halted` stamp with no `staged_at` is that same state).
+
+    Trap: `write_halt_marker` stamps the stage `halted`, so the stage alone cannot tell a never-staged run from a
+    staged one; `staged_at` is what separates them. `_is_shell` stays False for such a run; only
+    `dispatch.minted_run start` admits it.
+    """
+    marker = _read(run_dir)
+    halted = marker.get("halted") if marker else None
+    if not (isinstance(halted, str) and halted.startswith((MINTED_NOT_STARTED_HALT, "minted_not_started"))):
+        return False
+    try:
+        stage = json.loads((run_dir / "run-stage.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return (
+        isinstance(stage, dict)
+        and "staged_at" not in stage
+        and stage.get("stage") in (None, "minted", "halted")
+    )
+
+
 def halted_run_named(repo_root: Path, run_id: object, sizing_rel: str) -> Optional[str]:
     """`run_id` when it names a `warp-*` or `ask-*` run whose marker is still `halted`, else None.
 

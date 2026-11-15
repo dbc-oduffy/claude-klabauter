@@ -14,7 +14,10 @@ import os
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Optional
 
+from coordinator_core.session.record_homes import home_dir
+
 TOUCHED_FILE = "touched-blobs.json"
+OWNERLESS_SCAN_CAP = 64
 
 
 def _norm(path: object) -> str:
@@ -63,17 +66,29 @@ def kind_of(path: str) -> str:
     return "module"
 
 
-def _records(record_dir: Path) -> list:
+def recent_run_dirs(base: Path, exclude: str = "", cap: int = OWNERLESS_SCAN_CAP) -> list:
+    """`[(name, dir)]` of the `cap` most recently modified run dirs under `base`, `exclude` left out; `[]` on
+    OSError. The record root holds thousands of run dirs, and reading each one's records per path breaks the
+    process-time bar, so a peer older than the cap is not consulted."""
+    try:
+        with os.scandir(base) as it:
+            dirs = [e for e in it if e.name != exclude and e.is_dir(follow_symlinks=False)]
+        dirs.sort(key=lambda e: e.stat().st_mtime, reverse=True)
+    except OSError:
+        return []
+    return sorted((e.name, Path(e.path)) for e in dirs[:cap])
+
+
+def read_records(record_dir: Path) -> list:
     """`[(run id, record dir, record mtime, record)]`: `record_dir` itself when it holds a record,
-    else each child run dir that does (the state/warp parent)."""
+    else each of the `OWNERLESS_SCAN_CAP` most recent child run dirs that does (the state/warp parent)."""
     base = Path(record_dir)
     dirs = []
     try:
         if (base / TOUCHED_FILE).is_file():
             dirs = [base]
         else:
-            with os.scandir(base) as it:
-                dirs = [Path(e.path) for e in it if e.is_dir() and (Path(e.path) / TOUCHED_FILE).is_file()]
+            dirs = [d for _name, d in recent_run_dirs(base) if (d / TOUCHED_FILE).is_file()]
     except OSError:
         return []
     found = []
@@ -100,6 +115,7 @@ def stranded(
     record_dir: Path,
     landing_paths: Iterable[str],
     head_blobs: Mapping[str, Optional[str]],
+    records: Optional[list] = None,
 ) -> list:
     """`[{path, run, kind, reason}]` for each recorded path a landing leaves behind.
 
@@ -107,11 +123,13 @@ def stranded(
     per record, so a hit names another run's sibling by `run`). A recorded path outside the landing is
     stranded when its HEAD blob (`head_blobs`, None = absent) differs from the run blob and the run
     changed it (run != base). When several records name a path, only the newest record judges it.
-    `reason`: "unlanded" (worktree bytes are the run blob) or "lost" (they are not)."""
+    `reason`: "unlanded" (worktree bytes are the run blob) or "lost" (they are not).
+    `records`: the `read_records(record_dir)` result when the caller already read it, so no dir is read twice."""
     try:
         landing = {_norm(p) for p in landing_paths}
         landing.discard("")
-        records = _records(record_dir)
+        if records is None:
+            records = read_records(record_dir)
         newest: dict = {}
         for run_id, _d, mtime, rec in records:
             for p in rec:
@@ -158,10 +176,14 @@ def ownerless(root: Path, dirty_paths: Iterable[str]) -> list:
         if not dirty:
             return []
         declared: set = set()
-        with os.scandir(Path(root) / "state" / "warp") as it:
-            for e in it:
-                if e.is_dir():
-                    declared |= _declared_paths(_manifest_doc(Path(e.path)))
-        return sorted(dirty - declared)
+        # state/warp holds thousands of run dirs; the advisory judges only the newest, so the
+        # scan stays inside the process-time bar (older runs' paths may read as ownerless).
+        seen = False
+        for _name, run_dir in recent_run_dirs(Path(home_dir(str(root), "warp"))):
+            seen = True
+            declared |= _declared_paths(_manifest_doc(run_dir))
+            if dirty <= declared:
+                return []
+        return sorted(dirty - declared) if seen else []
     except Exception:
         return []

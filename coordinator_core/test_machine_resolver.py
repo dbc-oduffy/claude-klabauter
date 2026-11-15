@@ -167,6 +167,20 @@ def test_all_resolution_rungs_absent_returns_unknown(monkeypatch, tmp_path):
 # --- require_key: typed refusal on a missing settings-home key ---------------
 
 
+def test_registry_get_reads_concern_local_file_above_registry(monkeypatch, tmp_path):
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path))
+    monkeypatch.delenv("MACHINE_LOCAL_EXAMPLE_RETRIEVAL_REPO_PYTHON", raising=False)
+    (tmp_path / "registry.toml").write_text(
+        'concerns = ["project_rag"]\n[example_retrieval_repo]\npython = "shadowed"\n', encoding="utf-8"
+    )
+    (tmp_path / "example_retrieval_repo.local.toml").write_text(
+        "[example_retrieval_repo]\npython = '/usr/bin/py'\n", encoding="utf-8"
+    )
+    assert mr.registry_get("example_retrieval_repo.python") == "/usr/bin/py"
+    (tmp_path / "example_retrieval_repo.local.toml").unlink()
+    assert mr.registry_get("example_retrieval_repo.python") is None
+
+
 def test_require_key_missing_raises_naming_key(monkeypatch, tmp_path):
     reg_dir = tmp_path / "machine-local"
     reg_dir.mkdir()

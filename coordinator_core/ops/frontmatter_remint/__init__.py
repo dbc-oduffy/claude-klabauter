@@ -41,6 +41,7 @@ from coordinator_core.ops.frontmatter_remint._contract import (
     Refused,
     Resolved,
 )
+from coordinator_core.session.record_homes import home_rel
 
 _LOG = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ _RESOLVERS: dict[str, str] = {
 #: record location -> vendored schema (relative to the frontmatter schemas dir).
 _SCHEMA_DIR = Path(__file__).resolve().parents[2] / "frontmatter" / "schemas"
 _SCHEMA_BY_PREFIX: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("state", "handoffs"), "handoff.schema.json"),
+    (tuple(home_rel("handoffs").split("/")), "handoff.schema.json"),
     (("docs", "plans"), "plan.schema.json"),
 )
 

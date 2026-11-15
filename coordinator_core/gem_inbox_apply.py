@@ -26,6 +26,7 @@ from typing import Callable, Optional, Sequence
 
 from coordinator_core.git.run import run_git
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.session.record_homes import home_rel
 
 LEDGER_DIR = ".coordinator-local/gem-inbox-pending"
 _LIVE_STATUSES = {"open", "in_progress"}
@@ -169,7 +170,7 @@ def apply_manifest(
         declare_write(target)
 
     batons = [_rel(repo, w["path"]) for w in manifest.get("writes", [])]
-    batons = [b for b in batons if "state/handoffs/" in b]
+    batons = [b for b in batons if home_rel("handoffs") + "/" in b]
     lint = tool([["lint-frontmatter", "--file", b] for b in batons], cwd) if batons else []
     failed = [b for b, rc in zip(batons, lint) if rc != 0]
     if failed:

@@ -199,7 +199,8 @@ def test_a_reply_less_exit_0_is_acked_from_the_far_receipts(bridge, monkeypatch)
             rows = [{"digest": hashlib.sha256(l).hexdigest()} for l in sent[0].splitlines()]
             return subprocess.CompletedProcess([], 0, json.dumps({"ok": True, "rows": rows}).encode() + b"\n", b"")
         sent.append(data)
-        return subprocess.CompletedProcess([], 0, b"", b"")
+        # The macmini relay's real reply: one bare ok per line, no digest.
+        return subprocess.CompletedProcess([], 0, b'{"ok": true}\n' * len(data.splitlines()), b"")
     sent = []
     calls = record_ssh(monkeypatch, far)
     send_many(bridge, 2)

@@ -1,6 +1,10 @@
 """A far `from=` is never left as the far /tmp/cc-socks path, and a mirror's session name carries its box."""
 import importlib.util
 import json
+import socket
+import sys
+import threading
+import types
 from pathlib import Path
 
 import pytest
@@ -46,22 +50,98 @@ def test_name_match_is_per_box():
     other = {"name": "far-1.otherbox", "macSocketPath": FAR_SOCK, "messagingSocketPath": POSIX_EP}
     inbox._mirrors = lambda: iter([other])
     line = json.dumps(frame_from(FAR_CC_MSG)).encode()
-    assert inbox.localize(frame_from(FAR_CC_MSG), line, "boxlan") == line
+    out = json.loads(inbox.localize(frame_from(FAR_CC_MSG), line, "boxlan"))
+    assert out["from"] == "uds:" + FAR_CC_MSG
+    assert 'from="far-1"' in out["message"]["content"] and "uds:" + FAR_CC_MSG not in out["message"]["content"]
 
 
-def test_no_resolvable_endpoint_leaves_the_frame_refused_visible_never_a_label():
+@pytest.mark.parametrize("src", [FAR_CC_MSG, WIN_PIPE])
+def test_no_resolvable_endpoint_gives_the_reply_attribute_the_sender_name_not_the_far_path(src):
     inbox = load("inbox")
-    inbox._mirrors = lambda: iter([])
-    line = json.dumps(frame_from(FAR_CC_MSG)).encode()
-    assert inbox.localize(frame_from(FAR_CC_MSG), line, "boxlan") == line
+    out = localized(inbox, frame_from(src), [])
+    assert 'from="far-1"' in out["message"]["content"]
+    assert src not in out["message"]["content"]
+    assert out["from"] == "uds:" + src  # the receiving inbox checks the frame-level from
 
 
-def test_frame_without_from_name_or_box_is_untouched():
+def test_frame_without_from_name_is_untouched():
     inbox = load("inbox")
     bare = {"from": "uds:" + FAR_CC_MSG, "message": {"content": "no attrs"}}
     inbox._mirrors = lambda: iter([])
     assert inbox.localize(bare, b"raw", "boxlan") == b"raw"
-    assert inbox.localize(frame_from(FAR_CC_MSG), b"raw") == b"raw"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="unix-socket receiver")
+def test_unmapped_far_sender_frame_is_delivered_to_the_receiving_endpoint_name_routed(tmp_path, monkeypatch):
+    inbox = load("inbox")
+    inbox._mirrors = lambda: iter([])
+    inbox.log = types.SimpleNamespace(write=lambda _s: None)
+    monkeypatch.setattr(inbox, "SESSIONS", str(tmp_path / "sessions"))
+    monkeypatch.chdir(tmp_path)  # a relative bind keeps the path under the sun_path limit
+    endpoint = "r.sock"
+    srv = socket.socket(socket.AF_UNIX)
+    srv.bind(endpoint)
+    srv.listen(1)
+    got = []
+
+    def accept():
+        c, _ = srv.accept()
+        buf = b""
+        while chunk := c.recv(65536):
+            buf += chunk
+        got.append(buf)
+        c.close()
+
+    t = threading.Thread(target=accept)
+    t.start()
+    frame = frame_from(FAR_CC_MSG)
+    inbox.deliver_frame(frame, json.dumps(frame).encode() + b"\n", b"", endpoint, "boxlan")
+    t.join(5)
+    srv.close()
+    assert len(got) == 1
+    arrived = json.loads(got[0].splitlines()[-1])
+    assert arrived["from"] == "uds:" + FAR_CC_MSG
+    assert 'from="far-1"' in arrived["message"]["content"] and FAR_CC_MSG not in arrived["message"]["content"]
+
+
+@pytest.fixture
+def bridge(tmp_path, monkeypatch):
+    mod = load("bridge")
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    monkeypatch.setattr(mod, "SESSIONS", str(sessions))
+    mod.cfg = types.SimpleNamespace(remote="boxlan")
+    mod.log = open(tmp_path / "b.log", "a", encoding="utf-8")
+    mod.sessions_dir = sessions
+    yield mod
+    mod.log.close()
+
+
+def _bridge_localize(bridge, frame):
+    out, port = bridge.localize_from(json.dumps(frame).encode() + b"\n")
+    return json.loads(out.splitlines()[-1]), port
+
+
+@pytest.mark.parametrize("src", [WIN_PIPE, FAR_CC_MSG])
+def test_bridge_unmapped_far_from_of_either_os_shape_is_named_never_passed_through_as_localized(bridge, src):
+    out, port = _bridge_localize(bridge, frame_from(src))
+    assert port is None
+    assert 'from="far-1"' in out["message"]["content"] and src not in out["message"]["content"]
+
+
+def test_bridge_from_that_is_a_registered_local_address_is_left_alone(bridge):
+    (bridge.sessions_dir / "7.json").write_text(json.dumps({"pid": 7, "messagingSocketPath": WIN_PIPE}))
+    sent = frame_from(WIN_PIPE)
+    out, _ = _bridge_localize(bridge, sent)
+    assert out == sent
+
+
+def test_bridge_mapped_far_from_still_resolves_to_its_mirror(bridge):
+    (bridge.sessions_dir / "8.json").write_text(json.dumps(
+        {"pid": 8, "unimatrixMirror": True, "unimatrixRemote": "boxlan", "macSocketPath": FAR_CC_MSG,
+         "messagingSocketPath": POSIX_EP}))
+    out, _ = _bridge_localize(bridge, frame_from(FAR_CC_MSG))
+    assert out["from"] == "uds:" + POSIX_EP
 
 
 @pytest.mark.parametrize("remote", ["boxlan", "me@boxlan", "me@192.168.0.175"])

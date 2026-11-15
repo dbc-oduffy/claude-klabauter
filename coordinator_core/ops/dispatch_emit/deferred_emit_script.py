@@ -51,13 +51,15 @@ function _halted(r) {
 
 # Trap: a workflow script has no filesystem, so the receipt is read through a read-only relay; the started path is one
 # whose `<script>.emitted.json` sha equals the script's own bytes, never the relay's word for where the script is.
+# The command compares the two digests itself and prints MATCH or a MISMATCH line: the relay classifies one printed token and
+# never copies a 64-hex digest, so a match cannot be lost to a mis-copy.
 # Self-contained: the block is run alone under node by its test.
 _RECEIPT_PATH_JS = r"""const RECEIPT_CHECK_ATTEMPTS = 3;
 const RECEIPT_RETRY_WAIT_MS = 1000;
 const RECEIPT_SCHEMA = {
   type: 'object',
   required: ['found'],
-  properties: { found: { type: 'boolean' }, receipt_sha256: { type: 'string' }, script_sha256: { type: 'string' }, error: { type: 'string' } },
+  properties: { found: { type: 'boolean' }, verdict: { type: 'string', enum: ['MATCH', 'MISMATCH'] }, detail: { type: 'string' }, error: { type: 'string' } },
 };
 function _receiptCandidates(reply) {
   const out = [];
@@ -83,15 +85,13 @@ async function _verifiedScriptPath(reply) {
       const r = await agent(
         __AUTHORITY__
         // Trap: the receipt also carries em_brief.sha256 ahead of the top-level key, so the key path is read by the command, never chosen by the relay.
-        + ' Run `python3 -c "import hashlib,json,sys; p=sys.argv[1]; print(json.load(open(p + \'.emitted.json\', encoding=\'utf-8\'))[\'sha256\']); print(hashlib.sha256(open(p, \'rb\').read()).hexdigest())" "' + cand + '"` (`python` in place of `python3` on Windows). Do not delete or modify any file. Then '
-        + 'return found true with receipt_sha256 (the first line it printed) and script_sha256 (the second line it printed), both verbatim. '
+        + ' Run `python3 -c "import hashlib,json,sys; p=sys.argv[1]; r=str(json.load(open(p + \'.emitted.json\', encoding=\'utf-8\'))[\'sha256\']).strip().lower(); s=hashlib.sha256(open(p, \'rb\').read()).hexdigest(); print(\'MATCH\' if r == s else \'MISMATCH receipt sha256 \' + r + \' != script sha256 \' + s)" "' + cand + '"` (`python` in place of `python3` on Windows). Do not delete or modify any file. Then '
+        + 'return found true with verdict MATCH when the line it printed is exactly MATCH, else verdict MISMATCH with the printed line verbatim in detail. '
         + 'When either file is missing or unreadable, return found false and the error text verbatim in the error field.',
         { label: 'receipt-check', phase: 'emit', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: RECEIPT_SCHEMA },
       );
       if (!r || r.found !== true) { verdict = 'no emit receipt for ' + cand + (r && r.error ? ' (' + r.error + ')' : ''); break; }
-      const rs = String(r.receipt_sha256 || '').trim().toLowerCase();
-      const ss = String(r.script_sha256 || '').trim().toLowerCase();
-      if (!/^[0-9a-f]{64}$/.test(rs) || rs !== ss) { verdict = 'emit receipt sha mismatch for ' + cand + ': receipt sha256 ' + (rs || '(none)') + ' != script sha256 ' + (ss || '(none)') + '; re-emit this run id so the script and its receipt are rewritten together'; continue; }
+      if (String(r.verdict || '').trim().toUpperCase() !== 'MATCH') { verdict = 'emit receipt sha mismatch for ' + cand + ': ' + (String(r.detail || '').trim() || 'the receipt check did not report MATCH') + '; re-emit this run id so the script and its receipt are rewritten together'; continue; }
       verdict = '';
       break;
     }

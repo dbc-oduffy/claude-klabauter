@@ -252,8 +252,9 @@ def registry_get(key: str) -> Optional[str]:
     `repos.content_root` falls back to its legacy name (and the reverse), so a box
     holding either key resolves for readers of either.
 
-    Resolution order: ``MACHINE_LOCAL_<KEY>`` env override -> registry.local.toml
-    -> registry.toml. Empty-string values are treated as not-found (see module
+    Resolution order: ``MACHINE_LOCAL_<KEY>`` env override -> ``<c>.local.toml``
+    -> ``<c>.toml`` (``<c>`` a concern in registry.toml ``concerns``) ->
+    registry.local.toml -> registry.toml. Empty-string values are treated as not-found (see module
     docstring negative-spec).
 
     Public promotion (DR-071, 2026-07-22): this is the direct-tomllib registry
@@ -297,22 +298,61 @@ def require_key(key: str) -> str:
 REGISTRY_LAYER_FILES = ("registry.toml", "registry.local.toml")
 
 
+def _flatten_concern(concern: str, data: dict, prefix: Optional[str] = None) -> dict:
+    """Flatten one concern file under ``<concern>.``; a top-level ``[<concern>]``
+    table is not double-prefixed. Mirrors ``_machine_local.py::_flatten_concern``."""
+    out: dict = {}
+    base = prefix if prefix is not None else f"{concern}."
+    for k, v in data.items():
+        if k == "schema":
+            continue
+        if prefix is None and k == concern and isinstance(v, dict):
+            out.update(_flatten_concern(concern, v, f"{concern}."))
+            continue
+        full = f"{base}{k}"
+        if isinstance(v, dict):
+            out.update(_flatten_concern(concern, v, f"{full}."))
+        else:
+            out[full] = v
+    return out
+
+
+def _non_empty(flat: dict, key: str) -> Optional[str]:
+    if key not in flat:
+        return None
+    val = flat[key]
+    if isinstance(val, list):
+        val = "\n".join(str(i) for i in val)
+    return str(val) or None
+
+
 def _registry_get_exact(key: str) -> Optional[str]:
+    """env -> <c>.local.toml -> <c>.toml -> registry.local.toml -> registry.toml, where
+    <c> is a concern listed in registry.toml `concerns` (the machine-local CLI's layer
+    order, ``_build_resolution_layers``). A registry key under a concern prefix never
+    resolves. Only the concern files named by the key's first segment are read."""
     env_override = os.environ.get(_env_override_key(key))
     if env_override:
         return env_override
 
     reg_dir = registry_dir()
-    for fname in ("registry.local.toml", "registry.toml"):
-        flat = _flatten(_load_toml(reg_dir / fname))
-        if key in flat:
-            val = flat[key]
-            if isinstance(val, list):
-                val = "\n".join(str(i) for i in val)
-            s = str(val)
-            if s:
-                return s
-    return None
+    registry = _load_toml(reg_dir / "registry.toml")
+    concerns = registry.get("concerns", [])
+    concerns = [str(c) for c in concerns] if isinstance(concerns, list) else []
+
+    first_seg = key.split(".")[0]
+    if first_seg in concerns:
+        for fname in (f"{first_seg}.local.toml", f"{first_seg}.toml"):
+            found = _non_empty(_flatten_concern(first_seg, _load_toml(reg_dir / fname)), key)
+            if found is not None:
+                return found
+    if first_seg.lower() in {c.lower() for c in concerns}:
+        return None
+
+    found = _non_empty(_flatten(_load_toml(reg_dir / "registry.local.toml")), key)
+    if found is not None:
+        return found
+    return _non_empty(_flatten(registry), key)
 
 
 # Legacy alias — retained for the pre-existing internal callers in this module
