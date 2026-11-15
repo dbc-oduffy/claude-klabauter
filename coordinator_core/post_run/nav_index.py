@@ -191,7 +191,16 @@ def rebuild(touched: Iterable[Path], wiki_roots: Iterable[Path]) -> NavIndexResu
             continue
         dirs = _scan(root)
         cache: dict[str, tuple[str, str]] = {}
-        for d in _targets(root, mine, dirs):
+        # A rendered index links every child subdir's `_index.md`; build the ones missing on disk
+        # (and, recursively, theirs) or the link is dead.
+        todo = _targets(root, mine, dirs)
+        seen = set(todo)
+        for d in todo:
+            for s in sorted(s for s in dirs if s and posixpath.dirname(s) == d):
+                if s not in seen and not (root / s / "_index.md").is_file():
+                    seen.add(s)
+                    todo.append(s)
+        for d in todo:
             path = root / d / "_index.md" if d else root / "_index.md"
             data = _render(root, root.name, d, dirs, cache).encode("utf-8")
             if path.is_file() and path.read_bytes() == data:

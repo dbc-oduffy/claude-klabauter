@@ -51,13 +51,27 @@ def test_stale_index_refreshed_when_page_added(tmp_path: Path) -> None:
     assert "[A](a.md)" in text and "[C](c.md)" in text
 
 
-def test_only_dirs_with_a_touched_page_are_rebuilt(tmp_path: Path) -> None:
+def test_an_untouched_dir_with_an_index_is_not_rewritten(tmp_path: Path) -> None:
     wiki = tmp_path / "wiki"
     a = _w(wiki / "one" / "a.md", "# A\n")
     _w(wiki / "two" / "b.md", "# B\n")
+    two_idx = _w(wiki / "two" / "_index.md", "hand-kept\n")
     nav_index.rebuild([a], [wiki])
     assert (wiki / "one" / "_index.md").is_file()
-    assert not (wiki / "two" / "_index.md").exists()
+    assert two_idx.read_text() == "hand-kept\n"
+
+
+def test_every_subdir_index_a_rebuilt_index_links_exists(tmp_path: Path) -> None:
+    # example-retrieval-repo 2026-11-15: root linked observability/_index.md and semantic-search/_index.md,
+    # never written, so linkfix reported both dead on every run.
+    wiki = tmp_path / "wiki"
+    a = _w(wiki / "one" / "a.md", "# A\n")
+    _w(wiki / "two" / "b.md", "# B\n")
+    _w(wiki / "two" / "deep" / "c.md", "# C\n")
+    nav_index.rebuild([a], [wiki])
+    assert "[two/](two/_index.md)" in (wiki / "_index.md").read_text()
+    assert "[B](b.md)" in (wiki / "two" / "_index.md").read_text()
+    assert "[C](c.md)" in (wiki / "two" / "deep" / "_index.md").read_text()
 
 
 def test_family_parent_page_lists_in_parent_index_and_heads_its_own(tmp_path: Path) -> None:
