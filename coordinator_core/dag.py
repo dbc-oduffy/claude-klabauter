@@ -1213,8 +1213,15 @@ _resolve_target = resolve_target
 def build_handoff_id_index(
     paths: List[str], metas: Optional[Dict[str, dict]] = None
 ) -> Dict[str, str]:
+    """Map each handoff_id (and each `handoff_id_aliases` entry) to its file.
+
+    A live handoff_id outranks an alias; among aliases the first path seen wins,
+    matching `schema_validate._build_handoff_id_index`.
+    """
     index: Dict[str, str] = {}
+    aliases: Dict[str, str] = {}
     for p in paths:
+        meta = None
         if metas is not None:
             meta = metas.get(os.path.abspath(p))
             if meta is None:
@@ -1225,11 +1232,20 @@ def build_handoff_id_index(
             if hid is _RAW_SCAN_FALLBACK:
                 meta = _read_meta(p)
                 hid = meta.get('handoff_id') if meta else None
+        if meta:
+            raw_aliases = meta.get('handoff_id_aliases')
+            if isinstance(raw_aliases, list):
+                for alias in raw_aliases:
+                    alias_str = str(alias).strip() if alias is not None else ''
+                    if alias_str:
+                        aliases.setdefault(alias_str, os.path.abspath(p))
         if hid is None:
             continue
         hid_str = str(hid).strip()
         if hid_str:
             index[hid_str] = os.path.abspath(p)
+    for alias_str, path in aliases.items():
+        index.setdefault(alias_str, path)
     return index
 
 
@@ -1241,6 +1257,9 @@ _RAW_SCAN_FALLBACK = object()
 _RAW_SCAN_TERMINATOR_RE = re.compile(r'^---\s*$', re.MULTILINE)
 
 _RAW_SCAN_HANDOFF_ID_RE = re.compile(r'^handoff_id:[ \t]*(\S.*?)[ \t]*$', re.MULTILINE)
+
+#: An alias-carrying record needs the parsed list, so the raw scan defers it.
+_RAW_SCAN_ALIASES_RE = re.compile(r'^handoff_id_aliases:', re.MULTILINE)
 
 _RAW_SCAN_WINDOW_BYTES = 4096
 
@@ -1314,6 +1333,8 @@ def _raw_scan_handoff_id(file_path: str) -> Any:
         return _RAW_SCAN_FALLBACK
 
     header = text[:term_match.start()]
+    if _RAW_SCAN_ALIASES_RE.search(header):
+        return _RAW_SCAN_FALLBACK
     id_match = _RAW_SCAN_HANDOFF_ID_RE.search(header)
     if id_match is None:
         return None

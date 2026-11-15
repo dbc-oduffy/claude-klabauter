@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.distill.prompt_tier import split_to_tier
+from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS, register_op
@@ -80,7 +81,7 @@ HEAD_BYTES = 4096
 ARCHIVED_HANDOFFS_KEEP_NEWEST = 10
 """Newest archived handoffs (by filename order) kept unconditionally."""
 
-HANDOFF_EXEMPT_KINDS = frozenset({"roadmap-baton", "spinoff-roadmap"})
+HANDOFF_EXEMPT_KINDS = frozenset(kind_values_for_canonical("roadmap-baton"))
 
 BLOCKED_PASS_START_SECS = 0.12
 """Process time after which the one corpus-wide `blocked_by_dependents_many` pass is not

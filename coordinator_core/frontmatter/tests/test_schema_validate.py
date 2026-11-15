@@ -225,6 +225,38 @@ class TestValidateFrontmatterHappyPath:
         assert errors == []
 
 
+class TestHandoffIdIndexAliases:
+    def _repo(self, tmp_path, files):
+        from coordinator_core.frontmatter.schema_validate import _build_handoff_id_index
+
+        for rel, text in files.items():
+            p = tmp_path / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding='utf-8')
+        return _build_handoff_id_index(str(tmp_path))
+
+    def test_alias_maps_to_holder_logical_key(self, tmp_path):
+        index = self._repo(tmp_path, {
+            'state/handoffs/a.md': '---\nhandoff_id: hnd-new-bbbbbb\nhandoff_id_aliases:\n  - hnd-old-aaaaaa\n---\nb\n',
+            'archive/handoffs/2026-10/z.md': '---\nhandoff_id: hnd-arc-cccccc\nhandoff_id_aliases: [hnd-oldarc-dddddd]\n---\nb\n',
+        })
+        assert index['hnd-new-bbbbbb'] == 'state/handoffs/a.md'
+        assert index['hnd-old-aaaaaa'] == 'state/handoffs/a.md'
+        assert index['hnd-oldarc-dddddd'] == 'state/handoffs/z.md'
+
+    def test_live_id_outranks_alias_and_warns_not(self, tmp_path, capsys):
+        index = self._repo(tmp_path, {
+            'state/handoffs/a.md': '---\nhandoff_id: hnd-new-bbbbbb\nhandoff_id_aliases:\n  - hnd-old-aaaaaa\n---\nb\n',
+            'archive/handoffs/2026-10/z.md': '---\nhandoff_id: hnd-old-aaaaaa\n---\nb\n',
+        })
+        assert index['hnd-old-aaaaaa'] == 'state/handoffs/z.md'
+        assert capsys.readouterr().err == ''
+
+    def test_alias_only_record_still_indexed(self, tmp_path):
+        index = self._repo(tmp_path, {'state/handoffs/a.md': '---\nhandoff_id_aliases:\n  - hnd-old-aaaaaa\n---\nb\n'})
+        assert index == {'hnd-old-aaaaaa': 'state/handoffs/a.md'}
+
+
 class TestHandoffIdPlaceholderPatternNarrow:
     """The placeholder-id-minting-guard
     narrow (`handoff.schema.json` MAJOR 4.0.0->5.0.0) had no negative-case
@@ -4388,7 +4420,10 @@ _QUEUE_SCHEMA_PINS = {
     # schema.py review-findings.
     #   add handed-to-em row status + handed_to_em stamp count for ruling-only
     #   reviewers (claude-klabauter run ask-20261105T214502-ba98e0)
-    'review-findings': "56ea0390e26cececdfacbdf89865370f66dc4315",
+    # Pin moved 2026-11-15 to 8a85937400c250b9cfc4df7473b765884ccecba9 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
+    #   DoE 4b420cb7a9 touched review-findings; re-pin
+    'review-findings': "8a85937400c250b9cfc4df7473b765884ccecba9",
     # Moved off _C1_LANDING_SHA 2026-07-27: DoE landed the optional
     # `reviewed_paths` property at x-schema-version 1.1.0 (their 89c24b12d), in
     # response to this repo's canonical-first ask. Re-vendored from that commit;

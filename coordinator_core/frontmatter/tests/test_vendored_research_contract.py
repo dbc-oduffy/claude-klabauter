@@ -48,7 +48,7 @@ def test_vendored_versions():
     # test_register_rows_shape tracks 3.24.0 too (minItems dropped).
     # DoE re-sync is out of scope here.
     assert _version(_SIZING) == "1.53.0"
-    assert _version(_HANDOFF) == "11.6.0"
+    assert _version(_HANDOFF) == "11.7.1"
     assert _version(_PLAN_TASKS) == "3.24.0"
 
 

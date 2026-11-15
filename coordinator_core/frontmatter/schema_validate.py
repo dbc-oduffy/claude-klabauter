@@ -8609,6 +8609,10 @@ def _build_handoff_id_index(repo_root: str) -> dict[str, str]:
     otherwise first-seen wins. Either case is a data anomaly, surfaced via a
     one-line stderr warning rather than swallowed.
 
+    A `handoff_id_aliases` entry maps to its holder only where no record
+    holds that string as a current handoff_id (live id outranks alias; among
+    aliases first seen wins, silently).
+
     Does NOT existence-check deliverable_id/initiative — those resolve on the
     central/claude-klabauter state plane; a local scan would false-positive every ref
     forever (mirrors the oracle's own scope note).
@@ -8641,17 +8645,28 @@ def _build_handoff_id_index(repo_root: str) -> dict[str, str]:
             parsed = parse_frontmatter(content)
             frontmatter = parsed['frontmatter']
             hid = frontmatter.get('handoff_id') if frontmatter else None
-            if not hid or not isinstance(hid, str):
+            raw_aliases = frontmatter.get('handoff_id_aliases') if frontmatter else None
+            has_hid = bool(hid) and isinstance(hid, str)
+            if not has_hid and not isinstance(raw_aliases, list):
                 continue
             key = f'state/handoffs/{entry.name}' if is_archive_entry else (
                 os.path.relpath(full_path, repo_root).replace('\\', '/')
             )
-            claims.append((hid, key, is_archive_entry))
+            if has_hid:
+                claims.append((hid, key, is_archive_entry))
+            if isinstance(raw_aliases, list):
+                for alias in raw_aliases:
+                    if isinstance(alias, str) and alias.strip():
+                        alias_claims.append((alias.strip(), key, is_archive_entry))
 
     claims: list[tuple[str, str, bool]] = []
+    alias_claims: list[tuple[str, str, bool]] = []
     index_dir(os.path.join(repo_root, 'state', 'handoffs'), False, False)
     index_dir(os.path.join(repo_root, 'archive', 'handoffs'), True, True)
-    return _resolve_handoff_id_claims(claims)
+    index = _resolve_handoff_id_claims(claims)
+    for alias, key, _ in alias_claims:
+        index.setdefault(alias, key)
+    return index
 
 
 def _resolve_handoff_id_claims(claims) -> dict[str, str]:

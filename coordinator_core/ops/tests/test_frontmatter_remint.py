@@ -138,6 +138,21 @@ def test_writer_owning_family_is_called_after_resolve(repo, monkeypatch):
     assert (field["outcome"], field["reason"]) == ("refused", "review-run-absent")
 
 
+def test_cited_handoff_remints_with_alias_and_old_id_resolves(repo):
+    from coordinator_core.dag import build_handoff_id_index
+
+    p = _write(repo, BAD_ID)
+    (repo / "state" / "ledger.json").write_text(f'"{BAD_ID}"', encoding="utf-8")
+    out = _run(repo, paths=["state/handoffs/h.md"])
+    (field,) = out["results"][0]["fields"]
+    assert (field["field"], field["outcome"], field["reason"]) == ("handoff_id", "written", None)
+    text = p.read_text(encoding="utf-8")
+    assert f"handoff_id_aliases:\n  - {BAD_ID}\n" in text
+    assert "handoff_id: hnd-" in text and f"handoff_id: {BAD_ID}" not in text
+    assert build_handoff_id_index([str(p)])[BAD_ID] == str(p)
+    assert _run(repo, paths=["state/handoffs/h.md"])["results"][0]["fields"] == []
+
+
 def test_usage_and_path_errors(repo):
     assert _run(repo)["exit_code"] == 2
     out = _run(repo, paths=["../escape.md", "state/handoffs/missing.md", "README.md"])

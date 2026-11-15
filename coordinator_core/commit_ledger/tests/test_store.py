@@ -277,6 +277,27 @@ def test_read_chain_empty_handoff_id(tmp_path):
     assert store.read_chain("", cwd=str(tmp_path)) == []
 
 
+@pytest.mark.parametrize(
+    "alias_lines", [["handoff_id_aliases:", "  - hnd-old-aaaaaa"], ["handoff_id_aliases: [hnd-x-111111, 'hnd-old-aaaaaa']"]]
+)
+def test_frontmatter_id_search_resolves_alias(tmp_path, alias_lines):
+    new = tmp_path / "state" / "handoffs" / "2026-11-15-new.md"
+    new.parent.mkdir(parents=True)
+    new.write_text("\n".join(["---", "handoff_id: hnd-new-bbbbbb", *alias_lines, "---", "", "b"]), encoding="utf-8")
+    assert store._frontmatter_id_search(tmp_path, "hnd-old-aaaaaa") == new
+    assert store._frontmatter_id_search(tmp_path, "hnd-new-bbbbbb") == new
+    assert store._frontmatter_id_search(tmp_path, "hnd-none-cccccc") is None
+
+
+def test_frontmatter_id_search_live_id_outranks_alias(tmp_path):
+    aliased = tmp_path / "state" / "handoffs" / "a.md"
+    holder = tmp_path / "archive" / "handoffs" / "2026-10" / "z.md"
+    _write_handoff(holder, "hnd-old-aaaaaa")
+    aliased.parent.mkdir(parents=True, exist_ok=True)
+    aliased.write_text("---\nhandoff_id: hnd-new-bbbbbb\nhandoff_id_aliases:\n  - hnd-old-aaaaaa\n---\nb\n", encoding="utf-8")
+    assert store._frontmatter_id_search(tmp_path, "hnd-old-aaaaaa") == holder
+
+
 def test_record_predecessor_pointer_unresolvable_returns_false(tmp_path):
     repo = _init_git_repo(tmp_path)
     assert store.record_predecessor_pointer(

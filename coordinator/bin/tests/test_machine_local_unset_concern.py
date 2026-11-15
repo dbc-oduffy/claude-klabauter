@@ -133,14 +133,13 @@ def test_unset_concern_namespace_mismatch_refuses_with_path(tmp_path):
     assert "example_retrieval_repo.local.toml" in proc.stderr and "not under concern namespace" in proc.stderr
 
 
-def test_unset_concern_refusal_on_unserializable_cowriter_value_names_path(tmp_path):
+def test_unset_concern_keeps_a_cowriter_value_it_cannot_serialize(tmp_path):
     path = _seed(tmp_path, "schema = 1\n\n[example_retrieval_repo]\nk = 'v'\nlst = ['a', 'b']\n")
 
     proc = _run(tmp_path, "unset", "example_retrieval_repo.k")
 
-    assert proc.returncode == 2
-    assert "hand-edit" in proc.stderr and str(path) in proc.stderr
-    assert "k = 'v'" in path.read_text(encoding="utf-8")
+    assert proc.returncode == 0, proc.stderr
+    assert path.read_text(encoding="utf-8") == "schema = 1\n\n[example_retrieval_repo]\nlst = ['a', 'b']\n"
 
 
 def test_unset_falls_through_to_registry_local_when_concern_does_not_hold_key(tmp_path):

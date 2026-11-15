@@ -104,7 +104,8 @@ def find_archived_twin_by_filename(target_path: PathLike, repo_root: PathLike) -
 
 def find_archived_twin_by_handoff_id(handoff_id: Optional[str], repo_root: PathLike) -> Optional[Path]:
     """Return an ``archive/handoffs/`` record whose ``handoff_id`` frontmatter
-    scalar matches ``handoff_id``, or ``None`` when absent/not found.
+    scalar, or one of whose ``handoff_id_aliases``, matches ``handoff_id``, or
+    ``None`` when absent/not found.
 
     The single "archived twin" predicate: any guard that reacts to a twin
     (this module RAISES on a match) calls this rather than carrying its own
@@ -138,9 +139,43 @@ def _scan_for_handoff_id(archive_dir: Path, handoff_id: str) -> Optional[Path]:
             header = _read_frontmatter_block(candidate)
             if header is None:
                 continue
-            if extract_frontmatter_scalar(header, "handoff_id") == handoff_id:
+            if extract_frontmatter_scalar(header, "handoff_id") == handoff_id or handoff_id in _header_aliases(header):
                 return Path(candidate)
     return None
+
+
+def _header_aliases(header: str) -> list[str]:
+    """`handoff_id_aliases` from a header block, flow `[a, b]` or block `- a`; empty when absent."""
+    if "handoff_id_aliases:" not in header:
+        return []
+    out: list[str] = []
+    fence_count = 0
+    collecting = False
+    for line in header.splitlines():
+        s = line.strip()
+        if s == "---":
+            fence_count += 1
+            if fence_count >= 2:
+                break
+            continue
+        if fence_count != 1:
+            continue
+        if collecting:
+            if s == "-" or s.startswith("- "):
+                out.append(s[1:].strip().strip("\"'"))
+                continue
+            if not s or s.startswith("#"):
+                continue
+            collecting = False
+        if line.startswith("handoff_id_aliases:"):
+            rest = line[len("handoff_id_aliases:"):].strip()
+            if rest.startswith("["):
+                out.extend(t.strip().strip("\"'") for t in rest.strip("[]").split(","))
+            elif rest:
+                out.append(rest.strip("\"'"))
+            else:
+                collecting = True
+    return [a for a in out if a]
 
 
 def _read_frontmatter_block(path: PathLike) -> Optional[str]:

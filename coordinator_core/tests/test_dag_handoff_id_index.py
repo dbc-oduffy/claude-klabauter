@@ -442,3 +442,70 @@ def test_raw_scan_agrees_with_the_general_parser_over_the_live_corpus():
         f"{len(disagreements)} handoff file(s) read differently by the raw "
         f"4KB scan and the general parser; first 5: {disagreements[:5]}"
     )
+
+
+class TestHandoffIdAliases:
+    def test_alias_resolves_to_holder_without_metas(self, tmp_path):
+        root = _init_repo(tmp_path)
+        p = _write_handoff(
+            root,
+            "state/handoffs/new.md",
+            ["handoff_id: hnd-new-bbbbbb", "handoff_id_aliases: [hnd-old-aaaaaa]"],
+        )
+
+        index = dag.build_handoff_id_index([str(p)])
+
+        assert index == {
+            "hnd-new-bbbbbb": str(p.absolute()),
+            "hnd-old-aaaaaa": str(p.absolute()),
+        }
+
+    def test_block_list_alias_resolves_with_metas(self, tmp_path):
+        root = _init_repo(tmp_path)
+        p = _write_handoff(
+            root,
+            "state/handoffs/new.md",
+            ["handoff_id: hnd-new-bbbbbb", "handoff_id_aliases:", "  - hnd-old-aaaaaa"],
+        )
+        meta = dag.read_handoff_meta(str(p))
+
+        index = dag.build_handoff_id_index([str(p)], metas={str(p.absolute()): meta})
+
+        assert index["hnd-old-aaaaaa"] == str(p.absolute())
+
+    def test_live_id_outranks_alias_in_either_input_order(self, tmp_path):
+        root = _init_repo(tmp_path)
+        holder = _write_handoff(
+            root,
+            "state/handoffs/holder.md",
+            ["handoff_id: hnd-new-bbbbbb", "handoff_id_aliases: [hnd-live-cccccc]"],
+        )
+        live = _write_handoff(root, "state/handoffs/live.md", ["handoff_id: hnd-live-cccccc"])
+
+        for order in ([holder, live], [live, holder]):
+            index = dag.build_handoff_id_index([str(x) for x in order])
+            assert index["hnd-live-cccccc"] == str(live.absolute())
+            assert index["hnd-new-bbbbbb"] == str(holder.absolute())
+
+    def test_raw_scan_defers_an_alias_carrying_record(self, tmp_path):
+        root = _init_repo(tmp_path)
+        p = _write_handoff(
+            root,
+            "state/handoffs/new.md",
+            ["handoff_id: hnd-new-bbbbbb", "handoff_id_aliases: [hnd-old-aaaaaa]"],
+        )
+        plain = _write_handoff(root, "state/handoffs/plain.md", ["handoff_id: hnd-p-dddddd"])
+
+        assert dag._raw_scan_handoff_id(str(p)) is dag._RAW_SCAN_FALLBACK
+        assert dag._raw_scan_handoff_id(str(plain)) == "hnd-p-dddddd"
+
+    def test_body_alias_line_does_not_force_fallback(self, tmp_path):
+        root = _init_repo(tmp_path)
+        p = root / "state" / "handoffs" / "body.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            "---\nhandoff_id: hnd-b-eeeeee\n---\n\nhandoff_id_aliases: [x]\n",
+            encoding="utf-8",
+        )
+
+        assert dag._raw_scan_handoff_id(str(p)) == "hnd-b-eeeeee"

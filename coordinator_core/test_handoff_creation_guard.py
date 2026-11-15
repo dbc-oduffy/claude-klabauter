@@ -59,6 +59,30 @@ class TestFindArchivedTwinByHandoffId:
         _seed_archived(tmp_path, "2026-07/2026-07-22-foo.md", handoff_id="hnd-foo-abc123")
         assert find_archived_twin_by_handoff_id("hnd-bar-zzz999", tmp_path) is None
 
+    @pytest.mark.parametrize(
+        "alias_lines",
+        [
+            ["handoff_id_aliases:", "  - hnd-old-aaaaaa", "  - hnd-older-bbbbbb"],
+            ["handoff_id_aliases: [hnd-older-bbbbbb, 'hnd-old-aaaaaa']"],
+        ],
+    )
+    def test_alias_matches_in_block_and_flow_form(self, tmp_path, alias_lines):
+        archived = tmp_path / "archive" / "handoffs" / "2026-07" / "2026-07-22-foo.md"
+        archived.parent.mkdir(parents=True)
+        archived.write_text(
+            "\n".join(["---", "handoff_id: hnd-new-cccccc", *alias_lines, "status: closed", "---", "", "# Body"]) + "\n",
+            encoding="utf-8",
+        )
+        assert find_archived_twin_by_handoff_id("hnd-old-aaaaaa", tmp_path) == archived
+        assert find_archived_twin_by_handoff_id("hnd-new-cccccc", tmp_path) == archived
+        assert find_archived_twin_by_handoff_id("hnd-other-dddddd", tmp_path) is None
+
+    def test_alias_text_in_body_is_ignored(self, tmp_path):
+        archived = tmp_path / "archive" / "handoffs" / "2026-07" / "2026-07-22-foo.md"
+        archived.parent.mkdir(parents=True)
+        archived.write_text("---\nhandoff_id: hnd-new-cccccc\n---\nhandoff_id_aliases:\n  - hnd-old-aaaaaa\n", encoding="utf-8")
+        assert find_archived_twin_by_handoff_id("hnd-old-aaaaaa", tmp_path) is None
+
     def test_none_handoff_id_returns_none(self, tmp_path):
         _seed_archived(tmp_path, "2026-07/2026-07-22-foo.md", handoff_id="hnd-foo-abc123")
         assert find_archived_twin_by_handoff_id(None, tmp_path) is None

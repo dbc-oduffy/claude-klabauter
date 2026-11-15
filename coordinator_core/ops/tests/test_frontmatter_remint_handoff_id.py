@@ -39,14 +39,60 @@ def test_absent_id_resolves(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "key", ["predecessor_id", "origin_handoff_id", "predecessor", "forked_from"]
 )
-def test_refuses_when_old_id_referenced(tmp_path: Path, key: str) -> None:
+def test_cited_old_id_is_recorded_as_alias(tmp_path: Path, key: str) -> None:
     p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
     _write(tmp_path, "state/handoffs/other.md", "hnd-other-abcdef", f"{key}: hnd-a-thing\n")
     res = handoff_id.resolve(p, {"handoff_id": "hnd-a-thing"}, tmp_path)
-    assert isinstance(res, Refused) and res.reason == "handoff-id-referenced"
+    assert res == Resolved({"handoff_id": _expected(tmp_path, p.name), "handoff_id_aliases": ["hnd-a-thing"]})
 
 
-def test_refuses_when_referenced_from_archive_list_field(tmp_path: Path) -> None:
+def test_existing_aliases_are_kept_and_scalar_tolerated(tmp_path: Path) -> None:
+    p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
+    (tmp_path / "state" / "x.json").write_text('"hnd-a-thing"', encoding="utf-8")
+    for existing in (["hnd-zzz-111111", " "], "hnd-zzz-111111", None):
+        res = handoff_id.resolve(p, {"handoff_id": "hnd-a-thing", "handoff_id_aliases": existing}, tmp_path)
+        assert isinstance(res, Resolved)
+        want = ["hnd-a-thing"] if existing is None else ["hnd-a-thing", "hnd-zzz-111111"]
+        assert res.value["handoff_id_aliases"] == want
+
+
+@pytest.mark.parametrize(
+    "claim", ["handoff_id: hnd-a-thing\n", "handoff_id: hnd-q-222222\nhandoff_id_aliases:\n  - hnd-a-thing\n"]
+)
+def test_refuses_collision_when_old_id_claimed_by_another_record(tmp_path: Path, claim: str) -> None:
+    p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
+    (tmp_path / "state" / "x.json").write_text('"hnd-a-thing"', encoding="utf-8")
+    q = tmp_path / "state/handoffs/q.md"
+    q.write_text(f"---\ntitle: q\n{claim}---\nb\n", encoding="utf-8")
+    res = handoff_id.resolve(p, {"handoff_id": "hnd-a-thing"}, tmp_path)
+    assert isinstance(res, Refused) and res.reason == "handoff-id-collision"
+    assert str(q) in res.detail
+
+
+def test_write_records_alias_as_a_list_and_old_id_resolves(tmp_path: Path) -> None:
+    from coordinator_core.dag import build_handoff_id_index
+
+    (tmp_path / ".git").mkdir()
+    p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
+    (tmp_path / "state" / "x.json").write_text('"hnd-a-thing"', encoding="utf-8")
+    res = handoff_id.write(p, tmp_path)
+    new_id = _expected(tmp_path, p.name)
+    assert isinstance(res, Resolved)
+    text = p.read_text(encoding="utf-8")
+    assert f"handoff_id: {new_id}\n" in text and "handoff_id_aliases:\n  - hnd-a-thing\n" in text
+    assert build_handoff_id_index([str(p)])["hnd-a-thing"] == str(p)
+    handoff_id.write(p, tmp_path)
+    assert p.read_text(encoding="utf-8") == text
+
+
+def test_write_without_citers_adds_no_alias(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
+    assert isinstance(handoff_id.write(p, tmp_path), Resolved)
+    assert "handoff_id_aliases" not in p.read_text(encoding="utf-8")
+
+
+def test_archive_list_field_citer_yields_alias(tmp_path: Path) -> None:
     p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
     _write(
         tmp_path,
@@ -55,7 +101,7 @@ def test_refuses_when_referenced_from_archive_list_field(tmp_path: Path) -> None
         "additional_predecessors:\n  - hnd-a-thing\n",
     )
     res = handoff_id.resolve(p, {"handoff_id": "hnd-a-thing"}, tmp_path)
-    assert isinstance(res, Refused) and res.reason == "handoff-id-referenced"
+    assert isinstance(res, Resolved) and res.value["handoff_id_aliases"] == ["hnd-a-thing"]
 
 
 @pytest.mark.parametrize(
@@ -65,14 +111,13 @@ def test_refuses_when_referenced_from_archive_list_field(tmp_path: Path) -> None
         ("state/audits/triage/ledger-p1.yaml", "rows:\n  - id: hnd-a-thing\n"),
     ],
 )
-def test_refuses_and_names_state_ledger_citer(tmp_path: Path, rel: str, body: str) -> None:
+def test_state_ledger_citer_yields_alias(tmp_path: Path, rel: str, body: str) -> None:
     p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
     c = tmp_path / rel
     c.parent.mkdir(parents=True, exist_ok=True)
     c.write_text(body, encoding="utf-8")
     res = handoff_id.resolve(p, {"handoff_id": "hnd-a-thing"}, tmp_path)
-    assert isinstance(res, Refused) and res.reason == "handoff-id-referenced"
-    assert rel in res.detail
+    assert isinstance(res, Resolved) and res.value["handoff_id_aliases"] == ["hnd-a-thing"]
 
 
 def test_self_is_not_a_citer(tmp_path: Path) -> None:
@@ -219,5 +264,5 @@ def test_a_many_path_call_scans_citers_once(tmp_path: Path, monkeypatch: pytest.
     out = frontmatter_remint._handler({"paths": rels, "fields": ["handoff_id"]}, repo_root=tmp_path)
     assert len(calls) == 1
     outcomes = {r["path"]: r["fields"][0] for r in out["results"]}
-    assert outcomes[rels[2]]["reason"] == "handoff-id-referenced"
-    assert "state/ledger.json" in outcomes[rels[2]]["detail"]
+    assert outcomes[rels[2]]["outcome"] == "written"
+    assert "hnd-thing-2" in (tmp_path / rels[2]).read_text(encoding="utf-8").split("handoff_id_aliases:")[1]

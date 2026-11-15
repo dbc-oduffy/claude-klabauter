@@ -172,7 +172,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, read_fm_nested_field, split_frontmatter
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.locked_write import LockTimeout, held_lock
 from coordinator_core.session import core
@@ -576,7 +576,7 @@ def _worktree_root(cwd: Optional[str] = None) -> Optional[Path]:
     return Path(top) if top else None
 
 
-def _read_handoff_frontmatter(fpath: Path) -> Dict[str, str]:
+def _read_handoff_frontmatter(fpath: Path) -> Dict[str, Any]:
     """Best-effort raw frontmatter field read for ``handoff_id`` /
     ``predecessor`` / ``predecessor_id`` off a handoff markdown file.
 
@@ -592,17 +592,26 @@ def _read_handoff_frontmatter(fpath: Path) -> Dict[str, str]:
     split = split_frontmatter(raw)
     if split is None:
         return {}
-    fields: Dict[str, str] = {}
+    fields: Dict[str, Any] = {}
     for key in ("handoff_id", "predecessor", "predecessor_id", "continued_into"):
         val = read_fm_field_unquoted(split.fm_text, key)
         if val:
             fields[key] = val
+    if "handoff_id_aliases:" in split.fm_text:
+        flow = read_fm_field_unquoted(split.fm_text, "handoff_id_aliases") or ""
+        block = read_fm_nested_field(split.fm_text, "handoff_id_aliases") or ""
+        items = flow.strip("[]").split(",") if flow.startswith("[") else [
+            ln.strip()[1:] for ln in block.splitlines() if ln.strip().startswith("-")
+        ]
+        fields["handoff_id_aliases"] = [a for a in (i.strip().strip("\"'") for i in items) if a]
     return fields
 
 
 def _frontmatter_id_search(root: Path, target_id: str) -> Optional[Path]:
     """Locate a handoff file whose ``handoff_id:`` frontmatter field equals
     ``target_id`` by walking ``state/handoffs/`` then ``archive/handoffs/``.
+    A record whose ``handoff_id_aliases`` lists ``target_id`` is returned
+    only when no record holds it as a current id.
 
     This is the ONE case ``_find_first_match``'s basename search cannot
     cover: a bare ``handoff_id`` (e.g. ``hnd-<slug>-<hex6>``) generally
@@ -622,6 +631,7 @@ def _frontmatter_id_search(root: Path, target_id: str) -> Optional[Path]:
     """
     state_dir = root / "state" / "handoffs"
     archive_dir = root / "archive" / "handoffs"
+    alias_hit: Optional[Path] = None
     for rootdir, pattern in ((state_dir, "*.md"), (archive_dir, "*.md")):
         if not rootdir.is_dir():
             continue
@@ -631,7 +641,9 @@ def _frontmatter_id_search(root: Path, target_id: str) -> Optional[Path]:
             fm = _read_handoff_frontmatter(fpath)
             if fm.get("handoff_id") == target_id:
                 return fpath
-    return None
+            if alias_hit is None and target_id in fm.get("handoff_id_aliases", ()):
+                alias_hit = fpath
+    return alias_hit
 
 
 def record_predecessor_pointer(
