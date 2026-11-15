@@ -1024,3 +1024,21 @@ def test_blitz_baton_id_expression_evaluates_to_stem_and_throws_when_empty(m_plu
     assert status == "threw" and "baton has no id" in msg
     status, _ = _eval({}, None)
     assert status == "threw"
+
+
+def test_preblitz_scan_past_its_cap_parks_with_a_not_started_reply(monkeypatch):
+    import time
+
+    monkeypatch.setattr(ask_compose, "PREBLITZ_STEP_SECS", 0.05)
+    monkeypatch.setattr(ask_compose, "_preblitz_anchor_lines", lambda *_a: time.sleep(1.0) or [])
+    with pytest.raises(ask_compose.PreblitzStepParked) as parked:
+        ask_compose.preblitz_anchor_lines("/repo", "docs/plans/p.md")
+    reply = parked.value.reply
+    assert reply["status"] == "not-started" and reply["parked"] is True
+    assert reply["step"] == ask_compose.PREBLITZ_STEP
+
+
+def test_preblitz_scan_inside_its_cap_returns_its_lines(monkeypatch):
+    monkeypatch.setattr(ask_compose, "_preblitz_anchor_lines", lambda *_a: ["CONTRADICTED: x -- y"])
+    assert ask_compose.preblitz_anchor_lines("/repo", "docs/plans/p.md") == ["CONTRADICTED: x -- y"]
+    assert ask_compose.preblitz_anchor_lines("/repo", None) == []

@@ -338,13 +338,14 @@ async function _chainHop(child, handoff) {
   });
   // Trap: a gate agent that already ran dispatch.emit leaves its reply (path, run_id, ok, error) in the hand-off; those keys are never emit params. emit_error is the child's own failed retry: not fatal, the launcher emits.
   const { path: _rp, run_id: _rr, ok: _rk, error: _re, emit_error: _ee, fire_args: _rf, ...params } = handoff;
+  // Trap: without chain_parent the emit rebinds the sibling sizing to the child's own run id, which _emitRefusal refuses as not fresh. A hand-off's own chain_parent wins.
   let emitted;
   if (typeof _re === 'string' && _re !== '') return fail('emit failed: ' + _re);
   if (named(_rp)) {
     emitted = { path: _rp, run_id: _pathRunId(_rp) || (named(_rr) ? _rr : ''), fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
   } else {
     try {
-      emitted = await _emitLeg(child, { ...params, __LAUNCHER_PARAM__: true }, 'chain-emit-' + child.run_id);
+      emitted = await _emitLeg(child, { chain_parent: child.run_id, ...params, __LAUNCHER_PARAM__: true }, 'chain-emit-' + child.run_id);
     } catch (e) {
       return fail('emit threw: ' + String(e && e.message ? e.message : e));
     }

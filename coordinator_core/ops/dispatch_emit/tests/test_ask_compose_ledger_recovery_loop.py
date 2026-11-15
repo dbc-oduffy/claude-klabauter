@@ -347,3 +347,155 @@ def test_two_chunks_claiming_the_row_are_not_both_reopened_without_a_name(monkey
     out = _run(_script(monkeypatch), items=[_unmet(["still red"])])
     assert _fix_labels(out) == []
     assert out["result"]["halted_by"]["halted"] == "ledger-check"
+
+
+def _snap(*writes, cid="C1", ok=True, truncated=False):
+    """The engine's `live-snap` legs' replies for one writing leg: `before` ok, `after` naming `writes`."""
+    sfx = f":{cid}" if cid else ""
+    extra = {"truncated": True} if truncated else {}
+    return {
+        f"live-snap-before{sfx}": {"ok": ok, "live_tree_writes": [], **extra},
+        f"live-snap-after{sfx}": {"ok": ok, "live_tree_writes": list(writes), **extra},
+    }
+
+
+def _remnant_record(out: dict) -> dict:
+    prompt = next(c for c in out["calls"] if c["label"] == "remnant-record")["prompt"]
+    text = prompt.split("exactly this JSON text: ", 1)[1].split(". Edit nothing else", 1)[0]
+    return json.loads(text)
+
+
+def test_a_fix_leg_that_reports_no_change_while_a_live_blob_changed_has_the_path_listed(monkeypatch):
+    liar = {"status": "DONE", "paths": [], "reason": "live tree unchanged"}
+    out = _run(
+        _script(monkeypatch), items=[_NAMED],
+        replies={"ledger-fix:C1": liar, LEDGER_REVERIFY_LABEL: {"items": [_MET]}, **_snap("pkg/a.py")},
+    )
+    rec = _record(out)["chunks"]["C1"]
+    assert rec["live_tree_writes"] == ["pkg/a.py"]
+    assert rec["undeclared_live_writes"] == ["pkg/a.py"]
+    assert "pkg/a.py" in rec["last_reason"] and rec["last_reason"].startswith("live tree changed (engine-measured)")
+    assert rec["live_snapshot"].endswith("/live-C1.json")
+
+
+def test_a_fix_leg_with_unchanged_blobs_lists_no_write_and_keeps_its_reason(monkeypatch):
+    out = _run(
+        _script(monkeypatch), items=[_NAMED],
+        replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}, **_snap()},
+    )
+    rec = _record(out)["chunks"]["C1"]
+    assert rec["live_tree_writes"] == [] and "undeclared_live_writes" not in rec
+    assert rec["last_reason"] == "fixed"
+
+
+def test_a_fix_leg_whose_measurement_failed_records_the_write_as_unmeasured_not_unchanged(monkeypatch):
+    out = _run(
+        _script(monkeypatch), items=[_NAMED],
+        replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}, **_snap(ok=False)},
+    )
+    rec = _record(out)["chunks"]["C1"]
+    assert rec["live_tree_writes"] is None and rec["live_tree_unmeasured"] is True
+    assert rec["last_reason"] == "fixed [live-tree write not measured]"
+
+
+def test_the_engine_brackets_each_fix_leg_with_its_own_measurement_and_the_leg_is_never_asked_to_probe(monkeypatch):
+    out = _run(
+        _script(monkeypatch), items=[_NAMED],
+        replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}, **_snap()},
+    )
+    order = [lab for lab in _labels(out) if lab and (lab.startswith("live-snap") or lab.startswith(LEDGER_FIX_LABEL))]
+    assert order == ["live-snap-before:C1", "ledger-fix:C1", "live-snap-after:C1"]
+    fix_prompt = next(c for c in out["calls"] if c["label"] == "ledger-fix:C1")["prompt"]
+    assert "hash-object" not in fix_prompt and "live_before" not in fix_prompt
+    before = next(c for c in out["calls"] if c["label"] == "live-snap-before:C1")["prompt"]
+    assert "ledger_recovery before --root" in before and "live-C1.json" in before and '["pkg/a.py","tests/test_a.py"]' in before
+
+
+_ORPHAN = _unmet(["something no chunk owns"])
+
+
+def test_a_remnant_leg_that_changed_a_footprint_path_it_declared_records_it_and_proceeds(monkeypatch):
+    leg = {"status": "DONE", "paths": ["pkg/a.py"], "reason": "completed"}
+    out = _run(
+        _script(monkeypatch), items=[_ORPHAN],
+        replies={"remnant-complete": leg, "remnant-reverify": {"items": [_MET]}, **_snap("pkg/a.py", cid="remnant")},
+    )
+    rec = _remnant_record(out)
+    assert rec["live_tree_writes"] == ["pkg/a.py"] and "undeclared_live_writes" not in rec
+    assert rec["status"] == "fixed" and "remnant-reverify" in _labels(out)
+
+
+def test_a_remnant_leg_whose_report_leaves_out_a_changed_live_path_is_blocked_before_reverify(monkeypatch):
+    leg = {"status": "DONE", "paths": [], "reason": "live tree unchanged"}
+    out = _run(
+        _script(monkeypatch), items=[_ORPHAN],
+        replies={"remnant-complete": leg, "remnant-reverify": {"items": [_MET]}, **_snap("pkg/a.py", cid="remnant")},
+    )
+    rec = _remnant_record(out)
+    assert rec["status"] == "blocked"
+    assert rec["live_tree_writes"] == ["pkg/a.py"] and rec["undeclared_live_writes"] == ["pkg/a.py"]
+    assert rec["last_reason"].startswith("remnant wrote live path(s) it did not report")
+    assert "remnant-reverify" not in _labels(out)
+
+
+def test_a_remnant_leg_that_changed_a_path_outside_the_footprint_names_it_for_the_landing_fence(monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ledger_recovery
+
+    leg = {"status": "DONE", "paths": ["pkg/other.py"], "reason": "completed"}
+    out = _run(
+        _script(monkeypatch), items=[_ORPHAN],
+        replies={"remnant-complete": leg, "remnant-reverify": {"items": [_MET]}, **_snap("pkg/other.py", cid="remnant")},
+    )
+    rec = _remnant_record(out)
+    assert rec["status"] == "blocked" and rec["paths"] == ["pkg/other.py"]
+    assert ledger_recovery.remnant_breach(rec) == ["pkg/other.py"]
+
+
+
+def test_a_fix_leg_that_changed_a_path_is_followed_by_the_engine_restore_before_reverify(monkeypatch):
+    out = _run(
+        _script(monkeypatch), items=[_NAMED],
+        replies={
+            "ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}, **_snap("pkg/a.py"),
+            "live-restore:C1": {"ok": True, "restored": ["pkg/a.py"], "refused": [], "peer_held": []},
+        },
+    )
+    order = [lab for lab in _labels(out) if lab and (lab.startswith("live-") or lab.startswith(LEDGER_FIX_LABEL))]
+    assert order == ["live-snap-before:C1", "ledger-fix:C1", "live-snap-after:C1", "live-restore:C1"]
+    rec = _record(out)["chunks"]["C1"]
+    assert rec["live_restored"] == ["pkg/a.py"] and rec["status"] != "blocked"
+
+
+def test_a_fix_leg_whose_write_the_engine_could_not_restore_is_blocked_not_fixed(monkeypatch):
+    out = _run(
+        _script(monkeypatch), items=[_NAMED],
+        replies={
+            "ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}, **_snap("pkg/a.py"),
+            "live-restore:C1": {"ok": True, "restored": [], "refused": [{"path": "pkg/a.py", "reason": "clash"}]},
+        },
+    )
+    rec = _record(out)["chunks"]["C1"]
+    assert rec["status"] == "blocked" and rec["live_refused"][0]["path"] == "pkg/a.py"
+    assert "could not restore" in rec["last_reason"]
+
+
+def test_a_fix_leg_over_a_truncated_directory_snapshot_is_recorded_as_unmeasured(monkeypatch):
+    out = _run(
+        _script(monkeypatch), items=[_NAMED],
+        replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}, **_snap(truncated=True)},
+    )
+    assert _record(out)["chunks"]["C1"]["live_tree_unmeasured"] is True
+
+
+def test_a_remnant_write_to_a_peer_held_path_is_not_blamed_as_unreported(monkeypatch):
+    leg = {"status": "DONE", "paths": [], "reason": "live tree unchanged"}
+    out = _run(
+        _script(monkeypatch), items=[_ORPHAN],
+        replies={
+            "remnant-complete": leg, "remnant-reverify": {"items": [_MET]}, **_snap("pkg/a.py", cid="remnant"),
+            "live-restore:remnant": {"ok": True, "restored": [], "refused": [], "peer_held": ["pkg/a.py"]},
+        },
+    )
+    rec = _remnant_record(out)
+    assert "undeclared_live_writes" not in rec and rec["status"] == "fixed"
+    assert "remnant-reverify" in _labels(out)

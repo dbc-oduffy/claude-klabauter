@@ -34,7 +34,7 @@ NOMINATION_STEP = "groupem-nomination-who"
 FRESHNESS_STEP = "fresh-commit-delta"
 ALIGNMENT_STEPS = ("priority-whats-next", "triage-query-completions")
 
-CATCH_UP_ARGV = ("workday-complete", "--catch-up")
+CATCH_UP_ARGV = ("workday-complete-assemble", "brief", "--catch-up")
 _DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 PHASE_ONE_LAST_STAGE = "freshness"

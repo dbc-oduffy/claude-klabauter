@@ -355,6 +355,58 @@ def _run_child_stage(script: str, sha, fire_args=None, repeat=False, emit_extra=
     return json.loads(out.stdout)
 
 
+def _run_chain_hop(script: str, handoff: dict, chain_path: str):
+    """Run _runChild under node with a child whose first run hands off; returns [result, emit prompts, started paths]."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    body = script.split("\n", 1)[1].split("const _settled", 1)[0].replace("export const meta", "const meta")
+    root = re.search(r"const REPO_ROOT = (\".*?\");", body).group(1)
+    code = (
+        "const prompts = [];\nconst calls = [];\n"
+        f"const FIRST = {{ path: {root} + '/scratch/warp/ask-r1.workflow.mjs', run_id: 'ask-r1', fire_args: {{}} }};\n"
+        f"const CHAINED = {{ path: {root} + {json.dumps(chain_path)}, run_id: '', fire_args: {{}} }};\n"
+        "const agent = async (p, o) => { prompts.push(p); return CHAINED; };\n"
+        f"const workflow = async (o) => {{ calls.push(o.scriptPath); return calls.length === 1 ? {{ {CHAIN_HANDOFF_KEY}: {json.dumps(handoff)} }} : {{ done: true }}; }};\n"
+        "const parallel = async () => [];\n"
+        + body
+        + "\n_runChild(CHILDREN[0], FIRST).then((r) => console.log(JSON.stringify([r, prompts, calls])));\n"
+    )
+    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+@pytest.mark.spawns_process
+def test_a_chain_hop_emits_under_the_child_run_id_as_chain_parent_and_starts_the_fresh_run(tmp_path):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    fresh = "/scratch/warp/warp-sizing-20261115T200000-abcdef.workflow.mjs"
+    result, prompts, calls = _run_chain_hop(script, {"sizing_path": "state/sizings/ask-r1.yaml", "ask": True}, fresh)
+    assert result["status"] == "ok" and result["result"]["chained_from"] == "ask-r1"
+    assert len(prompts) == 1 and '"chain_parent":"ask-r1"' in prompts[0]
+    assert calls[1].endswith(fresh)
+
+
+@pytest.mark.spawns_process
+def test_a_chain_hop_still_refuses_an_emit_reply_under_the_child_own_run_id(tmp_path):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    result, _, calls = _run_chain_hop(script, {"sizing_path": "state/sizings/ask-r1.yaml"}, "/scratch/warp/ask-r1.workflow.mjs")
+    assert result["status"] == "failed" and "is not a fresh run id" in result["error"]
+    assert len(calls) == 1
+
+
+@pytest.mark.spawns_process
+def test_a_hand_off_chain_parent_is_kept_over_the_child_run_id(tmp_path):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    fresh = "/scratch/warp/warp-sizing-20261115T200000-abcdef.workflow.mjs"
+    _, prompts, _ = _run_chain_hop(script, {"sizing_path": "state/sizings/ask-r1.yaml", "chain_parent": "ask-own"}, fresh)
+    assert prompts[0].count("chain_parent") == 1 and '"chain_parent":"ask-own"' in prompts[0]
+
+
 @pytest.mark.spawns_process
 def test_stage_pending_with_a_good_handle_starts_the_twin_path(tmp_path):
     _, script = _write(tmp_path, ids=("ask-r1",))

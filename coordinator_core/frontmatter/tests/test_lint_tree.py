@@ -357,6 +357,14 @@ def test_sidecars_yaml_and_directory_index_are_skipped(tree, capsys):
     assert out['ok'] and out['violations'] == []
 
 
+def test_redirects_index_is_skipped_by_the_tree_sweep(tree, capsys):
+    # DoE 2026-11-15: --file skipped REDIRECTS.md but the --json tree walk still swept it.
+    _write(tree, 'docs/plans/REDIRECTS.md', '# redirect index\n')
+    _write(tree, 'state/handoffs/REDIRECTS.md', '# redirect index\n')
+    out = _sweep(tree, capsys)
+    assert not any(v['file'].endswith('REDIRECTS.md') for v in out['violations'])
+
+
 def test_plan_adjacent_evidence_yaml_is_not_swept_but_plan_md_is(tree, capsys):
     _write(tree, 'docs/plans/2026-11/p1-8a0ad1.evidence.yaml', 'title: x\nstatus: bogus\n')
     _write(tree, 'docs/plans/2026-11/p1-8a0ad1.md', _record('title: "Plan"\nstatus: "bogué中"\n'))

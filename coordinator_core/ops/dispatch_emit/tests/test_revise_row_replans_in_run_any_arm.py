@@ -129,3 +129,55 @@ def test_readiness_repairs_a_missing_register_pin_mechanically():
 
     out = readiness_verdict(_gate({"status": "FAIL", "kind": "register-pin-missing", "mechanical": False, "repair": None}), None, [])
     assert out["pull_class"] == "mechanical" and out["mechanical_repairs"][0]["kind"] == "register-pin-missing"
+
+
+_STAGE_RUN = "ask-20261115T000000-abc125"
+_STAGE_PLAN_REL = "docs/plans/2026-11-15-unserved.md"
+_STAGE_SIZING_REL = "state/sizings/2026-11-15-unserved.yaml"
+
+
+def _stage_default(tmp_path, spine_registers, claimed):
+    """Stage a plan through `dispatch.ask_stage` over a register of R1-R3, its one row serving `spine_registers`."""
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    served = f"  register_rows: {spine_registers}\n" if spine_registers else ""
+    plan = (
+        f"---\ntitle: fixture\nsizing_object: {_STAGE_SIZING_REL}\nregister_claims:\n  sizing: {_STAGE_SIZING_REL}\n"
+        f"  rows: {claimed}\n---\n# Fixture\n\n## Tasks\n\n```yaml plan-tasks\n- id: U1\n  title: ungated\n"
+        f"  change_kind: code-edit\n  surface: pkg/a.py\n  writes:\n    - pkg/a.py\n{served}```\n"
+    )
+    (tmp_path / _STAGE_PLAN_REL).write_text(plan, encoding="utf-8", newline="\n")
+    sizing = {
+        "schema": "sizing-object", "intent": "x", "estimate": {"tshirt": "S", "provisional": True},
+        "route": "dispatch", "detents": [], "fork": None, "xl_exit": None, "status": "sized",
+        "premise": {"provenance": "not-applicable", "evidence": "fixture"}, "requirement_register": {"rows": _ROWS},
+    }
+    (tmp_path / _STAGE_SIZING_REL).write_text(yaml.safe_dump(sizing, sort_keys=False), encoding="utf-8")
+    rl.start(tmp_path, _STAGE_RUN, all_of_pm_ask=False)
+    reply = read_stage_reply(tmp_path, ask_stage._handler(
+        {"run_id": _STAGE_RUN, "plan_path": _STAGE_PLAN_REL, "commit_sizing_path": _STAGE_SIZING_REL}, repo_root=tmp_path
+    ))
+    assert "error" not in reply, reply
+    return reply
+
+
+def test_stage_leaves_rows_it_claimed_without_a_serving_row_to_the_in_run_late_leg(tmp_path):
+    reply = _stage_default(tmp_path, "[R1]", "[R1]")
+    assert reply["ledger_item_ids"] == ["R1"] and set(reply["rulable_ids"]) == {"R1", "R2", "R3"}
+    assert rr.plan_claims(split_frontmatter((tmp_path / _STAGE_PLAN_REL).read_text(encoding="utf-8")).fm_text)[1] == {"R1", "R2", "R3"}
+    assert rl.late_rows(tmp_path, _STAGE_RUN) == ["R2", "R3"]
+
+
+def test_stage_keeps_an_omitted_row_a_plan_row_serves_through_register_rows(tmp_path):
+    reply = _stage_default(tmp_path, "[R1, R2, R3]", "[R1]")
+    assert reply["ledger_item_ids"] == ["R1", "R2", "R3"]
+    assert rl.late_rows(tmp_path, _STAGE_RUN) == []
+
+
+def test_stage_keeps_every_row_of_a_plan_whose_claims_omitted_nothing(tmp_path):
+    reply = _stage_default(tmp_path, "", "[R1, R2, R3]")
+    assert reply["ledger_item_ids"] == ["R1", "R2", "R3"]
+    assert rl.late_rows(tmp_path, _STAGE_RUN) == []

@@ -244,6 +244,9 @@ def test_unattributed_foreign_hunk_survives_byte_identical_and_own_hunk_reverts(
     assert idx["p.py"] == {"blob": blob_sha(before), "head": blob_sha(_lines(FOREIGN)), "base": blob_sha(_lines())}
     assert (rec / "withheld-blobs" / blob_sha(before)).read_bytes() == before
     _heads(monkeypatch, {"p.py": _lines()})
+    from coordinator_core.ops.dispatch_emit import live_write_guard
+
+    monkeypatch.setattr(live_write_guard, "_head_lines", lambda root, path: _lines().splitlines(keepends=True))
     assert hte.restore(root, rec, owned_paths=["p.py"]) == {"restored": ["p.py"], "drift": {}, "refused": {}}
     assert (root / "p.py").read_bytes() == before
 
@@ -326,6 +329,42 @@ def test_restore_for_run_with_an_unreadable_record_writes_nothing(tmp_path):
     assert out["restored"] == [] and set(out["refused"].values()) == {"outside-own-paths"}
     assert (repo / "t.py").read_bytes() == b"a = 1\n"
     assert (repo / "u.py").read_bytes() == b"u = 1\n"
+
+
+def _spliced_world(tmp_path, withheld_edits):
+    """Git repo whose HEAD holds `_lines()`, a live file carrying a foreign line-7 hunk, and a record
+    whose withheld bytes are `_lines(withheld_edits)` with `head` = the live bytes, `base` = HEAD."""
+    repo, rec = tmp_path / "repo", tmp_path / "rec"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "core.autocrlf", "false")
+    (repo / "p.py").write_bytes(_lines())
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "A")
+    live = _lines(FOREIGN)
+    (repo / "p.py").write_bytes(live)
+    withheld = _lines(withheld_edits)
+    (rec / "withheld-blobs").mkdir(parents=True)
+    (rec / "withheld-blobs" / blob_sha(withheld)).write_bytes(withheld)
+    (rec / "evicted.json").write_text(json.dumps({
+        "p.py": {"blob": blob_sha(withheld), "head": blob_sha(live), "base": blob_sha(_lines())},
+    }))
+    return repo, rec, live
+
+
+def test_restore_over_a_live_foreign_hunk_keeps_that_hunk(tmp_path):
+    repo, rec, _ = _spliced_world(tmp_path, OWN)
+    out = hte.restore(repo, rec, owned_paths=["p.py"], run_id=RUN)
+    assert out == {"restored": ["p.py"], "drift": {}, "refused": {}}
+    assert (repo / "p.py").read_bytes() == _lines({**FOREIGN, **OWN})
+
+
+def test_restore_that_clashes_with_a_live_foreign_hunk_is_refused_and_recorded(tmp_path):
+    repo, rec, live = _spliced_world(tmp_path, {7: b"mine7\r\n"})
+    out = hte.restore(repo, rec, owned_paths=["p.py"], run_id=RUN)
+    assert out["restored"] == [] and "overlaps" in out["refused"]["p.py"]
+    assert (repo / "p.py").read_bytes() == live
+    assert _refusals(rec)["p.py"] == out["refused"]["p.py"]
 
 
 def test_repeated_restore_records_each_refusal_once(tmp_path):

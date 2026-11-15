@@ -18,7 +18,8 @@ from coordinator_core.ops.dispatch_emit import ask_gate, ask_stage
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
-from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from coordinator_core.ops.dispatch_emit.ask_contract import REGISTER_ROWS_UNCLAIMED_REFUSAL, record_dir
+from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put
 from coordinator_core.ops.dispatch_emit import live_run_index
@@ -114,7 +115,7 @@ def test_pre_verify_late_ids_run_one_bounded_executor_leg_before_the_verify_leg(
 
 
 _DRIVER_JS = r"""
-const S = { _halted: null, _lateIds: [], _verifyLateIds: [], _lateLeg: null, _rows: {}, _verifications: [],
+const S = { _halted: null, _lateIds: [], _verifyLateIds: [], _lateUnplanned: [], _lateLeg: null, _rows: {}, _verifications: [],
   _stagedManifest: null, _relayGap: null, _diskHalt: null, _stageRefusal: null, _USAGE_LIMIT_RE: /usage limit/i,
   _manifest: { rows: [{ id: 'C1' }], review_declared_paths: [], test_targets: [], gated: [], owed: [] },
   _lateReads: READS, order: [], events: [] };
@@ -122,7 +123,7 @@ S.log = () => {};
 S.agent = async (prompt, opts) => {
   S.order.push(opts.label);
   if (opts.label === 'late-rows-read') return { late_rows: S._lateReads.shift() ?? [] };
-  if (opts.label === 'ledger-late') return { added_rows: ['C2'], stage_reply: {} };
+  if (opts.label === 'ledger-late') return { added_rows: ADDED, stage_reply: {} };
   return 'DONE ' + opts.label;
 };
 S._adoptStageReply = async () => { S._stagedManifest = { rows: [{ id: 'C2', writes: ['pkg/C2.py'], deps: [] }] }; };
@@ -134,7 +135,7 @@ const guard = { has: (t, k) => !(k in globalThis), get: (t, k) => (k in S ? S[k]
   set: (t, k, v) => { S[k] = v; return true; } };
 const run = new Function('p', 'with (p) { return (async () => {' + BODY + '})(); }');
 run(new Proxy({}, guard)).then(() => console.log(JSON.stringify({ order: S.order, rows: S._manifest.rows.map((r) => r.id),
-  halted: S._halted, verifyIds: S._verifyLateIds }))).catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });
+  halted: S._halted, verifyIds: S._verifyLateIds, unplanned: S._lateUnplanned }))).catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });
 """
 
 
@@ -144,7 +145,7 @@ def _between(script, start, end):
     return script[i: re.compile(end).search(script, i).end()]
 
 
-def _run_composed_late_legs(reads, tmp_path):
+def _run_composed_late_legs(reads, tmp_path, added=("C2",)):
     """Run the composed `_lateRead`, `_lateLeg` and verify-block late snippet under node with stubbed agents."""
     node = shutil.which("node")
     if node is None:
@@ -159,7 +160,7 @@ def _run_composed_late_legs(reads, tmp_path):
         verify,
         "S.order.push('verify');",
     ])
-    source = _DRIVER_JS.replace("READS", json.dumps(reads)).replace("BODY", json.dumps(body))
+    source = _DRIVER_JS.replace("READS", json.dumps(reads)).replace("ADDED", json.dumps(list(added))).replace("BODY", json.dumps(body))
     driver = tmp_path / "late_legs_driver.js"
     driver.write_text(source, encoding="utf-8")
     proc = subprocess.run([node, str(driver)], capture_output=True, text=True, timeout=30,
@@ -177,6 +178,25 @@ def test_a_row_revised_after_execute_is_executed_once_then_verify_runs_without_a
     assert out["order"].index(executors[0]) < out["order"].index("verify"), out["order"]
     assert out["rows"] == ["C1", "C2"] and out["halted"] is None
     assert out["verifyIds"] == ["R2"]
+
+
+def test_a_late_row_the_replan_cannot_plan_is_retried_within_the_bound_then_recorded_unplanned(tmp_path):
+    out = _run_composed_late_legs([["R2"], ["R2"]], tmp_path, added=())
+    assert out["order"].count("ledger-late") == MAX_IN_RUN_REMEDY_ATTEMPTS, out["order"]
+    assert out["unplanned"] == ["R2"] and out["rows"] == ["C1"] and out["halted"] is None
+    assert out["order"][-1] == "verify"
+
+
+def test_a_late_row_without_register_rows_serves_nothing_and_its_ids_are_recorded_unplanned(tmp_path):
+    out = _run_composed_late_legs([["R2"], []], tmp_path)
+    assert out["rows"] == ["C1", "C2"] and out["unplanned"] == ["R2"], out
+
+
+def test_the_ledger_check_rules_late_ids_rulable_and_names_unplanned_rows_by_refusal_token():
+    script = _compose()
+    assert "..._lateIds, ..._verifyLateIds])]" in _between(script, "const _rulable =", r";\n")
+    ledger = script[script.index("{ halted: 'ledger-check'"):]
+    assert "_lateUnplanned.length" in ledger and REGISTER_ROWS_UNCLAIMED_REFUSAL in ledger
 
 
 def test_no_late_row_runs_no_extra_leg(tmp_path):

@@ -320,6 +320,7 @@ class _Sweep:
         derived = {
             'globs': globs,
             'sidecar': sv._LINT_SIDECAR_RE.pattern,
+            'index_basenames': sorted(sv._LINT_INDEX_BASENAMES),
             'routing': {'byGlob': schemas['_byGlob'], 'byKind': schemas['_byKind'], 'globs': globs},
             'shas': shas,
         }
@@ -558,6 +559,11 @@ class _Sweep:
         d = self.store.data
         derived = d['derived']
         sidecar_re = re.compile(derived['sidecar'])
+        # Mirrors sv._lint_is_sidecar_file from cached data: the warm path never imports the validator.
+        index_names = frozenset(derived.get('index_basenames', ()))
+
+        def is_sidecar(rel: str) -> bool:
+            return rel.rsplit('/', 1)[-1] in index_names or bool(sidecar_re.search(rel))
         old_files = d['files']
         new_files: dict[str, dict] = {}
         violations: list[dict] = []
@@ -573,7 +579,7 @@ class _Sweep:
             for rel, fname, size, mtime in self.scan(base, recursive):
                 if rel in seen or not rx.match(rel):
                     continue
-                if sidecar_re.search(rel) or _YAML_JSON_RE.search(rel):
+                if is_sidecar(rel) or _YAML_JSON_RE.search(rel):
                     continue
                 seen.add(rel)
                 stamp = [size, mtime]

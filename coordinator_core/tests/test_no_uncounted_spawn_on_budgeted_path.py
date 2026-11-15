@@ -2269,6 +2269,16 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "`test_git_fallback_issues_exactly_one_spawn_for_many_changed_files` (`assert len(spawns) == 1` "
         "over three changed files, origin asserted run_git); first run asserted spawn-free.",
     ),
+    # frontmatter.remint's citer scan: `handoff_id.scan_citers` issues ONE `git grep --no-index`
+    # per call for every id, scoped to state/ and archive/handoffs (67a8fca527, 2026-11-15).
+    ("frontmatter.remint", "coordinator_core/ops/frontmatter_remint/handoff_id.py", "scan_citers", "git", 0):
+    _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py",
+        executed="Measured under `test_remint_citer_scan_is_one_git_spawn_for_many_ids` with "
+        "`subprocess.run` substituted: `scan_citers` over three ids and `primed` + `_citers` over "
+        "the same ids each make exactly one spawn, `argv[:2] == ['git', '-c']`.",
+    ),
     **{
         (op, "coordinator_core/ops/ceremony/detached_spawn.py", "spawn_detached", "<dynamic>", 0):
         _RESUME_LAUNCH_SEAM
@@ -8273,3 +8283,34 @@ def test_headless_admission_is_in_process_and_never_dials_the_engine(monkeypatch
     assert verdict.admitted and "advisory" in verdict.reason and dialed == []
     hcc.admit_before_spawn("headless-workflow-worker", 0.5)
     assert dialed == ["box_memory.admit"]
+
+
+def test_remint_citer_scan_is_one_git_spawn_for_many_ids(tmp_path, monkeypatch):
+    """Companion for the `frontmatter.remint` legitimization: the citer scan spawns once for any
+    number of ids, and a primed `_citers` lookup spawns nothing further."""
+    import subprocess
+
+    from coordinator_core.ops.frontmatter_remint import handoff_id
+
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "ledger.md").write_text("cites hnd-a-111111 and hnd-b-222222\n")
+    ids = ["hnd-a-111111", "hnd-b-222222", "hnd-c-333333"]
+
+    real_run = subprocess.run
+    calls: list = []
+
+    def counting_run(argv, *args, **kwargs):
+        calls.append(list(argv))
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", counting_run)
+    found = handoff_id.scan_citers(ids, tmp_path)
+    assert found == {"hnd-a-111111": ["state/ledger.md"], "hnd-b-222222": ["state/ledger.md"],
+                     "hnd-c-333333": []}
+    assert len(calls) == 1 and calls[0][:2] == ["git", "-c"], calls
+
+    calls.clear()
+    with handoff_id.primed(ids, tmp_path):
+        for old_id in ids:
+            handoff_id._citers(old_id, tmp_path, "")
+    assert len(calls) == 1, calls

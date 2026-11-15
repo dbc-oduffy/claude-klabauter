@@ -1597,6 +1597,20 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                 checkpoint_withheld = sorted({*checkpoint_withheld, *paired})
                 for p in paired:
                     checkpoint_reasons.setdefault(p, "test of a row whose code is withheld: the row lands whole or waits")
+            # A staged or untracked test that imports or names withheld code waits with it.
+            exercising = checkpoint_hunks.tests_exercising_withheld_code(
+                worktree_root, [*raw_paths, *raw_untracked], checkpoint_withheld, expectations["supplied_blobs"],
+            ) if checkpoint_withheld else {}
+            if exercising:
+                gone = {p.replace("\\", "/") for p in exercising}
+                raw_paths = [p for p in raw_paths if p.replace("\\", "/") not in gone]
+                raw_untracked = [p for p in raw_untracked if p.replace("\\", "/") not in gone]
+                for p in list(expectations["supplied_blobs"]):
+                    if p.replace("\\", "/") in gone:
+                        del expectations["supplied_blobs"][p]
+                checkpoint_withheld = sorted({*checkpoint_withheld, *gone})
+                for p, why in exercising.items():
+                    checkpoint_reasons.setdefault(p.replace("\\", "/"), f"test exercises withheld code: {why}")
         if not (raw_paths or raw_deleted or raw_untracked):
             return _error(
                 "every checkpoint path holds hunks outside this run or the run is unresolved, nothing to commit: "

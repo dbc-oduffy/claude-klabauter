@@ -659,3 +659,33 @@ def test_a_raising_redrive_is_reported_and_never_fails_the_cycle(redrive_root, m
     assert "redrive exploded" in result["cascade_redrive"]["errors"][0]["error"]
     assert result["landed_parked"] == []
     assert result["failed"] == []
+
+
+def test_handler_without_cap_runs_with_the_default_cap(tmp_path, monkeypatch):
+    root = _init_repo(tmp_path / "repo")
+    seen = {}
+
+    def _fake_run(worktree_root, cap, **kwargs):
+        seen["cap"] = cap
+        return {}
+
+    monkeypatch.setattr(cycle, "run", _fake_run)
+    result = cycle._handler({}, root)
+
+    assert result["exit_code"] == 0
+    assert seen["cap"] == cycle.DEFAULT_CAP > 0
+
+
+def test_handler_without_cap_runs_end_to_end_on_a_fixture_repo(tmp_path):
+    root = _init_repo(tmp_path / "repo")
+    result = cycle._handler({}, root)
+    assert result["exit_code"] == 0
+    assert "error" not in result
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, "5", 1.5, None])
+def test_handler_refuses_an_explicit_invalid_cap(tmp_path, bad):
+    root = _init_repo(tmp_path / "repo")
+    result = cycle._handler({"cap": bad}, root)
+    assert result["exit_code"] == 1
+    assert "cap must be a positive int" in result["error"]

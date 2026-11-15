@@ -196,3 +196,128 @@ def test_reopen_plan_js_parses_and_agrees_with_python():
     for items, rows, failed, held in cases:
         js = _run_js(node, "_reopenPlan(%s, %s, %s, %s)" % tuple(json.dumps(x) for x in (items, rows, failed, held)))
         assert js == lr.reopen_plan(items, rows, failed, held)
+
+
+def test_live_tree_writes_lists_each_path_whose_blob_changed_across_the_leg():
+    before = {"pkg/a": "aaa", "pkg/b": "bbb", "pkg/c": ""}
+    after = {"pkg/a": "aaa", "pkg/b": "b2b", "pkg/c": "ccc", "pkg/d": "ddd"}
+    assert lr.live_tree_writes(before, after) == ["pkg/b", "pkg/c", "pkg/d"]
+    assert lr.live_tree_writes(before, before) == []
+
+
+def test_live_tree_writes_is_none_when_a_snapshot_is_missing():
+    assert lr.live_tree_writes(None, {}) is None
+    assert lr.live_tree_writes({}, "x") is None
+
+
+def _git_repo(tmp_path):
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    (root / "pkg").mkdir()
+    return root
+
+
+def test_snap_cli_measures_a_live_write_in_process_and_persists_the_pre_leg_bytes(tmp_path, capsys):
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    root = _git_repo(tmp_path)
+    (root / "pkg/a.py").write_bytes(b"foreign hunk\nbase\n")
+    (root / "pkg/b.py").write_bytes(b"untouched\n")
+    out = tmp_path / "rec" / "live-C1.json"
+    entries = json.dumps(["pkg/a.py", "pkg/b.py", "pkg/absent.py"])
+
+    assert lr.main(["before", "--root", str(root), "--out", str(out), "--paths-json", entries]) == 0
+    assert json.loads(capsys.readouterr().out.strip()) == {"ok": True, "live_tree_writes": []}
+    before = json.loads(out.read_text(encoding="utf-8"))["before"]
+    assert before["pkg/absent.py"] == ""
+    assert read_object(resolve_git_common_dir(root), before["pkg/a.py"])[1] == b"foreign hunk\nbase\n"
+
+    (root / "pkg/a.py").write_bytes(b"base\n")
+    (root / "pkg/absent.py").write_bytes(b"new\n")
+    assert lr.main(["after", "--out", str(out)]) == 0
+    assert json.loads(capsys.readouterr().out.strip()) == {"ok": True, "live_tree_writes": ["pkg/a.py", "pkg/absent.py"]}
+    assert json.loads(out.read_text(encoding="utf-8"))["live_tree_writes"] == ["pkg/a.py", "pkg/absent.py"]
+
+
+def test_snap_cli_expands_a_directory_entry_and_sees_a_new_file_under_it(tmp_path, capsys):
+    root = _git_repo(tmp_path)
+    (root / "pkg/a.py").write_bytes(b"1\n")
+    out = tmp_path / "live.json"
+    assert lr.main(["before", "--root", str(root), "--out", str(out), "--paths-json", '["pkg/"]']) == 0
+    (root / "pkg/new.py").write_bytes(b"2\n")
+    assert lr.main(["after", "--out", str(out)]) == 0
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["live_tree_writes"] == ["pkg/new.py"]
+
+
+def test_snap_cli_reports_a_missing_snapshot_as_not_ok_and_exits_nonzero(tmp_path, capsys):
+    assert lr.main(["after", "--out", str(tmp_path / "nope.json")]) == 2
+    assert json.loads(capsys.readouterr().out.strip())["ok"] is False
+
+
+def test_undeclared_writes_are_the_measured_paths_the_leg_did_not_report():
+    assert lr.undeclared_writes(["pkg/a.py", "pkg/b.py"], ["./pkg/a.py"]) == ["pkg/b.py"]
+    assert lr.undeclared_writes(["pkg/a.py"], ["pkg/a.py"]) == []
+
+
+def test_the_writing_legs_are_never_asked_to_report_their_own_live_blobs():
+    assert not {"live_before", "live_after"} & set(lr.LEDGER_FIX_SCHEMA["properties"])
+    assert "hash-object" not in lr.ledger_fix_prompt("r", "e", "f", "fp")
+    assert "hash-object" not in lr.remnant_prompt("i", "fp")
+
+
+def test_remnant_breach_names_a_measured_live_write_outside_the_footprint_and_passes_one_inside():
+    rec = {"footprint": ["pkg/a.py", "tests/"], "paths": [], "live_tree_writes": ["pkg/a.py", "tests/t.py", "pkg/other.py"]}
+    assert lr.remnant_breach(rec) == ["pkg/other.py"]
+    assert lr.remnant_breach({**rec, "live_tree_writes": ["pkg/a.py"]}) == []
+
+
+def test_remnant_breach_normalises_an_in_root_absolute_path_and_keeps_every_other_unsafe_path_a_breach(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    note = "docs/delivery/run-1.md"
+    inside = (root / note).as_posix()
+    outside = (tmp_path / "elsewhere" / note).as_posix()
+    rec = {"footprint": [note], "paths": [inside], "live_tree_writes": []}
+
+    assert lr.remnant_breach(rec, root) == []
+    assert lr.remnant_breach(rec) == [inside]
+    assert lr.remnant_breach({**rec, "paths": [outside]}, root) == [outside]
+    assert lr.remnant_breach({**rec, "paths": [(root / "pkg/other.py").as_posix()]}, root) == ["pkg/other.py"]
+    dotdot = (root / "x/../../elsewhere/a.md").as_posix()
+    assert lr.remnant_breach({**rec, "paths": [dotdot]}, root) == [dotdot]
+    assert lr.remnant_breach({**rec, "paths": ["../" + note]}, root) == ["../" + note]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_undeclared_writes_js_agrees_with_python():
+    node = _node()
+    for measured, reported in [(["pkg/a.py", "pkg/b.py"], ["./pkg/a.py"]), (["x.py"], []), (["x.py"], ["x.py"])]:
+        program = lr.LIVE_TREE_WRITES_JS + "\nprocess.stdout.write(JSON.stringify(_undeclaredWrites(%s, %s)));" % (
+            json.dumps(measured), json.dumps(reported)
+        )
+        out = subprocess.run([node, "-e", program], capture_output=True, text=True, timeout=30, **no_console_creationflags())
+        assert out.returncode == 0, out.stderr
+        assert json.loads(out.stdout) == lr.undeclared_writes(measured, reported)
+
+
+def test_snap_cli_reports_a_directory_entry_past_the_cap_as_truncated(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(lr, "_SNAP_FILE_CAP", 2)
+    root = _git_repo(tmp_path)
+    for n in range(3):
+        (root / f"pkg/f{n}.py").write_bytes(b"x\n")
+    out = tmp_path / "live.json"
+    assert lr.main(["before", "--root", str(root), "--out", str(out), "--paths-json", '["pkg/"]']) == 0
+    assert json.loads(capsys.readouterr().out.strip()) == {"ok": True, "live_tree_writes": [], "truncated": True}
+    assert len(json.loads(out.read_text(encoding="utf-8"))["before"]) == 2
+
+
+def test_snap_cli_does_not_report_a_directory_at_exactly_the_cap_as_truncated(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(lr, "_SNAP_FILE_CAP", 2)
+    root = _git_repo(tmp_path)
+    for n in range(2):
+        (root / f"pkg/f{n}.py").write_bytes(b"x\n")
+    out = tmp_path / "live.json"
+    assert lr.main(["before", "--root", str(root), "--out", str(out), "--paths-json", '["pkg/"]']) == 0
+    assert json.loads(capsys.readouterr().out.strip()) == {"ok": True, "live_tree_writes": []}

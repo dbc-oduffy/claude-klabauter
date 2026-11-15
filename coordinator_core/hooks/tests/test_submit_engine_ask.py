@@ -2017,3 +2017,28 @@ def test_a_refire_recomposes_when_the_prompt_check_fails_or_stalls(tmp_path, mon
     launched = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
     assert launched != root / f"scratch/warp/{_STORED_RUN}.workflow.mjs"
     assert spawned == [_STORED_RUN]
+
+
+def _direct_start_root(tmp_path: Path, monkeypatch, body: str):
+    from coordinator_core.ops.dispatch_emit import minted_run
+
+    rel = "state/warp/r1/r1.run.js"
+    (tmp_path / rel).parent.mkdir(parents=True)
+    (tmp_path / rel).write_text(body, encoding="utf-8")
+    fire = {"repoRoot": "/r", "runToken": "tok"}
+    monkeypatch.setattr(minted_run, "is_minted_only", lambda path: True)
+    monkeypatch.setattr(minted_run, "start_args", lambda root, run_id: {"ok": True, "script_path": rel, "fire_args": fire})
+    return rel, fire
+
+
+def test_direct_start_of_a_run_script_holding_its_reader_starts_that_script_with_fire_args(tmp_path, monkeypatch):
+    rel, fire = _direct_start_root(tmp_path, monkeypatch, "const r = await workflow('x');\n")
+    out = mod._direct_start(tmp_path, "r1", time.monotonic() + 5)
+    assert out["hookSpecificOutput"]["updatedInput"] == {"scriptPath": str(tmp_path / rel), "args": fire}
+
+
+def test_direct_start_of_a_launcher_child_script_goes_through_the_wrapper(tmp_path, monkeypatch):
+    rel, _ = _direct_start_root(tmp_path, monkeypatch, "export const body = 1;\n")
+    out = mod._direct_start(tmp_path, "r1", time.monotonic() + 5)
+    updated = out["hookSpecificOutput"]["updatedInput"]
+    assert "args" not in updated and updated["scriptPath"] != str(tmp_path / rel)

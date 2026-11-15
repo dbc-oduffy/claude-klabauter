@@ -1,12 +1,16 @@
 """Ledger-recovery interface: attempt cap, fix-leg label/schema/prompt, reopen attribution and landing-withheld rule.
 
-Pure: no I/O, no git, no subprocess; stdlib only. `ask_compose` imports this module and splices
+No git, no subprocess. Pure at import and for every function except `remnant_breach` (a `Path.resolve()` when
+a `root` is given) and the `main` CLI (`snap_before`/`snap_after`, which hash live files and write
+loose blob objects in process, zero spawns). `ask_compose` imports this module and splices
 `REOPEN_PLAN_JS` into the workflow; `reopen_plan` is that function's Python statement, as
 `seam_repair.is_repairable` is for `_SEAM_REPAIRABLE`. `landing_withheld` runs engine-side only.
 """
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from coordinator_core.ops.dispatch_emit.ask_contract import HALT_GAP_RULE
@@ -55,6 +59,19 @@ LEDGER_FIX_SCHEMA = {
         "reason": {"type": "string"},
     },
     "required": ["status", "paths", "reason"],
+    "additionalProperties": False,
+}
+
+LIVE_SNAP_LABEL = "live-snap"
+LIVE_SNAP_MODULE = "coordinator_core.ops.dispatch_emit.ledger_recovery"
+LIVE_SNAP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "ok": {"type": "boolean"},
+        "live_tree_writes": {"type": "array", "items": {"type": "string"}},
+        "truncated": {"type": "boolean"},
+    },
+    "required": ["ok", "live_tree_writes"],
     "additionalProperties": False,
 }
 
@@ -231,7 +248,9 @@ def remnant_prompt(items_var: str, footprint_var: str) -> str:
     """Instruction tail for the remnant agent; both args are JS expressions spliced in.
 
     The footprint is prose here; the engine fence is `remnant_breach` over the recorded
-    `recovery.json` `remnant` object, applied at landing by `land_run`.
+    `recovery.json` `remnant` object, applied at landing by `land_run`, and the leg's measured
+    `live_tree_writes` (`snap_before`/`snap_after`, run by mechanical legs around it) recorded beside
+    its self-reported `paths`.
     """
     return (
         "The run's close checks found work still undone. Items (each gap is still true; make it false): ${"
@@ -255,24 +274,195 @@ def _in_footprint(path: str, footprint_entries: Iterable[str]) -> bool:
     return False
 
 
-def remnant_breach(remnant: Any) -> list[str]:
+def _in_root_relative(p: str, root: Path) -> str | None:
+    """The POSIX repo-relative form of absolute `p` when it resolves inside `root`; None otherwise."""
+    pp = Path(p)
+    if not pp.is_absolute():
+        return None
+    try:
+        return pp.resolve().relative_to(root.resolve()).as_posix()
+    except (ValueError, OSError):
+        return None
+
+
+def remnant_breach(remnant: Any, root: Path | None = None) -> list[str]:
     """Repo-relative paths a recorded remnant attempt wrote outside its recorded footprint.
 
     `remnant` is the `recovery.json` `remnant` object: its `paths` (what the leg reported writing
     outside the footprint) checked again against its `footprint` (entries ending `/` are
-    prefixes), so a record whose own status was edited to hide the breach still names it. Absolute,
-    drive-lettered and `..` paths are always a breach. Trap: this sees only paths the record
-    carries; a write the leg never reported is not attributable without a pre-leg baseline.
+    prefixes), so a record whose own status was edited to hide the breach still names it. `..`
+    paths are always a breach; an absolute or drive-lettered path is one too unless `root` is given
+    and it resolves inside it, when its repo-relative form is checked like any other. The record's
+    measured `live_tree_writes` are checked the same way. Trap: this sees only paths the record
+    carries; a write outside the probed footprint that the leg never reported is not attributable.
     """
     if not isinstance(remnant, Mapping):
         return []
     fp = [_posix(p) for p in _text_list(remnant.get("footprint"))]
     out: list[str] = []
-    for p in (_posix(x) for x in _text_list(remnant.get("paths"))):
+    for p in (_posix(x) for x in _text_list(remnant.get("paths")) + _text_list(remnant.get("live_tree_writes"))):
         unsafe = p.startswith("/") or ".." in p.split("/") or re.match(r"^[A-Za-z]:", p) is not None
+        if unsafe and root is not None and ".." not in p.split("/"):
+            rel = _in_root_relative(p, root)
+            if rel is not None:
+                p, unsafe = rel, False
         if (unsafe or not _in_footprint(p, fp)) and p not in out:
             out.append(p)
     return out
+
+
+def live_tree_writes(before: Any, after: Any) -> list[str] | None:
+    """Sorted POSIX paths whose blob differs between two `{path: blob}` maps; None when either is not a map.
+
+    A path present in only one map counts as changed; an absent file's blob is "".
+    """
+    if not isinstance(before, Mapping) or not isinstance(after, Mapping):
+        return None
+    b = {_posix(str(p)): str(v or "") for p, v in before.items()}
+    a = {_posix(str(p)): str(v or "") for p, v in after.items()}
+    return sorted(p for p in {*b, *a} if b.get(p, "") != a.get(p, ""))
+
+
+def undeclared_writes(measured: Iterable[str], reported: Iterable[str]) -> list[str]:
+    """Measured live writes the leg's self-reported `paths` leave out, sorted. Mirrors `_undeclaredWrites`."""
+    said = {_posix(p) for p in reported}
+    return sorted(p for p in measured if p not in said)
+
+
+_SNAP_FILE_CAP = 500
+_SNAP_PERSIST_CAP = 8 << 20
+_SNAP_SKIP_DIRS = frozenset({".git", "__pycache__", "node_modules", ".pytest_cache"})
+
+
+def _snap_files(root: Path, entries: Iterable[str]) -> tuple[list[str], bool]:
+    """`(files, truncated)`: POSIX repo-relative files named by footprint `entries`; an entry ending `/` expands to
+    the files under it (capped at `_SNAP_FILE_CAP` per entry, `.git` and cache dirs skipped; `truncated` is true when
+    a cap left files unmeasured), any other entry is itself, present or not."""
+    import os
+
+    out: list[str] = []
+    truncated = False
+    for e in (_posix(x) for x in entries):
+        if not e.endswith("/"):
+            if e and e not in out:
+                out.append(e)
+            continue
+        n = 0
+        for dirpath, dirnames, filenames in os.walk(root / e):
+            dirnames[:] = sorted(d for d in dirnames if d not in _SNAP_SKIP_DIRS)
+            for name in sorted(filenames):
+                if n >= _SNAP_FILE_CAP:
+                    truncated = True
+                    break
+                rel = (Path(dirpath) / name).relative_to(root).as_posix()
+                if rel not in out:
+                    out.append(rel)
+                n += 1
+            if truncated:
+                break
+    return out, truncated
+
+
+def _snap_blob(root: Path, rel: str, persist_to: Path | None) -> str:
+    """The blob id `git add` would record for live `rel` ("" when absent); the bytes become a loose object when
+    `persist_to` is a git dir, so an uncommitted hunk stays recoverable. Zero spawns."""
+    from coordinator_core.git.commit import checkin_blob_sha, checkin_form
+    from coordinator_core.git.git_objects import write_object
+
+    path = root / rel
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return ""
+    except OSError:
+        return "unreadable"
+    sha = checkin_blob_sha(root, rel)
+    form = checkin_form(root, rel, data)
+    if sha is None:
+        import hashlib
+
+        sha = "raw:" + hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+    if persist_to is not None and len(data) <= _SNAP_PERSIST_CAP:
+        try:
+            write_object(persist_to, b"blob", form if form is not None else data)
+        except OSError:
+            pass
+    return sha
+
+
+def snap_before(root: Path, paths: Iterable[str], out: Path) -> dict[str, str]:
+    """Fingerprint the live blobs of footprint `paths` (persisting their bytes as loose objects) into `out`."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    root = Path(root)
+    entries = [_posix(str(p)) for p in paths]
+    gitdir = resolve_git_common_dir(root)
+    files, truncated = _snap_files(root, entries)
+    before = {rel: _snap_blob(root, rel, gitdir) for rel in files}
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps({"root": root.as_posix(), "entries": entries, "before": before, "truncated": truncated}, indent=1) + "\n",
+        encoding="utf-8", newline="\n",
+    )
+    _declare(out)
+    return before
+
+
+def snap_after(out: Path) -> list[str]:
+    """Re-fingerprint the paths `snap_before` recorded in `out` plus any file now under its directory entries,
+    write `after` and `live_tree_writes` into `out`, and return the writes."""
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    root = Path(doc["root"])
+    before = doc["before"]
+    files, truncated = _snap_files(root, doc.get("entries", ()))
+    after = {rel: _snap_blob(root, rel, None) for rel in sorted({*before, *files})}
+    writes = live_tree_writes(before, after) or []
+    out.write_text(
+        json.dumps({**doc, "after": after, "live_tree_writes": writes, "truncated": bool(doc.get("truncated")) or truncated}, indent=1) + "\n", encoding="utf-8", newline="\n"
+    )
+    return writes
+
+
+def _declare(path: Path) -> None:
+    try:
+        from coordinator_core.session.declared_writes import declare_write
+
+        declare_write(path)
+    except Exception:  # claim is advisory bookkeeping; the measurement stands without it
+        pass
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`before --root R --out F --paths-json J` fingerprints; `after --out F` measures against it.
+
+    Prints one JSON line (`{"ok": true, "live_tree_writes": [...]}`, plus `"truncated": true` when a directory entry
+    held more files than `_SNAP_FILE_CAP` and the measurement is partial); exit 2 with the error otherwise.
+    """
+    import argparse
+    import sys
+
+    ap = argparse.ArgumentParser(prog="ledger_recovery")
+    ap.add_argument("phase", choices=("before", "after"))
+    ap.add_argument("--root")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--paths-json", default="[]")
+    ns = ap.parse_args(argv)
+    try:
+        out = Path(ns.out)
+        if ns.phase == "before":
+            snap_before(Path(ns.root), json.loads(ns.paths_json), out)
+            writes: list[str] = []
+        else:
+            writes = snap_after(out)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)[:300], "live_tree_writes": []}))
+        return 2
+    line: dict = {"ok": True, "live_tree_writes": writes}
+    if json.loads(out.read_text(encoding="utf-8")).get("truncated"):
+        line["truncated"] = True
+    print(json.dumps(line))
+    sys.stdout.flush()
+    return 0
 
 
 def footprint(chunk_row: Mapping[str, Any], failed_tests: Iterable[str]) -> list[str]:
@@ -385,3 +575,13 @@ REMNANT_ITEMS_JS = r"""function _remnantItems(items, unattributed, capped, crite
   }
   return out;
 }"""
+
+LIVE_TREE_WRITES_JS = r"""function _undeclaredWrites(measured, reported) {
+  const posix = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
+  const said = new Set((Array.isArray(reported) ? reported : []).map(posix));
+  return [...measured].filter((p) => !said.has(p)).sort();
+}"""
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

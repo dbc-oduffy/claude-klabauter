@@ -589,6 +589,31 @@ _SPENT_WINDOW_MINT_JOIN_S = 0.1
 _CALL: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar("submit_call", default=None)  # {"t0", "wall0", "roots", "minted", "gate", "gates", "answered", "session"}
 
 
+def _engine_wait_s() -> float:
+    """Seconds the engine held this request before the hook began: the longest of the pool's submit-to-bind
+    wait, the connection enqueue stamp this process serves, and the one the accept process forwarded to
+    this pool worker. The door's 8s bound runs from its own start, so the answer deadline starts this far
+    back. Never raises; 0.0 when unknown."""
+    import sys
+    import time
+
+    waited = 0.0
+    try:
+        from coordinator_core.ops.dispatch_emit import land_deadline
+
+        waited = float(land_deadline._QUEUE_WAIT.get())
+        server = sys.modules.get("coordinator_core.warm.server")
+        stamp = getattr(getattr(server, "_REQUEST_STAMP", None), "value", None)
+        if stamp is not None and isinstance(stamp[0], (int, float)):
+            waited = max(waited, time.time() - float(stamp[0]))
+        forwarded = getattr(server, "_CONNECTION_ENQUEUE_MONOTONIC", None)
+        if isinstance(forwarded, (int, float)):
+            waited = max(waited, time.monotonic() - float(forwarded))
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return max(0.0, waited)
+
+
 def _own_run_ids(call: Optional[dict], root: Path, session: Optional[str] = None) -> set:
     """The run ids this call may name as its own, found by key: those it reported minting, plus those a live
     run-token record attributes to its session (`session`, else the call's). Never lists `state/warp`.
@@ -870,7 +895,8 @@ def _minted_remedy(run_ids: Sequence[str]) -> str:
 
 def _direct_start(root: Path, run_id: str, deadline: float) -> Optional[dict]:
     """The rewrite onto a script that starts a minted run's own script with the op's fire_args through the
-    stage loop; None when the run script is not on disk yet."""
+    stage loop, or onto the run script itself (with its fire_args) when it holds its own `workflow()` reader,
+    so no wrapper puts that reader at a second nesting level; None when the run script is not on disk yet."""
     def start() -> Any:
         from coordinator_core.ops.dispatch_emit import minted_run
 
@@ -881,13 +907,15 @@ def _direct_start(root: Path, run_id: str, deadline: float) -> Optional[dict]:
         reply = minted_run.start_args(root, run_id)
         if not (isinstance(reply, dict) and reply.get("ok") and reply.get("script_path")):
             return None
-        return write_direct_start_script(root, run_id, reply["script_path"], reply.get("fire_args") or None)
+        if minted_run.holds_workflow_reader(root, reply["script_path"]):
+            return {"scriptPath": str(root / reply["script_path"]), "args": reply.get("fire_args") or {}}
+        return {"scriptPath": str(write_direct_start_script(root, run_id, reply["script_path"], reply.get("fire_args") or None))}
 
-    script = _quick(start, deadline)
-    if script is None:
+    new_input = _quick(start, deadline)
+    if new_input is None:
         return None
     return _allow_rewrite(
-        {"scriptPath": str(script)},
+        new_input,
         f"Submitted to the engine as run {run_id}: its emit outran the hook budget after minting it, so the run starts "
         f"from the script already on disk. It runs to its commit in the background; its completion notification is your "
         f"one wake. Do not re-submit. Do not poll or verify this run meanwhile; unrelated work proceeds. {_revise_hint(run_id)}",
@@ -3281,7 +3309,7 @@ def evaluate(
 
             session = payload.get("session_id")
             call = {
-                "t0": time.monotonic(), "wall0": time.time(), "roots": [], "minted": [], "gate": WriteGate(), "gates": [],
+                "t0": time.monotonic() - _engine_wait_s(), "wall0": time.time(), "roots": [], "minted": [], "gate": WriteGate(), "gates": [],
                 "session": session if isinstance(session, str) and session else None, "payload": payload,
             }
             box: dict = {}
@@ -3296,7 +3324,7 @@ def evaluate(
 
             worker = threading.Thread(target=_in_scope(body), daemon=True)
             worker.start()
-            worker.join(_caller_budget_s() * _ANSWER_SHARE)
+            worker.join(max(0.0, call["t0"] + _caller_budget_s() * _ANSWER_SHARE - time.monotonic()))
             if worker.is_alive():
                 envelope = _answer_overran(call)
             elif "error" in box:
@@ -3570,7 +3598,15 @@ def _evaluate(
     except _SizingStalled:
         from coordinator_core.ops.dispatch_emit import halt_resume_record as _hrr
 
-        hinted = None if asks is not None else _hrr.read_hint(root, sizing_rel)
+        if asks is not None:
+            if not reserved_run_id:
+                return _refuse(
+                    f"The sizing read of {sizing_rel} outran its {_READ_DEADLINE_MS:.0f}ms budget and the fan-out named no run id "
+                    "for it; nothing was taken. Next: wait for it to finish, then submit again."
+                )
+            hinted = reserved_run_id
+        else:
+            hinted = _hrr.read_hint(root, sizing_rel)
         if hinted is None:
             return _refuse(f"The sizing read of {sizing_rel} stalled; its ask_parent marker is unknown. Re-submit once.")
         sizing_doc, reserved_run_id = {}, hinted

@@ -128,8 +128,15 @@ def test_gap_emits_exactly_one_catch_up_entry() -> None:
     groups = run_spec.agent_groups({}, [_row("ran", line)], None)
     (group,) = _backfill(groups)
     (entry,) = group["entries"]
-    assert entry["argv"] == ["workday-complete", "--catch-up"]
+    assert entry["argv"] == ["workday-complete-assemble", "brief", "--catch-up"]
     assert entry["inputs"] == {"days": ["2026-10-14", "2026-10-15"]}
+
+
+def test_catch_up_argv_names_a_launcher_that_exists_in_bin() -> None:
+    bin_dir = Path(run_spec.__file__).resolve().parents[2] / "coordinator" / "bin"
+    launcher, *rest = run_spec.CATCH_UP_ARGV
+    assert (bin_dir / f"{launcher}.py").is_file()
+    assert "--catch-up" in rest
 
 
 @pytest.mark.parametrize("rows", [[], [_row("ran", "")], [_row("failed", "2026-10-14")]])

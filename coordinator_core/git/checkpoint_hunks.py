@@ -105,6 +105,88 @@ def tests_of_withheld_code(
         return []
 
 
+def _names_withheld(source: str, held_modules: dict[str, str], held_paths: set[str]) -> Optional[str]:
+    """The withheld path `source` imports (`import m`, `from m import x`, `from parent import leaf`,
+    absolute only) or names as a string literal (the path, or a dotted `module[.attr]`), else None."""
+    import ast
+
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            for mod in (node.module, *(f"{node.module}.{a.name}" for a in node.names)):
+                if mod in held_modules:
+                    return f"imports {mod}, withheld {held_modules[mod]}"
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name in held_modules:
+                    return f"imports {a.name}, withheld {held_modules[a.name]}"
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and len(node.value) < 300:
+            lit = _norm(node.value)
+            if lit in held_paths:
+                return f"names {lit}, withheld"
+            mod = lit
+            while mod:
+                if mod in held_modules:
+                    return f"names {lit}, withheld {held_modules[mod]}"
+                mod, _, _ = mod.rpartition(".")
+    return None
+
+
+def tests_exercising_withheld_code(
+    root: Path, paths: Sequence[str], withheld: Sequence[str], blobs: Optional[dict] = None,
+) -> dict[str, str]:
+    """`{path: why}` for each test file in `paths` (staged or untracked) that imports a `.py` in
+    `withheld` or names a withheld path as a string literal. A withheld test is itself a withheld
+    path for the next pass, so the result is a fixpoint. A path's text is its `blobs` entry when
+    supplied, else the worktree file. In-process ast read, zero git spawns; never raises, and an
+    unreadable or unparsable test judges nothing."""
+    try:
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+        from coordinator_core.git.git_objects import read_object
+
+        root = Path(root)
+        blobs = {_norm(k): v for k, v in (blobs or {}).items()}
+        held = {_norm(p) for p in withheld}
+        tests = [_norm(p) for p in paths if _is_test_path(p) and _norm(p) not in held]
+        if not held or not tests:
+            return {}
+        common = resolve_git_common_dir(root)
+
+        def text(path: str) -> Optional[str]:
+            try:
+                if path in blobs:
+                    got = read_object(common, blobs[path])
+                    return got[1].decode("utf-8", "replace") if got else None
+                return (root / path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return None
+
+        def module_of(path: str) -> str:
+            mod = path[:-3].replace("/", ".")
+            return mod[: -len(".__init__")] if mod.endswith(".__init__") else mod
+
+        sources = {p: text(p) for p in tests if p.endswith(".py")}
+        found: dict[str, str] = {}
+        grew = True
+        while grew:
+            grew = False
+            modules = {module_of(p): p for p in held if p.endswith(".py")}
+            for path, src in sources.items():
+                if path in found or not src:
+                    continue
+                why = _names_withheld(src, modules, held)
+                if why:
+                    found[path] = why
+                    held.add(path)
+                    grew = True
+        return found
+    except Exception:  # noqa: BLE001 -- unjudgeable: nothing extra is withheld
+        return {}
+
+
 NO_PRINT_REASON = "no write-time print of this run: the run's own write of this path was not recorded"
 
 

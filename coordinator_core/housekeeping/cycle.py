@@ -645,6 +645,9 @@ def run(
 
 OP_KEY = "housekeeping.cycle"
 
+#: Move cap applied when the caller passes no `cap`.
+DEFAULT_CAP = 150
+
 
 def _setup_error(message: str) -> Dict[str, Any]:
     return {"exit_code": 1, "error": message}
@@ -654,8 +657,9 @@ def _handler(params: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[s
     """`housekeeping.cycle` — clear finished gates, file terminal handoffs.
 
     Params:
-        cap (int, REQUIRED)   positive move cap; absent or non-positive is a
-                              setup error, never an unbounded default.
+        cap (int)             positive move cap. Absent means DEFAULT_CAP
+                              (150); an explicit non-positive, bool or
+                              non-int value is a setup error.
         close (bool)          run the gate-clear pass. Default True. False
                               sweeps and archives only.
         transition (dict)     OPTIONAL targeted transition on ONE named
@@ -674,13 +678,9 @@ def _handler(params: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[s
 
     common_dir = repo_root if isinstance(repo_root, Path) else Path(repo_root)
 
-    cap = params.get("cap")
+    cap = params.get("cap", DEFAULT_CAP)
     if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
-        return _setup_error(
-            f"cap is required and must be a positive int, got {cap!r} -- no "
-            f"unbounded default (mirrors fleet.archive_completed_handoffs's "
-            f"own cap-axis decision)"
-        )
+        return _setup_error(f"cap must be a positive int, got {cap!r}")
 
     transition_result = None
     transition_params = params.get("transition")

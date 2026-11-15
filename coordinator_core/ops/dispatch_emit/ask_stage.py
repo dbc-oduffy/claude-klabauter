@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shlex
 import time
+from functools import lru_cache, wraps
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable, Mapping, Optional, Sequence
@@ -117,8 +119,7 @@ from coordinator_core.ops.dispatch_emit.request_validation import Field, validat
 from coordinator_core.ops.dispatch_emit import halt_tree_evict, kept_work, requirements_ledger, resume_snapshot, row_returns, sibling_split
 from coordinator_core.ops.dispatch_emit.land_run import _DELIVERED_REPORT_RE, _UNDELIVERED_REPORT_RE
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
-from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS, OUTSIDE_CREDIT_REASON, SizingFireRefused, load_sizing, resolve_arm
-from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
+from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS, OUTSIDE_CREDIT_REASON, SizingFireRefused, load_sizing, resolve_arm, sizing_memo
 from coordinator_core.ops.dispatch_emit.spine_read import (
     EM_OWNED_REASONS,
     InvalidChangeKindError,
@@ -127,7 +128,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     read_spine,
     with_canonical_disposition,
 )
-from coordinator_core.ops.dispatch_emit import in_run_widen, review_floor, run_notes
+from coordinator_core.ops.dispatch_emit import review_floor, run_notes
 from coordinator_core.ops.dispatch_emit.requirements_ledger import NOTES_FILE
 from coordinator_core.ops.dispatch_emit.wave_map import (
     _RUNTIME_ORDER_GATE_KINDS,
@@ -135,7 +136,7 @@ from coordinator_core.ops.dispatch_emit.wave_map import (
     cap_waves,
     dag_from_waves,
 )
-from coordinator_core.ops.plan_tasks_render import load_rows
+from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo as load_rows
 from coordinator_core.ops._brief_premise import check_brief_claims, render_contradicted
 from coordinator_core.ops.sizing_intake_contract import read_em_brief
 from coordinator_core.telemetry import op_row_fields
@@ -220,13 +221,16 @@ def relayed_ask_block(relayed_text: Optional[str]) -> str:
 REVISIONS_HEADING = "## Revisions sent while the run was in flight"
 
 
-def revisions_block(root: Path, run_id: str) -> str:
+def revisions_block(root: Path, run_id: str, ledger: Optional[requirements_ledger.Ledger] = None) -> str:
     """The brief's section of every register row a `workflow.revise` added to the run, in arrival
-    order: the ledger judges each, so an executor not told of one can only fail it. Empty when none."""
-    try:
-        ledger = requirements_ledger.read_ledger(root, requirements_ledger.run_dir(root, run_id))
-    except requirements_ledger.LedgerRefused:
-        return ""
+    order: the ledger judges each, so an executor not told of one can only fail it. Empty when none.
+    `ledger`, when given, is the one `requirements_ledger.bind` just built from the rows it left on disk:
+    the register is not re-read or re-parsed."""
+    if ledger is None:
+        try:
+            ledger = requirements_ledger.read_ledger(root, requirements_ledger.run_dir(root, run_id))
+        except requirements_ledger.LedgerRefused:
+            return ""
     items = [i for i in ledger.items if i.origin == requirements_ledger.ORIGIN_REVISION] if ledger else []
     if not items:
         return ""
@@ -358,6 +362,7 @@ def _wave_test_scopes(waves, root: Path) -> dict[str, tuple[str, ...]]:
             out[str(i)] = scope
     return out
 
+
 # Mirrors DoE's coordinator/lib/plan_scaffold_markers.py; claude-klabauter never imports DoE's tree.
 _SCAFFOLD_MARKERS = (
     ("PLACEHOLDER", re.compile(r"\bPLACEHOLDER\b")),
@@ -383,20 +388,75 @@ from coordinator_core.ops.dispatch_emit.ask_stage_blocks import AskStageError, s
 
 
 def _write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8", newline="\n")
+    """Write `text` to `path`, creating its directory only when the first write finds it missing."""
+    data = text.encode("utf-8")
+    target = os.fspath(path)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(target, flags, 0o666)
+    except FileNotFoundError:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(target, flags, 0o666)
+    try:
+        view = memoryview(data)
+        while view:  # os.write may accept fewer bytes than offered
+            view = view[os.write(fd, view):]
+    finally:
+        os.close(fd)
+
+
+# Resolved roots and directories are memoized per `stage` call (cleared at its entry): a directory
+# swapped for a symlink or junction keeps its first answer only within one call.
+@lru_cache(maxsize=8)
+def _resolved_root(root: Path) -> Path:
+    return root.resolve()
+
+
+@lru_cache(maxsize=4096)
+def _resolved_dir(directory: Path) -> Path:
+    return directory.resolve()
+
+
+@lru_cache(maxsize=4096)
+def _rel_dir(root: Path, directory: Path) -> str:
+    """The resolved `directory` relative to the resolved `root`, as posix with a trailing `/` ("" for the root itself)."""
+    rel = _resolved_dir(directory).relative_to(_resolved_root(root)).as_posix()
+    return "" if rel == "." else rel + "/"
 
 
 def _rel(root: Path, path: Path) -> str:
-    return path.resolve().relative_to(root.resolve()).as_posix()
+    """`path` relative to the resolved `root`. A leaf that is not a symlink resolves through its memoized
+    parent: one realpath per directory, not per row."""
+    if path.is_absolute() and path.name not in ("", "..") and not os.path.islink(path):
+        return _rel_dir(root, path.parent) + path.name
+    return path.resolve().relative_to(_resolved_root(root)).as_posix()
 
 
-def _set_aside_prior_report(root: Path, report_rel: str) -> Optional[str]:
+def _report_files(root: Path, directory: str, listings: dict) -> frozenset:
+    """The regular-file names in `root/directory`, listed once per `listings` (the caller's call-scoped memo)."""
+    names = listings.get(directory)
+    if names is None:
+        try:
+            with os.scandir(root / directory) as it:
+                names = frozenset(e.name for e in it if e.is_file())
+        except OSError:
+            names = frozenset()
+        listings[directory] = names
+    return names
+
+
+def _set_aside_prior_report(root: Path, report_rel: str, listings: Optional[dict] = None) -> Optional[str]:
     """Rename a row report left by an earlier run to `<row id>.prior.md` beside it, replacing an
     older one, and return that repo-relative path; None when no report sits there. Rename only.
-    Trap: without this a refired executor finds its own report and replays it."""
+    Trap: without this a refired executor finds its own report and replays it.
+    `listings`, when given, is the caller's call-scoped memo: the report directory is listed once, not
+    stat-ed per row (a report appearing mid-call is not seen)."""
     report = root / report_rel
-    if not report.is_file():
+    if listings is not None:
+        directory, _, name = report_rel.rpartition("/")
+        if name not in _report_files(root, directory, listings):
+            return None
+    elif not report.is_file():
         return None
     prior = report.with_name(report.stem + ".prior.md")
     report.replace(prior)
@@ -885,7 +945,10 @@ def _group_rows(
         key = f"solo:{r.id}" if solo else f"{r.wave}|{','.join(sorted(r.deps))}|{r.agent_type}|{r.model}|{r.effort or ''}"
         units.append(Unit(r.id, key, sizes.get(r.id, 0)))
     groups = propose_groups(sorted(units, key=lambda u: u.key))
-    group_of = {m: f"g{next(r.wave for r in rows if r.id == g[0])}-{g[0]}" for g in groups if len(g) > 1 for m in g}
+    wave_of: dict[str, int] = {}
+    for r in rows:
+        wave_of.setdefault(r.id, r.wave)
+    group_of = {m: f"g{wave_of[g[0]]}-{g[0]}" for g in groups if len(g) > 1 for m in g}
     return [replace(r, group=group_of.get(r.id, "")) for r in rows], groups
 
 
@@ -1347,14 +1410,16 @@ def _missing_register_rows(
 def _settle_unclaimed_register_rows(
     root: Path, plan_path: Path, fm_text: str, plan_posix: str,
     run_sizing_rel: Optional[str], run_sizing: Optional[Mapping],
-) -> None:
+) -> list[str]:
     """Claim into the plan every register row it omits, re-checking after each claim; raise
-    AskStageError REGISTER-ROWS-UNCLAIMED only once MAX_IN_RUN_REMEDY_ATTEMPTS claims left a row omitted."""
+    AskStageError REGISTER-ROWS-UNCLAIMED only once MAX_IN_RUN_REMEDY_ATTEMPTS claims left a row omitted.
+    Returns the ids it claimed: a claim is frontmatter only, so no plan row serves them yet."""
     from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS, remedy_or_halt
 
     _, missing = _missing_register_rows(fm_text, run_sizing_rel, run_sizing)
     if not missing:
-        return
+        return []
+    claimed_ids = list(missing)
 
     def claim(_n: int) -> None:
         nonlocal fm_text, missing
@@ -1375,8 +1440,21 @@ def _settle_unclaimed_register_rows(
     )
     if halt is not None:
         raise halt
+    return claimed_ids
 
 
+def _in_sizing_memo(fn):
+    """Run `fn` inside one `sizing_memo` scope: the sizing its stage re-reads is parsed once."""
+
+    @wraps(fn)
+    def run(*args, **kwargs):
+        with sizing_memo():
+            return fn(*args, **kwargs)
+
+    return run
+
+
+@_in_sizing_memo
 def stage(
     repo_root: Path,
     *,
@@ -1411,6 +1489,8 @@ def stage(
     `plan_parse` is the handler's one parse of an unmodified full plan; it is ignored under
     `claim_register_rows`, which rewrites the plan first.
     """
+    for _memo in (_resolved_root, _resolved_dir, _rel_dir):
+        _memo.cache_clear()
     root = Path(repo_root)
     if not safe_id(run_id):
         raise AskStageError(f"run_id {run_id!r} is not a single safe path segment")
@@ -1437,6 +1517,8 @@ def stage(
         excluded = _excluded_by_ask(sizing, writes)
         writes = [w for w in writes if w not in excluded]
         _refuse_misrouted_xs_mint(sizing, sizing_rel, writes)
+        from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
+
         spine_text, spine_path = mint_xs_spine(
             sizing, sizing_rel=sizing_rel, writes=writes, out_dir=record, gated=gated,
             repo_root=root,
@@ -1617,7 +1699,7 @@ def stage(
     if run_sizing_rel:
         # The gate bound it already; idempotent, and it folds in a revision queued since.
         try:
-            requirements_ledger.bind(
+            bound_ledger = requirements_ledger.bind(
                 root, run_id, run_sizing_rel, ask_text=ask_text, relayed_text=relayed_text,
                 plan_rows=[
                     (rid, str(raw.get("title") or ""))
@@ -1628,11 +1710,12 @@ def stage(
         except requirements_ledger.LedgerRefused as exc:
             raise AskStageError(f"requirements: {exc}") from exc
         run_sizing = _run_sizing(root, run_sizing_rel) or run_sizing
-        revisions = revisions_block(root, run_id)
+        revisions = revisions_block(root, run_id, bound_ledger)
         if revisions:
             intent = intent + ("\n" if intent else "") + revisions
+    stage_claimed: list[str] = []
     if plan_rel and not ledger_resume and _split is not None:
-        _settle_unclaimed_register_rows(root, plan_path, _split.fm_text, plan_posix, run_sizing_rel, run_sizing)
+        stage_claimed = _settle_unclaimed_register_rows(root, plan_path, _split.fm_text, plan_posix, run_sizing_rel, run_sizing)
     em_block = em_brief_block(run_sizing, root)
     if em_block:
         intent = intent + ("\n" if intent else "") + em_block
@@ -1645,6 +1728,7 @@ def stage(
     manifest_rows: list[ManifestRow] = []
     chunks: list[ChunkCommit] = []
     declared: list[str] = []
+    report_listings: dict = {}
     brief_sizes: dict[str, int] = {}
     row_families: dict[str, str] = {}
     kept_ids: set[str] = set()
@@ -1705,7 +1789,7 @@ def stage(
                     if role_family or row_family != "claude":
                         agent_type, role_family, row_family = _EXECUTOR_AGENT_TYPE, "", "claude"
                         model = resolve_agent_model(agent_type, None)
-                prior = None if kept_from else _set_aside_prior_report(root, report_rel)
+                prior = None if kept_from else _set_aside_prior_report(root, report_rel, report_listings)
                 if kept_from:
                     text = _kept_brief(kept_from)
                 elif agent_type == REVIEWER_AGENT_TYPE:
@@ -1762,6 +1846,8 @@ def stage(
                 paths = _widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root)
                 declared.extend(paths)
                 if ledger_resume and agent_type != REVIEWER_AGENT_TYPE and (raw_by_id.get(row.id) or {}).get("register_rows"):
+                    from coordinator_core.ops.dispatch_emit import in_run_widen
+
                     in_run_widen.record_widens(run_dir, [{"row": row.id, "path": p} for p in paths])
                     served_widen_rows.add(row.id)
                 row_families[row.id] = row_family if row_family != "claude" else (role_family or "claude")
@@ -1882,6 +1968,8 @@ def stage(
 
     review_paths = [*declared, *kept_review]
     if served_widen_rows:
+        from coordinator_core.ops.dispatch_emit import in_run_widen
+
         widened = in_run_widen.widened_by_row(run_dir)
         review_paths.extend(
             p for rid in sorted(served_widen_rows) for p in widened.get(rid, ()) if p not in review_paths
@@ -1896,6 +1984,13 @@ def stage(
         r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or [] if isinstance(r, Mapping)
     ]
     ledger_item_ids, withheld_ids = requirements_ledger.ledger_ids(register_rows)
+    if stage_claimed:
+        # Rows the stage claimed with no serving plan row are left to `workflow.late_rows`, which the
+        # in-run late re-plan leg reads: the leg plans and executes them before verify.
+        from coordinator_core.ops import requirement_register as rr
+
+        served = rr.spine_claimants(raw_by_id.values())
+        ledger_item_ids = tuple(i for i in ledger_item_ids if i in served or i not in stage_claimed)
     review_declared = _reviewable(_dedupe_preserve_order(review_paths))
     review_code = review_floor.code_paths(review_declared)
     if ledger_resume and only_rows is not None:
@@ -2687,6 +2782,22 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             leg_attribution.end(token)
 
 
+def _end_refused_run(root: Path, run_id: str) -> None:
+    """A refused stage ends its run: drop the unclaimed token and the live-run-index entry, so the
+    refused run holds no path against a later refire. A launcher child's escrowed token is kept for
+    its parked script. Never raises: the refusal reply stands."""
+    from coordinator_core.ops.dispatch_emit import live_run_index, run_token
+
+    try:
+        if run_token.escrowed(root, run_id) is None:
+            run_token.discard(root, run_id)
+        live_run_index.remove(root, run_id)
+    except Exception:  # noqa: BLE001 -- cleanup must not mask the refusal
+        import logging
+
+        logging.getLogger(__name__).warning("ending refused run %s failed", run_id, exc_info=True)
+
+
 def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
     if repo_root is None:
         return {"error": "dispatch.ask_stage requires repo_root"}
@@ -2780,6 +2891,8 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
             "remedy": f"A blocker with old last activity known dead: {release_remedy(wait['blockers'])}.",
         }
     except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
+        if not getattr(exc, "owed_em_ids", None):  # an owed handback continues the run: its token and claim stay
+            _end_refused_run(root, run_id)
         reply = {"error": str(exc)}
         if getattr(exc, "owed_em_ids", None):
             reply["owed_em_ids"] = exc.owed_em_ids

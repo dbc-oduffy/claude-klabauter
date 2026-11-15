@@ -414,3 +414,119 @@ def test_kept_row_restores_an_owned_evicted_path_before_reading_the_kept_record(
     snap = resume_snapshot.Snapshot(frozenset(), frozenset(), kept=frozenset({"R1"}), kept_run="kept-run")
     ask_stage._kept_row_holds(repo, snap, "R1", "report.md")  # no kept.json: False, but the restore ran
     assert (repo / "t.py").read_bytes() == held
+
+
+def _row(rid: str, writes, depends=()):
+    from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+
+    return WaveRow(rid, rid, "", writes, [], list(depends))
+
+
+def _naive_wave_test_scopes(waves, root):
+    from coordinator_core.ops.dispatch_emit.ask_stage import _test_scope
+
+    out = {}
+    for i in range(len(waves) - 1):
+        scope = _test_scope(waves[: i + 1], root)[0]
+        if scope:
+            out[str(i)] = scope
+    return out
+
+
+def test_wave_test_scopes_equals_the_per_wave_terminal_test_scope(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_stage import _wave_test_scopes
+    from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
+
+    (tmp_path / "pkg" / "tests").mkdir(parents=True)
+    (tmp_path / "pkg" / "tests" / "test_a.py").write_text("", encoding="utf-8")
+    (tmp_path / "pkg" / "test_b.py").write_text("", encoding="utf-8")
+    waves = [
+        [_row("W0", ["pkg/a.py", "pkg/b.py", "docs/x.md"])],
+        [_row("W1", UNDECLARED), _row("W1b", ["pkg/c.py", "pkg/tests/test_c.py"])],
+        [_row("W2", ["pkg/d.py", "pkg/a.py"])],
+        [_row("W3", ["pkg/e.py"])],
+    ]
+    got = _wave_test_scopes(waves, tmp_path)
+    assert got == _naive_wave_test_scopes(waves, tmp_path)
+    assert set(got) == {"0", "1", "2"}
+    # `pkg/tests/test_c.py` is declared from wave 1 on: wave 0's scope must not carry it
+    assert "pkg/tests/test_c.py" not in got["0"] and "pkg/tests/test_c.py" in got["1"]
+
+
+def test_wave_test_scopes_is_empty_without_a_testable_write_or_a_second_wave(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_stage import _wave_test_scopes
+    from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
+
+    assert _wave_test_scopes([[_row("A", ["pkg/a.py"])]], tmp_path) == {}
+    waves = [[_row("A", UNDECLARED)], [_row("B", ["docs/x.md"])], [_row("C", ["docs/y.md"])]]
+    assert _wave_test_scopes(waves, tmp_path) == _naive_wave_test_scopes(waves, tmp_path) == {}
+
+
+def _spy_end(monkeypatch, *, escrowed_token, boom=False):
+    from coordinator_core.ops.dispatch_emit import live_run_index, run_token
+
+    calls = []
+    monkeypatch.setattr(run_token, "escrowed", lambda root, run_id: escrowed_token)
+    monkeypatch.setattr(run_token, "discard", lambda root, run_id: calls.append("discard"))
+
+    def _remove(root, run_id):
+        calls.append("remove")
+        if boom:
+            raise OSError("index gone")
+
+    monkeypatch.setattr(live_run_index, "remove", _remove)
+    return calls
+
+
+def test_a_refused_run_drops_its_unescrowed_token_and_its_index_entry(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_stage import _end_refused_run
+
+    calls = _spy_end(monkeypatch, escrowed_token=None)
+    _end_refused_run(tmp_path, "ask-1")
+    assert calls == ["discard", "remove"]
+
+
+def test_a_refused_launcher_child_keeps_its_escrowed_token_but_leaves_the_index(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_stage import _end_refused_run
+
+    calls = _spy_end(monkeypatch, escrowed_token="tok")
+    _end_refused_run(tmp_path, "ask-1")
+    assert calls == ["remove"]
+
+
+def test_a_cleanup_failure_never_masks_the_refusal(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_stage import _end_refused_run
+
+    calls = _spy_end(monkeypatch, escrowed_token=None, boom=True)
+    _end_refused_run(tmp_path, "ask-1")
+    assert calls == ["discard", "remove"]
+
+
+def _drive_refusal(tmp_path, monkeypatch, exc):
+    from coordinator_core.ops.dispatch_emit import ask_stage
+
+    ended = []
+    monkeypatch.setattr(ask_stage, "_end_refused_run", lambda root, run_id: ended.append(run_id))
+    monkeypatch.setattr(ask_stage, "main_worktree_root", lambda p: tmp_path)
+    monkeypatch.setattr(ask_stage, "_consume_park_marker", lambda *a, **k: None)
+    monkeypatch.setattr(ask_stage, "stamp_plan_phase", lambda *a, **k: None)
+    monkeypatch.setattr(ask_stage, "_spine_sha", lambda *a, **k: "sha")
+    monkeypatch.setattr(ask_stage, "record_dir", lambda root, run_id: tmp_path / "rec")
+    monkeypatch.setattr(ask_stage, "stage", lambda *a, **k: (_ for _ in ()).throw(exc))
+    reply = ask_stage._run_ask_stage({"run_id": "ask-20260101T000000-aaaaaa", "writes": []}, tmp_path)
+    return reply, ended
+
+
+def test_an_owed_handback_refusal_does_not_end_the_run(tmp_path, monkeypatch):
+    exc = AskStageError("owed")
+    exc.owed_em_ids = ["r1"]
+    exc.plan_path = "p"
+    reply, ended = _drive_refusal(tmp_path, monkeypatch, exc)
+    assert reply["owed_em_ids"] == ["r1"]
+    assert ended == []
+
+
+def test_a_plain_refusal_ends_the_run(tmp_path, monkeypatch):
+    reply, ended = _drive_refusal(tmp_path, monkeypatch, AskStageError("nope"))
+    assert "nope" in reply["error"]
+    assert ended == ["ask-20260101T000000-aaaaaa"]

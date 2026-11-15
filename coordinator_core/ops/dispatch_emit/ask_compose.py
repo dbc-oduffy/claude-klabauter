@@ -142,6 +142,10 @@ from coordinator_core.ops.dispatch_emit.ledger_recovery import (
     LEDGER_FIX_LABEL,
     LEDGER_FIX_PHASE,
     LEDGER_FIX_SCHEMA,
+    LIVE_SNAP_LABEL,
+    LIVE_SNAP_MODULE,
+    LIVE_SNAP_SCHEMA,
+    LIVE_TREE_WRITES_JS,
     LEDGER_REVERIFY_LABEL,
     RECOVERY_ATTEMPT_CAP,
     RECOVERY_RECORD_FILE,
@@ -194,6 +198,7 @@ from coordinator_core.ops.dispatch_emit.judgment_halt import pull_split_prompt, 
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import strip_comment_lines as _strip_comment_lines
 from coordinator_core.ops.dispatch_emit.requirements_ledger import (
+    HandoverPending,
     LEDGER_VIEW_FILE,
     NOTES_FILE,
     POST_COMMIT_ACTS,
@@ -1800,9 +1805,9 @@ _REVIEW_RECOVER_JS = r"""
         for (const f of found) if (!flaky.some((x) => x.node_id === f.node_id)) flaky.push(f);
         failing = failing.filter((n) => !fids.has(_hfPosix(n)));
       }
-      const split = classifyReds(failing, _manifest?.review_declared_paths ?? [], { pre_existing: rv?.pre_existing ?? [], passed_at_base: rv?.passed_at_base ?? [], diff_named: Array.isArray(rv?.diff_named) ? rv.diff_named : [], reverted: Array.isArray(rv?.reverted) ? rv.reverted : [] });
       const detail = new Map();
       for (const d of (Array.isArray(rv?.failing_detail) ? rv.failing_detail : [])) if (d && d.node_id) detail.set(_hfPosix(d.node_id), String(d.message ?? ''));
+      const split = classifyReds(failing, _manifest?.review_declared_paths ?? [], { detail, pre_existing: rv?.pre_existing ?? [], passed_at_base: rv?.passed_at_base ?? [], diff_named: Array.isArray(rv?.diff_named) ? rv.diff_named : [], reverted: Array.isArray(rv?.reverted) ? rv.reverted : [] });
       const ownedTxt = split.owned.map((n) => n + ': ' + ((detail.get(n) ?? '').trim().split('\n')[0] ?? '').trim().slice(0, 300));
       const slices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter((w) => w && (w.verdict === 'WARN' || __BLOCKED__) && (w.findings ?? 0) > (w.applied ?? 0))
         .map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null }));
@@ -2443,6 +2448,80 @@ def _prompt_parts(text: str) -> list[str]:
     return [("js:" + p) if n % 2 else p for n, p in enumerate(parts) if p]
 
 
+LIVE_RESTORE_LABEL = "live-restore"
+LIVE_RESTORE_MODULE = "coordinator_core.ops.dispatch_emit.live_write_guard"
+_LIVE_RESTORE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "ok": {"type": "boolean"},
+        "restored": {"type": "array", "items": {"type": "string"}},
+        "peer_held": {"type": "array", "items": {"type": "string"}},
+        "refused": {
+            "type": "array",
+            "items": {
+                "type": "object", "properties": {"path": {"type": "string"}, "reason": {"type": "string"}},
+                "required": ["path", "reason"], "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["ok", "restored", "refused"],
+    "additionalProperties": False,
+}
+
+
+def _live_snap_fn_js(*, repo_root: str, run_id: str, record_dir: str) -> str:
+    """`_liveSnap(kind, sfx, ph, out, arg)` and `_liveRestore(sfx, ph, out)`, declared once: the mechanical legs
+    that measure a writing leg's live-tree writes (`live-snap-<kind>:<sfx>`, `kind` `before` or `after`) and put
+    back the foreign hunks it dropped (`live-restore:<sfx>`). Snapshots run `ledger_recovery`'s CLI (in-process
+    blob shas, loose-object persist of the pre-leg bytes) on snapshot file `out` and shell-quoted footprint JSON
+    `arg`; the restore runs `live_write_guard`'s on that same `out`, merging through `merge_or_refuse`.
+    The engine computes the written list and the merge; the leg only relays its one JSON line.
+    """
+    root = Path(repo_root).as_posix()
+
+    def one(kind: str) -> str:
+        cmd = engine_module_command(LIVE_SNAP_MODULE, repo_root, f"{kind} --root {root} --out ")
+        parts = [
+            "Run exactly this one command as its own Bash call, no wrapper, no edit to it, and do not retry it:\n\n"
+            f"{cmd}",
+            "js:out",
+            *([" --paths-json '", "js:arg", "'"] if kind == "before" else []),
+            "\n\nReturn `ok` true when it exited 0 and its JSON line says ok, and `live_tree_writes` copied from that "
+            "line. Run nothing else.",
+        ]
+        label = f"{LIVE_SNAP_LABEL}-{kind}"
+        call = _agent(
+            _cat(*parts), label=label, phase=LIVE_SNAP_LABEL, agent_type=_emit._TEST_AGENT_TYPE,
+            effort=_MECHANICAL_EFFORT, schema=LIVE_SNAP_SCHEMA, run_id=run_id,
+        )
+        return call.replace(f"label: {_lit(label)},", f"label: {_lit(label + ':')} + sfx,", 1).replace(
+            f"phase: {_lit(LIVE_SNAP_LABEL)},", "phase: ph,", 1
+        )
+
+    restore_cmd = engine_module_command(
+        LIVE_RESTORE_MODULE, repo_root,
+        f"restore --root {root} --run-id {run_id} --record-dir {Path(record_dir).as_posix()} --snapshot ",
+    )
+    restore_call = _agent(
+        _cat(
+            "Run exactly this one command as its own Bash call, no wrapper, no edit to it, and do not retry it:\n\n"
+            f"{restore_cmd}",
+            "js:out",
+            "\n\nReturn `ok` true when it exited 0 and its JSON line says ok, and `restored`, `refused` and `peer_held` "
+            "copied from that line (each `refused` entry as {path, reason}). Run nothing else.",
+        ),
+        label=LIVE_RESTORE_LABEL, phase=LIVE_SNAP_LABEL, agent_type=_emit._TEST_AGENT_TYPE,
+        effort=_MECHANICAL_EFFORT, schema=_LIVE_RESTORE_SCHEMA, run_id=run_id,
+    ).replace(f"label: {_lit(LIVE_RESTORE_LABEL)},", f"label: {_lit(LIVE_RESTORE_LABEL + ':')} + sfx,", 1).replace(
+        f"phase: {_lit(LIVE_SNAP_LABEL)},", "phase: ph,", 1
+    )
+    return (
+        "function _liveSnap(kind, sfx, ph, out, arg) { return kind === 'before' ? "
+        f"{one('before')} : {one('after')}; }}\n"
+        f"function _liveRestore(sfx, ph, out) {{ return {restore_call}; }}"
+    )
+
+
 _LEDGER_RECOVER_JS = r"""
     const _recoveryCap = __CAP__;
     const _fpPosix = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
@@ -2489,9 +2568,12 @@ _LEDGER_RECOVER_JS = r"""
         rec[cid] = { rows: ids, attempts: 0, status: 'held', footprint: [], paths: [], last_reason: 'withheld at stage; never ran' };
       }
       for (const [cid, ids] of Object.entries(plan.reopen)) {
-        rec[cid] = { rows: ids, attempts: 0, status: 'open', footprint: _fpOf(rowOf(cid), failed), paths: [], last_reason: '' };
+        rec[cid] = { rows: ids, attempts: 0, status: 'open', footprint: _fpOf(rowOf(cid), failed), paths: [], live_tree_writes: null, last_reason: '' };
       }
       if (!Object.keys(rec).length) return;
+      const _lwAttempt = {};
+      const _lwTrunc = {};
+      const _lwRestore = {};
       const _fixOne = async (_cid) => {
         const st = rec[_cid];
         const _fixRow = rowOf(_cid);
@@ -2500,11 +2582,32 @@ _LEDGER_RECOVER_JS = r"""
         const evText = JSON.stringify(_items.map((i) => ({ id: i.id, evidence: String(i.evidence ?? '').slice(0, 600) })));
         const failTxt = JSON.stringify({ failing: failed, summary: String(tr?.summary ?? ''), report: tr?.sidecar_path ?? null });
         const fpText = JSON.stringify(st.footprint);
-        try { return await __FIXCALL__; }
+        const _snapOut = __RECDIR__ + '/live-' + _cid + '.json';
+        const _snapArg = JSON.stringify(st.footprint).replace(/'/g, "'\\''");
+        let _sb = null;
+        try { _sb = await _liveSnap('before', _cid, __SNAPPH__, _snapOut, _snapArg); }
+        catch (e) { if (_usageHalted(e)) return null; log('live-snap before leg threw: ' + String((e && e.message) ?? e)); }
+        let _res = null;
+        try { _res = await __FIXCALL__; }
         catch (e) {
-          if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return null; }
-          log('ledger-fix leg threw: ' + String((e && e.message) ?? e)); return null;
+          if (_usageHalted(e)) return null;
+          log('ledger-fix leg threw: ' + String((e && e.message) ?? e));
         }
+        let _sa = null;
+        if (!_halted && _sb && _sb.ok === true) {
+          try { _sa = await _liveSnap('after', _cid, __SNAPPH__, _snapOut, _snapArg); }
+          catch (e) { if (_usageHalted(e)) return null; log('live-snap after leg threw: ' + String((e && e.message) ?? e)); }
+        }
+        _lwAttempt[_cid] = (_sb && _sb.ok === true && _sa && _sa.ok === true && Array.isArray(_sa.live_tree_writes)) ? _sa.live_tree_writes.map(String) : null;
+        _lwTrunc[_cid] = !!((_sb && _sb.truncated) || (_sa && _sa.truncated));
+        if (_lwAttempt[_cid]) st.live_snapshot = _snapOut;
+        if (_lwAttempt[_cid] && _lwAttempt[_cid].length && !_halted) {
+          let _rr = null;
+          try { _rr = await _liveRestore(_cid, __SNAPPH__, _snapOut); }
+          catch (e) { if (_usageHalted(e)) return null; log('live-restore leg threw: ' + String((e && e.message) ?? e)); }
+          _lwRestore[_cid] = (_rr && _rr.ok === true) ? _rr : { unverified: true };
+        }
+        return _res;
       };
       for (let attempt = 1; attempt <= _recoveryCap && !_halted; attempt++) {
         const open = Object.keys(rec).filter((c) => rec[c].status === 'open');
@@ -2515,15 +2618,41 @@ _LEDGER_RECOVER_JS = r"""
         if (_halted) return;
         open.forEach((cid, k) => {
           const st = rec[cid]; const r = fixed[k]; st.attempts = attempt;
-          if (!r || typeof r !== 'object') { st.last_reason = 'fix leg returned no result'; return; }
+          const _lw = _lwAttempt[cid] ?? null;
+          const _rObj = (r && typeof r === 'object') ? r : null;
           const row = rowOf(cid);
-          const outside = (Array.isArray(r.paths) ? r.paths : []).map(_fpPosix).filter((p) => !st.footprint.includes(p) && !_fpOwns(row, p) && !_ownReport(cid, p));
+          if (_lw) {
+            st.live_tree_writes = [...new Set([...(st.live_tree_writes ?? []), ..._lw])].sort();
+            const _peerHeld = (_lwRestore[cid]?.peer_held ?? []).map(String);
+            const _und = _undeclaredWrites(_lw, _rObj?.paths).filter((p) => !_peerHeld.includes(p));
+            if (_und.length) st.undeclared_live_writes = [...new Set([...(st.undeclared_live_writes ?? []), ..._und])].sort();
+          } else st.live_tree_unmeasured = true;
+          if (_lwTrunc[cid]) st.live_tree_unmeasured = true;
+          const outside = [...new Set([...(Array.isArray(_rObj?.paths) ? _rObj.paths : []), ...(_lw ?? [])])].map(_fpPosix).filter((p) => !st.footprint.includes(p) && !_fpOwns(row, p) && !_ownReport(cid, p));
+          const _liveNote = (base) => _lw && _lw.length ? 'live tree changed (engine-measured): ' + _lw.join(', ') + ' | leg said: ' + base.slice(0, 200) : _lw ? base : base + ' [live-tree write not measured]';
+          if (!_rObj) {
+            st.last_reason = _liveNote('fix leg returned no result');
+            if (outside.length) { st.paths = [...new Set([...st.paths, ...outside])]; st.status = 'blocked'; st.last_reason = 'fix wrote outside the footprint: ' + outside.join(', '); }
+            return;
+          }
           const blockedNeeds = r.status === 'BLOCKED' ? (Array.isArray(r.needs_paths) ? r.needs_paths : []).map(_fpPosix).filter((p) => !st.footprint.includes(p) && !_fpOwns(row, p)) : [];
           if (outside.length || blockedNeeds.length) st.paths = [...new Set([...st.paths, ...outside, ...blockedNeeds])];
-          st.last_reason = String(r.reason ?? '');
+          st.last_reason = _liveNote(String(r.reason ?? ''));
           if (r.status === 'BLOCKED') st.status = 'blocked';
           else if (outside.length) { st.status = 'blocked'; st.last_reason = 'fix wrote outside the footprint: ' + outside.join(', '); }
         });
+        for (const cid of open) {
+          const st = rec[cid]; const _rr = _lwRestore[cid];
+          if (!_rr) continue;
+          if (_rr.unverified) { st.live_restore_unverified = true; continue; }
+          if ((_rr.restored ?? []).length) st.live_restored = [...new Set([...(st.live_restored ?? []), ..._rr.restored.map(String)])].sort();
+          if ((_rr.refused ?? []).length) {
+            st.live_refused = [...(st.live_refused ?? []), ..._rr.refused];
+            const _lostNote = 'fix leg dropped a foreign live hunk it could not restore (refusal in tree-write-refusals.json): ' + _rr.refused.map((x) => String(x.path)).join(', ');
+            st.last_reason = st.status === 'open' ? _lostNote : st.last_reason + ' | ' + _lostNote;
+            st.status = 'blocked';
+          }
+        }
         const stillOpen = open.filter((c) => rec[c].status === 'open');
         if (!stillOpen.length) continue;
         const ids = [...new Set(stillOpen.flatMap((c) => rec[c].rows))];
@@ -2611,6 +2740,7 @@ def _ledger_recover_js(
     """The `_ledgerRecover()` definition and its one call, composed between the verify leg's ledger and the ledger halt.
 
     The fix legs run in parallel under `LEDGER_FIX_PHASE`; each re-verify judges only the reopened rows.
+    Each fix leg is bracketed by two mechanical `live-snap` legs (`_liveSnap`, from `_live_snap_fn_js`).
     Trap: it reads `_ledgerBlocking`, `_normaliseLedger` and `_reopenPlan`, which must precede it in the script.
     """
     fix_prompt = _cat(
@@ -2663,6 +2793,8 @@ def _ledger_recover_js(
         .replace("__NOPROGRESS__", _lit(NO_PROGRESS))
         .replace("__XS__", _lit(ARM_XS))
         .replace("__TEST__", test_var)
+        .replace("__RECDIR__", _lit(record_dir))
+        .replace("__SNAPPH__", _lit(LEDGER_FIX_PHASE))
         .replace("__FIXCALL__", fix_call)
         .replace("__REVERIFYCALL__", reverify_call)
         .replace("__RECORDCALL__", record_call)
@@ -2696,7 +2828,12 @@ _REMNANT_COMPLETE_JS = r"""
       const _ownReport = (p) => p.startsWith('.coordinator-local/subagent-share/dispatch-reports/') && _ownRows.some((r) => p.split('/').pop() === String(r.id) + '.md');
       const itemsText = JSON.stringify(rmItems);
       const fpText = JSON.stringify(footprint);
-      const rec = { field: 'remnant', loop_owner: 'engine', cap: __CAP__, items: rmItems.map((i) => ({ kind: i.kind, id: i.id })), footprint, status: 'open', paths: [], last_reason: '' };
+      const rec = { field: 'remnant', loop_owner: 'engine', cap: __CAP__, items: rmItems.map((i) => ({ kind: i.kind, id: i.id })), footprint, status: 'open', paths: [], live_tree_writes: null, last_reason: '' };
+      const _snapOut = __RECDIR__ + '/live-remnant.json';
+      const _snapArg = JSON.stringify(footprint).replace(/'/g, "'\\''");
+      let _sb = null;
+      try { _sb = await _liveSnap('before', 'remnant', __SNAPPH__, _snapOut, _snapArg); }
+      catch (e) { if (_usageHalted(e)) return; log('live-snap before leg threw: ' + String((e && e.message) ?? e)); }
       let leg = null;
       try { leg = await __REMNANTCALL__; }
       catch (e) {
@@ -2704,12 +2841,46 @@ _REMNANT_COMPLETE_JS = r"""
         log('remnant-complete leg threw: ' + String((e && e.message) ?? e));
       }
       if (_halted) return;
-      if (!leg || typeof leg !== 'object') { rec.status = 'blocked'; rec.last_reason = 'remnant leg returned no result'; }
+      let _sa = null;
+      if (_sb && _sb.ok === true) {
+        try { _sa = await _liveSnap('after', 'remnant', __SNAPPH__, _snapOut, _snapArg); }
+        catch (e) { if (_usageHalted(e)) return; log('live-snap after leg threw: ' + String((e && e.message) ?? e)); }
+        if (_halted) return;
+      }
+      const _lw = (_sb && _sb.ok === true && _sa && _sa.ok === true && Array.isArray(_sa.live_tree_writes)) ? _sa.live_tree_writes.map(String) : null;
+      rec.live_tree_writes = _lw;
+      if (_lw) rec.live_snapshot = _snapOut;
+      if ((_sb && _sb.truncated) || (_sa && _sa.truncated)) rec.live_tree_unmeasured = true;
+      let _lostFoot = [];
+      let _peerHeld = [];
+      if (_lw && _lw.length) {
+        let _rr = null;
+        try { _rr = await _liveRestore('remnant', __SNAPPH__, _snapOut); }
+        catch (e) { if (_usageHalted(e)) return; log('live-restore leg threw: ' + String((e && e.message) ?? e)); }
+        if (_halted) return;
+        if (_rr && _rr.ok === true) {
+          if ((_rr.restored ?? []).length) rec.live_restored = _rr.restored.map(String);
+          if ((_rr.refused ?? []).length) { rec.live_refused = _rr.refused; _lostFoot = _rr.refused.map((x) => String(x.path)); }
+          _peerHeld = (_rr.peer_held ?? []).map(String);
+        } else rec.live_restore_unverified = true;
+      }
+      const _liveNote = (base) => _lw && _lw.length ? 'live tree changed (engine-measured): ' + _lw.join(', ') + ' | leg said: ' + base.slice(0, 200) : _lw ? base : base + ' [live-tree write not measured]';
+      const _legPaths = Array.isArray(leg?.paths) ? leg.paths : [];
+      const _und = _lw ? _undeclaredWrites(_lw, _legPaths).filter((p) => !_peerHeld.includes(p)) : [];
+      if (_und.length) rec.undeclared_live_writes = _und;
+      const outside = [...new Set([..._legPaths, ...(_lw ?? [])])].map(_fpP).filter((p) => !inFootprint(p) && !_ownReport(p));
+      if (!leg || typeof leg !== 'object') { rec.status = 'blocked'; rec.last_reason = _liveNote('remnant leg returned no result'); }
       else {
-        const outside = (Array.isArray(leg.paths) ? leg.paths : []).map(_fpP).filter((p) => !inFootprint(p) && !_ownReport(p));
-        rec.last_reason = String(leg.reason ?? '');
+        rec.last_reason = _liveNote(String(leg.reason ?? ''));
+        if (_und.length) { rec.status = 'blocked'; rec.last_reason = 'remnant wrote live path(s) it did not report: ' + _und.join(', '); }
         if (outside.length) { rec.paths = outside; rec.status = 'blocked'; rec.last_reason = 'remnant wrote outside the footprint: ' + outside.join(', '); }
         else if (leg.status === 'BLOCKED') rec.status = 'blocked';
+      }
+      if (!leg || typeof leg !== 'object') { if (outside.length) { rec.paths = outside; rec.last_reason = 'remnant wrote outside the footprint: ' + outside.join(', '); } }
+      if (_lostFoot.length) {
+        const _lostNote = 'remnant leg dropped a foreign live hunk it could not restore (refusal in tree-write-refusals.json): ' + _lostFoot.join(', ');
+        rec.last_reason = rec.status === 'open' ? _lostNote : rec.last_reason + ' | ' + _lostNote;
+        rec.status = 'blocked';
       }
       if (rec.status === 'open') {
         const rmTestWanted = !!((_manifest.test_targets ?? []).length);
@@ -2766,7 +2937,7 @@ def _remnant_complete_js(
 ) -> str:
     """The `_remnantComplete()` definition and its one call, composed right after `_ledger_recover_js`.
 
-    One writing leg over `_remnantItems(...)`, then one re-verify that re-reads `_ledger`, the
+    One writing leg over `_remnantItems(...)` bracketed by two mechanical `live-snap` legs, then one re-verify that re-reads `_ledger`, the
     falsifier verdict and `_deliveryVerdict`. A gap still open leaves them not_met, so the close
     halts with today's codes. The attempt lands in recovery.json under `remnant` (loop owner: engine).
     Trap: it reads `_ledgerBlocking`, `_normaliseLedger` and
@@ -2828,6 +2999,8 @@ def _remnant_complete_js(
     )
     return (
         _REMNANT_COMPLETE_JS.replace("__CAP__", str(REMNANT_ATTEMPT_CAP))
+        .replace("__RECDIR__", _lit(record_dir))
+        .replace("__SNAPPH__", _lit(REMNANT_PHASE))
         .replace("__RL__", RESUME_LEDGER_KEY)
         .replace("__XS__", _lit(ARM_XS))
         .replace("__TEST__", _emit._TEST_RESULT_VAR)
@@ -2948,13 +3121,71 @@ def stale_resume_plan(repo_root: str, sizing_rel: Optional[str]) -> Optional[str
     return None if plan_currency.assess(repo_root, plan_rel)["decent"] else plan_rel
 
 
+PREBLITZ_STEP = "emit.preblitz_anchor"
+
+#: Seconds the preblitz anchor scan may run before the emit parks; well under the warm dispatch timeout.
+PREBLITZ_STEP_SECS = 5.0
+
+
+class PreblitzStepParked(HandoverPending):
+    """The preblitz anchor step ran out of its deadline before any mint. `HandoverPending`'s
+    subclass so `op._dispatch_emit_body` rolls back and returns `reply`: a determinate
+    `not-started` answer naming the step, never an indeterminate timeout; a re-send is safe."""
+
+    def __init__(self, step: str) -> None:
+        self.retry_after = 1
+        self.reply = {
+            "status": "not-started",
+            "parked": True,
+            "step": step,
+            "error": (
+                f"emit-deadline: step {step} did not finish inside its deadline; parked, not started: "
+                "no run minted, nothing written. Re-send the emit."
+            ),
+        }
+        Exception.__init__(self, self.reply["error"])
+
+
 def preblitz_anchor_lines(repo_root: str, plan_rel: Optional[str]) -> list[str]:
     """`CONTRADICTED: <claim> -- <evidence>` per declared anchor the tree contradicts; [] otherwise.
 
-    Report-only: reads the plan, spawns nothing, and never changes `plan.readiness_verdict`'s outcome.
+    Report-only: reads the plan and never changes `plan.readiness_verdict`'s outcome. Runs as the
+    `PREBLITZ_STEP` step: a scan that outlives `PREBLITZ_STEP_SECS` is abandoned on its daemon
+    thread (a blocked read cannot be interrupted) and raises `PreblitzStepParked`.
     """
     if not plan_rel:
         return []
+    import threading
+
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    box: list = []
+
+    def work() -> None:
+        try:
+            box.append((True, _preblitz_anchor_lines(repo_root, plan_rel)))
+        except BaseException as exc:  # noqa: BLE001 -- handed to the caller's thread
+            box.append((False, exc))
+
+    ctx = contextvars.copy_context()
+    thread = threading.Thread(target=ctx.run, args=(work,), name="preblitz-anchor", daemon=True)
+    try:
+        with land_deadline.step(PREBLITZ_STEP, cap_secs=PREBLITZ_STEP_SECS) as secs:
+            thread.start()
+            thread.join(secs)
+            if thread.is_alive():
+                raise land_deadline.LandDeadlineExceeded(
+                    PREBLITZ_STEP, bound_by=land_deadline.BOUND_STEP, step=True
+                )
+    except land_deadline.LandDeadlineExceeded as exc:
+        raise PreblitzStepParked(exc.leg) from None
+    ok, value = box[0]
+    if not ok:
+        raise value
+    return value
+
+
+def _preblitz_anchor_lines(repo_root: str, plan_rel: str) -> list[str]:
     from coordinator_core.ops import _anchor_premise, _brief_premise
     from coordinator_core.ops.plan_readiness_verdict import _plan_inputs
 
@@ -3518,6 +3749,10 @@ def _family_run_js(work_label: str, exec_phase: str) -> str:
         "      return 'DONE: ' + r.id + ' via ' + _fam.family + ' ' + JSON.stringify(_rec);\n"
         "    }\n"
         "    if (!_fam.blocked_reason) _fam = { ..._fam, blocked_reason: 'family-stage-runner reported ' + _fam.verdict + ' without a reason' };\n"
+        "    if (!r.fallback_brief_path) {\n"
+        "      const _rec0 = { stage_role: r.stage_role, attempts: [_fam], reported_family: _fam.family };\n"
+        "      return 'BLOCKED: ' + r.id + ' via ' + _fam.family + ' ' + _fam.verdict + ' (row carries no fallback brief) ' + JSON.stringify(_rec0);\n"
+        "    }\n"
         "    log(r.id + ': ' + _fam.family + ' attempt ' + _fam.verdict + ' (' + _fam.blocked_reason + '); rerunning on '"
         f" + {_lit(_stage_family.FALLBACK)});\n"
         "    let _fbText = null;\n"
@@ -5907,6 +6142,7 @@ def compose_ask_script(
     )
     b.append("  let _lateIds = [];")
     b.append("  let _verifyLateIds = [];")
+    b.append("  let _lateUnplanned = [];")
     b.append("  let _lateLeg = null;")
     b.append(
         "  const _lateRead = async (_final) => {\n"
@@ -6046,7 +6282,12 @@ def compose_ask_script(
             "{ title: r.id, paths: r.writes ?? [], declared: r.writes ?? [] });\n"
             "      }\n"
             "      await Promise.allSettled(_lateRows.map((r) => _rows[r.id]));\n"
-            "    } else { log('ledger-late: re-plan staged no row for ' + JSON.stringify(_ids) + '; the verify leg rules them'); }\n"
+            "      const _lateServed = new Set(_lateRows.flatMap((r) => Array.isArray(r.register_rows) ? r.register_rows.map(String) : []));\n"
+            "      const _lateRest = _ids.filter((i) => !_lateServed.has(String(i)));\n"
+            "      if (_lateRest.length) { _lateUnplanned = [...new Set([..._lateUnplanned, ..._lateRest])]; "
+            "log('ledger-late: re-plan served no row for ' + JSON.stringify(_lateRest) + '; the verify leg rules them'); }\n"
+            "    } else { _lateUnplanned = [...new Set([..._lateUnplanned, ..._ids])]; "
+            "log('ledger-late: re-plan staged no row for ' + JSON.stringify(_ids) + '; the verify leg rules them'); }\n"
             "  };"
         )
     b.append("  await Promise.all(Object.values(_rows));")
@@ -6458,6 +6699,8 @@ def compose_ask_script(
     )
     if known_arm != ARM_XS:
         b.append(REOPEN_PLAN_JS)
+        b.append(LIVE_TREE_WRITES_JS)
+        b.append(_live_snap_fn_js(repo_root=repo_root, run_id=run_id, record_dir=record_abs))
         b.append(
             _ledger_recover_js(
                 head=head, anchor=anchor, session_tail=session_tail, record_dir=record_abs, ledger_rel=ledger_abs,
@@ -6478,7 +6721,7 @@ def compose_ask_script(
     # `out_of_scope` accepts only register rows still open at stage; any other blocking id is named
     # apart, with the ledger re-check as its remedy.
     b.append(
-        f"    const _rulable = _manifest?.rulable_ids ?? _gate.{RESUME_LEDGER_KEY}?.rulable_ids ?? [];\n"
+        f"    const _rulable = [...new Set([...(_manifest?.rulable_ids ?? _gate.{RESUME_LEDGER_KEY}?.rulable_ids ?? []), ..._lateIds, ..._verifyLateIds])];\n"
         f"    const _ledgerBase = _manifest?.ledger_item_ids?.length ? _manifest.ledger_item_ids : (_gate.{RESUME_LEDGER_KEY}?.ledger_item_ids ?? _manifest?.ledger_item_ids ?? null);\n"
         "    const _ledgerIds = Array.isArray(_ledgerBase) ? [...new Set([..._ledgerBase, ..._verifyLateIds])] : _ledgerBase;\n"
         f"    const _withheldIds = _gate.{RESUME_LEDGER_KEY}?.withheld_ids ?? _manifest?.withheld_ids ?? null;\n"
@@ -6530,7 +6773,9 @@ def compose_ask_script(
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
         "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' "
         f"+ ' If the halt commit landed every row, close it after the revise: ' + {_lit(_HALTED_ROUTE_OP)} + ' {{run_id: ' + _runId + ', sha: <the halt commit>}}.' : '') "
-        "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' are not in the stage manifest rulable_ids: re-run the ledger check. "
+        f"+ (_lateUnplanned.length ? ' ' + {_lit(REGISTER_ROWS_UNCLAIMED_REFUSAL)} + ': register row(s) ' + _lateUnplanned.join(', ') "
+        f"+ ' still have no plan row after the in-run re-plan: add one with plan.tasks.mutate verb add-task (register_rows naming the id), then re-fire.' : '') "
+        "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' are not open register rows (met, waived or ruled out at stage), so the ledger cannot rule them out of scope: re-fire to re-judge them. "
         f"A ruling that is not yet a row is recorded with workflow.revise run_id ' + _runId + ' verbatim + from + {CLAIM_PARAM}: true, which claims it and resumes at the ledger check.' : '') "
         "+ _addTaskRemedy "
         "+ (_blkIds.length ? ' Re-fire the same sizing: it executes the remaining work of the rows it keeps, briefed with the revise notes, '"
@@ -7022,12 +7267,16 @@ def _chain_emit_agent_call(
         f"JSON.stringify({_chain_emit_params_js(sizing_js, research=research, stop_after=stop_after)})"
         ".split(\"'\").join(\"'\" + '\"' + \"'\" + '\"' + \"'\")"
     )
+    # Trap: the command head and tail ride double-quoted literals, which literal staging never touches; a single-quoted
+    # head would join the staged run and leave the relay a params fragment with no op name.
     emit_prompt = _cat(
         f"{head}\n\n{anchor}\n\n{EMIT_RELAY_AUTHORITY} ",
-        f"Run `{_INVOKE} dispatch.emit '",
+        "js:" + json.dumps(f"Run `{_INVOKE} dispatch.emit '"),
         "js:" + params,
-        f"'` once and return path and run_id from its JSON reply verbatim. When the command "
-        "is denied or fails, return its error text in error, with path and run_id as empty strings. Commit nothing.",
+        "js:" + json.dumps(
+            "'` once and return path and run_id from its JSON reply verbatim. When the command "
+            "is denied or fails, return its error text in error, with path and run_id as empty strings. Commit nothing."
+        ),
     )
     return _agent(
         emit_prompt, label="chain-emit", phase="plan", agent_type=_OP_RELAY_AGENT_TYPE,

@@ -168,7 +168,8 @@ def restore(
     is null); otherwise the tree is left untouched and the path is reported as `restore-drift`.
     A path outside `owned_paths` (the record run's write set; None or empty owns nothing), or whose
     recorded `head` is no longer HEAD's blob, is not written: it is returned under `refused` and
-    recorded through `tree_write_fence.record_refusal`.
+    recorded through `tree_write_fence.record_refusal`. An entry carrying `base` (the tree kept
+    foreign hunks) is written as `live_write_guard.merge_or_refuse` output, or refused the same way.
     Returns `{"restored": [paths], "drift": {path: "restore-drift"}, "refused": {path: reason}}`.
     No `evicted.json`: all empty.
     """
@@ -201,6 +202,16 @@ def restore(
             refused[rel] = reason
             tree_write_fence.record_refusal(record_dir, rel, reason, run_id)
             continue
+        if "base" in entry:
+            # The tree holds HEAD plus kept foreign hunks: write the merge, never the bare blob.
+            from coordinator_core.ops.dispatch_emit import live_write_guard
+
+            merged, refusal = live_write_guard.merge_or_refuse(root, run_id, rel, data)
+            if refusal:
+                refused[rel] = refusal
+                tree_write_fence.record_refusal(record_dir, rel, refusal, run_id)
+                continue
+            data = merged
         target = root / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)

@@ -3,7 +3,7 @@
 
 Same idiom as test_archive_stamp_cli_ship_handoff.py /
 test_archive_stamp_cli_chain_supersede_archive.py: monkeypatches the module's
-own seams (`_resolve_repo_root`, `cc_invoke.route_mutation`)
+own seams (`_resolve_repo_root`, `_call_transition`)
 so this suite asserts ONLY the CLI's own dispatch logic — mode selection,
 opportunistic-vs-hard-fail error handling, argv parsing — not the engine
 behind `handoff.archive_transition` (coordinator_core's own test surface).
@@ -11,7 +11,7 @@ behind `handoff.archive_transition` (coordinator_core's own test surface).
 exception: `ClosedTargetSupersedeChokePointTest`
 below deliberately does the opposite, calling the real op handler
 (`coordinator_core.ops.handoff_archive_transition._handler`) directly against
-a real on-disk worktree, because the `cc_invoke.route_mutation` seam every
+a real on-disk worktree, because the `_call_transition` seam every
 other class here patches is precisely the op choke point that test needs to
 exercise (see that class's own docstring).
 
@@ -59,8 +59,8 @@ def _load_cli_module():
 _cli = _load_cli_module()
 
 
-class _RecordingRouteMutation:
-    """Stand-in for cc_invoke.route_mutation — records params, returns a
+class _RecordingTransition:
+    """Stand-in for _call_transition — records params, returns a
     canned result or raises a canned exception."""
 
     def __init__(self):
@@ -68,8 +68,8 @@ class _RecordingRouteMutation:
         self.result: dict = {}
         self.exc: Exception | None = None
 
-    def __call__(self, op, params, repo_root, legacy_fn):
-        self.calls.append({"op": op, "params": params, "repo_root": repo_root})
+    def __call__(self, params):
+        self.calls.append({"params": params})
         if self.exc is not None:
             raise self.exc
         return self.result
@@ -77,12 +77,12 @@ class _RecordingRouteMutation:
 
 class _StubHarness(unittest.TestCase):
     def setUp(self):
-        self._orig_route_mutation = _cli.cc_invoke.route_mutation
+        self._orig_transition = _cli._call_transition
         self._orig_repo_root = _cli._resolve_repo_root
         self.addCleanup(self._restore)
 
-        self.route_mutation = _RecordingRouteMutation()
-        _cli.cc_invoke.route_mutation = self.route_mutation
+        self.transition = _RecordingTransition()
+        _cli._call_transition = self.transition
         _cli._resolve_repo_root = lambda handoff_path: "/fake/repo/root"
 
         self._tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".md")
@@ -90,7 +90,7 @@ class _StubHarness(unittest.TestCase):
         self.handoff_path = self._tmp.name
 
     def _restore(self):
-        _cli.cc_invoke.route_mutation = self._orig_route_mutation
+        _cli._call_transition = self._orig_transition
         _cli._resolve_repo_root = self._orig_repo_root
         try:
             os.unlink(self.handoff_path)
@@ -132,7 +132,7 @@ class _StubHarness(unittest.TestCase):
         already present — the on-disk shape AFTER a real
         `handoff.archive_transition` supersede op has landed.
 
-        `route_mutation` is stubbed throughout this harness (§ module
+        `_call_transition` is stubbed throughout this harness (§ module
         docstring — it asserts only `cmd_supersede`'s own dispatch logic, not
         the real op), so it never performs an actual write. A test that
         exercises `cmd_supersede`'s AC3 post-write re-read must seed this
@@ -161,44 +161,43 @@ class ChainSubcommandTest(_StubHarness):
         os.unlink(self.handoff_path)
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 1)
-        self.assertEqual(self.route_mutation.calls, [])
+        self.assertEqual(self.transition.calls, [])
 
     def test_chain_selects_stamp_shipped(self):
-        self.route_mutation.result = {"moved": True}
+        self.transition.result = {"moved": True}
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 0)
-        self.assertEqual(len(self.route_mutation.calls), 1)
-        self.assertEqual(self.route_mutation.calls[0]["params"]["mode"], "stamp_shipped")
-        self.assertEqual(self.route_mutation.calls[0]["op"], "handoff.archive_transition")
+        self.assertEqual(len(self.transition.calls), 1)
+        self.assertEqual(self.transition.calls[0]["params"]["mode"], "stamp_shipped")
 
     def test_op_retained_envelope_returns_0(self):
-        self.route_mutation.result = {"moved": False, "retained": True, "retain_reason": "live children"}
+        self.transition.result = {"moved": False, "retained": True, "retain_reason": "live children"}
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 0)
 
     def test_exclude_forwarded(self):
-        self.route_mutation.result = {"moved": True}
+        self.transition.result = {"moved": True}
         rc = _cli.cmd_chain(self.handoff_path, ["state/handoffs/x.md", "state/handoffs/y.md"])
         self.assertEqual(rc, 0)
         self.assertEqual(
-            self.route_mutation.calls[0]["params"]["exclude"],
+            self.transition.calls[0]["params"]["exclude"],
             ["state/handoffs/x.md", "state/handoffs/y.md"],
         )
 
     def test_archive_transition_refusal_returns_1(self):
-        """C1/AC1: an op-level refusal (RouteMutationError) is now a hard
+        """C1/AC1: an op-level refusal (_TransitionRefused) is now a hard
         failure, not opportunistic-swallowed success — the mutation this
         call promised did not land, so rc must say so (plan § S5, site 4)."""
-        self.route_mutation.exc = _cli.cc_invoke.RouteMutationError("refused", {"exit_code": 1})
+        self.transition.exc = _cli._TransitionRefused("refused")
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 1)
 
     # Defect 1's actual new behavior (bare
     # RuntimeError transport/engine failure -> rc 1) had zero test coverage;
-    # a RouteMutationError is a RuntimeError subclass, so the sibling test
+    # a _TransitionRefused is a RuntimeError subclass, so the sibling test
     # above alone did not exercise the new `except RuntimeError` branch.
     def test_archive_transition_transport_failure_returns_1(self):
-        self.route_mutation.exc = RuntimeError("transport down")
+        self.transition.exc = RuntimeError("transport down")
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 1)
 
@@ -210,7 +209,7 @@ class ChainSubcommandTest(_StubHarness):
         _cli._resolve_repo_root = lambda path: None
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 1)
-        self.assertEqual(self.route_mutation.calls, [])
+        self.assertEqual(self.transition.calls, [])
 
     def test_archive_deferred_ambiguous_fails_loud(self):
         """C1 negative-spec (Finding 3): a 'stamp_shipped'
@@ -220,7 +219,7 @@ class ChainSubcommandTest(_StubHarness):
         neither the envelope nor the disk can distinguish a deliberate
         deferral from a failed move attempt — so this must fail loud (rc 1).
         Mirrors the shape of test_archive_transition_transport_failure_returns_1."""
-        self.route_mutation.result = {
+        self.transition.result = {
             "moved": False,
             "message": "deferred by policy",
         }
@@ -243,7 +242,7 @@ class ChainSubcommandTest(_StubHarness):
         `shipped_in`) must return 0 with NO fail-loud message — the
         production incident this fix closes was exactly this shape."""
         self._seed_landed_chain_frontmatter("abc12345")
-        self.route_mutation.result = {"moved": False}
+        self.transition.result = {"moved": False}
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
             rc = _cli.cmd_chain(self.handoff_path, [])
@@ -262,7 +261,7 @@ class ChainSubcommandTest(_StubHarness):
         so a future edit cannot quietly widen the rescue into swallowing
         real failures."""
         self._seed_claimed_frontmatter()
-        self.route_mutation.result = {"moved": False, "message": "git mv failed"}
+        self.transition.result = {"moved": False, "message": "git mv failed"}
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
             rc = _cli.cmd_chain(self.handoff_path, [])
@@ -275,28 +274,28 @@ class ChainSubcommandTest(_StubHarness):
     def test_sha_forwarded_when_supplied(self):
         """C3/AC5: `--sha` (threaded here as cmd_chain's `sha` param) must
         land in params["sha"] verbatim."""
-        self.route_mutation.result = {"moved": True}
+        self.transition.result = {"moved": True}
         rc = _cli.cmd_chain(self.handoff_path, [], sha="deadbeef")
         self.assertEqual(rc, 0)
-        self.assertEqual(self.route_mutation.calls[0]["params"]["sha"], "deadbeef")
+        self.assertEqual(self.transition.calls[0]["params"]["sha"], "deadbeef")
 
     def test_force_forwarded_when_supplied(self):
         """C3/AC5: `--force` (threaded here as cmd_chain's `force` param)
         must land in params["force"] truthy."""
-        self.route_mutation.result = {"moved": True}
+        self.transition.result = {"moved": True}
         rc = _cli.cmd_chain(self.handoff_path, [], sha="deadbeef", force=True)
         self.assertEqual(rc, 0)
-        self.assertIs(self.route_mutation.calls[0]["params"]["force"], True)
+        self.assertIs(self.transition.calls[0]["params"]["force"], True)
 
     def test_omitting_sha_and_force_adds_neither_key(self):
         """C3/AC5 negative-spec: omitting both `--sha` and `--force` must
         leave `params` byte-identical to pre-chunk resolution — neither key
         is added at all, not merely falsy-valued. Pins the docstring's
         explicit 'byte-identical to before this chunk' claim (Position A)."""
-        self.route_mutation.result = {"moved": True}
+        self.transition.result = {"moved": True}
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 0)
-        params = self.route_mutation.calls[0]["params"]
+        params = self.transition.calls[0]["params"]
         self.assertNotIn("sha", params)
         self.assertNotIn("force", params)
 
@@ -305,33 +304,33 @@ class SupersedeSubcommandTest(_StubHarness):
     def test_missing_continued_into_is_usage_error(self):
         rc = _cli.cmd_supersede(self.handoff_path, None, [])
         self.assertEqual(rc, 2)
-        self.assertEqual(self.route_mutation.calls, [])
+        self.assertEqual(self.transition.calls, [])
 
     def test_blank_continued_into_is_usage_error(self):
         rc = _cli.cmd_supersede(self.handoff_path, "   ", [])
         self.assertEqual(rc, 2)
-        self.assertEqual(self.route_mutation.calls, [])
+        self.assertEqual(self.transition.calls, [])
 
     def test_success_dispatches_supersede_mode(self):
         self._seed_landed_supersede_frontmatter("state/handoffs/successor.md")
-        self.route_mutation.result = {"superseded": True}
+        self.transition.result = {"superseded": True}
         rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
         self.assertEqual(rc, 0)
-        self.assertEqual(len(self.route_mutation.calls), 1)
-        params = self.route_mutation.calls[0]["params"]
+        self.assertEqual(len(self.transition.calls), 1)
+        params = self.transition.calls[0]["params"]
         self.assertEqual(params["mode"], "supersede")
         self.assertEqual(params["continued_into"], "state/handoffs/successor.md")
         self.assertEqual(params["handoff_path"], self.handoff_path)
 
     def test_exclude_forwarded(self):
         self._seed_landed_supersede_frontmatter("state/handoffs/successor.md")
-        self.route_mutation.result = {"superseded": True}
+        self.transition.result = {"superseded": True}
         rc = _cli.cmd_supersede(
             self.handoff_path, "state/handoffs/successor.md", ["state/handoffs/x.md"]
         )
         self.assertEqual(rc, 0)
         self.assertEqual(
-            self.route_mutation.calls[0]["params"]["exclude"], ["state/handoffs/x.md"]
+            self.transition.calls[0]["params"]["exclude"], ["state/handoffs/x.md"]
         )
 
     def test_landed_frontmatter_matching_successor_returns_0(self):
@@ -339,7 +338,7 @@ class SupersedeSubcommandTest(_StubHarness):
         `deployment_state: continued` + `continued_into: <successor>` on disk
         returns 0 — the re-read confirms what the op claimed."""
         self._seed_landed_supersede_frontmatter("state/handoffs/successor.md")
-        self.route_mutation.result = {"superseded": True}
+        self.transition.result = {"superseded": True}
         rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
         self.assertEqual(rc, 0)
         landed_fields = _cli._reread_frontmatter_fields(
@@ -358,7 +357,7 @@ class SupersedeSubcommandTest(_StubHarness):
         `cmd_supersede` must not trust the op's self-report and must return
         non-zero instead of silently exiting 0."""
         self._seed_claimed_frontmatter()
-        self.route_mutation.result = {"superseded": True}
+        self.transition.result = {"superseded": True}
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
             rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
@@ -371,7 +370,7 @@ class SupersedeSubcommandTest(_StubHarness):
         not a match — the re-read compares both fields, not just the
         deployment_state enum value."""
         self._seed_landed_supersede_frontmatter("state/handoffs/someone-else.md")
-        self.route_mutation.result = {"superseded": True}
+        self.transition.result = {"superseded": True}
         rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
         self.assertEqual(rc, 1)
 
@@ -383,7 +382,7 @@ class SupersedeSubcommandTest(_StubHarness):
         archival-move guard, so a legitimate retention must not be conflated
         with the silent-failure shape this chunk exists to catch."""
         self._seed_landed_supersede_frontmatter("state/handoffs/successor.md")
-        self.route_mutation.result = {
+        self.transition.result = {
             "superseded": True,
             "retained": True,
             "retain_reason": "live children found",
@@ -393,7 +392,7 @@ class SupersedeSubcommandTest(_StubHarness):
 
     def test_route_mutation_error_is_hard_failure(self):
         self._seed_claimed_frontmatter()
-        self.route_mutation.exc = _cli.cc_invoke.RouteMutationError("refused", {"exit_code": 1})
+        self.transition.exc = _cli._TransitionRefused("refused")
         rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
         self.assertEqual(rc, 1)
 
@@ -403,7 +402,7 @@ class SupersedeSubcommandTest(_StubHarness):
         result whose `superseded` key is falsy/absent must still be treated
         as a decline, not a success — this is the second defect's fix."""
         self._seed_claimed_frontmatter()
-        self.route_mutation.result = {}
+        self.transition.result = {}
         rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
         self.assertEqual(rc, 1)
 
@@ -411,7 +410,7 @@ class SupersedeSubcommandTest(_StubHarness):
         _cli._resolve_repo_root = lambda path: None
         rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
         self.assertEqual(rc, 1)
-        self.assertEqual(self.route_mutation.calls, [])
+        self.assertEqual(self.transition.calls, [])
 
     def test_never_claimed_parent_is_refused_dr242(self):
         """DR-242 (docs/decisions/DR-242-successor-named-child-is-not-
@@ -420,30 +419,30 @@ class SupersedeSubcommandTest(_StubHarness):
         succession on its own. self.handoff_path here is the harness's
         untouched empty tmp file, i.e. exactly the bare shape the gate
         exists to catch; no dispatch may reach route_mutation."""
-        self.route_mutation.result = {"superseded": True}
+        self.transition.result = {"superseded": True}
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
             rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
         self.assertEqual(rc, 1)
-        self.assertEqual(self.route_mutation.calls, [])
+        self.assertEqual(self.transition.calls, [])
         self.assertIn("DR-242", stderr.getvalue())
 
 
 class MainArgvTest(_StubHarness):
     def test_chain_argv_dispatch(self):
-        self.route_mutation.result = {"moved": True}
+        self.transition.result = {"moved": True}
         rc = _cli.main(["chain", self.handoff_path])
         self.assertEqual(rc, 0)
 
     def test_supersede_argv_dispatch(self):
         self._seed_landed_supersede_frontmatter("state/handoffs/s.md")
-        self.route_mutation.result = {"superseded": True}
+        self.transition.result = {"superseded": True}
         rc = _cli.main(
             ["supersede", self.handoff_path, "--continued-into", "state/handoffs/s.md"]
         )
         self.assertEqual(rc, 0)
         self.assertEqual(
-            self.route_mutation.calls[0]["params"]["continued_into"], "state/handoffs/s.md"
+            self.transition.calls[0]["params"]["continued_into"], "state/handoffs/s.md"
         )
 
     def test_no_subcommand_is_usage_error(self):
@@ -455,12 +454,51 @@ class MainArgvTest(_StubHarness):
         confirm --sha/--force actually wire from the CLI through to the
         dispatched params — the argparse layer is untested by the
         cmd_chain-direct passthrough tests above."""
-        self.route_mutation.result = {"moved": True}
+        self.transition.result = {"moved": True}
         rc = _cli.main(["chain", self.handoff_path, "--sha", "cafebabe", "--force"])
         self.assertEqual(rc, 0)
-        params = self.route_mutation.calls[0]["params"]
+        params = self.transition.calls[0]["params"]
         self.assertEqual(params["sha"], "cafebabe")
         self.assertIs(params["force"], True)
+
+
+class CallTransitionDoorTest(unittest.TestCase):
+    """`_call_transition` reaches the live library door and never the killed op key."""
+
+    def _run(self, door_result, fn):
+        from unittest import mock
+
+        import coordinator_core.archive_stamp as stamp
+
+        _cli.__getattr__("cc_invoke")
+        with mock.patch.object(stamp, "_call_handoff_archive_transition", return_value=door_result) as door, \
+                mock.patch.object(_cli.cc_invoke, "route_mutation", side_effect=AssertionError("killed op key routed")) as rm:
+            out = fn()
+        self.assertEqual(rm.call_count, 0)
+        return out, door
+
+    def test_success_goes_through_library_door_with_mode_params(self):
+        out, door = self._run(
+            {"exit_code": 0, "moved": True},
+            lambda: _cli._call_transition({"handoff_path": "h.md", "mode": "stamp_shipped"}),
+        )
+        self.assertEqual(out["moved"], True)
+        door.assert_called_once_with("h.md", {"mode": "stamp_shipped"})
+
+    def test_nonzero_exit_code_is_refusal(self):
+        with self.assertRaises(_cli._TransitionRefused):
+            self._run(
+                {"exit_code": 1, "error": "nope"},
+                lambda: _cli._call_transition({"handoff_path": "h.md", "mode": "supersede"}),
+            )
+
+
+class CallTransitionRealDoorTest(unittest.TestCase):
+    """Unmocked: the live library door answers a missing handoff with a refusal."""
+
+    def test_missing_handoff_is_refused_by_the_real_door(self):
+        with self.assertRaises(_cli._TransitionRefused):
+            _cli._call_transition({"handoff_path": "/nonexistent/none.md", "mode": "supersede"})
 
 
 class ClosedTargetSupersedeChokePointTest(unittest.TestCase):
@@ -468,7 +506,7 @@ class ClosedTargetSupersedeChokePointTest(unittest.TestCase):
     predecessor.md, chunk C2): exercises the REAL op handler
     (`coordinator_core.ops.handoff_archive_transition._handler`), not the
     CLI-stub harness above — `_StubHarness` monkeypatches
-    `cc_invoke.route_mutation`, which is precisely the seam that stands in
+    `_call_transition`, which is precisely the seam that stands in
     for the op under test everywhere else in this file, so it cannot assert
     anything about the op's own choke point. This class builds a minimal
     on-disk worktree (`.git` marker + `state/handoffs/`) and calls `_handler`

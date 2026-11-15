@@ -12,7 +12,7 @@ half by monkeypatching `_resolve_repo_root` directly — this suite keeps it
 real so `cmd_abandon`'s own path-containment check runs against a real
 worktree root). `cs_close_handoff` writes in-process (no subprocess — see
 `coordinator_core.archive_stamp._call_handoff_transition`), while the
-CHAIN half's own engine seam (`cc_invoke.route_mutation`)
+CHAIN half's own engine seam (`_call_transition`)
 is monkeypatched exactly as `test_handoff_archive_transition.py`'s
 `_StubHarness` does — this suite asserts `cmd_abandon`'s own composition
 and refusal logic, not the engine behind either call it composes. Marked
@@ -134,7 +134,7 @@ class PredicateTest(unittest.TestCase):
 class _AbandonHarness(unittest.TestCase):
     """Real tmp git repo + a placeholder handoff under state/handoffs/.
     Monkeypatches only the CHAIN half's engine seams
-    (`cc_invoke.route_mutation`) — `cs_close_handoff`
+    (`_call_transition`) — `cs_close_handoff`
     and `_resolve_repo_root` stay real."""
 
     def setUp(self):
@@ -146,19 +146,19 @@ class _AbandonHarness(unittest.TestCase):
         self.handoff_path = self.repo_root / "state" / "handoffs" / "placeholder.md"
         self.handoff_path.write_text(_placeholder_text(), encoding="utf-8")
 
-        self._orig_route_mutation = _cli.cc_invoke.route_mutation
+        self._orig_route_mutation = _cli._call_transition
         self.addCleanup(self._restore)
         self.route_calls: list[dict] = []
         self.route_result: dict = {"moved": True}
 
-        def _stub_route_mutation(op, params, repo_root, legacy_fn):
-            self.route_calls.append({"op": op, "params": params, "repo_root": repo_root})
+        def _stub_call_transition(params):
+            self.route_calls.append({"params": params})
             return self.route_result
 
-        _cli.cc_invoke.route_mutation = _stub_route_mutation
+        _cli._call_transition = _stub_call_transition
 
     def _restore(self):
-        _cli.cc_invoke.route_mutation = self._orig_route_mutation
+        _cli._call_transition = self._orig_route_mutation
 
 
 class AbandonSuccessTest(_AbandonHarness):
@@ -176,7 +176,6 @@ class AbandonSuccessTest(_AbandonHarness):
         self.assertEqual(rc, 0)
         self.assertEqual(len(self.route_calls), 1)
         self.assertEqual(self.route_calls[0]["params"]["mode"], "stamp_shipped")
-        self.assertEqual(self.route_calls[0]["op"], "handoff.archive_transition")
 
         text = self.handoff_path.read_text(encoding="utf-8")
         self.assertIn("deployment_state: closed", text)

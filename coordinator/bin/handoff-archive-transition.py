@@ -23,10 +23,10 @@ Subcommands:
         produces, and this call cannot tell those apart from disk alone; it
         does not claim success on the sweep's behalf (plan chunk C1, AC1/
         AC2). An op-level refusal from handoff.archive_transition (a
-        RouteMutationError) is likewise surfaced to stderr AND now fails this
+        _TransitionRefused) is likewise surfaced to stderr AND now fails this
         subcommand (exit 1) — a refusal is not a confirmed landing, and this
         call must never claim a mutation happened when it didn't. A genuine
-        transport/engine failure (a bare RuntimeError, not a RouteMutationError)
+        transport/engine failure (any exception other than _TransitionRefused)
         also returns 1 for the same reason: silently swallowing it would be
         indistinguishable from success to the caller (see Exit codes below).
         The asymmetry worth noting: a "stamp_shipped" run whose op
@@ -86,7 +86,7 @@ Exit codes:
                an on-disk re-read confirming `deployment_state: shipped`
                with `shipped_in` populated when the envelope's own flag is
                falsy — see `cmd_chain`'s docstring); 1 on a missing
-               predecessor file, an op-level refusal (RouteMutationError), a genuine transport/
+               predecessor file, an op-level refusal (_TransitionRefused), a genuine transport/
                engine failure (a bare RuntimeError), or a falsy envelope
                landing signal whose on-disk re-read also fails to confirm
                the transition landed — none of these is a confirmed
@@ -105,10 +105,10 @@ Exit codes:
                result.
 
 Negative-spec:
-    - Does NOT open any UDS socket or read an auth token — routes through
-      cc_invoke.route()/route_mutation(), which are command-type transports
-      (fresh coordinator_core.invoke subprocess per call), same as every
-      other bin/ CLI in this house style.
+    - Does NOT route through cc_invoke.route_mutation: the `handoff.archive_
+      transition` op key is killed over its bar, so chain/supersede call the
+      op's compute in-process via `archive_stamp._call_handoff_archive_
+      transition` (`_call_transition` below).
     - Does NOT write the `<!-- consumed: YYYY-MM-DD -->` marker — that stays
       `/pickup`'s exclusive responsibility, unaffected by this port.
     - Does NOT stamp `handoff_phase` — that is a separate concern
@@ -186,12 +186,25 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def _no_fallback():
-    raise RuntimeError(
-        f"{PROG}: handoff.archive_transition requires the native seam (no bash "
-        "fallback -- big-bang cutover); re-run coordinator:install or verify "
-        "CLAUDE_KLABAUTER_ROOT"
-    )
+class _TransitionRefused(Exception):
+    """The transition compute returned a non-zero `exit_code`."""
+
+
+def _call_transition(params: dict) -> dict:
+    """In-process call of the archive-transition compute (the op's key is
+    killed; its library door is live). Raises `_TransitionRefused` on a
+    non-zero `exit_code`; any other exception is a transport/engine failure."""
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
+    cc_invoke.require_engine_on_path(__file__)
+    from coordinator_core.archive_stamp import _call_handoff_archive_transition
+
+    rest = {k: v for k, v in params.items() if k != "handoff_path"}
+    result = _call_handoff_archive_transition(params["handoff_path"], rest)
+    if int(result.get("exit_code", 1)) != 0:
+        raise _TransitionRefused(result.get("error") or "unknown error")
+    return result
 
 
 def _resolve_repo_root(handoff_path: str) -> str | None:
@@ -348,10 +361,8 @@ def cmd_chain(
         params["force"] = True
 
     try:
-        result = cc_invoke.route_mutation(
-            "handoff.archive_transition", params, repo_root, _no_fallback
-        )
-    except cc_invoke.RouteMutationError as exc:
+        result = _call_transition(params)
+    except _TransitionRefused as exc:
         print(
             f"chain-archival: handoff.archive_transition (mode=stamp_shipped) refused "
             f"for {handoff_path!r} — {exc}",
@@ -501,10 +512,8 @@ def cmd_supersede(handoff_path: str, continued_into: str | None, exclude: list[s
         params["exclude"] = list(exclude)
 
     try:
-        result = cc_invoke.route_mutation(
-            "handoff.archive_transition", params, repo_root, _no_fallback
-        )
-    except cc_invoke.RouteMutationError as exc:
+        result = _call_transition(params)
+    except _TransitionRefused as exc:
         print(
             f"ERROR: handoff.archive_transition (mode=supersede) failed: {exc}",
             file=sys.stderr,
@@ -514,7 +523,7 @@ def cmd_supersede(handoff_path: str, continued_into: str | None, exclude: list[s
         print(f"ERROR: handoff.archive_transition (mode=supersede) failed: {exc}", file=sys.stderr)
         return 1
 
-    # Never silently succeed with no trace: route_mutation only raises on a
+    # Never silently succeed with no trace: _call_transition only raises on a
     # non-zero op-level exit_code, and this op deliberately returns
     # exit_code:0 even when the live-children guard retains the archival
     # move (retention is never an error — see handoff_archive_transition.py's
@@ -533,7 +542,7 @@ def cmd_supersede(handoff_path: str, continued_into: str | None, exclude: list[s
     superseded = bool(result.get("superseded"))
     if not superseded:
         # Defensive: as of the 2026-07-27 fix the status flip is unconditional
-        # and any failure to apply it already raises RouteMutationError above
+        # and any failure to apply it already raises _TransitionRefused above
         # (op-level exit_code!=0) — reaching exit_code:0 with superseded:False
         # should not happen, but this is exactly the shape the bug we're
         # fixing had, so refuse to report success if it ever does.

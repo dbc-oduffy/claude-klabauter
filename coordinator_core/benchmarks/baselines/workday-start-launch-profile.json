@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "command": "python -m coordinator_core.benchmarks.workday_start_launch_profile",
+  "before": {
+    "ref": "c89663d57a2f1ca4230697ddff26518ee04f1bf7",
+    "measured_on": "2026-11-15",
+    "note": "One run on the live corpus at the base sha (the benchmark's own tree, redrive read-only via a no-op cascade_terminal_sync; sentinels doctor-full and corpus-currency stubbed). Process time and spawns are the bar; wall_ms is attribution only. The redrive axis ran under peer load, so its process_ms is a ceiling of one run, not a floor. Memo figures (226 collector calls, ~156k _read_meta, 14.5s) were measured on a smaller corpus.",
+    "redrive": {
+      "terminal_handoffs": 229,
+      "collector_calls": 1076,
+      "read_meta_calls": 1596784,
+      "process_ms": 86906.2,
+      "spawns": 0,
+      "wall_ms": 90189.8,
+      "scan_incomplete": false,
+      "errors": 0
+    },
+    "sentinels": {
+      "steps": 11,
+      "stubbed": ["sentinel-corpus-currency-probe", "sentinel-doctor-sentinel-full"],
+      "statuses": {"failed": 1, "ran": 10},
+      "process_ms": 1593.8,
+      "spawns": 43,
+      "popen_spawns": 8,
+      "stage_wall_ms": 3704.9,
+      "step_wall_ms_sum": 3699.5
+    }
+  }
+}
