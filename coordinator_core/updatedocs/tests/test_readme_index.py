@@ -114,6 +114,30 @@ def test_plans_wrong_count_is_drift(tmp_path):
     assert section.missing == []
 
 
+_TABLE_PLANS = (
+    "→ [`docs/plans/`](plans/) — plans start elsewhere. Most recent:\n\n"
+    + "".join(f"- [p](plans/2026-01-{i:02d}-p{i}.md)\n" for i in range(4, 9))
+    + "\n| Corpus | Count |\n|---|---|\n| Plans | {count} |\n"
+)
+
+
+def test_plans_count_stated_in_a_table_row_is_read(tmp_path):
+    section = _plans_section(_plans_fixture(tmp_path, _TABLE_PLANS.format(count=8)))
+    assert section.missing == []
+    assert section.dead == []
+
+
+def test_plans_wrong_count_in_a_table_row_is_drift(tmp_path):
+    section = _plans_section(_plans_fixture(tmp_path, _TABLE_PLANS.format(count="1,000")))
+    assert section.dead == ["stated count 1,000 != 8 on disk"]
+
+
+def test_plans_table_without_a_plans_count_row_is_still_missing_count(tmp_path):
+    body = _TABLE_PLANS.format(count=8).replace("| Plans |", "| Research |")
+    section = _plans_section(_plans_fixture(tmp_path, body))
+    assert section.missing == ["stated count"]
+
+
 def test_plans_missing_pointer_is_drift(tmp_path):
     section = _plans_section(
         _plans_fixture(tmp_path, _GOOD_PLANS.replace("[`docs/plans/`](plans/)", "docs/plans/"))
@@ -143,9 +167,50 @@ def test_undated_plan_files_are_never_recent(tmp_path):
 def test_other_corpora_still_require_every_doc_linked(tmp_path):
     root = _plans_fixture(tmp_path, _GOOD_PLANS)
     _write(root / "docs" / "research" / "r1.md", "# R1\n")
+    readme = root / "docs" / "README.md"
+    readme.write_text(readme.read_text(encoding="utf-8") + "\n## Research\n\nNothing yet.\n", encoding="utf-8")
     drift = compute_readme_index_drift(root)
     research = next(s for s in drift.sections if s.section == "Research")
     assert research.missing == ["r1.md"]
+
+
+def test_undeclared_sections_report_no_drift(tmp_path):
+    root = _plans_fixture(tmp_path, _GOOD_PLANS)
+    _write(root / "docs" / "decisions" / "d1.md", "# D1\n")
+    _write(root / "docs" / "problems" / "p1.md", "# P1\n")
+    drift = compute_readme_index_drift(root)
+    for name in ("Decisions", "Problems", "Research"):
+        section = next(s for s in drift.sections if s.section == name)
+        assert section.missing == []
+        assert section.dead == []
+
+
+def test_pointer_style_section_reports_no_drift(tmp_path):
+    root = _plans_fixture(tmp_path, _GOOD_PLANS)
+    _write(root / "docs" / "decisions" / "d1.md", "# D1\n")
+    _write(root / "docs" / "decisions" / "d2.md", "# D2\n")
+    readme = root / "docs" / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8")
+        + "\n## Decisions\n\nSee [`docs/decisions/`](decisions/) for all records.\n",
+        encoding="utf-8",
+    )
+    drift = compute_readme_index_drift(root)
+    decisions = next(s for s in drift.sections if s.section == "Decisions")
+    assert decisions.missing == []
+    assert decisions.dead == []
+
+
+def test_declared_section_without_pointer_or_links_still_drifts(tmp_path):
+    root = _plans_fixture(tmp_path, _GOOD_PLANS)
+    _write(root / "docs" / "decisions" / "d1.md", "# D1\n")
+    readme = root / "docs" / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8") + "\n## Decisions\n\nTBD.\n", encoding="utf-8"
+    )
+    drift = compute_readme_index_drift(root)
+    decisions = next(s for s in drift.sections if s.section == "Decisions")
+    assert decisions.missing == ["d1.md"]
 
 
 def test_repo_root_readme_link_is_not_counted_as_docs_target(tmp_path):
@@ -219,3 +284,35 @@ def test_title_extraction_reads_a_bounded_head_not_the_whole_file(tmp_path):
     path = tmp_path / "huge.md"
     _write(path, "x" * 70_000 + "\n# Late Heading\n")
     assert _extract_title(path) == "huge"
+
+
+def test_table_form_section_counts_every_linked_row_as_indexed(tmp_path):
+    root = tmp_path
+    docs = root / "docs"
+    rows = "".join(f"| [`r{i}.md`](research/r{i}.md) | topic {i} |\n" for i in range(3))
+    for i in range(3):
+        _write(docs / "research" / f"r{i}.md", f"# R{i}\n")
+    _write(docs / "README.md", f"## Research\n\n| Doc | Topic |\n|---|---|\n{rows}")
+    research = next(s for s in compute_readme_index_drift(root).sections if s.section == "Research")
+    assert research.linked == 3
+    assert research.missing == []
+    assert research.dead == []
+
+
+def test_plan_sidecars_are_not_plans_on_disk_or_in_the_index(tmp_path):
+    root = _plans_fixture(tmp_path, _GOOD_PLANS)
+    _write(root / "docs" / "plans" / "2026-01-08-p8.premise-check.md", "no frontmatter\n")
+    _write(root / "docs" / "plans" / "2026-01-09-p9.prior-art-check.md", "no frontmatter\n")
+    section = _plans_section(root)
+    assert section.on_disk == 8
+    assert section.missing == []
+    assert section.dead == []
+
+
+def test_a_sidecar_the_readme_links_is_not_dead_and_a_real_doc_still_is(tmp_path):
+    root = _plans_fixture(
+        tmp_path,
+        _GOOD_PLANS + "\n- [s](plans/2026-01-08-p8.premise-check.md)\n- [g](plans/gone.md)\n",
+    )
+    _write(root / "docs" / "plans" / "2026-01-08-p8.premise-check.md", "x\n")
+    assert _plans_section(root).dead == ["gone.md"]

@@ -7593,6 +7593,22 @@ def _schema_name_for_kind(schemas: dict, kind_value: str) -> str | None:
     return name
 
 
+def _schema_name_for_declared_type(schemas: dict, frontmatter: dict | None) -> str | None:
+    """Schema a declared `type:` names (by schema name or registered kind), else None.
+
+    An unregistered `type:` is ignored: `type` is also an ordinary content field,
+    so only a value naming a schema is a routing declaration.
+    """
+    if frontmatter is None:
+        return None
+    declared = frontmatter.get('type')
+    if not isinstance(declared, str) or not declared:
+        return None
+    if declared in schemas and not declared.startswith('_') and isinstance(schemas[declared], dict):
+        return declared
+    return _schema_name_for_kind(schemas, declared)
+
+
 def match_schema(repo_rel_path: str, frontmatter: dict | None, schemas: dict) -> dict | None:
     """Resolve schema for a file using archive-path-first (handoff-archived
     only), then kind-first, then glob-fallback strategy.
@@ -7689,6 +7705,10 @@ def match_schema(repo_rel_path: str, frontmatter: dict | None, schemas: dict) ->
         schema_name = _schema_name_for_kind(schemas, kind_value)
         if schema_name is not None:
             return {'schemaName': schema_name, 'schema': schemas[schema_name]}
+
+    declared_type = _schema_name_for_declared_type(schemas, frontmatter)
+    if declared_type is not None:
+        return {'schemaName': declared_type, 'schema': schemas[declared_type]}
 
     for entry in schemas['_byGlob']:
         if match_glob(entry['glob'], normalised):
@@ -8522,7 +8542,7 @@ def validate_frontmatter_obj(fm_dict: dict, schema_obj: dict) -> dict:
 _LINT_SIDECAR_RE = re.compile(
     r'\.(prior-art-check|docs-check|coverage-check|plan-coverage-check|'
     r'plan-review-check|schema-migration-audit|review-[^./]+|[^./]*-review|review|'
-    r'phase0|node-map|execution-record)\b'
+    r'phase0|node-map|execution-record|annotations|premise-check)\b'
 )
 
 

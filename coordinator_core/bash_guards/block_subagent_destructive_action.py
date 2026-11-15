@@ -4270,6 +4270,7 @@ def build_record(
     *,
     ready: Optional[str] = None,
     adapt: Optional[tuple] = None,
+    escalate: bool = True,
 ):
     """Build this family's AlternativeRecord: never an Override, always an
     EscalationRoute (the subagent's only way out), plus an optional pasteable
@@ -4289,7 +4290,8 @@ def build_record(
         members.append(ReadyCommand(text=ready))
     if adapt:
         members.append(AdaptableOffer(template=adapt[0], what_to_adapt=adapt[1]))
-    members.append(EscalationRoute(report_what=report_what, authorize_what=authorize_what))
+    if escalate:
+        members.append(EscalationRoute(report_what=report_what, authorize_what=authorize_what))
     return AlternativeRecord(
         verdict_kind=verdict_kind,
         summary=summary,
@@ -4470,6 +4472,21 @@ def _rm_operands_all(cmd: str, operand_ok) -> bool:
         if not operands or not all(operand_ok(o) for o in operands):
             return False
     return seen_rm
+
+
+_VAR_COMMAND_POSITION_KIND = "unresolved $VAR/${VAR}/$(...) in command position"
+_INLINE_LAUNCHER_TEMPLATE = (
+    '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/<cli>" <args>'
+)
+#: A variable used as a directory in command position (`"$B/coordinator-invoke"`): the hoisted
+#: launcher shape, whose whole fix is the inline expansion. A bare `"$X"` names no directory and
+#: keeps its route to the EM.
+_HOISTED_LAUNCHER_RE = re.compile(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/[A-Za-z0-9_.-]+")
+
+
+def _is_hoisted_launcher(kind: str, cmd: str) -> bool:
+    """True for an unresolved-$VAR deny whose variable is a launcher directory."""
+    return _VAR_COMMAND_POSITION_KIND in kind and bool(_HOISTED_LAUNCHER_RE.search(cmd or ""))
 
 
 def _build_reason(
@@ -4742,6 +4759,14 @@ def _build_reason(
             "subagent that can run Python can still remove files directly, unseen by\n"
             "this guard. Fix forward, or surface a genuine need to the EM."
         )
+    if _VAR_COMMAND_POSITION_KIND in deny_kind:
+        return (
+            f"BLOCKED: {deny_kind}.\n\n"
+            f"  Command:  {cmd_safe}\n\n"
+            "Instead: inline the launcher at the call site, "
+            f"`{_INLINE_LAUNCHER_TEMPLATE}`, "
+            "no variable holding the path."
+        )
     return (
         "BLOCKED: git/rm/chmod -R at the shell surface, not a capability\n"
         "boundary (an interpreter reaches git).\n"
@@ -4769,6 +4794,9 @@ def _build_record(
             adapt = ("mv <A> <B>", "<A> and <B> to your own source and destination")
     elif deny_kind == _GIT_MERGE_DENY_KIND:
         adapt = (_MERGE_STAGE_TEMPLATE, "<repo-root>, <ref> and <why> to your own repo, branch and reason")
+    var_launcher = _is_hoisted_launcher(deny_kind, cmd)
+    if var_launcher:
+        adapt = (_INLINE_LAUNCHER_TEMPLATE, "<cli> and <args> to your own launcher and arguments")
     return build_record(
         _GUARD_NAME,
         "deny",
@@ -4777,6 +4805,7 @@ def _build_record(
         "it",
         ready=ready,
         adapt=adapt,
+        escalate=not var_launcher,
     )
 
 
@@ -5696,12 +5725,19 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if deny_kind.startswith("indirection: "):
         wrapper_shape = deny_kind[len("indirection: "):]
         if _is_opaque_indirection(wrapper_shape):
+            var_launcher = _is_hoisted_launcher(wrapper_shape, cmd)
             advisory_verdict = build_record(
                 _GUARD_NAME,
                 "advisory",
                 _indirection_advisory_summary(wrapper_shape),
                 "it to the EM if genuinely destructive",
                 "the wrapped command",
+                adapt=(
+                    (_INLINE_LAUNCHER_TEMPLATE, "<cli> and <args> to your own launcher and arguments")
+                    if var_launcher
+                    else None
+                ),
+                escalate=not var_launcher,
             )
             if kind_unresolved:
                 emit_kind_resolution_failure_signal(

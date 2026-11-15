@@ -372,6 +372,15 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/ask_spool_withdraw.py",
         ("_handler",),
     ),
+    # Spawn-free on landing (empty function-granular reachable set), 2026-11-14.
+    "skill.preconditions": (
+        "coordinator_core/ops/skill_preconditions.py",
+        ("_skill_preconditions",),
+    ),
+    "frontmatter.remint": (
+        "coordinator_core/ops/frontmatter_remint/__init__.py",
+        ("_handler",),
+    ),
     # Spawn-free on landing (empty function-granular reachable set), 2026-11-13.
     "code_intel.freshness": (
         "coordinator_core/ops/code_intel_freshness.py",
@@ -7519,7 +7528,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # Measured 2026-11-10: a detached spawn is 2.3ms wall max (parent never waits); a git read
     # 123.9ms wall max, parent CPU below the 15.6ms clock tick. The pin is a static ceiling; the
     # detached legs add no blocking time, so the op stays under the 500ms bar.
-    "engine_ask.submit": 5,
+    # 5 -> 6: 8a86c65476 (fe18ae) routes a sandboxed caller through
+    # warm.sandboxed_spawn.forward_spawn_to_warm; the static walk reaches the warm client's
+    # server-start site, which _install_no_spawn_seam blocks at runtime (Windows restricted token only).
+    "engine_ask.submit": 6,
     # Enrolled 2026-08-30 (second reconciliation pass): both entered the live
     # registry mid-close from concurrent peer work, measured at their live
     # reachable-site counts.
@@ -7690,7 +7702,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # composition-gate.md, C2) -- the op is now enrolled in _BUDGETED_ENTRYPOINTS with an
     # execution-backed _LEGITIMIZED_SITES entry per reachable site; a COUNT-tier pin beside
     # an enrolment is dead weight (AC20c).
-    "workflow.fire": 5,
+    # 5 -> 6: 8a86c65476 (fe18ae) routes a sandboxed caller through
+    # warm.sandboxed_spawn.forward_spawn_to_warm; the static walk reaches the warm client's
+    # server-start site, which _install_no_spawn_seam blocks at runtime (Windows restricted token only).
+    "workflow.fire": 6,
     "machine.hibernate": 4,
     # 4 -> 1, 2026-10-12: build_cache resolves its git facts once through `_git`; the
     # `find` argv, the `is_inside_work_tree` probe and the per-fact rev-parse spawns are gone.

@@ -252,6 +252,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "distill.curate_clusters":               "none",
     "distill.workflow_input":                "none",
     "distill.launch_args":                   "none",
+    # skill.preconditions takes repo_root as a param, as distill.launch_args does.
+    "skill.preconditions":                   "none",
     # workflow.scaffold — fleet-generic, COMPUTE_ONLY op: pure generation
     # from caller-supplied name/description/phases/pattern params, no repo
     # state accessed at all (not even a path read) — the handler ignores
@@ -465,6 +467,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "ceremony.update_docs_bookkeeping":        "common_dir",
     "ceremony.plan_wiki_map":                  "common_dir",
     "ceremony.wiki_candidates":                "common_dir",
+    "frontmatter.remint":                      "common_dir",
     "deliverable.cascade_terminal":             "common_dir",
     "deliverable.cascade_retract":              "common_dir",
     "deliverable.cascade_backstop_sweep":       "common_dir",

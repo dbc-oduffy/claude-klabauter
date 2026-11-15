@@ -59,6 +59,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "op_census.breaches":                     "coordinator_core.ops.op_budget_breaches",
     "doctor.recover_kept_blobs":              "coordinator_core.ops.doctor_kept_blobs",
     "freshness.commit_delta":                 "coordinator_core.ops.freshness_commit_delta",
+    "skill.preconditions":                    "coordinator_core.ops.skill_preconditions",
     "code_intel.freshness":                   "coordinator_core.ops.code_intel_freshness",
     "code_intel.workstate_index":             "coordinator_core.ops.code_intel_workstate_index",
     # coordinator_core.hooks registers every hooks.* op in a single module
@@ -221,6 +222,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "handoff.repair_deployment_state":        "coordinator_core.ops.handoff_stamp",
     "handoff.stamp_phase":                    "coordinator_core.ops.handoff_phase_stamp",
     "handoff.backfill_claim_stamp":           "coordinator_core.ops.handoff_backfill_claim_stamp",
+    "frontmatter.remint":                     "coordinator_core.ops.frontmatter_remint",
     "handoff.repoint_origin":                 "coordinator_core.ops.handoff_repoint_origin",
     "handoff.human_gate_clear":               "coordinator_core.ops.handoff_human_gate_clear",
     "session.landing_hold":                   "coordinator_core.ops.session_landing_hold",

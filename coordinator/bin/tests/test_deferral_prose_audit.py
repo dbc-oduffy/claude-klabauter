@@ -193,25 +193,37 @@ def test_launcher_found_in_settings_home(tmp_path, monkeypatch):
                                              ("## Distill pass", True), ("## Tasks and follow-ups", False),
                                              ("## Taskforce", False)])
 def test_section_skip_is_not_a_prefix_match(heading, skipped):
-    hits = audit.find_hits(f"{heading}\nlater item\n")
+    hits = audit.find_hits(f"{heading}\ndeferred to a later plan\n")
     assert (not hits) is skipped
 
 
 def test_tilde_fence_skipped():
-    assert not audit.find_hits("~~~\nlater in a tilde fence\n~~~\n")
+    assert not audit.find_hits("~~~\ndeferred to a later plan\n~~~\n")
 
 
 def test_fence_of_other_kind_inside_fence_does_not_close_it():
-    assert not audit.find_hits("~~~\n```\nlater inside nested fence\n~~~\n")
-    assert audit.find_hits("~~~\n```\n~~~\nlater after the fence\n")
+    assert not audit.find_hits("~~~\n```\ndeferred to a later plan\n~~~\n")
+    assert audit.find_hits("~~~\n```\n~~~\ndeferred to a later plan\n")
 
 
-@pytest.mark.parametrize("word", ["deferred", "Follow-up", "followups", "follow up", "later"])
-def test_keyword_families(word):
-    assert audit.KEYWORDS.search(f"x {word} y")
+@pytest.mark.parametrize("line", [
+    "x deferred to plan y", "we defer the rest until C3", "Deferring it into a later plan",
+    "pushed to the next wave", "push this out to a later session",
+    "Follow-up plan y", "followups ask", "follow up phase", "as a follow-up", "in a Follow-up.",
+    "moved to a later wave", "for later phase work",
+    "deferred to later",
+])
+def test_keyword_families(line):
+    assert audit.KEYWORDS.search(line)
 
 
-@pytest.mark.parametrize("line", ["a delayed plan", "alternately", "preserve this row"])
+@pytest.mark.parametrize("line", [
+    "a delayed plan", "alternately", "preserve this row",
+    "This row is deferred.", "status: deferred", "do it later", "later we measure",
+    "a follow-up call", "as a follow-up call", "the follow-up question", "pushed the button",
+    "Follow-up", "see the follow-ups below", "the later run's halt commit", "a later row governs",
+    "this defers to it", "pushed to a public remote",
+])
 def test_non_keywords(line):
     assert not audit.KEYWORDS.search(line)
 

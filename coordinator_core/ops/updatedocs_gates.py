@@ -99,6 +99,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import re
 import shutil
@@ -111,6 +112,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from coordinator_core.external_tool_budget import bound_for
+from coordinator_core.frontmatter.schema_validate import _lint_is_sidecar_file
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -195,6 +197,56 @@ def rollup(results: list[GateResult]) -> dict[str, Any]:
         "clean": clean,
         "gate_count": len(results),
     }
+
+
+#: Ceiling on the serialized default reply, in bytes. The full per-file lists stay
+#: reachable through `params["full_detail"]` or a single-gate `gates` subset.
+_REPLY_BYTE_CAP = 32_768
+#: Items kept per list/dict in a bounded detail; the dropped remainder is counted in `<key>_count`.
+_DETAIL_SAMPLE_CAP = 10
+#: Per-gate summary length kept in the bounded reply; `full_detail` leaves summaries uncut.
+_SUMMARY_CHARS_CAP = 400
+
+
+def _bound_detail(value: Any) -> Any:
+    """Copy of a gate detail with every list/dict longer than `_DETAIL_SAMPLE_CAP`
+    cut to a sample and its full length recorded beside it as `<key>_count`."""
+    if isinstance(value, list):
+        return [_bound_detail(v) for v in value[:_DETAIL_SAMPLE_CAP]]
+    if not isinstance(value, dict):
+        return value
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        if isinstance(item, dict) and len(item) > _DETAIL_SAMPLE_CAP:
+            out[key] = {k: _bound_detail(v) for k, v in list(item.items())[:_DETAIL_SAMPLE_CAP]}
+            out[f"{key}_count"] = len(item)
+        elif isinstance(item, list) and len(item) > _DETAIL_SAMPLE_CAP:
+            out[key] = _bound_detail(item)
+            out[f"{key}_count"] = len(item)
+        else:
+            out[key] = _bound_detail(item)
+    return out
+
+
+def _bounded_reply(results: list[GateResult]) -> dict[str, Any]:
+    """The default reply: per-gate verdict + counts + a capped sample, never more
+    than `_REPLY_BYTE_CAP` serialized bytes. Over the cap, the largest details are
+    elided whole (`detail: {"elided": true}`) until the reply fits."""
+    gates = []
+    for r in results:
+        d = r.to_dict()
+        d["detail"] = _bound_detail(d["detail"])
+        if len(d["summary"]) > _SUMMARY_CHARS_CAP:
+            d["summary"] = d["summary"][: _SUMMARY_CHARS_CAP - 1] + "\u2026"
+            d["summary_truncated"] = True
+        gates.append(d)
+    reply = {"gates": gates, "rollup": rollup(results), "bounded": True}
+    while len(json.dumps(reply)) > _REPLY_BYTE_CAP:
+        sized = [(len(json.dumps(g["detail"])), i) for i, g in enumerate(gates) if g["detail"] != {"elided": True}]
+        if not sized:
+            break
+        gates[max(sized)[1]]["detail"] = {"elided": True}
+    return reply
 
 
 # log-size ceiling for the JSON-RPC
@@ -367,12 +419,30 @@ def _run(
     caller. See
     state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
     """
+    global _last_run_failure
+    proc, _last_run_failure = _run_reporting(cli_path, args, timeout=timeout)
+    return proc
+
+
+#: Reason the most recent `_run` produced no process; read by a gate right after `_run` returns None.
+_last_run_failure: Optional[str] = None
+
+
+def _run_reporting(
+    cli_path: Path,
+    args: list[str],
+    *,
+    timeout: Optional[float] = None,
+) -> tuple[Optional[subprocess.CompletedProcess], Optional[str]]:
+    """`_run` plus the reason it produced no process: `(proc, None)` on completion,
+    else `(None, "timed out after <N>s" | "spawn error: <OSError>" | "no launcher resolved")`.
+    Never raises."""
     if cli_path.suffix == ".py":
         argv = [sys.executable, str(cli_path), *args]
     elif sys.platform == "win32":
         resolved = _windows_exec_argv(cli_path, args)
         if resolved is None:
-            return None
+            return None, "no launcher resolved"
         argv = resolved
     else:
         argv = [str(cli_path), *args]
@@ -386,7 +456,7 @@ def _run(
         _DEFAULT_CLI_TIMEOUT_SECONDS if timeout is None else timeout,
     )
     try:
-        return subprocess.run(
+        proc = subprocess.run(
             argv,
             capture_output=True,
             text=True,
@@ -394,8 +464,11 @@ def _run(
             timeout=effective_timeout,
             **no_console_creationflags(),
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    except subprocess.TimeoutExpired:
+        return None, f"timed out after {effective_timeout:g}s"
+    except OSError as exc:
+        return None, f"spawn error: {exc}"
+    return proc, None
 
 
 def _run_in_process(fn: Callable[[], int]) -> subprocess.CompletedProcess:
@@ -510,8 +583,9 @@ def _gate_repomap(repo_root: Path, settings_home: Path, overrides: dict) -> Gate
         )
 
     proc = _run(generate_repomap_cli, [])
+    failure = _last_run_failure
     if proc is None:
-        return GateResult("repomap-gate", GateVerdict.UNAVAILABLE, "generate-repomap.py could not be spawned")
+        return GateResult("repomap-gate", GateVerdict.UNAVAILABLE, f"generate-repomap.py produced no result: {failure}" if failure else "generate-repomap.py could not be spawned")
     if proc.returncode != 0:
         return GateResult(
             "repomap-gate",
@@ -950,22 +1024,27 @@ def _prune_gate(
             detail={"missing_path": str(exc.missing_path)},
         )
 
+    # A sidecar (`<plan>.premise-check.md`) carries no plan status, so the predicate
+    # would file it as indeterminate; it is not a candidate of its own corpus.
+    prunable = [p for p in result.prunable if not _lint_is_sidecar_file(p)]
+    indeterminate = [p for p in result.indeterminate if not _lint_is_sidecar_file(p)]
+    retained = [p for p in result.retained if not _lint_is_sidecar_file(p)]
     detail = {
-        "prunable": list(result.prunable),
-        "indeterminate": list(result.indeterminate),
-        "retained_count": len(result.retained),
+        "prunable": prunable,
+        "indeterminate": indeterminate,
+        "retained_count": len(retained),
     }
-    if not result.prunable and not result.indeterminate:
+    if not prunable and not indeterminate:
         return GateResult(
             gate_id,
             GateVerdict.CLEAN,
-            f"no candidate is prune-eligible ({len(result.retained)} retained)",
+            f"no candidate is prune-eligible ({len(retained)} retained)",
             detail=detail,
         )
     return GateResult(
         gate_id,
         GateVerdict.FINDING,
-        f"{len(result.prunable)} prune candidate(s), {len(result.indeterminate)} indeterminate",
+        f"{len(prunable)} prune candidate(s), {len(indeterminate)} indeterminate",
         severity=Severity.INFORMATIONAL,
         detail=detail,
     )
@@ -1053,6 +1132,13 @@ def _updatedocs_gates(params: dict, repo_root: Optional[Path] = None) -> dict:
                          paths, injected states) for test/diagnostic use,
                          keyed by gate_id — mirrors update-docs-probes.py's
                          existing --*-cli override flags.
+        full_detail    (bool) — default false: each gate's detail is a bounded
+                         sample with `<key>_count` totals and the whole reply
+                         stays under `_REPLY_BYTE_CAP`. True returns every list.
+        blocked_by     (list[str]) — handoff paths (repo-relative or absolute);
+                         the reply gains `blocked_by`: {path: reply} from ONE
+                         corpus pass of `blocked_by_dependents_many`, each reply
+                         carrying a tri-state `state`.
     """
     # Injected `repo_root` is the git COMMON DIR (op_scopes: "common_dir"), and every
     # gate reads worktree-rooted corpora — see the module docstring's negative spec.
@@ -1078,7 +1164,21 @@ def _updatedocs_gates(params: dict, repo_root: Optional[Path] = None) -> dict:
     for gate_id in requested:
         results.append(_run_gate(gate_id, root, settings_home, overrides_by_gate.get(gate_id, {})))
 
-    return {
-        "gates": [r.to_dict() for r in results],
-        "rollup": rollup(results),
-    }
+    reply = (
+        {"gates": [r.to_dict() for r in results], "rollup": rollup(results), "bounded": False}
+        if params.get("full_detail")
+        else _bounded_reply(results)
+    )
+    candidates = params.get("blocked_by")
+    if candidates:
+        reply["blocked_by"] = _blocked_by_batch(root, candidates)
+    return reply
+
+
+def _blocked_by_batch(root: Path, candidates: list[str]) -> dict[str, dict]:
+    """One `blocked_by_dependents_many` pass over `candidates`, keyed by the path as given."""
+    from coordinator_core.ops.handoff_children import blocked_by_dependents_many
+
+    keyed = {c: (Path(c) if Path(c).is_absolute() else root / c) for c in candidates}
+    replies = blocked_by_dependents_many(list(keyed.values()), root)
+    return {c: replies[str(p)] for c, p in keyed.items()}

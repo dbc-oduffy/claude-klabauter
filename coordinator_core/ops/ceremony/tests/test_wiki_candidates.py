@@ -287,3 +287,39 @@ def test_repo_root_param_queries_another_repo_and_rejects_a_missing_one(repo, tm
         wc._ceremony_wiki_candidates({"repo_root": str(tmp_path / "missing")}, repo_root=None)
     with pytest.raises(ValueError):
         wc._ceremony_wiki_candidates({}, repo_root=None)
+
+
+def test_empty_reason_ledger_missing(repo):
+    out = _run(repo)
+    assert out["pages"] == [] and out["empty_reason"] == "ledger_missing"
+
+
+def test_empty_reason_ledger_empty_in_window(repo):
+    _wiki(repo, "alpha", "src/a.py")
+    text = "---\nstatus: landed\n---\n\nx\n"
+    old = _NOW - timedelta(days=30)
+    _row(repo, "docs/plans/2026-11/old.md", text, "a" * 40, writes=["src/a.py"], at=old)
+    out = _run(repo)
+    assert out["pages"] == [] and out["empty_reason"] == "ledger_empty_in_window"
+
+
+def test_empty_reason_no_citing_page(repo):
+    _wiki(repo, "alpha", "src/a.py")
+    _plan(repo, "other", writes=("src/zzz.py",))
+    out = _run(repo)
+    assert out["pages"] == [] and out["empty_reason"] == "no_citing_page"
+
+
+def test_empty_reason_hub_cut(repo):
+    for i in range(wc.HUB_CITING_PAGES + 1):
+        _wiki(repo, f"hub{i}", "src/hub.py")
+    _plan(repo, "ph", writes=("src/hub.py",))
+    out = _run(repo)
+    assert out["pages"] == [] and out["empty_reason"] == "hub_cut"
+
+
+def test_empty_reason_is_null_when_pages_non_empty(repo):
+    _wiki(repo, "alpha", "src/a.py")
+    _plan(repo, "p1")
+    out = _run(repo)
+    assert out["pages"] and out["empty_reason"] is None

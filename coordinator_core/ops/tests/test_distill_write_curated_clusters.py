@@ -74,3 +74,53 @@ def test_refuses_degraded_curation_and_writes_nothing(tmp_path) -> None:
     with pytest.raises(ValueError):
         _handler({"tag_counts": {}, "output_path": "state/scratch/x.json"}, repo_root=_common_dir(tmp_path))
     assert not (tmp_path / "state" / "scratch" / "x.json").exists()
+
+
+def _write_a(tmp_path, run_id, body):
+    d = tmp_path / "state" / "scratch" / "artifact-distillation" / run_id
+    d.mkdir(parents=True)
+    (d / "invocation-a.json").write_text(json.dumps(body), encoding="utf-8")
+
+
+def test_derives_tag_counts_and_threshold_from_run_dir_invocation_a(tmp_path) -> None:
+    _write_a(tmp_path, "r5", {"tag_counts": _COUNTS, "recommended_keep_threshold": 1})
+    reply = _handler({"run_id": "r5"}, repo_root=_common_dir(tmp_path))
+    assert reply["curated_verdict_count"] == 3
+    assert reply["threshold_applied"] == 1 and reply["threshold_auto"] is False
+    assert (tmp_path / reply["output_path"]).is_file()
+
+
+def test_explicit_keep_threshold_beats_recommended(tmp_path) -> None:
+    _write_a(tmp_path, "r5", {"tag_counts": _COUNTS, "recommended_keep_threshold": 1})
+    reply = _handler({"run_id": "r5", "keep_threshold": 3}, repo_root=_common_dir(tmp_path))
+    assert reply["threshold_applied"] == 3
+
+
+def test_derives_from_inline_invocation_a_result(tmp_path) -> None:
+    reply = _handler(
+        {"run_id": "r6", "invocation_a": {"tag_counts": _COUNTS, "run_id": "r6"}},
+        repo_root=_common_dir(tmp_path),
+    )
+    assert reply["curated_verdict_count"] == 3
+
+
+def test_derives_from_invocation_a_file_and_confines_it(tmp_path) -> None:
+    _write_a(tmp_path, "r7", {"tag_counts": _COUNTS})
+    rel = "state/scratch/artifact-distillation/r7/invocation-a.json"
+    common = _common_dir(tmp_path)
+    reply = _handler({"run_id": "r8", "invocation_a_file": rel}, repo_root=common)
+    assert reply["curated_verdict_count"] == 3
+    with pytest.raises(ValueError):
+        _handler({"run_id": "r8", "invocation_a_file": "../x.json"}, repo_root=common)
+
+
+def test_caller_tag_counts_win_over_invocation_a(tmp_path) -> None:
+    _write_a(tmp_path, "r5", {"tag_counts": {"only-one": 4}})
+    reply = _handler({"run_id": "r5", "tag_counts": _COUNTS}, repo_root=_common_dir(tmp_path))
+    assert reply["curated_verdict_count"] == 3
+
+
+def test_run_id_without_invocation_a_still_refuses_and_writes_nothing(tmp_path) -> None:
+    with pytest.raises(ValueError, match="tag_counts"):
+        _handler({"run_id": "r5"}, repo_root=_common_dir(tmp_path))
+    assert not (tmp_path / "state").exists()

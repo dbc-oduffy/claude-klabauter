@@ -51,6 +51,11 @@ SOURCE_ACK = "ack_head"
 SOURCE_SINCE = "since-param"
 SOURCE_DEFAULT = "default-7d"
 
+REASON_LEDGER_MISSING = "ledger_missing"
+REASON_LEDGER_EMPTY = "ledger_empty_in_window"
+REASON_NO_CITING_PAGE = "no_citing_page"
+REASON_HUB_CUT = "hub_cut"
+
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 _EPOCH = "1970-01-01"
 
@@ -156,8 +161,18 @@ def _citing_pages(root: Path, paths: List[str]) -> Dict[str, List[str]]:
     return cites
 
 
+def _empty_reason(root: Path, chosen: List[Dict[str, Any]], had_citing: bool) -> str:
+    """Why `pages` is empty: the first stage of the pipeline that left nothing."""
+    if not chosen:
+        if not (root / _ledger.LEDGER).exists():
+            return REASON_LEDGER_MISSING
+        return REASON_LEDGER_EMPTY
+    return REASON_HUB_CUT if had_citing else REASON_NO_CITING_PAGE
+
+
 def wiki_candidates(root: Path, since: Optional[str] = None) -> Dict[str, Any]:
-    """The contract reply for the repo at `root`: window, ranked pages, preview total, truncation."""
+    """The contract reply for the repo at `root`: window, ranked pages, preview total, truncation,
+    and `empty_reason` (null when pages is non-empty)."""
     rows, base, source = _window(root, since)
     latest: Dict[str, Dict[str, Any]] = {}
     for row in rows:
@@ -175,6 +190,7 @@ def wiki_candidates(root: Path, since: Optional[str] = None) -> Dict[str, Any]:
         })
 
     cited = _citing_pages(root, sorted({p for pl in plans for p in pl["writes"]}))
+    had_citing = bool(cited)
     fan_in: Dict[str, int] = {}
     for hit in cited.values():
         for p in hit:
@@ -219,6 +235,7 @@ def wiki_candidates(root: Path, since: Optional[str] = None) -> Dict[str, Any]:
         "pages": kept,
         "preview_chars_total": total,
         "truncated": {"pages": len(cut_pages) + len(emptied), "plans": cut_plans},
+        "empty_reason": None if kept else _empty_reason(root, chosen, had_citing),
     }
 
 
@@ -229,7 +246,7 @@ def _ceremony_wiki_candidates(params: dict, repo_root: Optional[Path] = None) ->
     Params: `since` (ISO date/datetime, or a ledger `completing_sha`; overrides the cached
     `ack_head`), `repo_root` (repo to query; default the invoking repo's main worktree). Returns
     {schema, schema_version, window{since, head, source}, pages[{page, plans[{path, commit_sha,
-    tshirt, preview}]}], preview_chars_total, truncated{pages, plans}}. Read-only: writes no file
+    tshirt, preview}]}], preview_chars_total, truncated{pages, plans}, empty_reason}. Read-only: writes no file
     and never advances the worklist `ack_head`. Caps: PREVIEW_CHARS, PAGES_CAP, PLANS_CAP.
     """
     p = params or {}

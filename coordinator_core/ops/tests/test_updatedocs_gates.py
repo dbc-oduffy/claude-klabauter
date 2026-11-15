@@ -30,6 +30,7 @@ Spec backlink: cross-repo/inbox/2026-08-06-coordinator-content-repo-em-updatedoc
 from __future__ import annotations
 
 import asyncio
+import json
 import stat
 import subprocess
 import sys
@@ -957,3 +958,173 @@ def test_repomap_gate_default_route_nonzero_check_rag_state_reads_unknown(tmp_pa
     result = udg._gate_repomap(tmp_path, tmp_path, {"generate_repomap_cli": str(tmp_path / "absent.py")})
     assert result.verdict == udg.GateVerdict.UNAVAILABLE
     assert "generate-repomap.py unresolvable" in result.summary
+
+
+# ---------------------------------------------------------------------------
+# repomap-gate names why the generator produced no result.
+# ---------------------------------------------------------------------------
+
+
+def _repomap_gate(tmp_path, script):
+    cli = tmp_path / "generate-repomap.py"
+    cli.write_text(script, encoding="utf-8")
+    return udg._gate_repomap(tmp_path, tmp_path, {"rag_state": "absent", "generate_repomap_cli": str(cli)})
+
+
+def test_repomap_gate_timeout_names_timeout_and_ceiling(tmp_path, monkeypatch):
+    monkeypatch.setattr(udg, "_DEFAULT_CLI_TIMEOUT_SECONDS", 0.25)
+    result = _repomap_gate(tmp_path, "import time\ntime.sleep(5)\n")
+    assert result.verdict == udg.GateVerdict.UNAVAILABLE
+    assert "timed out after 0.25s" in result.summary
+    assert "could not be spawned" not in result.summary
+
+
+def test_repomap_gate_spawn_oserror_names_spawn_error(tmp_path, monkeypatch):
+    def _boom(*args, **kwargs):
+        raise OSError("exec format error")
+
+    monkeypatch.setattr(udg.subprocess, "run", _boom)
+    result = _repomap_gate(tmp_path, "print('x')\n")
+    assert result.verdict == udg.GateVerdict.UNAVAILABLE
+    assert "spawn error: exec format error" in result.summary
+    assert "timed out" not in result.summary
+
+
+def test_repomap_gate_nonzero_exit_stays_a_finding(tmp_path):
+    result = _repomap_gate(tmp_path, "import sys\nsys.exit(3)\n")
+    assert result.verdict == udg.GateVerdict.FINDING
+    assert "repomap regeneration failed (exit 3)" in result.summary
+
+
+def test_run_reporting_distinguishes_timeout_from_spawn_error(tmp_path, monkeypatch):
+    cli = tmp_path / "hangs.py"
+    cli.write_text("import time\ntime.sleep(5)\n", encoding="utf-8")
+    proc, why = udg._run_reporting(cli, [], timeout=0.05)
+    assert proc is None and why.startswith("timed out after")
+    monkeypatch.setattr(udg.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
+    proc, why = udg._run_reporting(cli, [])
+    assert proc is None and why == "spawn error: nope"
+
+
+# ---------------------------------------------------------------------------
+# Bounded default reply; plan sidecars are not plans.
+# ---------------------------------------------------------------------------
+
+
+def _big_decisions_repo(tmp_path, n=400):
+    docs = tmp_path / "docs"
+    (docs / "decisions").mkdir(parents=True)
+    for i in range(n):
+        (docs / "decisions" / f"DR-{i:04d}-{'x' * 40}.md").write_text(f"# D{i}\n", encoding="utf-8")
+    (docs / "README.md").write_text("## Decisions\n\nTBD.\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_default_reply_is_a_bounded_summary_with_counts(tmp_path):
+    root = _big_decisions_repo(tmp_path)
+    params = {"repo_root": str(root), "gates": ["docs-readme-index-drift"]}
+    full = udg._updatedocs_gates({**params, "full_detail": True})
+    reply = udg._updatedocs_gates(params)
+    assert len(json.dumps(full)) > udg._REPLY_BYTE_CAP
+    assert len(json.dumps(reply)) <= udg._REPLY_BYTE_CAP
+    assert reply["bounded"] is True and full["bounded"] is False
+    gate = reply["gates"][0]
+    assert gate["verdict"] == "finding"
+    section = gate["detail"]["sections"][0]
+    assert section["missing_count"] == 400
+    assert len(section["missing"]) == udg._DETAIL_SAMPLE_CAP
+    assert len(full["gates"][0]["detail"]["sections"][0]["missing"]) == 400
+    assert reply["rollup"] == full["rollup"]
+
+
+def test_reply_over_the_cap_elides_the_largest_detail_not_the_verdict(tmp_path, monkeypatch):
+    root = _big_decisions_repo(tmp_path)
+    monkeypatch.setattr(udg, "_REPLY_BYTE_CAP", 1500)
+    reply = udg._updatedocs_gates({"repo_root": str(root), "gates": ["docs-readme-index-drift"]})
+    gate = reply["gates"][0]
+    assert gate["detail"] == {"elided": True}
+    assert gate["verdict"] == "finding" and gate["summary"]
+
+
+def test_a_cut_summary_is_marked_and_a_short_one_is_not(monkeypatch):
+    long_text, short_text = "x" * 900, "short"
+    results = [
+        udg.GateResult("a-gate", udg.GateVerdict.CLEAN, long_text),
+        udg.GateResult("b-gate", udg.GateVerdict.CLEAN, short_text),
+    ]
+    a, b = udg._bounded_reply(results)["gates"]
+    assert a["summary_truncated"] is True
+    assert len(a["summary"]) == udg._SUMMARY_CHARS_CAP and a["summary"].endswith("\u2026")
+    assert b["summary"] == short_text and "summary_truncated" not in b
+
+
+def test_short_detail_lists_pass_through_unbounded(tmp_path):
+    docs = tmp_path / "docs"
+    (docs / "decisions").mkdir(parents=True)
+    for i in range(3):
+        (docs / "decisions" / f"d{i}.md").write_text("# D\n", encoding="utf-8")
+    (docs / "README.md").write_text("## Decisions\n\nTBD.\n", encoding="utf-8")
+    reply = udg._updatedocs_gates({"repo_root": str(tmp_path), "gates": ["docs-readme-index-drift"]})
+    section = reply["gates"][0]["detail"]["sections"][0]
+    assert section["missing"] == ["d0.md", "d1.md", "d2.md"]
+    assert "missing_count" not in section
+
+
+def test_plans_prune_gate_never_lints_a_plan_sidecar_as_a_plan(tmp_path):
+    plans = tmp_path / "docs" / "plans"
+    plans.mkdir(parents=True)
+    (plans / "2026-01-01-a.md").write_text("---\nstatus: executing\n---\n# A\n", encoding="utf-8")
+    (plans / "2026-01-01-a.premise-check.md").write_text("no frontmatter\n", encoding="utf-8")
+    result = udg._gate_plans_prune_candidates(tmp_path, tmp_path, {})
+    assert result.verdict == udg.GateVerdict.CLEAN
+    assert result.detail["indeterminate"] == []
+    assert result.detail["retained_count"] == 1
+
+
+def test_plans_prune_gate_still_reports_a_real_plan_without_status(tmp_path):
+    plans = tmp_path / "docs" / "plans"
+    plans.mkdir(parents=True)
+    (plans / "2026-01-01-b.md").write_text("no frontmatter\n", encoding="utf-8")
+    result = udg._gate_plans_prune_candidates(tmp_path, tmp_path, {})
+    assert result.verdict == udg.GateVerdict.FINDING
+    assert result.detail["indeterminate"] == ["docs/plans/2026-01-01-b.md"]
+
+
+def _handoff(path: Path, **fm) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "".join(f"{k}: {v}\n" for k, v in fm.items())
+    path.write_text(f"---\n{body}---\nbody\n")
+
+
+def test_blocked_by_batch_answers_every_candidate_in_one_reply(tmp_path):
+    (tmp_path / "CLAUDE.md").write_text("x")
+    _handoff(tmp_path / "archive/handoffs/a.md", stub_id="stub-a", kind="session-handoff", status="consumed")
+    _handoff(tmp_path / "archive/handoffs/b.md", stub_id="stub-b", kind="session-handoff", status="consumed")
+    _handoff(
+        tmp_path / "state/handoffs/live.md",
+        stub_id="stub-live", kind="session-handoff", status="open", deployment_state="ready",
+        blocked_by="[stub-a]",
+    )
+    reply = _run(
+        udg._updatedocs_gates(
+            {
+                "repo_root": str(tmp_path),
+                "gates": ["fresh-scaffold-probe"],
+                "blocked_by": ["archive/handoffs/a.md", "archive/handoffs/b.md"],
+            },
+            repo_root=None,
+        )
+    )
+    states = {k: v["state"] for k, v in reply["blocked_by"].items()}
+    assert states["archive/handoffs/a.md"] == "dependents"
+    assert states["archive/handoffs/b.md"] == "none"
+
+
+def test_blocked_by_absent_leaves_reply_unchanged(tmp_path):
+    (tmp_path / "CLAUDE.md").write_text("x")
+    reply = _run(
+        udg._updatedocs_gates(
+            {"repo_root": str(tmp_path), "gates": ["fresh-scaffold-probe"]}, repo_root=None
+        )
+    )
+    assert "blocked_by" not in reply

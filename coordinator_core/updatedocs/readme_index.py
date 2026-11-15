@@ -12,7 +12,9 @@ tables, and never constructs a `GateResult` — verdict mapping (including the
 CLEAN vs UNAVAILABLE distinction for a missing target) belongs to
 `coordinator_core.ops.updatedocs_gates`, one layer up. It also never parses the
 README's table *shape* — the tables are hand-formatted prose, and a row-shape
-parser breaks on the next hand edit; only markdown link *targets* are read.
+parser breaks on the next hand edit; only markdown link *targets* are read, so a
+link in a table row indexes a file exactly as a link in a list item does. A sidecar
+file (`<plan>.premise-check.md`) is neither on disk nor linked for this purpose.
 
 Spec backlink: pln-bucket-2-extraction-four-deter-e121fa (chunk C1)
 """
@@ -25,6 +27,7 @@ from pathlib import Path
 
 from coordinator_core.frontmatter import primitives as _frontmatter_primitives
 from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.frontmatter.schema_validate import _lint_is_sidecar_file
 from coordinator_core.updatedocs import _common, _stamp_cache
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing, read_head
 from coordinator_core.updatedocs._stamp_cache import MISS, StampCache
@@ -101,6 +104,12 @@ def _section_bodies(readme_text: str) -> dict[str, str]:
     return bodies
 
 
+def _is_sidecar(subdir: str, name: str) -> bool:
+    """True for a review/check/annotation sidecar (`<doc>.premise-check.md`): it is a
+    companion of an artifact, never an indexable artifact of its own corpus."""
+    return _lint_is_sidecar_file(f"docs/{subdir}/{name}" if subdir else f"docs/{name}")
+
+
 def _resolve_link_target(docs_dir: Path, raw_target: str) -> Path | None:
     target = raw_target.split("#", 1)[0].strip()
     if not target:
@@ -137,6 +146,19 @@ _POINTER_COUNT_RECENT_SECTIONS = frozenset({"Plans"})
 RECENT_LINK_COUNT = 5
 _DATED_NAME_RE = re.compile(r"\d{4}-\d{2}-\d{2}-")
 _STATED_COUNT_RE = re.compile(r"(\d[\d,]*)\s+plan\s+docs", re.IGNORECASE)
+_TABLE_COUNT_RE = re.compile(
+    r"^\|[^|\n]*\bplans?\b[^|\n]*\|\s*(\d[\d,]*)\s*(?:plans?|docs?)?\s*\|", re.IGNORECASE | re.MULTILINE
+)
+
+
+def _stated_count(body: str) -> str | None:
+    """The plan count the section states, in prose (`N plan docs`) or in a table row
+    whose first cell names plans and whose next cell is the number."""
+    prose = _STATED_COUNT_RE.search(body)
+    if prose is not None:
+        return prose.group(1)
+    row = _TABLE_COUNT_RE.search(body)
+    return row.group(1) if row is not None else None
 
 
 def _pointer_count_recent_drift(
@@ -155,26 +177,31 @@ def _pointer_count_recent_drift(
     missing: list[str] = []
     dead: list[str] = []
 
-    corpus_resolved = corpus_dir.resolve()
-    pointer_ok = any(
-        _resolve_link_target(docs_dir, m.group(1)) == corpus_resolved
-        for m in _LINK_RE.finditer(body)
-    )
+    pointer_ok = _links_directory(docs_dir, corpus_dir, body)
     if not pointer_ok:
         missing.append(f"pointer link to {corpus_dir.name}/")
 
-    stated = _STATED_COUNT_RE.search(body)
+    stated = _stated_count(body)
     if stated is None:
         missing.append("stated count")
     # Count is every `.md` in the corpus dir (README/undated included), not only dated plans.
-    elif int(stated.group(1).replace(",", "")) != len(on_disk_names):
-        dead.append(f"stated count {stated.group(1)} != {len(on_disk_names)} on disk")
+    elif int(stated.replace(",", "")) != len(on_disk_names):
+        dead.append(f"stated count {stated} != {len(on_disk_names)} on disk")
 
     dated = (name for name in on_disk_names if _DATED_NAME_RE.match(name))
     recent = sorted(dated, reverse=True)[:RECENT_LINK_COUNT]
     missing.extend(sorted(name for name in recent if name not in linked_names))
     dead.extend(sorted(linked_names - on_disk_names))
     return missing, dead
+
+
+def _links_directory(docs_dir: Path, corpus_dir: Path, body: str) -> bool:
+    """True when the section body links the corpus directory itself (pointer-style)."""
+    corpus_resolved = corpus_dir.resolve()
+    return any(
+        _resolve_link_target(docs_dir, m.group(1)) == corpus_resolved
+        for m in _LINK_RE.finditer(body)
+    )
 
 
 def compute_readme_index_drift(repo_root: Path) -> ReadmeIndexDrift:
@@ -203,6 +230,9 @@ def compute_readme_index_drift(repo_root: Path) -> ReadmeIndexDrift:
     live_keys: set[str] = set()
     sections: list[SectionDrift] = []
     for section_name, subdir in SECTION_CORPORA.items():
+        if section_name not in bodies:
+            sections.append(SectionDrift(section=section_name, linked=0, on_disk=0))
+            continue
         corpus_dir = (docs_dir / subdir) if subdir else docs_dir
         stamps: dict[str, tuple[int, int] | None] = {}
         if corpus_dir.is_dir():
@@ -210,15 +240,22 @@ def compute_readme_index_drift(repo_root: Path) -> ReadmeIndexDrift:
                 stamps = dict(_stamp_cache.list_md(corpus_dir))
             except OSError:
                 pass
+        stamps = {n: st for n, st in stamps.items() if not _is_sidecar(subdir, n)}
         on_disk_names = set(stamps)
 
         body = bodies.get(section_name, "")
-        linked_names = _linked_names_for_section(docs_dir, corpus_dir.resolve(), body)
+        linked_names = {
+            n
+            for n in _linked_names_for_section(docs_dir, corpus_dir.resolve(), body)
+            if not _is_sidecar(subdir, n)
+        }
 
         if section_name in _POINTER_COUNT_RECENT_SECTIONS:
             missing, dead = _pointer_count_recent_drift(
                 docs_dir, corpus_dir, body, on_disk_names, linked_names
             )
+        elif not linked_names and _links_directory(docs_dir, corpus_dir, body):
+            missing, dead = [], []
         else:
             missing = sorted(on_disk_names - linked_names)
             dead = sorted(linked_names - on_disk_names)

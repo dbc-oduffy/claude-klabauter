@@ -208,6 +208,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.dispatch_emit.objective_check", 'registers "dispatch.objective_check"'),
     ("coordinator_core.ops.dispatch_emit.objective_write", 'registers "dispatch.objective_write"'),
     ("coordinator_core.ops.handoff_backfill_claim_stamp", 'registers "handoff.backfill_claim_stamp"'),
+    ("coordinator_core.ops.frontmatter_remint", 'registers "frontmatter.remint"'),
     ("coordinator_core.ops.handoff_repoint_origin", 'registers "handoff.repoint_origin"'),
     ("coordinator_core.ops.baton_supersede", 'registers "baton.supersede"'),
     ("coordinator_core.ops.baton_awaiting_gate_recheck", 'registers "baton.awaiting_gate_recheck"'),
@@ -825,6 +826,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "freshness.commit_delta" (workday-start doc/test/bug-sweep '
         "commit-delta producer — docs/plans/2026-09-10-cartography-churn-producer-"
         "and-staleness-registrations.md § C3)",
+    ),
+    (
+        "coordinator_core.ops.skill_preconditions",
+        'registers "skill.preconditions" (one verdict per precondition check the plugin '
+        "skill-preconditions.yaml registers for a skill; read-only, no refresh)",
     ),
     (
         "coordinator_core.ops.code_intel_freshness",

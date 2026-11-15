@@ -13,6 +13,58 @@ _D1 = (
 )
 
 
+_HOISTED = (
+    'B="${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin"; '
+    '"$B/coordinator-invoke" updatedocs.gates \'{}\''
+)
+_INLINE = (
+    '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke" '
+    "updatedocs.gates '{}'"
+)
+
+
+def _reason(cmd):
+    from coordinator_core.guard_messages.testing import envelope_of
+
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": cmd},
+        "session_id": "sess-launcher-var",
+        "cwd": None,
+        "agent_type": "coordinator:executor",
+        "agent_id": "a1",
+    }
+    env = envelope_of(g.check(payload))
+    return None if env is None else str(env)
+
+
+_NESTED = "bash -c 'B=/x/bin; \"$B/coordinator-invoke\" a'"
+
+
+@pytest.mark.parametrize("cmd", [_HOISTED, _NESTED])
+def test_hoisted_dir_var_names_inline_rewrite_and_no_escalation(cmd):
+    text = _reason(cmd)
+    assert text is not None
+    assert '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/<cli>"' in text
+    assert "Report" not in text
+    assert "authoriz" not in text
+    assert "Route: the engine op" not in text
+
+
+def test_nested_hoisted_var_is_a_deny():
+    assert "BLOCKED" in (_reason(_NESTED) or "")
+
+
+def test_inline_expansion_still_admitted():
+    assert _reason(_INLINE) is None
+
+
+def test_non_var_deny_keeps_its_route_line():
+    text = _reason("git reset --hard HEAD~1")
+    assert text is not None
+    assert "inline the launcher" not in text
+
+
 def _deny(cmd):
     return g._evaluate_tokenized(cmd).deny_kind
 

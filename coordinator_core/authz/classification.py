@@ -4027,6 +4027,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # (ops/ceremony/wiki_candidates.py); writes no file, no queue, no cache.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "ceremony.wiki_candidates": OpClass.COMPUTE_ONLY,
+    # skill.preconditions — COMPUTE_ONLY: reads the plugin skill-preconditions.yaml and each check's
+    # cache file (ops/skill_preconditions.py); spawns nothing, writes nothing, never refreshes.
+    "skill.preconditions": OpClass.COMPUTE_ONLY,
+    # frontmatter.remint — MUTATING: rewrites engine-owned frontmatter fields in place from
+    # recorded provenance (ops/frontmatter_remint/); refuses rather than fabricates.
+    "frontmatter.remint": OpClass.MUTATING,
     "deliverable.cascade_terminal": OpClass.MUTATING,
     "deliverable.cascade_retract": OpClass.MUTATING,
     "deliverable.cascade_backstop_sweep": OpClass.COMPUTE_ONLY,

@@ -595,7 +595,7 @@
       "name": "ceremony__update_docs_worklist"
     },
     {
-      "description": "JSON-RPC \"ceremony.wiki_candidates\" handler.\n\nParams: `since` (ISO date/datetime, or a ledger `completing_sha`; overrides the cached\n`ack_head`), `repo_root` (repo to query; default the invoking repo's main worktree). Returns\n{schema, schema_version, window{since, head, source}, pages[{page, plans[{path, commit_sha,\ntshirt, preview}]}], preview_chars_total, truncated{pages, plans}}. Read-only: writes no file\nand never advances the worklist `ack_head`. Caps: PREVIEW_CHARS, PAGES_CAP, PLANS_CAP.",
+      "description": "JSON-RPC \"ceremony.wiki_candidates\" handler.\n\nParams: `since` (ISO date/datetime, or a ledger `completing_sha`; overrides the cached\n`ack_head`), `repo_root` (repo to query; default the invoking repo's main worktree). Returns\n{schema, schema_version, window{since, head, source}, pages[{page, plans[{path, commit_sha,\ntshirt, preview}]}], preview_chars_total, truncated{pages, plans}, empty_reason}. Read-only: writes no file\nand never advances the worklist `ack_head`. Caps: PREVIEW_CHARS, PAGES_CAP, PLANS_CAP.",
       "inputSchema": {
         "type": "object"
       },
@@ -2146,6 +2146,13 @@
         "type": "object"
       },
       "name": "freshness__commit_delta"
+    },
+    {
+      "description": "JSON-RPC \"frontmatter.remint\" — re-mint engine-owned frontmatter fields.\n\nParams:\n    paths (list[str], required) — repo-relative record paths.\n    fields (list[str], optional) — subset of families (handoff_id,\n        execution_authorized, review_stamp, review_stamp.register); default\n        is every family the validator reports failing for each path. A named\n        family that is not failing reports `already-valid`; an unknown one\n        refuses `resolver-unbuilt`.\n\nReturns:\n    exit_code (int) — 0 ok (refusals are per-field outcomes, not errors);\n        2 usage error.\n    results (list) — per path: `path`, `error` (path-level failure or null),\n        `fields`: [{field, outcome: written|refused|already-valid, reason,\n        detail}]; every `refused` reason is a `_contract.REASONS` member.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "frontmatter__remint"
     },
     {
       "description": "JSON-RPC \"gate.validate_invocable\" handler.\n\nWire params:\n    changed_files (list[str], required) — the diff / changed-file set to\n                                           evaluate. May be empty (a\n                                           no-op diff still returns a\n                                           full five-dimension verdict).\n    diff_base (str, optional) — an explicit diff-base reference (e.g. a\n                                 git ref/sha), passed through unexamined\n                                 to whichever dimension check consumes\n                                 it. Per C4's plan text this must stay an\n                                 explicit op parameter, never a\n                                 hardcoded `origin/main` merge-base\n                                 default baked into this handler.\n\nReturns: the `to_json()` payload (see its docstring for shape).\n\nRaises ValueError if `changed_files` is missing (not merely empty —\nabsent) or is not a list. Never raises for an internal dimension-check\nfailure; see `_run_dimension()`.",
@@ -4733,6 +4740,13 @@
       "name": "sizings__summary"
     },
     {
+      "description": "JSON-RPC \"skill.preconditions\" handler: one verdict per registered check for ``skill``.\n\ncoordinator_core.ops.skill_preconditions -- \"skill.preconditions\" op (COMPUTE_ONLY).\n\nReturns one verdict per precondition check the plugin's ``skill-preconditions.yaml``\nregisters for a skill. The one check shape the yaml carries is a cache read: the\ncheck's ``reads_cache`` file (relative to the repo root, written by the async\nSessionStart freshness leg) holds a example-retrieval-repo verdict and a ``checked_epoch``.\n\nInvariants:\n  * Read-only: no process is spawned, no refresh is queued, no file is written.\n    ``fallback_command`` is never run; ``on_stale`` is reported, never actuated.\n  * Verdicts: ``not_applicable`` (the repo has no registered example-retrieval-repo slug),\n    ``absent`` (no readable cache, or the cached verdict is absent), ``stale``\n    (cache older than ``max_age_hours``, or a verdict that is not ``current``),\n    ``fresh``, and ``unsupported`` for a check outside the cache-read shape.\n  * An unknown skill or an unreadable registry returns an empty ``checks`` list.\n\nWire params: ``skill`` (str, required), ``repo_root`` (str, the consumer repo).",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "skill__preconditions"
+    },
+    {
       "description": "JSON-RPC \"spec_backlink.resolve\" handler — COMPUTE_ONLY, sync.\n\nParams:\n    id (str) — a `pln-<slug>-<hash>` or `dlv-<slug>-<hash>` id, optionally\n               `<repo>:`-qualified for a named peer repo (e.g. Coordinator-content-repo).\n\nReturns one of three typed outcome shapes:\n    {\"outcome\": \"hit\",       \"queried_id\": ..., \"path\": \"<str>\"}\n    {\"outcome\": \"miss\",      \"queried_id\": ..., \"path\": None}\n    {\"outcome\": \"ambiguity\", \"queried_id\": ..., \"path\": None, \"candidates\": [...]}\n\nrepo_root is the .git common dir (common_dir keying, per op_scopes.py);\nthe worktree is derived via main_worktree_root(repo_root), never from\nrepo_root directly (scanning .git/docs/plans instead of <worktree>/docs/plans\nwould be a silent scan-miss).",
       "inputSchema": {
         "type": "object"
@@ -4838,7 +4852,7 @@
       "name": "update_docs__probe_fresh_repo_noop"
     },
     {
-      "description": "JSON-RPC \"updatedocs.gates\" handler — runs the named gate subset and\nreturns {\"gates\": [...], \"rollup\": {...}}.\n\nParams (all optional):\n    repo_root      (str) — repo root to scope gates against; default cwd.\n                     Explicit param, NOT the injected `_origin_worktree`\n                     (this op is registered scope=\"none\" — see module\n                     docstring).\n    settings_home  (str) — override for $COORDINATOR_SETTINGS_HOME\n                     resolution (external coordinator-content-repo CLI location).\n    gates          (list[str]) — named subset to run; default: all gates\n                     in the registry. An unknown name is a ValueError,\n                     never a silent skip (no silent caps).\n    overrides      (dict[str, dict]) — per-gate keyword overrides (CLI\n                     paths, injected states) for test/diagnostic use,\n                     keyed by gate_id — mirrors update-docs-probes.py's\n                     existing --*-cli override flags.",
+      "description": "JSON-RPC \"updatedocs.gates\" handler — runs the named gate subset and\nreturns {\"gates\": [...], \"rollup\": {...}}.\n\nParams (all optional):\n    repo_root      (str) — repo root to scope gates against; default cwd.\n                     Explicit param, NOT the injected `_origin_worktree`\n                     (this op is registered scope=\"none\" — see module\n                     docstring).\n    settings_home  (str) — override for $COORDINATOR_SETTINGS_HOME\n                     resolution (external coordinator-content-repo CLI location).\n    gates          (list[str]) — named subset to run; default: all gates\n                     in the registry. An unknown name is a ValueError,\n                     never a silent skip (no silent caps).\n    overrides      (dict[str, dict]) — per-gate keyword overrides (CLI\n                     paths, injected states) for test/diagnostic use,\n                     keyed by gate_id — mirrors update-docs-probes.py's\n                     existing --*-cli override flags.\n    full_detail    (bool) — default false: each gate's detail is a bounded\n                     sample with `<key>_count` totals and the whole reply\n                     stays under `_REPLY_BYTE_CAP`. True returns every list.\n    blocked_by     (list[str]) — handoff paths (repo-relative or absolute);\n                     the reply gains `blocked_by`: {path: reply} from ONE\n                     corpus pass of `blocked_by_dependents_many`, each reply\n                     carrying a tri-state `state`.",
       "inputSchema": {
         "type": "object"
       },
