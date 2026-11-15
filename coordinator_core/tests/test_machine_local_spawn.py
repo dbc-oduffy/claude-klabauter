@@ -501,11 +501,14 @@ def _sample_live_max(pidfile: Path, running) -> int:
 
 def test_threads_never_exceed_the_box_wide_cap(env, monkeypatch):
     monkeypatch.setenv("MACHINE_LOCAL_MAX_INFLIGHT", "2")
+    # A slot holder must finish, not hit the kill ceiling: on a loaded box interpreter start plus
+    # the stub's sleep can pass ML_SPAWN_TIMEOUT_S, turning every holder into None.
+    monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 30.0)
     monkeypatch.setenv("STUB_SLEEP", str(CONTENDED_STUB_SLEEP_S))
     results: list = []
     threads = [
         threading.Thread(
-            target=lambda: results.append(mls.run_bounded([sys.executable, env["stub"], "dump"]))
+            target=lambda: results.append(mls.run_bounded([sys.executable, env["stub"], "dump"], timeout=30.0))
         )
         for _ in range(8)
     ]

@@ -65,14 +65,14 @@
     "mirror_blob": "3d69558b87bf07f332464aa4c23433d24695d1c9"
   },
   "handoff-archived.schema.json": {
-    "blob": "0521c3879e950940b93e782bd14d72994e3f88b9",
-    "doe_commit": "8a3298ae0f6d0c92c0781ba7d3116e3d22a59d68",
-    "mirror_blob": "abb9b7d00a368301fde79414baaa43bc722109c5"
+    "blob": "83fc9da7eb02cbbbb373798d36b4ccbf8a75238b",
+    "doe_commit": "242febf982c896b9efead65134b16de6734b3b7e",
+    "mirror_blob": "ebeea6b9ca9879e2fc92f7c0470c39e67a7c864c"
   },
   "handoff.schema.json": {
-    "blob": "e7b7fb6876a951f7237edd53f22d1813747ee008",
-    "doe_commit": "8a3298ae0f6d0c92c0781ba7d3116e3d22a59d68",
-    "mirror_blob": "d2ebd64d17dd5f355fd19cd1eb0ac825701495ee"
+    "blob": "d2f15d6c95a6b031270b2b0c89a9af727e8330f6",
+    "doe_commit": "242febf982c896b9efead65134b16de6734b3b7e",
+    "mirror_blob": "4aacf2f997b607fb24f6cb383695558e5cf5616a"
   },
   "health-status.schema.json": {
     "blob": "d31ddbff5b35ca0c760aabe3d02de903d19550d8",

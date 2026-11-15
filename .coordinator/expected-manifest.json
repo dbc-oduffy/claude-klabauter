@@ -2507,8 +2507,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "f4c414450b39f8789cf981ccb44429ac0d644791",
-    "coordinator_core/_engine_stamp": "638a3193ae65e4cd3dca51211eb16165be70b772",
+    "coordinator_core/_engine_published_at": "4eab17216db1e8e9e0d1139febe9969bccbfe893",
+    "coordinator_core/_engine_stamp": "42d2f5972766ab2c01c263125027167a21e78a90",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4224,8 +4224,8 @@
     "coordinator_core/frontmatter/schemas/docs-check-sidecar.schema.json": "1510b28ef08266b87f27f16eec01963f78b02393",
     "coordinator_core/frontmatter/schemas/fleet-capability-index.schema.json": "408fda4ffacf49d8191e4ce4f39fc91236a5bb04",
     "coordinator_core/frontmatter/schemas/goal.schema.json": "3d69558b87bf07f332464aa4c23433d24695d1c9",
-    "coordinator_core/frontmatter/schemas/handoff-archived.schema.json": "abb9b7d00a368301fde79414baaa43bc722109c5",
-    "coordinator_core/frontmatter/schemas/handoff.schema.json": "d2ebd64d17dd5f355fd19cd1eb0ac825701495ee",
+    "coordinator_core/frontmatter/schemas/handoff-archived.schema.json": "ebeea6b9ca9879e2fc92f7c0470c39e67a7c864c",
+    "coordinator_core/frontmatter/schemas/handoff.schema.json": "4aacf2f997b607fb24f6cb383695558e5cf5616a",
     "coordinator_core/frontmatter/schemas/health-status.schema.json": "d31ddbff5b35ca0c760aabe3d02de903d19550d8",
     "coordinator_core/frontmatter/schemas/improvement-queue.schema.json": "7655aeb610640a8154db26c867419c26f69aab2c",
     "coordinator_core/frontmatter/schemas/initiative.schema.json": "c8ecb8ddfec00470ea1db06fb5af5e9f1c292220",
@@ -4253,7 +4253,7 @@
     "coordinator_core/frontmatter/schemas/spike-result.schema.json": "60b3687677ee26d52b84103ee8eeedd33fa983af",
     "coordinator_core/frontmatter/schemas/spine.schema.json": "229b83d4739a065bb8b181ca305b6b8bf42051d6",
     "coordinator_core/frontmatter/schemas/strategic-self-description.schema.json": "281c3be70b15d55dc4ed68e1d17738031c00174f",
-    "coordinator_core/frontmatter/schemas/vendored-from.json": "15f157cdc4633e43696036c9a2433e79e16718c1",
+    "coordinator_core/frontmatter/schemas/vendored-from.json": "c0db4ee67a420a9336a3648151d15f4671018bd2",
     "coordinator_core/frontmatter/schemas/workstream-event.schema.json": "3e702827dceb5960721bed49d4da092ff38316e6",
     "coordinator_core/frontmatter/schemas/workstream.schema.json": "5358eeffc65de623a0f6f11ee066bec4a72c694d",
     "coordinator_core/frontmatter/sentinel_blocks.py": "a09f63c6acc9ed66029574dba851aa1cf75e82ee",
@@ -11308,7 +11308,7 @@
     "coordinator_core/tests/test_locked_write_outside_git.py": "52a29d507913e2aa0484475ce67e78edd218a649",
     "coordinator_core/tests/test_locked_write_sizing_claim.py": "deccf18de65c8136e2ada951ddd2f46884c199f9",
     "coordinator_core/tests/test_machine_local_impl_settings_home_first.py": "cb41986f2e28991398c8accbd5d5b208c6a026b3",
-    "coordinator_core/tests/test_machine_local_spawn.py": "6b6b277bc30f9894a834f0e83717d484fc4cbab1",
+    "coordinator_core/tests/test_machine_local_spawn.py": "f2afd12ee4f58531a9b24f1e8f55d44acaa8a80e",
     "coordinator_core/tests/test_machine_path_leak.py": "5df4599b8032ffedbed3fabf1ad8d2ecffae9937",
     "coordinator_core/tests/test_machine_profile.py": "1d5ebb58e010341c74e5a153912483f8caa496ed",
     "coordinator_core/tests/test_managed_temp_pytest_seam.py": "4524fb7a508fc56570e274bb7766b29c0c795339",
@@ -12492,5 +12492,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "227a14c69e1948d59f779e868553700d696db229"
+  "source_head": "8103d5ae255e36764884fc2825cafe38c3ca041e"
 }
