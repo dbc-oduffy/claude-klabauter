@@ -69,9 +69,8 @@ def test_old_zero_commit_branch_still_gets_a_delete() -> None:
     assert "delete-only" in _clis(_brief(OLD, ""))
 
 
-def test_recent_zero_commit_branch_gets_no_delete() -> None:
+def test_recent_zero_commit_branch_is_a_delete_keep_judgment_point() -> None:
     obj = _brief(FRESH, "")
-    assert "delete-only" not in _clis(obj)
     stale = next(b for b in obj["gates"]["branches"] if b["name"] == "work/stale")
     assert stale["recent"] is True
     directive = next(d for d in obj["directives"] if d["id"] == "d-delete-work/stale")

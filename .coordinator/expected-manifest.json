@@ -2527,8 +2527,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "6b4337430084f1c7b4ca24f3bf82e57fb581c8c6",
-    "coordinator_core/_engine_stamp": "a879dadf83761ddea9fe6871a5a1322c8558d758",
+    "coordinator_core/_engine_published_at": "2926fceb33c1a8bf91f5435730697e32ceee5a94",
+    "coordinator_core/_engine_stamp": "953b457a3d2198ff9d8df238e8b61fd40f9048be",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -3949,7 +3949,7 @@
     "coordinator_core/conservatism/tests/test_declared_directions_hold.py": "5900c59a4fde4d458ae2eac99a0929276c9e5e72",
     "coordinator_core/conservatism/tests/test_posture_fail_direction.py": "3178e2e0d6ac5621ba078156796b8350986016d0",
     "coordinator_core/conservatism/verify.py": "40183616472b3fc2d32d5e9e21085e0e600ce19f",
-    "coordinator_core/consolidate_assemble/__init__.py": "305d4f29a497a1143c4ecb3b9bcb473125799158",
+    "coordinator_core/consolidate_assemble/__init__.py": "6fd66469a496431161061284db49b06d3b57eca6",
     "coordinator_core/consolidate_assemble/apply.py": "9e3883674964b23247fa1406a28f0ea0b20dfb43",
     "coordinator_core/consolidate_assemble/live_holders.py": "3aed96a8b59aea5dc4749ed8fd503a38f21b0b01",
     "coordinator_core/consolidate_assemble/ops.py": "3d8efbff35ba25c33a1aafab24df5c720b440045",
@@ -3964,7 +3964,7 @@
     "coordinator_core/consolidate_assemble/tests/test_merge_and_delete.py": "aa16b0f2a3a7df2648d6895549a9934a08503c19",
     "coordinator_core/consolidate_assemble/tests/test_ops_registration.py": "b87e8bf2745b8359a2c7ed15272fbe5440eb456a",
     "coordinator_core/consolidate_assemble/tests/test_post_absorb_test_gate.py": "4075836aa700c1142e3dda4398b48e895a54ee3e",
-    "coordinator_core/consolidate_assemble/tests/test_recency_floor_and_absorb_keep.py": "b973c29af8d2775ce8b1ccc13a4c6ed9b56b5816",
+    "coordinator_core/consolidate_assemble/tests/test_recency_floor_and_absorb_keep.py": "d8f02844bbee389e0fb9b2be6ce84c410fc34ebc",
     "coordinator_core/consolidate_assemble/tests/test_ref_listing_is_one_spawn.py": "8d2412469ce45b7a2c1543fddb406352ce6ab3b7",
     "coordinator_core/consolidate_assemble/tests/test_unique_commits_base_is_main.py": "cb3e7fd48b6cd213966b4c0c531d3021b0ff4970",
     "coordinator_core/consolidate_assemble/tests/test_worktree_is_dirty_missing_path.py": "fd0eeb062233e87e88408dec812005d5da1bdfbe",
@@ -12590,5 +12590,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "1679e2dbde43e75aa7e69bc599ca5c078f2daecc"
+  "source_head": "4956c772bed79f1fafc3b29fd86ea7e6a95d8bf5"
 }

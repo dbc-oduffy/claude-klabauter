@@ -648,10 +648,10 @@ def brief(
 
         delete_directive_id = f"d-delete-{name}"  # zero-commit branches only
         recent = stale["recent"]
-        if not commits and recent:
-            continue
         if not commits:
             is_cloud = stale["category"] == "cloud-session"
+            # A cloud-session or recent-tip branch is deleted only on a judged disposition.
+            needs_judgment = is_cloud or recent
             delete_jp_id = f"j-delete-{name}"
             directives.append(
                 {
@@ -664,12 +664,16 @@ def brief(
                     "already_satisfied": False,
                 }
             )
-            if is_cloud:
+            if needs_judgment:
                 judgment_points.append(
                     build_judgment_point(
                         None,
                         id=delete_jp_id,
-                        question=f"Cloud-session branch {name!r} has no unique commits — delete or keep?",
+                        question=(
+                            f"{'Cloud-session branch' if is_cloud else 'Branch'} {name!r} has no unique commits"
+                            + (" and a recent tip" if recent else "")
+                            + " — delete or keep?"
+                        ),
                         dispositions=[
                             build_disposition("delete", resolves=[delete_directive_id]),
                             build_disposition("keep"),
