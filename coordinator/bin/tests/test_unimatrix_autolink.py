@@ -1911,10 +1911,10 @@ def healthy_cache(e, aliases):
 
 
 def test_one_pair_per_box_two_spellings(env, monkeypatch):
-    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-a-lan": "machine-a.local"}.get(a))
-    alias_rec = seed_pair(env, "machine-a-lan", (2001, 2002))
-    member_rec = seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004))
-    healthy_cache(env, ["example-operator@machine-a.local"])
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"farbox-lan": "farbox.local"}.get(a))
+    alias_rec = seed_pair(env, "farbox-lan", (2001, 2002))
+    member_rec = seed_pair(env, "kim_at_farbox.local", (2003, 2004))
+    healthy_cache(env, ["kim@farbox.local"])
     killed = []
     env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
     assert killed == [2001, 2002]
@@ -1922,21 +1922,21 @@ def test_one_pair_per_box_two_spellings(env, monkeypatch):
 
 
 def test_one_pair_per_box_keeps_the_live_pair_when_only_the_alias_spelling_lives(env, monkeypatch):
-    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-a-lan": "machine-a.local"}.get(a))
-    alias_rec = seed_pair(env, "machine-a-lan", (2001, 2002))
-    member_rec = seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004))
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"farbox-lan": "farbox.local"}.get(a))
+    alias_rec = seed_pair(env, "farbox-lan", (2001, 2002))
+    member_rec = seed_pair(env, "kim_at_farbox.local", (2003, 2004))
     env.live.difference_update({2003, 2004})
-    healthy_cache(env, ["example-operator@machine-a.local"])
+    healthy_cache(env, ["kim@farbox.local"])
     killed = []
     env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
     assert killed == [] and alias_rec.is_file() and not member_rec.exists()
 
 
 def test_one_pair_per_box_never_merges_two_boxes(env, monkeypatch):
-    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-a-lan": "elsewhere.local"}.get(a))
-    seed_pair(env, "machine-a-lan", (2001, 2002))
-    seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004))
-    healthy_cache(env, ["example-operator@machine-a.local", "machine-a-lan"])
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"farbox-lan": "elsewhere.local"}.get(a))
+    seed_pair(env, "farbox-lan", (2001, 2002))
+    seed_pair(env, "kim_at_farbox.local", (2003, 2004))
+    healthy_cache(env, ["kim@farbox.local", "farbox-lan"])
     killed = []
     env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
     assert killed == []
@@ -1946,9 +1946,9 @@ def test_one_pair_per_box_never_merges_two_boxes(env, monkeypatch):
 def test_a_healthy_run_over_stamped_records_spawns_no_ssh(env, monkeypatch):
     calls = []
     monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: calls.append(a))
-    seed_pair(env, "machine-a-lan", (2001, 2002), box="machine-a")
-    seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004), box="machine-a")
-    healthy_cache(env, ["example-operator@machine-a.local"])
+    seed_pair(env, "farbox-lan", (2001, 2002), box="farbox")
+    seed_pair(env, "kim_at_farbox.local", (2003, 2004), box="farbox")
+    healthy_cache(env, ["kim@farbox.local"])
     with monkeypatch.context() as mp:
         mp.setattr(env.al.subprocess, "run", lambda *a, **k: calls.append(a) or boom())
         env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=lambda pid: None)
@@ -1957,48 +1957,48 @@ def test_a_healthy_run_over_stamped_records_spawns_no_ssh(env, monkeypatch):
 
 def test_a_legacy_record_is_resolved_once_and_stamped_for_the_next_run(env, monkeypatch):
     calls = []
-    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: calls.append(a) or "machine-a.local")
-    rec_path = seed_pair(env, "machine-a-lan", (2001, 2002))
-    healthy_cache(env, ["example-operator@machine-a.local"])
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: calls.append(a) or "farbox.local")
+    rec_path = seed_pair(env, "farbox-lan", (2001, 2002))
+    healthy_cache(env, ["kim@farbox.local"])
     env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=lambda pid: None)
-    assert calls == ["machine-a-lan"] and json.loads(rec_path.read_text())["box"] == "machine-a"
+    assert calls == ["farbox-lan"] and json.loads(rec_path.read_text())["box"] == "farbox"
     env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=lambda pid: None)
-    assert calls == ["machine-a-lan"]
+    assert calls == ["farbox-lan"]
 
 
 def test_the_link_lock_is_one_file_per_box_across_spellings(env, monkeypatch):
-    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-a-lan": "machine-a.local"}.get(a))
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"farbox-lan": "farbox.local"}.get(a))
     env.sdir.mkdir(parents=True)
-    (env.sdir / "autolink-machine-a.lock").write_text("")
+    (env.sdir / "autolink-farbox.lock").write_text("")
     said = []
-    for alias in ("machine-a-lan", "example-operator@machine-a.local"):
+    for alias in ("farbox-lan", "kim@farbox.local"):
         env.al.link_peer(env.roster, alias, str(env.key), said.append, spawn=boom, probe_fn=boom)
     assert len(said) == 2 and all("lock held" in line for line in said)
 
 
 def test_link_peer_folds_the_other_spelling_record_into_one_stamped_record(env, monkeypatch):
-    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-a-lan": "machine-a.local"}.get(a))
-    old = seed_pair(env, "machine-a-lan", (2001, 2002))
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"farbox-lan": "farbox.local"}.get(a))
+    old = seed_pair(env, "farbox-lan", (2001, 2002))
     env.live.clear()
     sp = Spawner()
-    env.al.link_peer(env.roster, "example-operator@machine-a.local", str(env.key), lambda m: None, spawn=sp, probe_fn=ok)
+    env.al.link_peer(env.roster, "kim@farbox.local", str(env.key), lambda m: None, spawn=sp, probe_fn=ok)
     assert not old.exists()
-    rec = json.loads(env.al.record_path(env.sdir, "example-operator@machine-a.local").read_text())
-    assert rec["box"] == "machine-a" and len(sp.cmds) == 2
+    rec = json.loads(env.al.record_path(env.sdir, "kim@farbox.local").read_text())
+    assert rec["box"] == "farbox" and len(sp.cmds) == 2
 
 
 def test_run_does_not_spawn_a_second_pair_for_a_box_whose_other_spelling_lives(env, monkeypatch):
-    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-a-lan": "machine-a.local"}.get(a))
-    seed_pair(env, "machine-a-lan", (2001, 2002))
-    env.al.run(roster=env.roster, boxes=["example-operator@machine-a.local"], spawn=boom, probe_fn=boom, key_fn=boom)
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"farbox-lan": "farbox.local"}.get(a))
+    seed_pair(env, "farbox-lan", (2001, 2002))
+    env.al.run(roster=env.roster, boxes=["kim@farbox.local"], spawn=boom, probe_fn=boom, key_fn=boom)
     log = env.sdir / "autolink.log"
     assert "link failed" not in (log.read_text() if log.exists() else "")
 
 
 def test_retire_non_target_record(env):
-    gone = seed_pair(env, "example_operator_at_oldbox.local", (2001, 2002))
-    kept = seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004))
-    healthy_cache(env, ["example-operator@machine-a.local"])
+    gone = seed_pair(env, "kim_at_oldbox.local", (2001, 2002))
+    kept = seed_pair(env, "kim_at_farbox.local", (2003, 2004))
+    healthy_cache(env, ["kim@farbox.local"])
     killed = []
     env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
     assert killed == [2001, 2002]
@@ -2006,9 +2006,9 @@ def test_retire_non_target_record(env):
 
 
 def test_retire_non_target_record_in_a_live_snapshot_run(env, snap):
-    snap.adopt("me", "machine-a")
-    gone = seed_pair(env, "example_operator_at_oldbox.local", (2001, 2002))
-    seed_pair(env, "kim_at_machine_a.local", (2003, 2004))
+    snap.adopt("me", "farbox")
+    gone = seed_pair(env, "kim_at_oldbox.local", (2001, 2002))
+    seed_pair(env, "kim_at_farbox.local", (2003, 2004))
     killed = []
     env.al.run(roster=env.roster, spawn=boom, probe_fn=ok, key_fn=boom, self_names={"me"},
                pull_fn=lambda *a: False, kill=killed.append)
@@ -2017,26 +2017,26 @@ def test_retire_non_target_record_in_a_live_snapshot_run(env, snap):
 
 def test_retire_spares_a_bare_alias_record_whose_hostname_did_not_resolve(env, monkeypatch):
     monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: None)
-    flaky = seed_pair(env, "machine-c-lan", (2001, 2002))
-    seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004))
-    healthy_cache(env, ["example-operator@machine-a.local"])
+    flaky = seed_pair(env, "flaky-lan", (2001, 2002))
+    seed_pair(env, "kim_at_farbox.local", (2003, 2004))
+    healthy_cache(env, ["kim@farbox.local"])
     killed = []
     env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
     assert killed == [] and flaky.is_file() and "box" not in json.loads(flaky.read_text())
 
 
 def test_retire_still_retires_a_bare_alias_record_whose_hostname_resolved_elsewhere(env, monkeypatch):
-    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-c-lan": "oldbox.local"}.get(a))
-    gone = seed_pair(env, "machine-c-lan", (2001, 2002))
-    seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004))
-    healthy_cache(env, ["example-operator@machine-a.local"])
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"flaky-lan": "oldbox.local"}.get(a))
+    gone = seed_pair(env, "flaky-lan", (2001, 2002))
+    seed_pair(env, "kim_at_farbox.local", (2003, 2004))
+    healthy_cache(env, ["kim@farbox.local"])
     killed = []
     env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
     assert killed == [2001, 2002] and not gone.exists()
 
 
 def test_retire_skipped_on_failed_target_read(env):
-    rec = seed_pair(env, "example_operator_at_oldbox.local", (2001, 2002))
+    rec = seed_pair(env, "kim_at_oldbox.local", (2001, 2002))
     killed = []
     env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)  # reader missing
     assert killed == [] and rec.is_file() and not (env.sdir / "retired").exists()
