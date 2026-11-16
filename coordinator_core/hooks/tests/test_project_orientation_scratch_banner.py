@@ -23,6 +23,12 @@ _FORBIDDEN = ("too large to measure", "rm ", "rm -", "rmdir", "del ", "Remove-It
 _MB5 = 5 * 1024 * 1024
 
 
+@pytest.fixture(autouse=True)
+def _no_real_launch_or_disk_read(monkeypatch):
+    monkeypatch.setattr(po, "_free_fraction", lambda root: 0.5)
+    monkeypatch.setattr(po, "_launch_scratch_hygiene", lambda root, params: False)
+
+
 def _banner(root, read=None, monkeypatch=None):
     if read is not None:
         monkeypatch.setattr(po, "read_scratch", lambda roots, **kw: read)
@@ -189,3 +195,121 @@ def test_rendered_remedy_is_three_shell_tokens(tmp_path, monkeypatch):
         "cadence": "workday_complete",
         "apply": True,
     }
+
+
+def _recording_launcher(monkeypatch, ok=True):
+    calls = []
+
+    def fake(root, params):
+        calls.append((root, json.loads(params)))
+        return ok
+
+    monkeypatch.setattr(po, "_launch_scratch_hygiene", fake)
+    return calls
+
+
+def test_over_size_launches_the_op_once_and_says_so(tmp_path, monkeypatch):
+    calls = _recording_launcher(monkeypatch)
+    out = _banner(tmp_path, ScratchRead(True, 3, SCRATCH_WARN_BYTES + 1), monkeypatch)
+    assert calls == [
+        (str(tmp_path), {"repo_root": str(tmp_path), "cadence": "workday_complete", "apply": True})
+    ]
+    assert "cleanup started in the background" in out[0]
+    assert out[0].startswith("── ⚠ Scratch is")
+
+
+def test_entry_bound_launches(tmp_path, monkeypatch):
+    calls = _recording_launcher(monkeypatch)
+    _banner(tmp_path, ScratchRead(False, WALK_ENTRY_LIMIT, _MB5, True), monkeypatch)
+    assert len(calls) == 1
+
+
+def test_under_both_thresholds_launches_nothing(tmp_path, monkeypatch):
+    calls = _recording_launcher(monkeypatch)
+    assert _banner(tmp_path, ScratchRead(True, 3, SCRATCH_WARN_BYTES), monkeypatch) == []
+    assert calls == []
+
+
+def test_time_stop_under_threshold_warns_without_launching(tmp_path, monkeypatch):
+    calls = _recording_launcher(monkeypatch)
+    out = _banner(tmp_path, ScratchRead(False, 1234, _MB5), monkeypatch)
+    assert len(out) == 1 and calls == []
+
+
+def test_low_disk_alone_launches_with_small_scratch(tmp_path, monkeypatch):
+    calls = _recording_launcher(monkeypatch)
+    monkeypatch.setattr(po, "_free_fraction", lambda root: 0.04)
+    out = _banner(tmp_path, ScratchRead(True, 3, _MB5), monkeypatch)
+    assert len(calls) == 1
+    assert out[0].startswith("── ⚠ Scratch is 5.0 MB") and "4% free" in out[0]
+
+
+def test_disk_exactly_at_threshold_is_not_low(tmp_path, monkeypatch):
+    calls = _recording_launcher(monkeypatch)
+    monkeypatch.setattr(po, "_free_fraction", lambda root: po.SCRATCH_LOW_DISK_FREE_FRACTION)
+    assert _banner(tmp_path, ScratchRead(True, 3, _MB5), monkeypatch) == []
+    assert calls == []
+
+
+def test_unreadable_disk_does_not_trigger(tmp_path, monkeypatch):
+    calls = _recording_launcher(monkeypatch)
+    monkeypatch.setattr(po, "_free_fraction", lambda root: None)
+    assert _banner(tmp_path, ScratchRead(True, 3, _MB5), monkeypatch) == []
+    assert calls == []
+
+
+def test_free_fraction_reads_disk_usage_and_survives_failure(tmp_path, monkeypatch):
+    monkeypatch.undo()
+    assert 0.0 <= po._free_fraction(str(tmp_path)) <= 1.0
+    assert po._free_fraction(str(tmp_path / "missing")) is None
+
+
+def test_second_trigger_inside_the_interval_only_warns(tmp_path, monkeypatch):
+    calls = _recording_launcher(monkeypatch)
+    big = ScratchRead(True, 3, SCRATCH_WARN_BYTES + 1)
+    _banner(tmp_path, big, monkeypatch)
+    out = _banner(tmp_path, big, monkeypatch)
+    assert len(calls) == 1
+    assert "cleanup started" not in out[0] and "resolve:" in out[0]
+
+
+def test_trigger_fires_again_after_the_interval(tmp_path, monkeypatch):
+    import os
+
+    calls = _recording_launcher(monkeypatch)
+    big = ScratchRead(True, 3, SCRATCH_WARN_BYTES + 1)
+    _banner(tmp_path, big, monkeypatch)
+    stamp = tmp_path / po._SCRATCH_TRIGGER_STAMP
+    old = stamp.stat().st_mtime - po.SCRATCH_TRIGGER_INTERVAL_SECS - 1
+    os.utime(stamp, (old, old))
+    _banner(tmp_path, big, monkeypatch)
+    assert len(calls) == 2
+
+
+def test_failed_launch_keeps_the_plain_remedy(tmp_path, monkeypatch):
+    _recording_launcher(monkeypatch, ok=False)
+    out = _banner(tmp_path, ScratchRead(True, 3, SCRATCH_WARN_BYTES + 1), monkeypatch)
+    assert "resolve:" in out[0] and "cleanup started" not in out[0]
+
+
+def test_launcher_spawns_detached_with_the_op_and_params(tmp_path, monkeypatch):
+    import subprocess
+
+    seen = {}
+
+    class FakePopen:
+        def __init__(self, argv, **kw):
+            seen["argv"], seen["kw"] = argv, kw
+
+    monkeypatch.undo()
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    assert po._launch_scratch_hygiene(str(tmp_path), '{"a": 1}') is True
+    assert seen["argv"][1:] == ["fleet.scratch_hygiene", '{"a": 1}']
+    assert seen["kw"]["stdout"] is subprocess.DEVNULL and seen["kw"]["cwd"] == str(tmp_path)
+    assert seen["kw"].get("start_new_session") or "creationflags" in seen["kw"]
+
+    def boom(*a, **k):
+        raise OSError("no binary")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    assert po._launch_scratch_hygiene(str(tmp_path), "{}") is False

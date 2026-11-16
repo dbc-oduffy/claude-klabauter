@@ -68,6 +68,10 @@ def _spine(repo, name):
 
 
 def _land(repo, halted):
+    plan = halted.get(HALT_PLAN_FIELD)
+    if isinstance(plan, str):
+        (repo / plan).parent.mkdir(parents=True, exist_ok=True)
+        (repo / plan).write_text("plan\n", encoding="utf-8")
     out = commit_halted_record(
         repo, repo / ".git", {"script_path": "run.mjs", "run_id": RUN, HALTED_RECORD_PARAM: halted}
     )

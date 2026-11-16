@@ -68,7 +68,10 @@ def _marker(root: Path, solo: bool, withheld: tuple) -> tuple:
         st = root / c.status_rel("A")
         st.parent.mkdir(parents=True, exist_ok=True)
         st.write_text(json.dumps({"parent_id": PARENT, "status": "halted"}), encoding="utf-8")
-        body = {"status": "halted", "halted": "x", "plan": PLAN, "blocking": ["R1"], "run_base_sha": "c" * 40, "sizing_rel": None}
+        body = {
+            "status": "halted", "halted": "x", "plan": PLAN, "blocking": ["R1"], "met_by": {"R1": "d" * 40},
+            "run_base_sha": "c" * 40, "sizing_rel": None,
+        }
     d.mkdir(parents=True, exist_ok=True)
     marker = d / "halted.json"
     body["run_artifacts"] = {"withheld": {p: "r" for p in withheld}}

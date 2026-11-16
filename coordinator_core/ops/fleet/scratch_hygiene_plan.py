@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import time
 from dataclasses import dataclass, field
@@ -35,6 +36,70 @@ _WARP_DIRNAME = "warp"
 _RUN_FILE_SUFFIXES = (".workflow.mjs.emitted.json", ".workflow.mjs")
 OPEN_RUN_NO_RECORD_QUIESCENCE_HOURS = 168
 CURSOR_NAME = ".scratch-hygiene-cursor"
+#: ``skipped-budget`` reason for an entry cut by its own allowance; it was walked, so the cursor passes it.
+ENTRY_OVER_ALLOWANCE = "entry-over-allowance"
+
+
+_PLANS_RELDIR = ("docs", "plans")
+_PLAN_TERMINAL_STATUSES = frozenset({"implemented", "landed", "complete", "completed", "superseded", "abandoned"})
+_STATUS_RE = re.compile(r"^status:[ \t]*[\"']?([A-Za-z_-]+)", re.MULTILINE)
+_SCRATCH_CITE_RE = re.compile(r"scratch/(?:warp/)?[\w.\-]+")
+
+
+def _plan_files(plans: Path) -> list[tuple[Path, str]]:
+    """``(directory, file name)`` for ``docs/plans`` and each month subdirectory beneath it."""
+    found: list[tuple[Path, str]] = []
+    try:
+        top = sorted(os.scandir(plans), key=lambda e: e.name)
+    except OSError:
+        return found
+    for entry in top:
+        if entry.is_dir(follow_symlinks=False):
+            try:
+                found.extend((Path(entry.path), n) for n in sorted(os.listdir(entry.path)))
+            except OSError:
+                continue
+        else:
+            found.append((plans, entry.name))
+    return found
+
+
+def _collect(text: str, name: str, cited: dict[str, str]) -> None:
+    for m in _SCRATCH_CITE_RE.finditer(text):
+        start = m.start()
+        lead = "state/" if text.startswith("state/", start - 6) and start >= 6 else ""
+        cited.setdefault((lead + m.group(0)).rstrip(".").lower(), name)
+
+
+def _plan_scratch_citations(repo_root: Path) -> dict[str, str]:
+    """Scratch entries (repo-relative, posix) cited by a non-terminal plan body or its evidence
+    file, each mapped to one citing file's name. One in-process read of ``docs/plans`` and its
+    month subdirectories, no spawn. A plan with no readable status counts as non-terminal."""
+    cited: dict[str, str] = {}
+    files = _plan_files(repo_root.joinpath(*_PLANS_RELDIR))
+    terminal: dict[Path, bool] = {}
+    for folder, name in files:
+        if not name.endswith(".md"):
+            continue
+        try:
+            with open(folder / name, encoding="utf-8", errors="replace") as fh:
+                head = fh.read(2000)
+                m = _STATUS_RE.search(head)
+                is_terminal = m is not None and m.group(1).lower() in _PLAN_TERMINAL_STATUSES
+                terminal[folder / name[:-3]] = is_terminal
+                text = "" if is_terminal else head + fh.read()
+        except OSError:
+            continue
+        _collect(text, name, cited)
+    for folder, name in files:
+        if not name.endswith(".evidence.yaml") or terminal.get(folder / name[: -len(".evidence.yaml")], False):
+            continue
+        try:
+            text = (folder / name).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        _collect(text, name, cited)
+    return cited
 
 
 def _norm(path: str | os.PathLike[str]) -> str:
@@ -52,6 +117,12 @@ class _Context:
     registry_dir: Optional[Path] = None
     _live: Optional[list[session_registry.RegistryRow]] = field(default=None, repr=False)
     _open_files: Optional[set[str]] = field(default=None, repr=False)
+    _plan_cites: Optional[dict[str, str]] = field(default=None, repr=False)
+
+    def plan_cites(self, repo_root: Path) -> dict[str, str]:
+        if self._plan_cites is None:
+            self._plan_cites = _plan_scratch_citations(repo_root)
+        return self._plan_cites
 
     def live_rows(self) -> list[session_registry.RegistryRow]:
         if self._live is None:
@@ -238,13 +309,16 @@ def classify_entry(
     registry_dir: Optional[Path] = None,
     now: Optional[float] = None,
     deadline: Optional[float] = None,
+    entry_allowance: Optional[float] = None,
     _ctx: Optional[_Context] = None,
 ) -> dict[str, Any]:
     """Gate one top-level entry and return its purge record (``would-delete`` or one ``skipped-*``).
 
     Usable as apply's ``recheck``: it reads current disk state on every call. ``deadline`` is a
-    ``time.monotonic()`` instant: past it the entry is reported ``skipped-budget`` unwalked, since
-    the walk and the probe both scale with the entry's file count.
+    ``time.monotonic()`` instant: past it the entry is reported ``skipped-budget`` unwalked
+    (``budget-exhausted``), since the walk and the probe both scale with the entry's file count.
+    ``entry_allowance`` (seconds) caps this one entry's walk and probe: an entry that outruns it is
+    ``skipped-budget`` with ``ENTRY_OVER_ALLOWANCE``, so the shared ``deadline`` is never spent by it.
     """
     entry = os.fspath(entry)
     repo_root = Path(repo_root)
@@ -285,13 +359,31 @@ def classify_entry(
     no_record = open_run is not None and open_run[0] == "none"
     hours = max(quiescence_hours, OPEN_RUN_NO_RECORD_QUIESCENCE_HOURS) if no_record else quiescence_hours
     cutoff = now - hours * 3600.0
-    w = _walk(entry, cutoff, deadline)
+    limit = deadline
+    if entry_allowance is not None:
+        own = time.monotonic() + entry_allowance
+        limit = own if deadline is None else min(deadline, own)
+
+    def cut() -> dict[str, Any]:
+        shared_spent = deadline is not None and time.monotonic() >= deadline
+        return rec("skipped-budget", reason="budget-exhausted" if shared_spent else ENTRY_OVER_ALLOWANCE)
+
+    w = _walk(entry, cutoff, limit)
     if w.out_of_time:
-        return rec("skipped-budget", reason="budget-exhausted")
+        return cut()
     if w.young and no_record:
         return rec("skipped-live", w, reason=f"open-run-no-close-job:{open_run[1]}")
     if w.young:
         return rec("skipped-young", w, reason=f"written-within-{quiescence_hours:g}h")
+
+    try:
+        rel = Path(here).relative_to(_norm(repo_root)).as_posix()
+    except ValueError:
+        rel = ""
+    if rel:
+        citer = ctx.plan_cites(repo_root).get(rel.lower())
+        if citer:
+            return rec("skipped-live", w, reason=f"cited-by-open-plan:{citer}")
 
     if verify_copy and _norm(verify_copy.get("source", "")) == here:
         src = _tree_totals(entry)
@@ -299,9 +391,9 @@ def classify_entry(
         if src != dst:
             return rec("skipped-unverified", w, reason=f"copy-mismatch:files={src[0]}/{dst[0]},bytes={src[1]}/{dst[1]}")
 
-    held = _has_open_handle(entry, w, ctx, deadline)
+    held = _has_open_handle(entry, w, ctx, limit)
     if held is None:
-        return rec("skipped-budget", reason="budget-exhausted")
+        return cut()
     if held:
         return rec("skipped-live", w, reason="open-handle")
 
@@ -373,10 +465,12 @@ def plan_purge(
     deadline: Optional[float] = None,
     candidates: Optional[list[str]] = None,
     first_unbounded: bool = False,
+    entry_allowance: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """Dry-run purge records for every candidate entry (``candidates`` when given, else
     ``purge_candidates``). Deletes nothing. A missing root yields no records.
-    ``first_unbounded`` walks the first entry with no deadline, so a call always gates one."""
+    ``first_unbounded`` exempts the first entry from the shared ``deadline`` (``entry_allowance``
+    still caps it), so a call always gates one."""
     repo_root = Path(repo_root)
     ctx = _Context(registry_dir=registry_dir)
     now = time.time() if now is None else now
@@ -388,6 +482,7 @@ def plan_purge(
             verify_copy=verify_copy,
             now=now,
             deadline=None if first_unbounded and i == 0 else deadline,
+            entry_allowance=entry_allowance,
             _ctx=ctx,
         )
         for i, p in enumerate(purge_candidates(repo_root) if candidates is None else candidates)

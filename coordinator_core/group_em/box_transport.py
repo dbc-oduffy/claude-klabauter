@@ -587,7 +587,8 @@ def _relay_deliver(
     except (ValueError, IndexError):
         reply = None
     if proc.returncode not in (0, 1) or not isinstance(reply, dict):
-        tail = (proc.stderr or "").strip()[-300:]
+        err = (proc.stderr or "").strip()
+        tail = err[:300] if err.startswith("usage:") else err[-300:]
         return {**_unknown(f"ssh_exit_{proc.returncode}" if proc.returncode not in (0, 1) else "bad_reply"), "stderr": tail}
     if proc.returncode == 0 and reply.get("ok") is True:
         return {"ok": True, "reply": reply}
@@ -642,6 +643,46 @@ def _deliver_via(
     if reply.get("ok") is True:
         return res
     return {"ok": False, "reason": str(reply.get("reason", "far_refused"))}
+
+
+def _not_answered(reason: str) -> dict:
+    return {"ok": False, "answered": False, "reason": reason}
+
+
+def query_freshness(
+    box: dict,
+    runner: Optional[Runner] = None,
+    timeout: float = DEFAULT_TIMEOUT_S,
+) -> dict:
+    """Ask the far box's engine for its klabauter clone's freshness (the relay ``freshness`` mode when
+    the row carries ``relay_key``, else the ``fleet.klabauter_freshness`` op); never raises.
+
+    Returns ``{"ok": True, "answered": True, "reply": {"box_id", "result"}}`` when the far engine
+    replied with a ``FreshnessResult``; otherwise ``{"ok": False, "answered": False, "reason": ...}``
+    for every transport failure and for a far engine that could not run. A far relay that predates the
+    verb answers its usage line: reason ``relay_mode_absent``. The caller's ``timeout`` bounds the probe.
+    """
+    try:
+        transport = box.get("transport") if isinstance(box, dict) else None
+        if isinstance(transport, dict) and transport.get("relay_key") is not None:
+            res = _relay_deliver(box, "freshness", "", runner, timeout)
+            if not res["ok"]:
+                if res.get("reason") == "bad_reply" and str(res.get("stderr", "")).startswith("usage:"):
+                    return _not_answered("relay_mode_absent")
+                return _not_answered(str(res.get("reason", "far_refused")))
+            far_id, result = res["reply"].get("box_id"), res["reply"].get("result")
+        else:
+            res = _remote_invoke(box, "fleet.klabauter_freshness", {"fetch": True}, runner, timeout)
+            if not res["ok"]:
+                return _not_answered(str(res.get("reason", "far_refused")))
+            far_id, result = box.get("box_id"), res["reply"]
+            if isinstance(result, dict) and result.get("ok") is False:
+                return _not_answered(str(result.get("reason", "far_refused")))
+        if not isinstance(result, dict):
+            return _not_answered("bad_reply")
+        return {"ok": True, "answered": True, "reply": {"box_id": far_id, "result": result}}
+    except Exception as exc:  # noqa: BLE001 - contract: never raises
+        return _not_answered(f"freshness_failed:{type(exc).__name__}:{exc}")
 
 
 def deliver_revoke(

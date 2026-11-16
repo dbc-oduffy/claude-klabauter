@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 
@@ -44,7 +45,10 @@ def _next_action(monkeypatch, items, *, blocked=(), incomplete=("C9", "C10", "C1
     script = _script(monkeypatch)
     start = script.index("const _owedById")
     end = script.index("}; }", script.index("halted: 'ledger-check'", start)) + len("}; }")
+    fragments = "\n".join(re.findall(r"^\s*(const _PFC?\d+ = [^\n]*;)$", script, flags=re.MULTILINE))
     program = (
+        "const _owedIds = []; const _ledgerSc = null; const _lateUnplanned = []; const _addTaskRemedy = '';\n"
+        + fragments + "\n"
         "const _manifest = {owed: %s}; const _ledger = {items: %s}; const _ledgerBlocking = (l) => l.items;\n"
         "const _emptyVerdict = false; const _blockedChunks = %s; const _incompleteChunks = %s;\n"
         "let _halted = null; const _runId = 'run-1'; const _planRel = 'p.md'; const _sizingRel = 's.yaml';\n"

@@ -111,7 +111,7 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
     def remaining() -> float:
         budget = deadline - time.monotonic()
         if budget <= 0:
-            raise AgentFailed("Workflow agent deadline exhausted during admission or execution")
+            raise AgentFailed(f"{backend} agent timed out after {timeout_s}s (deadline exhausted during admission or execution)")
         return budget
 
     sid = parent_session_id if parent_session_id is not None else (

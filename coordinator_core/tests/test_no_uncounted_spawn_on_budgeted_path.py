@@ -2279,6 +2279,16 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "`subprocess.run` substituted: `scan_citers` over three ids and `primed` + `_citers` over "
         "the same ids each make exactly one spawn, `argv[:2] == ['git', '-c']`.",
     ),
+    # The orientation hook's scratch-hygiene launch: the one detached Popen, taken at most once per
+    # SCRATCH_TRIGGER_INTERVAL_SECS, behind the `_launch_scratch_hygiene` seam.
+    ("hooks.project_orientation", "coordinator_core/hooks/project_orientation.py", "_launch_scratch_hygiene", "<dynamic>", 0):
+    _Legitimation(
+        counter=_SEAM,
+        counted_by="coordinator_core/hooks/tests/test_project_orientation_scratch_banner.py",
+        executed="Seam substitution under `test_over_size_launches_the_op_once_and_says_so` "
+        "(`calls == [(repo, params)]`); the Popen shape itself under "
+        "`test_launcher_spawns_detached_with_the_op_and_params`.",
+    ),
     **{
         (op, "coordinator_core/ops/ceremony/detached_spawn.py", "spawn_detached", "<dynamic>", 0):
         _RESUME_LAUNCH_SEAM

@@ -54,6 +54,9 @@ Modes, read from SSH_ORIGINAL_COMMAND:
   keypin <box_id>   read {"box_id", "key_b64"} (one JSON line on stdin) and pin that key through
                     relayed_grant_peer.receive_key_pin; refused `no_peer` without the forced command's
                     `--peer`, `issuer_not_peer` unless box_id is that peer.
+  freshness         print {"ok": true, "box_id", "result"}: this box's klabauter clone freshness from the
+                    engine (fetching, and advancing the clone when the engine's freshness pass does);
+                    {"ok": false, "reason"} and exit 1 when the engine cannot run.
   grant, revoke and keypin refuse `issuer_not_peer` when `--peer` is set and the envelope's issuer box differs.
   membership get    print the held signed membership snapshot (canonical JSON line, then its
                     base64 signature line); exit 1 when none is held.
@@ -141,7 +144,7 @@ def mark_stale(name, state, until, box):
 # Every verb parse_mode accepts; a sender probes this list instead of guessing a far mirror's version.
 CAPABILITIES = ["roster", "source", "specs", "capabilities", "send", "send-batch", "send-to", "send-named",
                 "send-session", "receipts", "inbox-mux", "inbox", "reply-inbox", "mirror-stale",
-                "membership", "grant", "revoke", "keypin", "roster-mirrors"]
+                "membership", "grant", "revoke", "keypin", "roster-mirrors", "freshness"]
 
 
 def parse_mode(original_command):
@@ -157,6 +160,8 @@ def parse_mode(original_command):
         return "source", None
     if cmd == ["specs"]:
         return "specs", None
+    if cmd == ["freshness"]:
+        return "freshness", None
     if len(cmd) == 2 and cmd[0] == "send" and cmd[1].isdigit():
         return "send", int(cmd[1])
     if len(cmd) == 2 and cmd[0] == "send-batch" and cmd[1].isdigit():
@@ -1284,6 +1289,27 @@ def receive_grant():
     return suite_grant.receive_relayed_grant
 
 
+def freshness(run=None, box_id=None):
+    """The `freshness` mode's reply: this box's klabauter clone freshness from the engine, resolved lazily.
+
+    Runs ``run_freshness(do_fetch=True)``, whose ``apply_freshness`` may advance the clone: the verb
+    widens the relay key past message delivery, like ``grant``/``revoke``/``keypin``, which also
+    mutate far state. Never raises; ``{"ok": False, "reason"}`` when the engine cannot run.
+    """
+    try:
+        if run is None:
+            from coordinator_core.ops.fleet.klabauter_freshness import run_freshness as run
+        if box_id is None:
+            from coordinator_core.group_em.box_registry import local_box_id
+            box_id = local_box_id()
+    except ImportError:
+        return {"ok": False, "reason": "engine_unavailable"}
+    try:
+        return {"ok": True, "box_id": box_id, "result": run(do_fetch=True)}
+    except Exception as exc:
+        return {"ok": False, "reason": f"freshness_failed:{type(exc).__name__}"}
+
+
 def receive_revoke():
     """The engine's arrival check for a relayed revoke; the engine is resolved lazily."""
     try:
@@ -1877,7 +1903,7 @@ def main():
     parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
         sys.exit("usage: roster | capabilities | specs | send <pid> | send-batch <pid> | send-to <pid> <digest> | send-named <pid> <digest> <name-digest> | send-session <pid> <digest> <name-digest> <session-id> | receipts <session-id> <since> | inbox <name> | inbox-mux | reply-inbox <name> | source | "
-                 "grant <grantee> <note> <ttl> <repo> | revoke <grantee> | keypin <box_id> | membership get | membership put")
+                 "grant <grantee> <note> <ttl> <repo> | revoke <grantee> | keypin <box_id> | freshness | membership get | membership put")
     mode, arg = parsed
     if mode == "membership":
         membership = load_membership()
@@ -1904,6 +1930,10 @@ def main():
             reply = revoke(arg, line, peer=peer)
         else:
             reply = keypin(arg, line, peer=peer)
+        print(json.dumps(reply))
+        sys.exit(0 if reply.get("ok") is True else 1)
+    if mode == "freshness":
+        reply = freshness()
         print(json.dumps(reply))
         sys.exit(0 if reply.get("ok") is True else 1)
     if mode == "mirror-stale":

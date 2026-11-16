@@ -108,6 +108,8 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -914,14 +916,78 @@ def _scratch_size(nbytes: int) -> str:
     return f"{mb / 1024:.1f} GB" if mb >= 1024 else f"{mb:.1f} MB"
 
 
+SCRATCH_LOW_DISK_FREE_FRACTION = 0.10
+SCRATCH_TRIGGER_INTERVAL_SECS = 3600
+_SCRATCH_TRIGGER_STAMP = Path(".coordinator-local") / "scratch-hygiene-trigger.stamp"
+
+
+def _free_fraction(repo_root: str) -> Optional[float]:
+    """Free share of the volume holding ``repo_root`` (one statvfs); None when unreadable."""
+    try:
+        usage = shutil.disk_usage(repo_root)
+    except (OSError, ValueError):
+        return None
+    return usage.free / usage.total if usage.total else None
+
+
+def _claim_scratch_trigger(repo_root: str) -> bool:
+    """True when no trigger launched within SCRATCH_TRIGGER_INTERVAL_SECS; stamps the claim."""
+    stamp = Path(repo_root) / _SCRATCH_TRIGGER_STAMP
+    try:
+        if time.time() - stamp.stat().st_mtime < SCRATCH_TRIGGER_INTERVAL_SECS:
+            return False
+    except OSError:
+        pass
+    try:
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text("", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def _launch_scratch_hygiene(repo_root: str, params: str) -> bool:
+    """Start fleet.scratch_hygiene detached, stdio disowned; False when the spawn failed."""
+    argv = [str(settings_home() / "bin" / "coordinator-invoke"), "fleet.scratch_hygiene", params]
+    kwargs: dict = {}
+    if hasattr(os, "fork"):
+        kwargs["start_new_session"] = True
+    else:
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
+            subprocess, "CREATE_NO_WINDOW", 0
+        )
+    try:
+        subprocess.Popen(
+            argv,
+            cwd=repo_root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            **kwargs,
+        )
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def _scratch_size_banner(out: List[str], repo_root: Optional[str]) -> None:
-    """Warn when scratch is over SCRATCH_WARN_BYTES or its read hit a bound; silent otherwise."""
+    """Warn, and launch fleet.scratch_hygiene in the background, when scratch is over
+    SCRATCH_WARN_BYTES, its read hit the entry bound, or the volume is under
+    SCRATCH_LOW_DISK_FREE_FRACTION free; silent and idle otherwise.
+
+    Both reads are bounded (read_scratch, one statvfs); at most one launch per
+    SCRATCH_TRIGGER_INTERVAL_SECS.
+    """
     if not repo_root:
         return
     scratch = Path(repo_root) / "scratch"
     state_scratch = Path(repo_root) / "state" / "scratch"
     read = read_scratch([scratch, state_scratch])
-    if read.finished and read.bytes <= SCRATCH_WARN_BYTES:
+    free = _free_fraction(repo_root)
+    low_disk = free is not None and free < SCRATCH_LOW_DISK_FREE_FRACTION
+    over_size = read.bytes > SCRATCH_WARN_BYTES or read.over_entries
+    if read.finished and not over_size and not low_disk:
         return
     params = json.dumps({"repo_root": str(repo_root), "cadence": "workday_complete", "apply": True})
     remedy = (
@@ -930,13 +996,21 @@ def _scratch_size_banner(out: List[str], repo_root: Optional[str]) -> None:
         f"{Path(repo_root) / 'scratch-hold'}/)"
     )
     size = _scratch_size(read.bytes)
-    if read.finished:
+    if read.finished and over_size:
         head = f"Scratch is {size} (over 500 MB)"
+    elif read.finished:
+        head = f"Scratch is {size} and its volume has {free:.0%} free (under {SCRATCH_LOW_DISK_FREE_FRACTION:.0%})"
     elif read.over_entries:
         head = f"Scratch holds over {WALK_ENTRY_LIMIT} entries ({size} read in the first {WALK_ENTRY_LIMIT})"
     else:
         head = f"Scratch read stopped at its time allowance: {read.entries} entries and {size} read"
-    out.append(f"── ⚠ {head} — resolve: {remedy} ──\n")
+    lead = "resolve"
+    if (over_size or low_disk) and _claim_scratch_trigger(repo_root):
+        if _launch_scratch_hygiene(str(repo_root), params):
+            lead = "cleanup started in the background; to continue"
+        else:
+            (Path(repo_root) / _SCRATCH_TRIGGER_STAMP).unlink(missing_ok=True)
+    out.append(f"── ⚠ {head} — {lead}: {remedy} ──\n")
 
 
 BANNER_DETAIL_ENV = "COORDINATOR_BANNER_DETAIL"

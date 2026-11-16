@@ -17,7 +17,7 @@ from coordinator_core.ops.dispatch_emit import halted_run_landed as op
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import halted_record_message
-from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, resumable_plan
+from coordinator_core.ops.dispatch_emit.sizing_fire import resumable_plan
 from coordinator_core.testing.git_write import write_seen_by_git
 from coordinator_core.warp_fire import fire_command
 from coordinator_core.win_portability import no_console_creationflags
@@ -157,10 +157,8 @@ def _drive(root: Path, sha: str) -> dict:
     assert revised["ok"] and revised["withheld"] == ["R1"]
     assert _register(root)["R1"]["status"] == "deferred"
 
-    with pytest.raises(SizingFireRefused) as refire:
-        resumable_plan(yaml.safe_load((root / SIZING).read_text(encoding="utf-8")), SIZING, root, "m_plus")
-    (refusal,) = refire.value.fields
-    assert "already ran" in refusal and ROUTE in refusal
+    refire = resumable_plan(yaml.safe_load((root / SIZING).read_text(encoding="utf-8")), SIZING, root, "m_plus")
+    assert refire.incomplete == () and refire.ledger.halted == "all-landed" and refire.ledger.run_id == RUN
 
     digest = root / "scratch" / "task-output.json"
     digest.parent.mkdir(parents=True, exist_ok=True)
@@ -211,7 +209,7 @@ def test_halt_to_named_route_to_closed_with_r1_withheld(repo):
     marker = json.loads((root / f"state/warp/{RUN}/halted.json").read_text(encoding="utf-8"))
     assert marker["status"] == "landed" and marker["sha"] == sha
     assert legs["close-commit"].status == "ran", legs["close-commit"].detail
-    assert json.loads((root / c.status_rel(RUN)).read_text(encoding="utf-8"))["status"] == "landed"
+    assert not (root / c.status_rel(RUN)).exists()
 
 
 def test_without_a_review_record_the_stamp_and_flip_fail_while_the_rest_lands(repo):
@@ -229,3 +227,15 @@ def test_without_a_review_record_the_stamp_and_flip_fail_while_the_rest_lands(re
     assert _register(root)["R1"]["status"] == "deferred"
     marker = json.loads((root / f"state/warp/{RUN}/halted.json").read_text(encoding="utf-8"))
     assert marker["status"] == "landed"
+
+
+def test_a_ruled_out_row_owes_no_credit_but_an_unruled_blocking_row_still_does(repo):
+    root, _, _ = repo
+    rl._handler({"run_id": RUN, "verbatim": WORDS, "out_of_scope": ["R1"]}, repo_root=root)
+    assert op._standing_halt_problem(root, RUN, {}) is None
+
+    path = root / f"state/warp/{RUN}/halted.json"
+    marker = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**marker, "blocking": ["R1", "R9"]}), encoding="utf-8")
+    problem = op._standing_halt_problem(root, RUN, {})
+    assert problem and "blocking rows R9 carry no met_by credit" in problem

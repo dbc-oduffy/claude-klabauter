@@ -22,6 +22,7 @@ from coordinator_core.ops.fleet.scratch_hygiene_apply import apply_purge
 from coordinator_core.ops.fleet.scratch_hygiene_nag import hold_nag, hold_pending_nag
 from coordinator_core.ops.fleet.scratch_hygiene_plan import (
     CURSOR_NAME,
+    ENTRY_OVER_ALLOWANCE,
     _Context,
     classify_entry,
     ordered_candidates,
@@ -36,6 +37,10 @@ _NAG_CADENCES = ("workweek_start", "workweek_complete")
 #: One call's walk-probe-delete allowance. The work scales with file count, so the op is
 #: bounded by time and resumes on the next call; a background caller passes ``budget_secs``.
 DEFAULT_BUDGET_SECS = 0.4
+
+#: The share of a call's budget one entry's walk may spend, so one many-file directory
+#: leaves the rest of the budget to the entries behind it.
+ENTRY_ALLOWANCE_SHARE = 0.5
 
 
 def _bad(message: str) -> dict[str, Any]:
@@ -76,9 +81,15 @@ def _write_cursor(repo_root: Path, entry: str) -> None:
             pass
 
 
+def _deferred(rec: dict[str, Any]) -> bool:
+    """True when the shared budget ran out before the entry was walked. An entry cut by its own
+    allowance was walked, so the cursor moves past it."""
+    return rec["action"] == "skipped-budget" and rec.get("reason") != ENTRY_OVER_ALLOWANCE
+
+
 def _walk_counts(records: list[dict[str, Any]]) -> dict[str, int]:
     """``eligible`` = would-delete, ``walked`` = gated before the budget ran out, ``skipped_budget`` = the rest."""
-    skipped = sum(r["action"] == "skipped-budget" for r in records)
+    skipped = sum(_deferred(r) for r in records)
     return {
         "eligible": sum(r["action"] == "would-delete" for r in records),
         "walked": len(records) - skipped,
@@ -118,8 +129,9 @@ def run_hygiene(params: dict) -> dict[str, Any]:
     if budget is None:
         return _bad("budget_secs must be a non-negative number")
     # A call with no explicit budget always gates its first entry, so the cursor moves every call.
-    # Trap: that first walk has no deadline, so one huge entry exceeds the 500ms brightline.
+    # That entry is exempt from the shared deadline only; its own allowance still cuts it.
     guarantee = "budget_secs" not in params
+    allowance = budget * ENTRY_ALLOWANCE_SHARE
 
     records: list[dict[str, Any]] = []
     applied = False
@@ -137,9 +149,10 @@ def run_hygiene(params: dict) -> dict[str, Any]:
             deadline=deadline,
             candidates=candidates,
             first_unbounded=guarantee,
+            entry_allowance=allowance,
         )
         walk = _walk_counts(records)
-        last = next((c for c, r in zip(reversed(candidates), reversed(records)) if r["action"] != "skipped-budget"), None)
+        last = next((c for c, r in zip(reversed(candidates), reversed(records)) if not _deferred(r)), None)
         if last is not None:
             _write_cursor(repo_root, last)
     elif not nag_only:
@@ -156,12 +169,13 @@ def run_hygiene(params: dict) -> dict[str, Any]:
                 quiescence_hours=quiescence,
                 verify_copy=verify_copy,
                 deadline=None if guarantee and i == 0 else deadline,
+                entry_allowance=allowance,
                 _ctx=ctx,
             )
             gated.append(rec)
             out = apply_purge(repo_root, [rec], recheck=lambda _entry, _rec=rec: _rec)
             records.extend(out)
-            if rec["action"] != "skipped-budget":
+            if not _deferred(rec):
                 last_walked = entry
             if rec["action"] == "would-delete":
                 eligible += 1

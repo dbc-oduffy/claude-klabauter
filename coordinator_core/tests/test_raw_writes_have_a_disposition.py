@@ -371,6 +371,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/backlog_grind_assemble/grind_fix_paths.py': ('in-repo-non-state', 'per-row fix-paths json via tmp + os.replace under the caller-supplied <run_dir>/fix-paths, a run-artifact dir, never state/: write'),
     'coordinator_core/cartography/atlas_catchup.py': ('ignored-target', 'watermark and pending json via tmp + os.replace under the gitignored .coordinator-local/freshness/: _write_json'),
     'coordinator_core/cartography/atlas_freshness.py': ('in-repo-non-state', 'files: frontmatter line rewrite of docs/architecture/systems pages (write_bytes) and acted-fact JSON lines appended to the gitignored .coordinator-local/freshness/atlas-acted.jsonl, never state/: apply_repair, record_acted'),
+    'coordinator_core/hooks/project_orientation.py': ('ignored-target', 'empty once-per-hour claim stamp .coordinator-local/scratch-hygiene-trigger.stamp (gitignored) before launching fleet.scratch_hygiene: _claim_scratch_trigger'),
     'coordinator_core/hooks/commit_resolution.py': ('git-internal', 'staged-set cache json via tmp + os.replace beside the index inside the git dir, never the worktree: _save'),
     'coordinator_core/ops/rag_freshness.py': ('outside-repo', 'refresh-queue marker json under <settings-home>/rag-freshness-queue, never the repo: queue_refresh'),
     'coordinator_core/ops/reverify_base_measure.py': ('in-repo-non-state', 'baseline-measure result file at the caller-supplied out path (a run scratch artifact), never state/: main'),

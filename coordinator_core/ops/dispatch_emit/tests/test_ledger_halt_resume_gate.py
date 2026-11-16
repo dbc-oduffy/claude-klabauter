@@ -222,7 +222,8 @@ def test_all_landed_resume_is_the_same_with_or_without_a_halted_run(repo):  # no
     d = repo / "state" / "warp" / run_id
     d.mkdir(parents=True)
     (d / "halted.json").write_text(
-        json.dumps({"status": "halted", "sizing_rel": REL, "plan": PLAN_REL}), encoding="utf-8"
+        json.dumps({"status": "halted", "halted": "ledger-check", "sizing_rel": REL, "plan": PLAN_REL}),
+        encoding="utf-8",
     )
     routed = resumable_plan(_load(repo), REL, repo, "s")
     assert routed.incomplete == () and routed.ledger.halted == ALL_LANDED_HALT_KIND and routed.ledger.blocking == ()

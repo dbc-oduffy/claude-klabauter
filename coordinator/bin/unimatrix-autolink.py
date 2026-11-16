@@ -577,16 +577,39 @@ def ipaddress_literal(name):
         return False
 
 
+def relay_boxes(roster, remote, key, run=subprocess.run):
+    """Lower-cased `box` names the far relay's `roster` answer reports for itself, or None when it did not answer."""
+    cmd = ["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "AddressFamily=inet",
+           "-o", f"ConnectTimeout={PROBE_CONNECT_SECONDS}", remote, "roster"]
+    try:
+        r = run(cmd, capture_output=True, timeout=PROBE_TIMEOUT_SECONDS, creationflags=roster.no_window())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode:
+        return None
+    boxes = set()
+    for line in (r.stdout or b"").decode("utf-8", "replace").splitlines():
+        try:
+            box = json.loads(line).get("entry", {}).get("box")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(box, str) and box.strip():
+            boxes.add(_host_key(box))
+    return boxes
+
+
 def ssh_alias_fallback(roster, alias, key, why, probe_fn, aliases_fn=None, hostname_fn=None, mdns_fn=None,
-                       resolve_fn=None, entries=None, identity_fn=None):
+                       resolve_fn=None, entries=None, identity_fn=None, boxes_fn=None):
     """(remote, why, note, key) after the recorded name and mDNS failed: probe each ssh-config alias naming the same box.
 
     An alias names the box when its `ssh -G` HostName equals the recorded host (`.local`, case ignored); else when
     a known_hosts host key recorded for the alias or its HostName equals one recorded for the recorded host (no
-    network, so a stale hosts line or failing mDNS cannot hide it); else when its HostName is or resolves to a
-    live mDNS address (asked once). The first alias that answers a probe is `remote` (`<user>@<alias>` when the
-    recorded name had a user), probed with its own IdentityFile and the recorded `key` when it has none;
-    `key` returned is the one that answered."""
+    network, so a stale hosts line or failing mDNS cannot hide it); else when the alias (or its HostName) has a
+    supervisor record in the state dir and the far relay's own `roster` answer reports the recorded host as its
+    box (one ssh per such alias, which is also its probe, for a recorded name known_hosts never saw); else when
+    its HostName is or resolves to a live mDNS address (asked once). The first alias that answers a probe is
+    `remote` (`<user>@<alias>` when the recorded name had a user), probed with its own IdentityFile and the
+    recorded `key` when it has none; `key` returned is the one that answered."""
     host = alias.rpartition("@")[2]
     want, user = _host_key(host), alias.rpartition("@")[0]
     hostname_fn = hostname_fn or ssh_hostname
@@ -598,6 +621,17 @@ def ssh_alias_fallback(roster, alias, key, why, probe_fn, aliases_fn=None, hostn
         recorded = known_host_keys([host], entries)
         if recorded:
             matched = [a for a, h in names if recorded & known_host_keys([a, h], entries)]
+    answered = {}
+    if not matched and names:
+        held = {_host_key(a.rpartition("@")[2]) for a in record_aliases(state_dir(roster))}
+        for a, h in names:
+            if _host_key(a) not in held and not (h and _host_key(h) in held):
+                continue
+            remote = f"{user}@{a}" if user else a
+            own = (identity_fn or ssh_identity_file)(roster, a) or key
+            if want in ((boxes_fn or relay_boxes)(roster, remote, own) or ()):
+                matched.append(a)
+                answered[a] = own
     if not matched:
         name = live_name(roster, alias)
         live = set((mdns_fn or mdns_a_records)(name) if name and names else [])
@@ -605,8 +639,8 @@ def ssh_alias_fallback(roster, alias, key, why, probe_fn, aliases_fn=None, hostn
         matched = [a for a, h in names if h and (h in live or resolve(h) in live)] if live else []
     for cand in matched:
         remote = f"{user}@{cand}" if user else cand
-        own = (identity_fn or ssh_identity_file)(roster, cand) or key
-        if not probe_fn(roster, alias, own, remote=remote):
+        own = answered.get(cand) or (identity_fn or ssh_identity_file)(roster, cand) or key
+        if cand in answered or not probe_fn(roster, alias, own, remote=remote):
             return remote, None, f"ssh alias {cand} names the same box and answered", own
     return (alias, why,
             f"ssh alias {', '.join(matched)} named the same box and did not answer" if matched else None, key)

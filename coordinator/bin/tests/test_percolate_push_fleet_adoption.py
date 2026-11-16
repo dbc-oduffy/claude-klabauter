@@ -106,6 +106,28 @@ def test_all_adopted_has_no_stderr_line(wired, capsys):
     assert "NOT FLEET-LIVE" not in capsys.readouterr().err
 
 
+def test_cannot_ask_is_split_from_not_fleet_live(wired, capsys):
+    wired["rows"] = [
+        fleet_adoption.BoxAdoption("machine-a", True, _SHA, ""),
+        fleet_adoption.BoxAdoption("machine-b", False, "b" * 40, "diverged"),
+        fleet_adoption.BoxAdoption("mini", False, "", "timeout", fleet_adoption.CANNOT_ASK),
+    ]
+    assert _mod._cmd_push(_args()) == 0
+    err = capsys.readouterr().err
+    assert "NOT FLEET-LIVE: machine-b" in err
+    assert "mini" not in err.split("CANNOT ASK")[0]
+    assert "CANNOT ASK: mini (timeout)" in err
+    assert "machine-b (" not in err
+
+
+def test_only_cannot_ask_has_no_not_fleet_live_line(wired, capsys):
+    wired["rows"] = [fleet_adoption.BoxAdoption("mini", False, "", "timeout", fleet_adoption.CANNOT_ASK)]
+    assert _mod._cmd_push(_args()) == 0
+    err = capsys.readouterr().err
+    assert "NOT FLEET-LIVE" not in err
+    assert "CANNOT ASK: mini (timeout)" in err
+
+
 def test_other_target_skips_fan_out(wired, capsys):
     assert _mod._cmd_push(_args(target="claude-other")) == 0
     assert wired["calls"] == []

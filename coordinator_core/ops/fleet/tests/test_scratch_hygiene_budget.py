@@ -155,9 +155,12 @@ def test_default_call_walks_a_slow_first_entry_and_moves_the_cursor(tmp_path, mo
 
         def slow(top, cutoff, deadline=None, _real=real):
             time.sleep(0.05)
-            return _real(top, cutoff, deadline)
+            return _real(top, cutoff)
 
         monkeypatch.setattr(plan_module, "_walk", slow)
+        # The fake walk outlives the entry allowance without reporting it; the Windows handle probe honours
+        # that allowance and would cut the entry, so these budget tests pin the probe off on every platform.
+        monkeypatch.setattr(plan_module, "_has_open_handle", lambda *a, **k: False)
         out = _default_call(root, apply)
         assert out["walk"]["walked"] >= 1
         assert out["walk"]["skipped_budget"] == 2
@@ -179,6 +182,9 @@ def test_default_calls_cover_the_whole_backlog_and_wrap(tmp_path, monkeypatch):
 
     monkeypatch.setattr(op, "DEFAULT_BUDGET_SECS", 0.01)
     monkeypatch.setattr(plan_module, "_walk", slow)
+    # The fake walk outlives the entry allowance without reporting it; the Windows handle probe honours
+    # that allowance and would cut the entry, so these budget tests pin the probe off on every platform.
+    monkeypatch.setattr(plan_module, "_has_open_handle", lambda *a, **k: False)
     for _ in range(5):
         _default_call(tmp_path, False)
     assert order == [f"a{i:02d}-kept" for i in range(4)] + ["a00-kept"]
@@ -196,8 +202,8 @@ def test_an_entry_cut_off_by_the_deadline_is_never_deleted(tmp_path, monkeypatch
 
     monkeypatch.setattr(plan_module, "_walk", cut)
     out = _default_call(tmp_path, True)
-    assert out["walk"]["deleted"] == 1
-    assert [p.name for p in (tmp_path / "scratch").glob("b*-old")] == ["b01-old", "b02-old"]
+    assert out["walk"]["deleted"] == 0
+    assert len(list((tmp_path / "scratch").glob("b*-old"))) == 3
 
 
 def test_progressing_budget_deferred_call_exits_zero_and_other_skips_still_exit_one(tmp_path, monkeypatch):
@@ -232,9 +238,12 @@ def test_default_call_on_a_large_backlog_with_slow_first_entry_exits_zero(tmp_pa
 
     def slow(top, cutoff, deadline=None):
         time.sleep(0.05)
-        return real(top, cutoff, deadline)
+        return real(top, cutoff)
 
     monkeypatch.setattr(plan_module, "_walk", slow)
+    # The fake walk outlives the entry allowance without reporting it; the Windows handle probe honours
+    # that allowance and would cut the entry, so these budget tests pin the probe off on every platform.
+    monkeypatch.setattr(plan_module, "_has_open_handle", lambda *a, **k: False)
     out = _default_call(tmp_path, False)
     assert out["walk"]["walked"] >= 1
     assert out["walk"]["skipped_budget"] > 0
@@ -251,6 +260,56 @@ def test_cursor_file_is_never_a_purge_candidate(tmp_path):
     out = _call(tmp_path, True)
     assert cursor.exists()
     assert all(r["path"] != "scratch/.scratch-hygiene-cursor" for r in out["records"] if r.get("kind") == "purge")
+
+
+def _huge_first_fixture(root, stale=5):
+    _old_tree(root, "a00-huge", files=1)
+    for i in range(stale):
+        _old_tree(root, f"b{i:02d}-stale", files=2)
+
+
+def _huge_walk_is_slow(monkeypatch):
+    """The huge entry's walk runs until its limit; a limitless walk would run a full second."""
+    real = plan_module._walk
+
+    def walk(top, cutoff, deadline=None):
+        if os.path.basename(top) == "a00-huge":
+            time.sleep(max(deadline - time.monotonic(), 0) if deadline is not None else 1.0)
+            w = plan_module._Walk()
+            w.out_of_time = deadline is not None
+            return w
+        return real(top, cutoff, deadline)
+
+    monkeypatch.setattr(plan_module, "_walk", walk)
+
+
+def test_one_huge_first_entry_does_not_starve_the_entries_behind_it(tmp_path, monkeypatch):
+    for apply in (False, True):
+        root = tmp_path / str(apply)
+        root.mkdir()
+        _huge_first_fixture(root)
+        _huge_walk_is_slow(monkeypatch)
+        out = _default_call(root, apply)
+        purge = {r["path"]: r for r in out["records"] if r.get("kind") == "purge"}
+        assert purge["scratch/a00-huge"]["reason"] == "entry-over-allowance"
+        for i in range(5):
+            assert purge[f"scratch/b{i:02d}-stale"]["action"] == ("deleted" if apply else "would-delete")
+        assert out["walk"]["skipped_budget"] == 0
+        assert (root / "scratch" / "a00-huge").exists()
+
+
+def test_a_cut_entry_is_passed_by_the_cursor_not_retried_forever(tmp_path, monkeypatch):
+    _huge_first_fixture(tmp_path, stale=2)
+    _huge_walk_is_slow(monkeypatch)
+    _default_call(tmp_path, False)
+    cursor = json.loads((tmp_path / "scratch" / ".scratch-hygiene-cursor").read_text(encoding="utf-8"))["after"]
+    assert cursor == str(tmp_path / "scratch" / "b01-stale")
+
+
+def test_an_entry_past_the_shared_deadline_is_still_budget_exhausted(tmp_path):
+    entry = _old_tree(tmp_path, "a")
+    rec = classify_entry(entry, repo_root=tmp_path, deadline=time.monotonic() - 1, entry_allowance=5)
+    assert rec["reason"] == "budget-exhausted"
 
 
 def test_a_top_level_file_entry_is_deleted(tmp_path):

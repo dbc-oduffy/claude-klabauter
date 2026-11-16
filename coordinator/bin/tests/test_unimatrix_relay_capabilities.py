@@ -41,7 +41,8 @@ def test_every_listed_capability_is_a_parse_mode_verb():
     probes = {"roster": "roster", "source": "source", "specs": "specs", "capabilities": "capabilities",
               "send": "send 1", "send-batch": "send-batch 1", "inbox-mux": "inbox-mux",
               "inbox": "inbox abc", "reply-inbox": "reply-inbox abc",
-              "membership": "membership get", "keypin": "keypin abc", "revoke": "revoke abc"}
+              "membership": "membership get", "keypin": "keypin abc", "revoke": "revoke abc",
+              "freshness": "freshness"}
     assert "roster-mirrors" in R.CAPABILITIES and R.parse_mode("roster --mirrors") == ("roster", "mirrors")
     for verb, cmd in probes.items():
         assert verb in R.CAPABILITIES

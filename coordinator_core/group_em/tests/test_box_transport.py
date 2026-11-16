@@ -491,3 +491,57 @@ def test_corrupt_rate_file_fails_closed_without_a_spawn():
     calls = []
     assert _refused(box_transport.send(BOX, "s", "t", runner=_runner("{}", calls=calls)), "rate_limited")
     assert calls == []
+
+
+RESULT = {"action": "none", "local_sha": "a" * 40, "origin_sha": "a" * 40}
+
+
+def test_query_freshness_relay_row_runs_the_freshness_verb_never_coordinator_invoke(monkeypatch):
+    monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: [dict(RELAY_BOX)])
+    calls = []
+    reply = {"ok": True, "box_id": "box-far", "result": RESULT}
+    out = box_transport.query_freshness(RELAY_BOX, runner=_relay_runner(calls, reply), timeout=7)
+    assert out == {"ok": True, "answered": True, "reply": {"box_id": "box-far", "result": RESULT}}
+    argv, stdin = calls[0]
+    assert argv[-2:] == ["box.example", "freshness"] and "coordinator-invoke" not in " ".join(argv)
+    assert argv[1:3] == ["-i", "/keys/unimatrix"] and stdin == ""
+    assert "ConnectTimeout=7" in argv
+
+
+def test_query_freshness_invoke_row_calls_the_op_and_normalises_a_bare_result():
+    calls = []
+    out = box_transport.query_freshness(BOX, runner=_runner(json.dumps(RESULT), calls=calls))
+    assert out == {"ok": True, "answered": True, "reply": {"box_id": "box-mac", "result": RESULT}}
+    assert "fleet.klabauter_freshness" in calls[0][-1] and '"fetch": true' in calls[0][-1]
+
+
+def test_query_freshness_unknown_verb_usage_maps_to_relay_mode_absent(monkeypatch):
+    monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: [dict(RELAY_BOX)])
+    usage = "usage: roster | capabilities | " + "x" * 400
+
+    def run(argv, timeout, stdin_text):
+        return subprocess.CompletedProcess(argv, 1, "", usage + "\n")
+
+    out = box_transport.query_freshness(RELAY_BOX, runner=run)
+    assert out == {"ok": False, "answered": False, "reason": "relay_mode_absent"}
+
+
+def test_query_freshness_failures_are_not_answered(monkeypatch):
+    monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: [dict(RELAY_BOX)])
+    far = box_transport.query_freshness(RELAY_BOX, runner=_relay_runner([], {"ok": False, "reason": "engine_import"}, 1))
+    assert far == {"ok": False, "answered": False, "reason": "engine_import"}
+
+    def run(argv, timeout, stdin_text):
+        return subprocess.CompletedProcess(argv, 255, "", "Permission denied")
+
+    assert box_transport.query_freshness(RELAY_BOX, runner=run) == {
+        "ok": False, "answered": False, "reason": "ssh_exit_255"}
+
+    def boom(argv, timeout, stdin_text):
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    assert box_transport.query_freshness(RELAY_BOX, runner=boom)["reason"] == "ssh_timeout"
+    no_invoke = {"box_id": "box-mac", "transport": {"kind": "ssh", "host": "box.example"}}
+    assert box_transport.query_freshness(no_invoke, runner=_runner("{}")) == {
+        "ok": False, "answered": False, "reason": "no_invoke_path"}
+    assert box_transport.query_freshness(None)["answered"] is False

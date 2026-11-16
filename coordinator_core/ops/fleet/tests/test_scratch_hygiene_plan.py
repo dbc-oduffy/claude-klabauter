@@ -324,3 +324,52 @@ def test_queue_grind_evidence_is_never_planned(repo):
     _backdate_to(repo / "state" / "queue-grind", 10)
     (repo / "state" / "scratch").mkdir(parents=True)
     assert not any("queue-grind" in p for p in _plan_actions(repo))
+
+
+def _scratch_entry(repo: Path, name: str) -> Path:
+    d = repo / "scratch" / name
+    d.mkdir(parents=True)
+    (d / "f.txt").write_text("x")
+    _backdate_to(d, 10)
+    return d
+
+
+def _plan_doc(repo: Path, stem: str, status: str, body: str = "", evidence: str = "") -> None:
+    plans = repo / "docs" / "plans"
+    plans.mkdir(parents=True, exist_ok=True)
+    (plans / f"{stem}.md").write_text(f"---\nstatus: {status}\n---\n{body}\n")
+    if evidence:
+        (plans / f"{stem}.evidence.yaml").write_text(evidence)
+
+
+@pytest.mark.parametrize("where", ["evidence", "body"])
+def test_scratch_cited_by_a_non_terminal_plan_is_kept(repo, where):
+    d = _scratch_entry(repo, "proof-logs")
+    cite = "- path: scratch/proof-logs/c6.log\n"
+    _plan_doc(repo, "p1", "executing", body=cite if where == "body" else "", evidence=cite if where == "evidence" else "")
+    r = _classify(repo, d)
+    assert r["action"] == "skipped-live" and r["reason"].startswith("cited-by-open-plan:p1")
+
+
+@pytest.mark.parametrize("where", ["evidence", "body"])
+def test_scratch_cited_only_by_a_terminal_plan_is_deleted(repo, where):
+    d = _scratch_entry(repo, "proof-logs")
+    cite = "- path: scratch/proof-logs/c6.log\n"
+    _plan_doc(repo, "p1", "implemented", body=cite if where == "body" else "", evidence=cite if where == "evidence" else "")
+    assert _classify(repo, d)["action"] == "would-delete"
+
+
+def test_a_citation_of_a_longer_name_does_not_keep_a_prefix_entry(repo):
+    d = _scratch_entry(repo, "proof")
+    _plan_doc(repo, "p1", "executing", evidence="- path: scratch/proof-logs/c6.log\n")
+    assert _classify(repo, d)["action"] == "would-delete"
+
+
+def test_scratch_cited_by_a_non_terminal_plan_in_a_month_subdirectory_is_kept(repo):
+    d = _scratch_entry(repo, "proof-logs")
+    month = repo / "docs" / "plans" / "2026-11"
+    month.mkdir(parents=True)
+    (month / "p1.md").write_text('---\nstatus: "executing"\n---\n')
+    (month / "p1.evidence.yaml").write_text("- path: scratch/proof-logs/c6.log\n")
+    r = _classify(repo, d)
+    assert r["action"] == "skipped-live" and r["reason"] == "cited-by-open-plan:p1.evidence.yaml"

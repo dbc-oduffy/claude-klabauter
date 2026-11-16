@@ -144,7 +144,7 @@ def test_nonzero_exit_fails_even_with_valid_result(tmp_path, monkeypatch):
 def test_timeout_kills_worker(tmp_path, monkeypatch):
     fake_cli(tmp_path, monkeypatch, delay=10)
     with pytest.raises(agents.AgentFailed, match="timed out"):
-        agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent", timeout_s=.1)
+        agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent", timeout_s=1.0)
     process = json.loads((tmp_path / "agent/process.json").read_text())
     assert process["pid"] > 0 and process["exit_code"] != 0
     assert process["native_thread_id"] == "unknown"

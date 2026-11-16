@@ -663,6 +663,74 @@ def test_alias_with_a_different_host_key_is_never_used(env, monkeypatch):
     assert sp.cmds == [] and [r for r, _ in probe_fn.seen] == ["example-operator@Mac-mini.local"]
 
 
+def _identity_env(env, monkeypatch, record="autolink-example_operator_at_macmini.json"):
+    _alias_env(env, monkeypatch, {"macmini": "192.168.0.175", "other": "elsewhere.lan"})
+    monkeypatch.setattr(env.al, "_known_hosts_entries", lambda *a, **k: [(["192.168.0.175", "macmini"], "k1")])
+    own = str(env.home / "unimatrix-zero-machine-a-to-macmini")
+    monkeypatch.setattr(env.al, "ssh_identity_file", lambda roster, a, run=None: own if a == "macmini" else None)
+    if record:
+        env.sdir.mkdir(parents=True, exist_ok=True)
+        (env.sdir / record).write_text("{}", encoding="utf-8")
+    return own
+
+
+def _boxes_fn(reported):
+    seen = []
+
+    def fn(roster, remote, key, run=None):
+        seen.append((remote, key))
+        return reported.get(remote)
+
+    fn.seen = seen
+    return fn
+
+
+def test_alias_with_a_link_record_and_the_recorded_box_in_its_roster_links_without_known_hosts(env, monkeypatch):
+    own = _identity_env(env, monkeypatch)
+    boxes_fn, probe_fn = _boxes_fn({"example-operator@macmini": {"mac-mini"}}), _keyed_probe(set())
+    remote, why, note, key = env.al.ssh_alias_fallback(
+        env.roster, "example-operator@Mac-mini.local", "/rec", "rc=255", probe_fn, mdns_fn=lambda n: [], boxes_fn=boxes_fn)
+    assert (remote, why, key) == ("example-operator@macmini", None, own)
+    assert "ssh alias macmini names the same box and answered" in note
+    assert boxes_fn.seen == [("example-operator@macmini", own)] and probe_fn.seen == []
+
+
+def test_alias_whose_roster_reports_another_box_is_never_used(env, monkeypatch):
+    _identity_env(env, monkeypatch)
+    boxes_fn, probe_fn = _boxes_fn({"example-operator@macmini": {"machine-b"}}), _keyed_probe({"example-operator@macmini"})
+    remote, why, note, key = env.al.ssh_alias_fallback(
+        env.roster, "example-operator@Mac-mini.local", "/rec", "rc=255", probe_fn, mdns_fn=lambda n: [], boxes_fn=boxes_fn)
+    assert remote == "example-operator@Mac-mini.local" and why == "rc=255" and probe_fn.seen == []
+
+
+def test_alias_without_a_link_record_is_never_asked_for_its_roster(env, monkeypatch):
+    _identity_env(env, monkeypatch, record=None)
+    boxes_fn = _boxes_fn({"example-operator@macmini": {"mac-mini"}})
+    remote, why, _, _ = env.al.ssh_alias_fallback(
+        env.roster, "example-operator@Mac-mini.local", "/rec", "rc=255", _keyed_probe(set()), mdns_fn=lambda n: [],
+        boxes_fn=boxes_fn)
+    assert why == "rc=255" and boxes_fn.seen == []
+
+
+def test_run_links_the_mini_through_the_alias_when_known_hosts_has_no_entry_for_the_recorded_name(env, monkeypatch):
+    own = _identity_env(env, monkeypatch)
+    monkeypatch.setattr(env.al, "relay_boxes", _boxes_fn({"example-operator@macmini": {"mac-mini"}}))
+    sp = Spawner()
+    env.al.run(roster=env.roster, boxes=["example-operator@Mac-mini.local"], spawn=sp, probe_fn=_keyed_probe(set()),
+               stable_fn=boom, mdns_fn=lambda name: [])
+    assert len(sp.cmds) == 2, (env.sdir / "autolink.log").read_text()
+    for c in sp.cmds:
+        assert c[c.index("--remote") + 1] == "example-operator@macmini" and own in c
+
+
+def test_relay_boxes_reads_the_box_of_each_roster_entry(env):
+    out = b'{"entry": {"box": "Mac-Mini.local"}}\nnot json\n{"entry": {"box": "mac-mini"}}\n{"entry": {}}\n'
+    run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, out, b"")
+    assert env.al.relay_boxes(env.roster, "example-operator@macmini", "/k", run=run) == {"mac-mini"}
+    fail = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 255, b"", b"x")
+    assert env.al.relay_boxes(env.roster, "example-operator@macmini", "/k", run=fail) is None
+
+
 def test_hashed_known_hosts_entry_for_the_recorded_name_matches(env):
     import base64, hashlib, hmac
     salt = b"0123456789abcdefghij"

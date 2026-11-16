@@ -1029,11 +1029,29 @@ def _met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -
 _COMPLETION_GATE_PREFIX = "completion gate:"
 
 
+def _ruled_out_rows(root: Path, marker: dict) -> set:
+    """Ids of the marker's sizing register rows a ``workflow.revise`` ruled out of scope; empty when the register is unreadable."""
+    rel = marker.get("sizing_rel")
+    if not isinstance(rel, str) or not rel:
+        return set()
+    from coordinator_core.ops import requirement_register as rr
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import _sizing_path, ruled_out_ids
+
+    try:
+        register = rr.read_register(_sizing_path(Path(root), rel).read_text(encoding="utf-8"))
+        if register is None:
+            return set()
+        return set(ruled_out_ids([r for r in register.rows if isinstance(r, dict)]))
+    except (OSError, ValueError):
+        return set()
+
+
 def _standing_halt_problem(root: Path, run_id: str, credited: dict) -> Optional[str]:
     """Refusal while the run's halt marker states a reason no evidence discharges, else None.
 
     Blocking rows (``_withheld``) owe a ``met_by`` credit, from this call (*credited*) or already
-    stamped on the marker. A marker whose ``reason``/``halted`` starts ``completion gate:`` also owes a
+    stamped on the marker; a row a revise ruled out of scope (``_ruled_out_rows``) owes none. A marker
+    whose ``reason``/``halted`` starts ``completion gate:`` also owes a
     review record whose ``completion_blockers`` (halt marker excluded) is empty. A marker-less run
     (``in_run``, ``landed_under``, never halted) has nothing standing.
     """
@@ -1046,7 +1064,7 @@ def _standing_halt_problem(root: Path, run_id: str, credited: dict) -> Optional[
     if marker is None:
         return None
     stamped = marker.get(MET_BY_FIELD)
-    have = set(credited) | (set(stamped) if isinstance(stamped, dict) else set())
+    have = set(credited) | (set(stamped) if isinstance(stamped, dict) else set()) | _ruled_out_rows(root, marker)
     uncredited = [b for b in _blocking_rows(marker) if b not in have]
     if uncredited:
         shape = "{" + ", ".join(f'"{b}": "<sha>"' for b in uncredited) + "}"

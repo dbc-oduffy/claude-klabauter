@@ -25,6 +25,8 @@ PARENT = "ask-parent-20261015T000000-abcdef"
 SOLO = "warp-2026-10-20-solo-20261020T000000-abcdef"
 REAL_LAUNCH = op._launch
 RECORD_RESIDUE_STATUS = 1  # the one `git status` of record_dir_residue in the landed-record commit
+RECORD_LANDED_PATHS = 1  # the one `git diff-tree` of the landing sha that `_closed_trailers` reads for the sibling-checkpoint scan
+RECORD_COMMIT_SPAWNS = RECORD_RESIDUE_STATUS + RECORD_LANDED_PATHS
 
 
 def _budget() -> dict:
@@ -103,7 +105,7 @@ def test_solo_run_full_sha_spawns_one_ancestry_check(repo, monkeypatch):
     _seed_solo(root)
     out, spawns = _count(monkeypatch, root, run_id=SOLO, sha=shas[0])
     assert out["ok"], out
-    assert len(spawns) == _budget()["ancestry_check"] + RECORD_RESIDUE_STATUS, [s.argv for s in spawns]
+    assert len(spawns) == _budget()["ancestry_check"] + RECORD_COMMIT_SPAWNS, [s.argv for s in spawns]
 
 
 def test_abbreviated_sha_spawns_prefix_resolve_plus_ancestry_check(repo, monkeypatch):
@@ -113,7 +115,7 @@ def test_abbreviated_sha_spawns_prefix_resolve_plus_ancestry_check(repo, monkeyp
     assert out["ok"] and out["sha"] == shas[0], out
     budget = _budget()
     assert len(spawns) == (
-        budget["ancestry_check"] + budget["prefix_resolve"] + RECORD_RESIDUE_STATUS
+        budget["ancestry_check"] + budget["prefix_resolve"] + RECORD_COMMIT_SPAWNS
     ), [s.argv for s in spawns]
 
 
@@ -122,7 +124,7 @@ def test_three_sha_set_is_still_one_ancestry_check(repo, monkeypatch):
     _seed_solo(root)
     out, spawns = _count(monkeypatch, root, run_id=SOLO, shas=list(shas))
     assert out["ok"], out
-    assert len(spawns) == _budget()["ancestry_check"] + RECORD_RESIDUE_STATUS, [s.argv for s in spawns]
+    assert len(spawns) == _budget()["ancestry_check"] + RECORD_COMMIT_SPAWNS, [s.argv for s in spawns]
 
 
 def test_several_withheld_paths_add_no_per_path_spawn(repo, monkeypatch):
@@ -135,7 +137,7 @@ def test_several_withheld_paths_add_no_per_path_spawn(repo, monkeypatch):
     marker.write_text(json.dumps(data), encoding="utf-8")
     out, spawns = _count(monkeypatch, root, run_id=SOLO, sha=landed)
     assert out["ok"] and sorted(out["covers"][landed]) == sorted(names), out
-    assert len(spawns) == _budget()["ancestry_check"] + RECORD_RESIDUE_STATUS, [s.argv for s in spawns]
+    assert len(spawns) == _budget()["ancestry_check"] + RECORD_COMMIT_SPAWNS, [s.argv for s in spawns]
 
 
 def test_idempotent_second_call_spawns_nothing(repo, monkeypatch):
@@ -157,7 +159,7 @@ def test_full_sha_that_is_not_a_commit_spawns_nothing(repo, monkeypatch):
 
 def test_a_written_landing_launches_the_close_job_exactly_once(repo, launches):
     root, shas = repo
-    _seed_solo(root, plan="docs/plans/p.md", blocking=["R1"], run_base_sha="c" * 40)
+    _seed_solo(root, plan="docs/plans/p.md", blocking=["R1"], met_by={"R1": "d" * 40}, run_base_sha="c" * 40)
     out = op._handler({"run_id": SOLO, "sha": shas[0]}, root)
     assert out["ok"] and out["written"] is True and out["close"]["launched"] is True, out
     assert launches == [SOLO]
