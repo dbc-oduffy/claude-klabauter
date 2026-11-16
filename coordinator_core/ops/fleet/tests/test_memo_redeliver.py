@@ -168,7 +168,7 @@ class TestRefusals:
         )
         _git(receiver, "add", "-A")
         _git(receiver, "commit", "-m", "occupy filename")
-        _git(receiver, "push", "-q", "origin", "main")
+        _git(receiver, "push", "-q", "origin", "work/test/2026-11-16")
         source = _write_stranded(tmp_path)
         before = _repo_state(receiver)
 

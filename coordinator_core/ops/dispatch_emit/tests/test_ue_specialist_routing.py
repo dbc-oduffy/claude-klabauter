@@ -122,15 +122,14 @@ def test_specialist_absent_from_roster_keeps_regular_with_drift_note(world, monk
     assert len(notes) == 1 and notes[0].startswith("drift:") and "roster" in notes[0]
 
 
-def test_explicit_row_hitting_refuse_class_degrades_to_drift_note(world):
+def test_explicit_executor_row_hitting_refuse_class_is_left_alone(world):
     repo, _ = world
     rows = [_row(body="tweak the unreal level", agent_type="coordinator:executor")]
     out, routes, notes = ar.route_rows(rows, repo)
-    assert out[0].agent_type == "coordinator:executor" and routes == {}
-    assert len(notes) == 1 and notes[0].startswith("drift:")
+    assert out[0].agent_type == "coordinator:executor" and routes == {} and notes == []
 
 
-def test_one_drifted_row_does_not_unroute_siblings(world):
+def test_explicit_executor_row_does_not_unroute_siblings(world):
     repo, _ = world
     rows = [
         _row("C1", body="tweak the unreal level", agent_type="coordinator:executor"),
@@ -139,10 +138,10 @@ def test_one_drifted_row_does_not_unroute_siblings(world):
     out, routes, notes = ar.route_rows(rows, repo)
     assert out[0].agent_type == "coordinator:executor"
     assert out[1].agent_type == SPECIALIST and "C2" in routes and "C1" not in routes
-    assert any(n.startswith("drift: row C1") for n in notes)
+    assert not any("C1" in n for n in notes)
 
 
-def test_repo_owned_table_wins_and_still_raises(world):
+def test_repo_owned_table_wins_over_plugin_table(world):
     repo, _ = world
     (repo / ".claude").mkdir()
     table = {
@@ -161,8 +160,8 @@ def test_repo_owned_table_wins_and_still_raises(world):
     (repo / ".claude" / "route-table.json").write_text(json.dumps(table), encoding="utf-8")
     out, _, _ = ar.route_rows([_row(body="unreal thing")], repo)
     assert out[0].agent_type == SPECIALIST
-    with pytest.raises(ar.RouteAdmissionError):
-        ar.route_rows([_row(body="unreal thing", agent_type="coordinator:executor")], repo)
+    out, routes, notes = ar.route_rows([_row(body="unreal thing", agent_type="coordinator:executor")], repo)
+    assert out[0].agent_type == "coordinator:executor" and routes == {} and notes == []
 
 
 def test_run_only_likeness_class_keeps_python_authoring_rows_on_executor(world):

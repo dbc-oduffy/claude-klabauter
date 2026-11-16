@@ -228,18 +228,38 @@ def test_triage_class_marks_row_triage_first(env):
 
 
 def test_explicit_row_lacking_tools_refuse_raises(env):
-    _write(env, _table())
+    _write(env, _table(agent_tool_ranges={"coordinator:op-relay": ["Read"]}))
     with pytest.raises(ar.RouteAdmissionError) as exc:
-        ar.route_rows([_row(agent_type="coordinator:executor")], env)
+        ar.route_rows([_row(agent_type="coordinator:op-relay")], env)
     assert "C1" in str(exc.value) and "ue-editor" in str(exc.value) and MCP in str(exc.value)
 
 
 def test_explicit_row_lacking_tools_redirect_repoints_and_notes(env):
     cls = {**_table()["work_classes"][0], "on_mismatch": "redirect"}
-    _write(env, _table(work_classes=[cls]))
-    out, routes, notes = ar.route_rows([_row(agent_type="coordinator:executor")], env)
+    _write(env, _table(work_classes=[cls], agent_tool_ranges={"coordinator:op-relay": ["Read"]}))
+    out, routes, notes = ar.route_rows([_row(agent_type="coordinator:op-relay")], env)
     assert out[0].agent_type == UE and routes["C1"].primary[0] == UE
     assert any("redirected" in n for n in notes)
+
+
+@pytest.mark.parametrize("on_mismatch", ["refuse", "redirect"])
+def test_explicit_executor_row_inside_footprint_is_never_redirected_or_refused(env, on_mismatch):
+    cls = {**_table()["work_classes"][0], "on_mismatch": on_mismatch}
+    _write(env, _table(work_classes=[cls]))
+    row = _row(agent_type="coordinator:executor")
+    out, routes, notes = ar.route_rows([row], env)
+    assert out[0] is row and routes == {} and notes == []
+
+
+def test_metahuman_surface_with_trail_and_test_writes_routes_to_executor(env):
+    cls = {**_table()["work_classes"][0], "match": {"paths": ["Content/*"], "keywords": ["metahuman"]}}
+    _write(env, _table(work_classes=[cls]))
+    writes = ("docs/research/metahuman/a/trail.yaml", "tests/test_trail.py")
+    explicit = _row(writes=writes, title="metahuman audience tag", agent_type="coordinator:executor")
+    derived = _row(writes=writes, title="metahuman audience tag")
+    for row in (explicit, derived):
+        out, routes, _ = ar.route_rows([row], env)
+        assert (out[0].agent_type or "coordinator:executor") == "coordinator:executor" and routes == {}
 
 
 def test_explicit_covering_row_is_admitted_unchanged(env):

@@ -95,6 +95,11 @@ def test_every_row_head_carries_the_heavy_launch_floor():
 def test_every_row_head_carries_the_heavy_probe_declared_clause():
     clause = emit._HEAVY_PROBE_DECLARED_CLAUSE
     assert "peak" in clause and "GO" in clause and "stop and report" in clause
+    for required in ("4 GiB", "live store", "STOP report", "spawn_in_capped_job", "uncapped `python -`"):
+        assert required in clause, required
+    from coordinator_core.diagnostics import contained_run
+
+    assert callable(contained_run.spawn_in_capped_job)
     assert clause in emit._prompt_head(None)
     assert clause in emit._prompt_head(None, verification=True)
 

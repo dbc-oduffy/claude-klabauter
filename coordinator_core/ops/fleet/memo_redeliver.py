@@ -6,7 +6,7 @@ that is not the owner's) into its owner's `cross-repo/inbox/` with the file's by
 `from`, `sent_by`, `created` and the basename survive -- as one object-only
 delivery commit through `memo_send._deliver_upstream`, the primitive `memo.send`
 uses. The owner is the file's own `to:`, resolved by `memo_wire.resolve_receiver`
-(registry receiver plus `resolve_owning_box`); no second map.
+(the registry receiver's clone on this box); no second map.
 
 Negative-spec:
   - Does NOT restamp: `memo_send._compose_delivered_content` is never called, so
@@ -14,7 +14,7 @@ Negative-spec:
   - Does NOT apply `memo.draft`'s `self_addressed` refusal: delivering a memo whose
     `from` is this repo's own EM to another owner is the intended use.
   - Does NOT write when the owner has no reachable clone: an unresolvable,
-    mirror-only, undeliverable or other-box owner returns a setup-error envelope
+    mirror-only or undeliverable owner returns a setup-error envelope
     with `rejection_class="owner_unreachable"` and the resolver's reason.
   - Does NOT write a sender-side receipt, outbox draft or sent record; the only
     sender-side write is the push-pending record `_deliver_upstream` leaves.

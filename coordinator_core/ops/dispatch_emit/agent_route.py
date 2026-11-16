@@ -483,7 +483,7 @@ def resolve_agent_type(
     Only a row whose derived type is the executor, or one that names an `agent_type`, is routed.
     First matching class in list order wins. A derived executor row takes the class agent type
     (triage first when the class sets one), or `default_agent_type` when no class matches. An
-    explicit type is admitted when it covers the class's required tools; otherwise `refuse` raises
+    explicit non-executor type is admitted when it covers the class's required tools; otherwise `refuse` raises
     `RouteAdmissionError` and `redirect` re-points the row at the class agent type.
 
     A class marked `run_only` (route-table work-class key `run_only: true`) is a fence for running
@@ -496,6 +496,10 @@ def resolve_agent_type(
     row naming the class's agent (or its triage agent) is redirected to the executor with a note,
     and any other explicit type is left alone. A class with no path globs, or a row with no
     declared writes, keeps keyword/tool routing.
+
+    A row whose explicit `agent_type` is the executor is never redirected or refused, inside a
+    class footprint or outside it: the row's own naming wins over the table, and `None` is
+    returned. Explicit non-executor types keep `admit` semantics.
     """
     from coordinator_core.ops.dispatch_emit import emit
 
@@ -532,6 +536,8 @@ def resolve_agent_type(
             )
 
     if explicit:
+        if base == emit._EXECUTOR_AGENT_TYPE:
+            return None
         verdict = admit(base, cls, table, _defs=defs)
         if verdict.verdict == "admit":
             return RouteDecision(base, None, cls)

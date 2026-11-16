@@ -90,3 +90,41 @@ def test_ping_is_the_cheapest_reachability_probe_and_needs_no_new_flag():
 
     src = inspect.getsource(module.main)
     assert "op_main = _import_main()" in src
+
+
+@pytest.mark.parametrize(
+    ("method", "result", "expected"),
+    [
+        ("memo.send", {"exit_code": 2}, 1),
+        ("memo.send", {"exit_code": 1}, 1),
+        ("memo.send", {"exit_code": 0}, 0),
+        ("memo.send", {"exit_code": True}, 0),
+        ("memo.send", {}, 0),
+        ("plan.status", {"exit_code": 1}, 0),
+    ],
+)
+def test_refused_memo_send_exits_the_process_nonzero(method, result, expected):
+    from coordinator_core.invoke.__main__ import _exit_code_for_response
+
+    response = {"jsonrpc": "2.0", "id": 1, "result": result}
+
+    assert _exit_code_for_response(response, 99, method) == expected
+
+
+def test_refused_memo_send_rc1_surfaces_the_result_reason_through_cc_invoke(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.syspath_prepend(str(BIN_DIR / "lib"))
+    import cc_invoke
+
+    monkeypatch.setattr(
+        cc_invoke, "_route_unreachable_ledger_path", lambda: str(tmp_path / "ledger.jsonl")
+    )
+    stdout = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"exit_code": 1, "error": "addressee refused"}}
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        cc_invoke._raise_on_process_failure(1, stdout, "", "memo.send", "/engine")
+
+    assert "addressee refused" in str(excinfo.value)

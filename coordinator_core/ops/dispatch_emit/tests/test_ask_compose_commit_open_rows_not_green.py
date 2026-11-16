@@ -98,6 +98,15 @@ def test_uncredited_incomplete_reason_still_revises_and_refires(monkeypatch):
     assert got["kind"] == "revise_and_refire" and got["open"] == ["X"]
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+def test_credit_closes_only_the_delivered_row_and_keeps_the_held_row_open(monkeypatch):
+    got = _drive_commit_block(
+        monkeypatch, incomplete=["C1", "C2"],
+        commit={"committed": True, "credited_chunks": ["C1"], "incomplete_reasons": {"C2": "held: pending"}},
+    )
+    assert got == {"kind": "revise_and_refire", "open": ["C2"]}
+
+
 def test_commit_schema_declares_credited_chunks():
     from coordinator_core.ops.dispatch_emit.ask_compose import _COMMIT_SCHEMA
 

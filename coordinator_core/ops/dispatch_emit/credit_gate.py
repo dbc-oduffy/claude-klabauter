@@ -103,16 +103,39 @@ def ledger_regradable(
     return out
 
 
+#: A pass's own notes and captures: writes the footprint check flags but never product.
+PROCESS_OUTPUT_PREFIXES = (".coordinator-local/workflow-sidecars/", "scratch/")
+_OUTSIDE_FOOTPRINT_REASON = "remnant wrote outside the footprint:"
+
+
+def _remnant_pass_done(remnant: Mapping) -> bool:
+    """True for a ``fixed`` pass, or a ``blocked`` one whose only block is outside-footprint writes to process outputs."""
+    if remnant.get("status") == "fixed":
+        return True
+    paths = remnant.get("paths")
+    return (
+        remnant.get("status") == "blocked"
+        and str(remnant.get("last_reason") or "").startswith(_OUTSIDE_FOOTPRINT_REASON)
+        and isinstance(paths, list) and bool(paths)
+        and all(isinstance(p, str) and p.startswith(PROCESS_OUTPUT_PREFIXES) for p in paths)
+    )
+
+
 def remnant_supersedes_blocked(files: AbstractSet[str], remnant: object) -> bool:
     """True when the run's ``recovery.json`` ``remnant`` record shows a verified ``fixed`` pass over ``files``.
 
     The pass must have nothing still open, report no write outside its own footprint, and its
     footprint (entries ending ``/`` are prefixes) must cover every one of ``files``. Such a pass
     postdates the chunk's BLOCKED report, so the report no longer bars the ledger re-grade.
+    A write under ``PROCESS_OUTPUT_PREFIXES`` is the pass's own notes, not a footprint breach: a
+    pass blocked only by those writes counts as fixed.
     """
-    if not files or not isinstance(remnant, Mapping) or remnant.get("status") != "fixed":
+    if not files or not isinstance(remnant, Mapping) or not _remnant_pass_done(remnant):
         return False
-    if remnant.get("still_open") or remnant.get("paths"):
+    if remnant.get("still_open"):
+        return False
+    stray = [p for p in remnant.get("paths") or () if not (isinstance(p, str) and p.startswith(PROCESS_OUTPUT_PREFIXES))]
+    if stray:
         return False
     raw = remnant.get("footprint")
     footprint = [f for f in (raw if isinstance(raw, list) else []) if isinstance(f, str)]

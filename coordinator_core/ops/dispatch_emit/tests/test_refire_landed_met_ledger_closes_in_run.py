@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import re
+import shutil
 import subprocess
 
 import pytest
@@ -76,7 +79,7 @@ def _review() -> dict:
     review["delivery"] = {"verdict": "PASS", "product_files": 0, "claims_unbacked": 0}
     review["criterion"]["register_rows"] = [
         {"id": "R1", "claim": "this-plan", "status": "met", "wired": True, "surface": "api",
-         "observed_ref": "a.py::f"}
+         "command": "python a.py", "observed": "a.py ran", "observed_ref": "a.py::f"}
     ]
     return review
 
@@ -89,6 +92,7 @@ def _landed(tmp_path, monkeypatch, *, slice_sizing: bool) -> dict:
     repo, script = driver.build_fixture(parent)
     plan = (repo / driver.PLAN_REL).read_text(encoding="utf-8")
     body = plan.split("---\n", 2)[2]
+    body = body.replace("  disposition: open\n", "  disposition: open\n  register_rows: [R1]\n  writes: [a.py]\n")
     (repo / PLAN_REL).parent.mkdir(parents=True)
     (repo / driver.PLAN_REL).unlink()
     (repo / PLAN_REL).write_text(_PLAN_HEAD + body, encoding="utf-8")
@@ -144,7 +148,7 @@ def test_run_with_product_at_head_and_met_criterion_closes_in_run(tmp_path, monk
 
     assert legs["review-stamp"][0] == "ran", legs
     text = (repo / PLAN_REL).read_text(encoding="utf-8")
-    assert "status: implemented" in text and "review_stamp:" in text
+    assert "status: implemented" in text and "review_stamp:" in text, json.dumps(legs, indent=2)
     assert "status: met" in text.split("review_stamp:", 1)[1]
     assert _rejudge_records(repo) == []
 
@@ -187,3 +191,208 @@ def test_zero_file_pass_anchor_lands_an_empty_delta_commit_carrying_the_review_t
     ).stdout
     record = next((repo / ".coordinator-local" / "subagent-share" / "99999999-2222-3333-4444-555555555555").glob("*.md"))
     assert f"Review: {hashlib.sha256(record.read_bytes()).hexdigest()}" in body
+
+
+@pytest.mark.parametrize("integration", [None, {"unresolved": [], "confinement_violations": []}])
+def test_delivered_report_gets_ledger_credit_without_an_integration_leg(tmp_path, integration):
+    from types import SimpleNamespace
+
+    (tmp_path / "report.md").write_text("status: DONE\n", encoding="utf-8")
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",), report="report.md"),))
+    review = {"prep": {"slice_files": ["a.py"]}, "delivery": {"verdict": "PASS"}}
+    if integration is not None:
+        review["integration"] = integration
+    got = land_run._grade(
+        tmp_path, request, {"C1"}, review, SimpleNamespace(items=[]),
+        {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "met"}]},
+        set(), None, None, None, None, {},
+    )
+    assert got == {"C1": "ledger-met: R1, R2"}
+
+
+@pytest.mark.parametrize("case", ["held", "unreviewed", "unresolved", "no-ledger", "blocked", "no-delivery", "delivery-failed"])
+def test_delivery_credit_still_requires_row_evidence(tmp_path, case):
+    from types import SimpleNamespace
+
+    (tmp_path / "report.md").write_text("BLOCKED: C1\n" if case == "blocked" else "DONE: C1\n", encoding="utf-8")
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",), report="report.md"),))
+    review = {"prep": {"slice_files": [] if case == "unreviewed" else ["a.py"]},
+              "delivery": {"verdict": "PASS"}}
+    if case == "unresolved":
+        review["integration"] = {"unresolved": ["unfinished"]}
+    if case == "no-delivery":
+        review.pop("delivery")
+    if case == "delivery-failed":
+        review["delivery"] = {"verdict": "FAIL"}
+    assert land_run._grade(
+        tmp_path, request, {"C1"}, review, None if case == "no-ledger" else SimpleNamespace(items=[]),
+        {"items": [{"id": "R1", "status": "met"}]}, {"C1"} if case == "held" else set(),
+        None, None, None, None, {},
+    ) == {}
+
+
+_LIVE_AGENTS = r"""
+const fs = require('fs');
+const cfg = JSON.parse(process.env.CFG);
+const calls = [];
+function ask(request) {
+  console.log(JSON.stringify(request));
+  let line = '', byte = Buffer.alloc(1);
+  while (fs.readSync(0, byte, 0, 1, null)) { if (byte[0] === 10) break; line += byte.toString(); }
+  return JSON.parse(line);
+}
+const agent = async (prompt, opts) => {
+  calls.push(opts.label);
+  return ask({label: opts.label, type: opts.agentType, prompt: String(prompt)});
+};
+const workflow = async (spec) => {
+  const body = fs.readFileSync(spec.scriptPath, 'utf8').replace(/^export const meta[^\n]*\n/, '');
+  return await new AsyncFunction(body)();
+};
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const src = fs.readFileSync(cfg.script, 'utf8').replace(/^export const meta/m, 'const meta');
+new AsyncFunction('args', 'agent', 'parallel', 'pipeline', 'phase', 'workflow', 'log', src)(
+  {runToken: cfg.token}, agent, async xs => Promise.all(xs.map(f => f())), async () => ({}),
+  () => {}, workflow, () => {}
+).then(result => console.log(JSON.stringify({result, calls}))).catch(e => {
+  console.log(JSON.stringify({error: String(e.stack)})); process.exitCode = 1;
+});
+"""
+
+
+def test_default_sizing_refire_delivers_discharge_and_consistent_result(tmp_path, monkeypatch):
+    import yaml
+    from coordinator_core.ops.dispatch_emit import ask_compose, ask_gate, op, requirements_ledger as rl
+    from coordinator_core.ops.dispatch_emit import emit
+    from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import prompt_params
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import _git as git, _write
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import agent_gate_reply
+    from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.sizing_fire import s_plan_path
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node unavailable")
+    root = tmp_path / "repo"
+    root.mkdir()
+    plan_rel = s_plan_path(SIZING_REL)
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", driver.SESSION_ID)
+    monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
+    monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: "return {ready: []};")
+    git(root, "init", "-q")
+    git(root, "config", "user.email", "t@example.com")
+    git(root, "config", "user.name", "t")
+    git(root, "config", "commit.gpgsign", "false")
+    _write(root, ".gitignore", "scratch/\n.coordinator-local/\n")
+    _write(root, plan_rel, _PLAN_HEAD.replace("rows: [R1]", "rows: [R1, R2]") + "\n## Tasks\n\n```yaml plan-tasks\n- id: C1\n"
+           "  title: deliver a\n  disposition: open\n  change_kind: script-edit\n  surface: a.py\n"
+           "  agent_type: coordinator:executor\n  body: deliver a\n  register_rows: [R1, R2]\n"
+           "  writes: [a.py]\n```\n")
+    doc = {"schema": "sizing-object", "name": "incident", "intent": "deliver a", "plan": plan_rel,
+           "estimate": {"tshirt": "S", "provisional": True}, "route": "spec-dispatch", "detents": [],
+           "fork": None, "xl_exit": None, "status": "routed", "interaction_mode": "ceo",
+           "premise": {"provenance": "read", "evidence": "fixture"},
+           "exit_criterion": {"statement": "a delivered", "accepted": None},
+           "requirement_register": {"sources": [{"doc": SIZING_REL, "ref": "ask"}], "rows": [
+               {"id": rid, "source_text": "deliver a", "anchor": "ask", "surface": "internal",
+                "status": "open", "claimed_by": [plan_rel]} for rid in ("R1", "R2")]}}
+    _write(root, SIZING_REL, yaml.safe_dump(doc, sort_keys=False))
+    git(root, "add", ".")
+    git(root, "commit", "-qm", "seed")
+    prior = "warp-2026-10-16-slice-20261116T000000-aaaaaa"
+    rl.start(root, prior, all_of_pm_ask=False)
+    rl.bind(root, prior, SIZING_REL)
+    write_halt_marker(record_dir(root, prior), halted="criterion", sizing_rel=SIZING_REL)
+    emitted = op._dispatch_emit({"ask": True, "sizing_path": SIZING_REL}, repo_root=root)
+    run_id = emitted["run_id"]
+    assert run_id == prior, emitted
+    script = root / "scratch" / "warp" / f"{run_id}.workflow.mjs"
+    gate = agent_gate_reply(root, ask_gate._handler({"sizing_path": SIZING_REL, "run_id": run_id}, repo_root=root))
+    assert gate.get("resume_plan") == plan_rel, json.dumps(gate, indent=2)
+    verdict = {"items": [{"id": rid, "status": "met", "wired": True,
+                          "command": "python a.py", "observed": "a.py ran"} for rid in ("R1", "R2")]}
+    cfg = {"script": str(script), "token": emitted["fire_args"]["runToken"]}
+    landed = None
+    output: dict = {"error": "node driver exited without a result line"}
+    with subprocess.Popen(
+        [node, "-e", _LIVE_AGENTS], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", env={**os.environ, "CFG": json.dumps(cfg)}, **no_console_creationflags(),
+    ) as proc:
+        for line in proc.stdout:
+            request = json.loads(line)
+            if "label" not in request:
+                output = request
+                break
+            label = request["label"]
+            reply = {}
+            if label in ("gate", "gate-stage"):
+                reply = gate
+            elif label.startswith("work:"):
+                _write(root, "a.py", "a = 1\n")
+                _write(root, emit._dispatch_report_path(plan_rel, "C1"), "status: DONE\n")
+                reply = "PARTIAL: C1 — waiting for run verification"
+            elif label == "verify":
+                reply = {"items": [{"id": "R1", "status": "not_met", "essential": True,
+                                    "remaining": ["a.py still needs the remnant fix"]}, verdict["items"][1]]}
+            elif label.startswith("ledger-fix:"):
+                reply = {"status": "BLOCKED", "paths": [], "reason": "requires the remnant pass"}
+            elif label == "remnant-complete":
+                _write(root, "a.py", "a = 2\n")
+                reply = {"status": "DONE", "paths": ["a.py"], "reason": "delivered"}
+            elif label == "remnant-reverify":
+                reply = {**verdict, "delivery": {"verdict": "PASS", "reason": "delivered"}}
+            elif label in ("ledger-recovery-record", "remnant-record"):
+                match = re.search(r"(\{[^\n]*\})\. Edit nothing else", request["prompt"])
+                assert match, request["prompt"]
+                path = record_dir(root, run_id) / "recovery.json"
+                record = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+                change = json.loads(match[1])
+                record = {**record, "remnant": change} if label == "remnant-record" else change
+                path.write_text(json.dumps(record), encoding="utf-8")
+                reply = {"written": True}
+            elif request.get("type") == "coordinator:review-prep":
+                reply = {"slice_files": ["a.py"], "foreign_claims": [], "product_files": 1}
+            elif request.get("type") == "coordinator:code-reviewer":
+                _write(root, "review.md", "PASS\n")
+                reply = {"prep": {"slices": [{"id": "S1", "files": ["a.py"]}], "slice_files": ["a.py"],
+                                  "product_files": 1, "foreign_claims": []},
+                         "review": {"slice_id": "S1", "verdict": "OK", "findings": 0, "applied": 0,
+                                    "out_of_slice": 0, "sidecar_path": "review.md"}}
+            elif label == "review:coordinator:op-relay":
+                reply = {"status": "pass", "tests_run": 1, "tests_failed": 0}
+            elif request.get("type") == "coordinator:test-runner":
+                reply = {"status_before": "pass", "status_after": "pass", "failing": [], "reverted": []}
+            elif request.get("type") == "coordinator:integrator":
+                reply = {"unresolved": [], "confinement_violations": []}
+            elif request.get("type") == "coordinator:delivery-verifier":
+                reply = {"verdict": "PASS", "claims_unbacked": 0}
+            elif label == "commit":
+                params = prompt_params(request["prompt"])
+                assert params["incomplete_chunks"] == ["C1"], params
+                assert params["inline_review"]["delivery"]["verdict"] == "PASS", params
+                assert params["inline_review"]["prep"]["slice_files"] == ["a.py"], params
+                assert [i["status"] for i in params["ledger_verdict"]["items"]] == ["met", "met"], params
+                landed = land_run._handler(params, repo_root=root / ".git")
+                assert landed.get("committed") is True, landed
+                reply = landed
+            proc.stdin.write(json.dumps(reply) + "\n")
+            proc.stdin.flush()
+        proc.stdin.close()
+        assert proc.wait(timeout=20) == 0, proc.stderr.read()
+    assert "error" not in output, output
+    assert landed is not None, json.dumps(output, indent=2)
+    result = output["result"]
+    assert "plan" not in output["calls"]
+    assert {"ledger-fix:C1", "remnant-complete", "remnant-reverify", "commit"} <= set(output["calls"])
+    assert result["commit"]["sha"] == landed["sha"]
+    assert result["incomplete"] == [], json.dumps(landed, indent=2)
+    assert result["next_action"]["kind"] == "close_job", result
+    assert result["revise_and_refire"] is None
+    assert git(root, "show", f"{landed['sha']}:a.py") == "a = 2\n"
+    legs = _close({"repo": root, "out": landed})
+    assert legs["coded-stamp"][0] == "ran", legs
+    spine = (root / plan_rel).read_text(encoding="utf-8")
+    assert "disposition: coded" in spine and landed["sha"] in spine
+    assert "disposition: coded" in git(root, "show", f"HEAD:{plan_rel}")

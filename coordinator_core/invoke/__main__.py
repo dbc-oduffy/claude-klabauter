@@ -722,28 +722,37 @@ def _in_band_failure_line(response: dict, method: object, prior_stderr: str) -> 
     code = result.get("exit_code")
     if isinstance(code, bool) or not isinstance(code, int) or code == 0:
         return None
+    proc = 1 if method in _IN_BAND_EXIT_FAILS_PROCESS else 0
     for field in ("error", "message"):
         value = result.get(field)
         if isinstance(value, str) and value.strip():
             return (
                 f"[invoke] {method} FAILED in-band: result exit_code={code} with "
-                f"process exit 0. Reason (result.{field}): {value.strip()}"
+                f"process exit {proc}. Reason (result.{field}): {value.strip()}"
             )
     lines = [ln.strip() for ln in prior_stderr.splitlines() if ln.strip()]
     reason = lines[-1] if lines else "no reason was written to stderr"
     return (
         f"[invoke] {method} FAILED in-band: result exit_code={code} with process "
-        f"exit 0; the stdout JSON carries no reason. Reason: {reason}"
+        f"exit {proc}; the stdout JSON carries no reason. Reason: {reason}"
     )
 
 
-def _exit_code_for_response(response: dict, structural_pin_error_code: int) -> int:
+#: Ops whose nonzero in-band `result.exit_code` (a refusal or a partial
+#: delivery) is a process failure; every other op keeps exit 0 on a JSON-RPC success.
+_IN_BAND_EXIT_FAILS_PROCESS = frozenset({"memo.send"})
+
+
+def _exit_code_for_response(
+    response: dict, structural_pin_error_code: int, method: object = None
+) -> int:
     """Select the process exit code for a completed JSON-RPC response.
 
     Pure/testable in-process (unlike main(), which os._exit()s and can only be
     regression-tested via subprocess — see test_invoke_main.py's module docstring).
 
-    0 — no 'error' key (success).
+    0 — no 'error' key (success), except a `method` in `_IN_BAND_EXIT_FAILS_PROCESS`
+        whose result carries a nonzero integer `exit_code`: that exits 1.
     2 — 'error' present and error.code == structural_pin_error_code (STRUCTURAL_PIN_ERROR)
         — a structurally-wedged contract-pin failure; see the module docstring's
         "Exit codes" section for why this is distinct from the generic exit 1.
@@ -751,6 +760,11 @@ def _exit_code_for_response(response: dict, structural_pin_error_code: int) -> i
     """
     error = response.get("error")
     if error is None:
+        if method in _IN_BAND_EXIT_FAILS_PROCESS:
+            result = response.get("result")
+            code = result.get("exit_code") if isinstance(result, dict) else None
+            if isinstance(code, int) and not isinstance(code, bool) and code != 0:
+                return 1
         return 0
     if isinstance(error, dict) and error.get("code") == structural_pin_error_code:
         return 2
@@ -1603,7 +1617,9 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     sys.stdout.flush()
     if wait_exit_code is not None and "error" not in response:
         raise SystemExit(wait_exit_code)
-    raise SystemExit(_exit_code_for_response(response, STRUCTURAL_PIN_ERROR))
+    raise SystemExit(
+        _exit_code_for_response(response, STRUCTURAL_PIN_ERROR, msg.get("method"))
+    )
 
 
 # ---------------------------------------------------------------------------

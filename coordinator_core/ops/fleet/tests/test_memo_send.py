@@ -100,6 +100,8 @@ def _make_receiver_git_repo(tmp_path: Path, name: str = "receiver-repo") -> Path
     _git(tmp_path, "init", "--bare", "-b", "main", str(bare))
     _git(root, "remote", "add", "origin", str(bare))
     _git(root, "push", "-q", "origin", "main")
+    _git(root, "checkout", "-q", "-b", "work/test/2026-11-16")
+    _git(root, "push", "-q", "origin", "work/test/2026-11-16")
     return root
 
 
@@ -949,7 +951,7 @@ class TestCollisionRefused:
         target.write_text("already here\n", encoding="utf-8")
         _git(receiver_repo, "add", "-A")
         _git(receiver_repo, "commit", "-q", "-m", "prior delivery")
-        _git(receiver_repo, "push", "-q", "origin", "main")
+        _git(receiver_repo, "push", "-q", "origin", "work/test/2026-11-16")
 
         result = _memo_send({"dry_run": False, "topic": "collision-topic"}, repo_root=sender_repo)
 
@@ -995,7 +997,7 @@ class TestCollisionRefused:
         target.write_text("raced in\n", encoding="utf-8")
         _git(receiver_repo, "add", "-A")
         _git(receiver_repo, "commit", "-q", "-m", "raced in")
-        _git(receiver_repo, "push", "-q", "origin", "main")
+        _git(receiver_repo, "push", "-q", "origin", "work/test/2026-11-16")
         monkeypatch.setattr(memo_send_module, "_base_tree_has", lambda *a, **k: False)
 
         result = _memo_send({"dry_run": False, "topic": "race-topic"}, repo_root=sender_repo)

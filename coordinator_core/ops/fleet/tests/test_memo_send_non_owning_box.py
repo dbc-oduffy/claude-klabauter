@@ -53,6 +53,8 @@ def _make_receiver_git_repo(tmp_path: Path, name: str = "receiver-repo") -> Path
     _git(tmp_path, "init", "--bare", "-b", "main", str(bare))
     _git(root, "remote", "add", "origin", str(bare))
     _git(root, "push", "-q", "origin", "main")
+    _git(root, "checkout", "-q", "-b", "work/test/2026-11-16")
+    _git(root, "push", "-q", "origin", "work/test/2026-11-16")
     return root
 
 

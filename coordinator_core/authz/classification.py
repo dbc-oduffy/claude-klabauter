@@ -2611,6 +2611,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # DR-208 five-question affirmation: 1 YES (marker rewrite, index entry removal); 2 No; 5 YES (persisted on disk).
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.close_halted_run_rejected": OpClass.MUTATING,
+    # dispatch.close_plan_checkpoints — MUTATING: one commit stamping `Checkpoint-Run-Closed` for every open
+    # run-open checkpoint of a plan (ops/dispatch_emit/plan_checkpoints_close.py).
+    # DR-208 five-question affirmation: 1 YES (git commit); 2 No; 5 YES (persisted in history).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.close_plan_checkpoints": OpClass.MUTATING,
     # dispatch.checkpoint_reds — MUTATING: writes state/bug-backlog fix rows for introduced reds
     # (ops/dispatch_emit/checkpoint_reds.py).
     # DR-208 five-question affirmation: 1 YES (bug-backlog yaml write); 2 No; 5 YES (persisted on disk).

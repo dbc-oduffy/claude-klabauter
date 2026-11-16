@@ -113,18 +113,13 @@ def test_triage_class_dispatches_triage_literal_first(repo):
     assert "Routing: assess this work before proceeding" in script
 
 
-def test_explicit_executor_row_on_class_refuses(repo):
-    _write_table(repo, _table("refuse"))
-    with pytest.raises(RouteAdmissionError, match=rf"row C1.*lacks {MCP}.*work class ue-editor"):
-        _emit(repo, agent_type="coordinator:executor")
-
-
-def test_explicit_executor_row_on_class_redirects_with_log_line(repo):
-    _write_table(repo, _table("redirect"))
+@pytest.mark.parametrize("on_mismatch", ["refuse", "redirect"])
+def test_explicit_executor_row_on_class_is_neither_refused_nor_redirected(repo, on_mismatch):
+    _write_table(repo, _table(on_mismatch))
     script = _emit(repo, agent_type="coordinator:executor")
 
-    assert f"t === '{UE}' ? agent(" in script
-    assert re.search(r"log\('route: C1 redirected: [^']*ue-editor", script)
+    assert "route: C1" not in script
+    assert "_routedRun(" not in script.split("_rows['C1']")[1].split("_rows['C2']", 1)[0]
 
 
 def _spawns(monkeypatch):

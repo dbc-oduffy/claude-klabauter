@@ -1979,7 +1979,12 @@ _HEAVY_LAUNCH_FLOOR_CLAUSE = (
 _HEAVY_PROBE_DECLARED_CLAUSE = (
     "Never run an ad-hoc heavy probe or read unannounced (a large index load, a corpus-wide "
     "scan, anything with multi-GiB potential): declare it as a step with its expected peak "
-    "memory and wait for the EM's GO, or stop and report."
+    "memory and wait for the EM's GO, or stop and report. A read is heavy above 4 GiB expected "
+    "peak, or when it touches a live store beside a running job. If you cannot message the "
+    "Group EM, do not run it: return a STOP report naming the probe, its expected peak and "
+    "the lock it would hold. Any probe you do run goes through "
+    "`coordinator_core.diagnostics.contained_run.spawn_in_capped_job` with a memory cap; never "
+    "run an uncapped `python -` against a store path."
 )
 
 #: The per-row head ``_row_prompt`` opens with and ``_row_agent_call_expr``
