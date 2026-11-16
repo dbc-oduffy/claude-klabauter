@@ -9,8 +9,9 @@ Traps:
   - Codex flags are verified against installed codex-cli 0.167.0 help. Grok and agy flags
     are verified against their official CLI references (WORKER_ARGV_SOURCE); local binary
     availability is checked by the launcher before admission.
-  - codex_runner.execute carries no argv constant (its `exec --sandbox workspace-write` is inline),
-    so nothing is reused from it; the sandbox value here matches that call.
+  - Every engine codex launch (this table, codex_runner.execute, codex_runner.workflow) widens the
+    workspace-write sandbox by exactly the settings home through `settings_home_add_dir_argv`, so
+    engine ops a worker runs can write their settings-home state.
   - There is no per-agent seat record on the box. The only G-EM slot record is
     group_em.slot_grant (a memory-slot grant keyed by grantee session id and run), so the slot
     rule is: a live verified box holder (a Group EM exists, e.g. Machine-a) requires that grant;
@@ -20,18 +21,42 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Callable, NamedTuple, Optional
+from typing import Callable, Iterator, Mapping, NamedTuple, Optional
+
+from coordinator_core._settings_home import settings_home
 
 WORKER_ENV = "COORDINATOR_AGENT_WORKER"
 
-WORKER_ARGV: dict[str, tuple[str, ...]] = {
-    "codex": ("--sandbox", "workspace-write", "--ask-for-approval", "never"),
-    "grok": ("--always-approve",),
-    "agy": ("--dangerously-skip-permissions",),
-}
+
+def settings_home_add_dir_argv() -> list[str]:
+    """`["--add-dir", <settings home>]`: the codex flag that makes the settings home a writable root beside the repo."""
+    return ["--add-dir", str(settings_home())]
+
+
+class _WorkerArgv(Mapping):
+    """WORKER_ARGV view: static agent flags, with the codex settings-home root resolved on each read."""
+
+    _STATIC: dict[str, tuple[str, ...]] = {
+        "codex": ("--sandbox", "workspace-write", "--ask-for-approval", "never"),
+        "grok": ("--always-approve",),
+        "agy": ("--dangerously-skip-permissions",),
+    }
+
+    def __getitem__(self, agent: str) -> tuple[str, ...]:
+        base = self._STATIC[agent]
+        return (*base, *settings_home_add_dir_argv()) if agent == "codex" else base
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._STATIC)
+
+    def __len__(self) -> int:
+        return len(self._STATIC)
+
+
+WORKER_ARGV: Mapping[str, tuple[str, ...]] = _WorkerArgv()
 
 WORKER_ARGV_SOURCE: dict[str, str] = {
-    "codex": "verified: `codex --help` on codex-cli 0.167.0 (-s/--sandbox, -a/--ask-for-approval never)",
+    "codex": "verified: `codex --help` on codex-cli 0.167.0 (-s/--sandbox, -a/--ask-for-approval never, --add-dir <DIR> additional writable directory)",
     "grok": "verified official CLI permissions reference: https://docs.x.ai/build/features/permissions (2026-11-07)",
     "agy": "verified official CLI reference: https://antigravity.google/docs/cli/reference/ (2026-11-07)",
 }

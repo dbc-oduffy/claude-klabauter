@@ -54,6 +54,15 @@ def test_the_em_section_opens_with_the_worker_condition_before_any_em_rule():
     assert em.count("WORKER ROLE") == 1
 
 
+def test_em_revises_or_refires_a_failed_run_and_stops_with_a_report_when_no_pm_is_present():
+    # 1b attempt 5: the EM saw exit 1, hand-edited and committed, then asked the absent PM a question.
+    em = _em_section()
+    flat = re.sub(r"\s+", " ", em)
+    assert "exited non-zero or halted is steered with `workflow.revise` or refired by its `owed_next_action`" in flat
+    assert "hand edits and a hand commit never replace it" in flat
+    assert "With no PM present" in flat and "never end on a question: stop with a report" in flat
+
+
 def test_the_em_section_applies_only_under_the_headless_em_token_or_an_interactive_pm():
     # Prose alone did not stop a codex sizing-scout obeying the EM rules (1b attempt 3, run 1712a5); the
     # gate names the env var only headless-em-launch sets, and the executor strips from agent children.

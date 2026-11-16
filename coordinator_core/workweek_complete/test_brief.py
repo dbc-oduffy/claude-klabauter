@@ -19,12 +19,18 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-from datetime import datetime
+import os
+import subprocess
+import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from coordinator_core.cadence.period_mode import week_window
 from coordinator_core.workweek_complete import brief as wwc_brief
+
+backfill_scan = wwc_brief.backfill_scan
 
 
 def test_step2_directive_repointed_at_validate_gate_fast_subcommand() -> None:
@@ -278,6 +284,88 @@ def test_catch_up_lead_reports_the_daily_gap_count(monkeypatch, tmp_path: Path) 
         monkeypatch, tmp_path, "2026-10-12", datetime(2026, 10, 16, 10, 0)
     )
     assert "backfill-scan gaps" not in concluding["narration"]
+
+
+_REAL_GAP_SCAN = backfill_scan.scan
+
+
+def _git(repo: Path, *args: str, when: str | None = None) -> None:
+    env = dict(os.environ)
+    if when:
+        env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = when
+    subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env=env,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+def _covered_week_two(repo: Path) -> None:
+    """Week 2026-10-05: day fully recorded (changelog block, daily summary, WEEK-SUMMARY)."""
+    week = repo / "archive" / "week-changelogs" / "2026-10-05"
+    week.mkdir(parents=True)
+    (week / "2026-10-08-h.md").write_text("block\n", encoding="utf-8")
+    (week / "WEEK-SUMMARY.md").write_text("summary\n", encoding="utf-8")
+    daily = repo / "archive" / "daily-summaries"
+    daily.mkdir(parents=True)
+    (daily / "2026-10-08-h.md").write_text("summary\n", encoding="utf-8")
+
+
+@pytest.fixture
+def gap_repo(monkeypatch, tmp_path: Path) -> Path:
+    """A real git repo with commits on 2026-10-01 (week 09-28) and 2026-10-08 (week 10-05), no HEADER.md."""
+    monkeypatch.setenv("TZ", "UTC")
+    if hasattr(time, "tzset"):
+        time.tzset()
+    monkeypatch.setattr(wwc_brief.backfill_scan, "scan", _REAL_GAP_SCAN)
+    monkeypatch.setattr(wwc_brief.backfill_scan, "_coordinator_local_day", lambda: "2026-10-15")
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "symbolic-ref", "HEAD", "refs/heads/main")
+    for key, val in (("user.email", "t@t.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
+        _git(tmp_path, "config", key, val)
+    for day in ("2026-10-01", "2026-10-08"):
+        (tmp_path / f"f-{day}.txt").write_text(day, encoding="utf-8")
+        _git(tmp_path, "add", "--", f"f-{day}.txt")
+        _git(tmp_path, "commit", "-q", "-m", day, when=f"{day}T12:00:00Z")
+    _covered_week_two(tmp_path)
+    yield tmp_path
+    if hasattr(time, "tzset"):
+        monkeypatch.undo()
+        time.tzset()
+
+
+def _gap_scan_weeks(repo: Path) -> list[str]:
+    result = _REAL_GAP_SCAN(str(repo), today="2026-10-15")
+    days = [date.fromisoformat(d) for d in [*(r.date for r in result.rows), *result.older_gaps]]
+    return sorted({week_window(d, date(2026, 9, 28))[0].isoformat() for d in days})
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("header_anchor", [None, "2026-09-28"])
+def test_missed_equals_the_daily_gap_scan_weeks_with_or_without_header(
+    monkeypatch, gap_repo: Path, header_anchor
+) -> None:
+    expected = _gap_scan_weeks(gap_repo)
+    assert expected == ["2026-09-28"]
+    _, env = _brief_at(monkeypatch, gap_repo, header_anchor, datetime(2026, 10, 15, 10, 0))
+    assert env["period_mode"]["missed"] == expected
+    assert "2026-10-05" not in env["period_mode"]["missed"]
+    assert any(
+        d["id"] == "d_step13_catch_up_archive_2026-09-28" for d in env["directives"]
+    ) == (env["period_mode"]["mode"] == "catch_up")
+
+
+@pytest.mark.spawns_process
+def test_week_with_a_week_summary_is_never_missed(monkeypatch, gap_repo: Path) -> None:
+    week = gap_repo / "archive" / "week-changelogs" / "2026-09-28"
+    week.mkdir(parents=True)
+    (week / "WEEK-SUMMARY.md").write_text("summary\n", encoding="utf-8")
+    assert _gap_scan_weeks(gap_repo) == ["2026-09-28"]
+    _, env = _brief_at(monkeypatch, gap_repo, None, datetime(2026, 10, 15, 10, 0))
+    assert env["period_mode"]["missed"] == []
 
 
 def test_catch_up_step_cost_row_exists() -> None:

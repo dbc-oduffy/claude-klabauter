@@ -31,6 +31,7 @@ from coordinator_core.codex_runner.sandbox_preflight import (
     SandboxSetupRefused,
     check_workspace_write,
 )
+from coordinator_core.agent_pipe.worker_mode import settings_home_add_dir_argv
 from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
 from coordinator_core.codex_runner.review import _LIMIT_MARKERS, _build_env, _usage
 
@@ -171,7 +172,7 @@ def run(req: RunRequest, run_dir: Path, on_spawn: OnSpawn) -> RunResult:
         argv = resolve_codex()
     except CodexUnavailable as exc:
         return RunResult(run_id=run_id, status=STATUS_FAILED, error=f"codex unavailable: {exc}")
-    argv = argv + ["exec", "--json", "--sandbox", "workspace-write", build_prompt(chunk)]
+    argv = argv + ["exec", "--json", "--sandbox", "workspace-write", *settings_home_add_dir_argv(), build_prompt(chunk)]
 
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)

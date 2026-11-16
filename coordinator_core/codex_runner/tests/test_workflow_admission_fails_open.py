@@ -23,10 +23,14 @@ def denied_ledger(monkeypatch, tmp_path):
     monkeypatch.setattr(admission_post, "local_box_id", lambda *_a: "box")
     monkeypatch.setattr(admission_post, "settings_home", lambda: tmp_path / "settings")
 
-    def refuse(*_a, **_kw):
-        raise PermissionError(13, "denied")
+    real_open = os.open
 
-    monkeypatch.setattr(admission_post.os, "open", refuse)
+    def refuse_ledger_only(path, *a, **kw):
+        if Path(os.fspath(path)).name == admission_post.admission_path().name:
+            raise PermissionError(13, "denied")
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(admission_post.os, "open", refuse_ledger_only)
     host = SimpleNamespace(admission_file=lambda: "unused", read_recorded_peak=lambda *_a: None)
     monkeypatch.setattr(agents.capacity, "_load_box_memory_host", lambda: host)
     monkeypatch.setattr(agents.capacity, "admit_before_spawn",

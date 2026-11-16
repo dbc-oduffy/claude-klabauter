@@ -92,6 +92,7 @@ from coordinator_core.cadence.period_mode import (
     local_now,
     period_flag_error,
     resolve_period_mode,
+    week_window,
 )
 from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
 from coordinator_core.contract.decision_object.envelope import (
@@ -156,6 +157,7 @@ _CEREMONY_NAME = "workweek-complete"
 #: `d_step13_archive_close`; `step_costs.json` carries one row under the same key.
 CATCH_UP_ARCHIVE_PREFIX = "d_step13_catch_up_archive"
 
+_ISO_DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _WEEK_STARTING_RE = re.compile(r"\*\*Week starting:\*\*[ \t]*(\d{4}-\d{2}-\d{2})")
 
 #: Stored VERBATIM in the grant record's `note` (write_tier_u_grant never
@@ -823,6 +825,57 @@ def _archived_weeks(repo_root: Optional[str]) -> list[str]:
         return []
 
 
+#: One `backfill_scan.scan` per `brief()` call, shared by the missed-week derivation and the
+#: catch-up lead; keyed by repo root, cleared when `brief()` returns.
+_GAP_SCAN_MEMO: dict[str, Any] = {}
+
+
+def _gap_scan(repo_root: Optional[str]) -> Any:
+    """The daily gap scan for `repo_root` (memoised per brief call), or `None` when it cannot run."""
+    if not repo_root:
+        return None
+    key = str(repo_root)
+    if key not in _GAP_SCAN_MEMO:
+        try:
+            _GAP_SCAN_MEMO[key] = backfill_scan.scan(key)
+        except Exception:  # noqa: BLE001 - a missed-week source must not fail the brief
+            _GAP_SCAN_MEMO[key] = None
+    return _GAP_SCAN_MEMO[key]
+
+
+def _has_week_summary(repo_root: Optional[str], week_start: str) -> bool:
+    if not repo_root:
+        return False
+    return (
+        Path(repo_root) / "archive" / "week-changelogs" / week_start / "WEEK-SUMMARY.md"
+    ).is_file()
+
+
+def _gap_days(repo_root: Optional[str]) -> list[date]:
+    """Days the daily gap scan reports (rows plus `older_gaps`), oldest first."""
+    result = _gap_scan(repo_root)
+    if result is None:
+        return []
+    days: set[date] = set()
+    for iso in [*(r.date for r in result.rows), *result.older_gaps]:
+        try:
+            days.add(date.fromisoformat(iso))
+        except ValueError:
+            continue
+    return sorted(days)
+
+
+def _gap_weeks(repo_root: Optional[str], days: list[date], chain: date, today: date) -> tuple[str, ...]:
+    """Completed weeks on `chain` holding a gap-scan day and no `WEEK-SUMMARY.md`, oldest first."""
+    current = week_window(today, chain)[0]
+    starts = {week_window(d, chain)[0] for d in days}
+    return tuple(
+        s.isoformat()
+        for s in sorted(starts)
+        if s < current and not _has_week_summary(repo_root, s.isoformat())
+    )
+
+
 def _resolve_week_period(
     repo_root: Optional[str],
     now_local: datetime,
@@ -830,12 +883,15 @@ def _resolve_week_period(
     catch_up: bool,
     conclude: bool,
 ) -> tuple[PeriodMode, Optional[date]]:
-    """The week's mode and its anchor. A missed week is one from HEADER's `Week starting:` up to
-    the in-progress week with no `archive/week-changelogs/<start>/`. No dated anchor means no
-    period arithmetic is possible: an unflagged run keeps the full concluding ceremony."""
+    """The week's mode and its anchor. A missed week is a completed week the daily gap scan
+    reports and that has no `archive/week-changelogs/<start>/WEEK-SUMMARY.md`, plus (catch-up)
+    unarchived dated-file weeks and HEADER's `Week starting:` walk up to the in-progress week.
+    No dated anchor and no gap week means no period arithmetic is possible: an unflagged run
+    keeps the full concluding ceremony."""
     anchor = _read_week_anchor(repo_root)
     explicit = "catch_up" if catch_up else "conclude" if conclude else None
-    if anchor is None and explicit is None:
+    days = _gap_days(repo_root)
+    if anchor is None and explicit is None and not days:
         return (
             PeriodMode(
                 "conclude",
@@ -854,25 +910,32 @@ def _resolve_week_period(
     )
     chain = anchor
     if chain is None:
-        chain = date.fromisoformat(derived[0]) if derived else now_local.date()
+        if derived:
+            chain = date.fromisoformat(derived[0])
+        elif archived:
+            chain = max(date.fromisoformat(w) for w in archived if _ISO_DAY_RE.fullmatch(w))
+        elif days:
+            chain = days[0] - timedelta(days=days[0].weekday())
+        else:
+            chain = now_local.date()
+    gap_weeks = _gap_weeks(repo_root, days, chain, now_local.date())
     period = resolve_period_mode(
         "week", now_local, explicit, week_anchor=chain, concluded=archived
     )
-    if period.mode == "catch_up" and derived:
-        missed = tuple(sorted({*period.missed, *derived}))
-        if anchor is None:
-            missed = tuple(w for w in missed if w in derived)
-        period = replace(period, missed=missed)
-    return period, anchor
+    missed = set(period.missed)
+    if period.mode == "catch_up":
+        missed |= set(derived)
+    missed |= set(gap_weeks)
+    if anchor is None:
+        missed &= set(gap_weeks) | (set(derived) if period.mode == "catch_up" else set())
+    missed = {w for w in missed if not _has_week_summary(repo_root, w)}
+    return replace(period, missed=tuple(sorted(missed))), anchor
 
 
 def _daily_gap_summary(repo_root: Optional[str]) -> str:
     """The daily backfill-scan's uncovered-day count for a catch-up lead; empty when the scan cannot run."""
-    if not repo_root:
-        return ""
-    try:
-        result = backfill_scan.scan(str(repo_root))
-    except Exception:  # noqa: BLE001 - a lead line must not fail the brief
+    result = _gap_scan(repo_root)
+    if result is None:
         return ""
     older = f" plus {len(result.older_gaps)} older" if result.older_gaps else ""
     return f" Daily backfill-scan gaps: {len(result.rows)} day(s){older}."
@@ -889,7 +952,16 @@ def _catch_up_narration_lead(period: PeriodMode) -> str:
     return lead
 
 
-def brief(
+def brief(**kwargs: Any) -> tuple[int, dict[str, Any]]:
+    """Build the workweek-complete brief envelope; the gap-scan memo never outlives the call."""
+    _GAP_SCAN_MEMO.clear()
+    try:
+        return _brief(**kwargs)
+    finally:
+        _GAP_SCAN_MEMO.clear()
+
+
+def _brief(
     *,
     decisions: Optional[dict[str, Any]] = None,
     env: Optional[dict[str, str]] = None,

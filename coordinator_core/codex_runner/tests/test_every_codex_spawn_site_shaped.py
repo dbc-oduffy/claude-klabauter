@@ -259,6 +259,57 @@ def test_argv_only_modules_are_not_sites(argv_only: str) -> None:
     assert not _is_codex_spawn_site(_tree(path)), f"{argv_only} now spawns; treat it as a site"
 
 
+_ADD_DIR = "settings_home_add_dir_argv"
+_ADD_DIR_TABLE = CORE / "agent_pipe" / "worker_mode.py"
+
+
+def _workspace_write_modules() -> list[str]:
+    """Every production module carrying a `workspace-write` argv literal, bar the WORKER_ARGV table (pinned by value below)."""
+    out = []
+    for path in _production_modules():
+        if path == _ADD_DIR_TABLE:
+            continue
+        if any(isinstance(n, ast.Constant) and n.value == "workspace-write" for n in ast.walk(_tree(path))):
+            out.append(path.relative_to(CORE).as_posix())
+    return sorted(out)
+
+
+_ADD_DIR_SITES = _workspace_write_modules()
+
+
+def _launches_without_settings_home_root(tree: ast.AST) -> list[str]:
+    """Functions whose `workspace-write` argv literal lacks a settings_home_add_dir_argv call in the same function."""
+    parents = _parents(tree)
+    bad: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and node.value == "workspace-write":
+            fn = _enclosing_function(node, parents)
+            if fn is None or _ADD_DIR not in _called_names(fn):
+                bad.add(getattr(fn, "name", "<module>"))
+    return sorted(bad)
+
+
+@pytest.mark.parametrize("site", _ADD_DIR_SITES)
+def test_workspace_write_launch_grants_the_settings_home_root(site: str) -> None:
+    tree = _tree(CORE / site)
+    assert _launches_without_settings_home_root(tree) == [], f"{site} launches workspace-write without the settings-home --add-dir root"
+
+
+def test_worker_mode_codex_argv_grants_the_settings_home_root() -> None:
+    from coordinator_core._settings_home import settings_home
+    from coordinator_core.agent_pipe import worker_mode
+
+    argv = worker_mode.WORKER_ARGV["codex"]
+    assert argv[argv.index("--add-dir") + 1] == str(settings_home())
+
+
+def test_settings_home_pin_rejects_a_launch_that_omits_the_root() -> None:
+    omitted = "def go(c):\n    return c + ['exec', '--sandbox', 'workspace-write']\n"
+    granted = "def go(c):\n    return c + ['exec', '--sandbox', 'workspace-write', *settings_home_add_dir_argv()]\n"
+    assert _launches_without_settings_home_root(ast.parse(omitted)) == ["go"]
+    assert _launches_without_settings_home_root(ast.parse(granted)) == []
+
+
 def test_scan_flags_an_unshaped_indirect_argv_spawn() -> None:
     src = "import subprocess\n\ndef go(adapter):\n    return subprocess.Popen(adapter.spawn_argv())\n"
     tree = ast.parse(src)

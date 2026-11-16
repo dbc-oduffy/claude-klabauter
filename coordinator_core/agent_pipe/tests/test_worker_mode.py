@@ -1,6 +1,7 @@
 """worker_mode: argv table, branch naming, and the load + G-EM slot preflight."""
 import pytest
 
+from coordinator_core._settings_home import settings_home
 from coordinator_core.agent_pipe import worker_mode as wm
 from coordinator_core.ops.dispatch_emit import admission
 
@@ -25,8 +26,19 @@ def _busy():
 
 def test_argv_table_covers_the_three_clis_with_a_source_each():
     assert set(wm.WORKER_ARGV) == {"codex", "grok", "agy"} == set(wm.WORKER_ARGV_SOURCE)
-    assert wm.WORKER_ARGV["codex"] == ("--sandbox", "workspace-write", "--ask-for-approval", "never")
+    assert wm.WORKER_ARGV["codex"] == (
+        "--sandbox", "workspace-write", "--ask-for-approval", "never", "--add-dir", str(settings_home()),
+    )
     assert "danger-full-access" not in wm.WORKER_ARGV["codex"]
+    assert wm.WORKER_ARGV["grok"] == ("--always-approve",) and "--add-dir" not in wm.WORKER_ARGV["agy"]
+
+
+def test_codex_worker_settings_home_root_follows_the_resolver(tmp_path, monkeypatch):
+    home = tmp_path / "sh"
+    home.mkdir()
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    assert wm.WORKER_ARGV["codex"][-2:] == ("--add-dir", str(settings_home()))
+    assert wm.settings_home_add_dir_argv() == ["--add-dir", str(settings_home())]
 
 
 def test_branch_name_slugs_host_and_never_main():

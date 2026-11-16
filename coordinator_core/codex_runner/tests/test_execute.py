@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core._settings_home import settings_home
 from coordinator_core.codex_runner import codex_spawn_env, execute
 from coordinator_core.codex_runner.contract import RunRequest
 
@@ -112,7 +113,8 @@ def test_spawn_form_is_workspace_write_in_shared_tree(env):
     assert res.status == "ok"
     argv = json.loads(argv_out.read_text())
     assert argv[:4] == ["exec", "--json", "--sandbox", "workspace-write"]
-    prompt = argv[4]
+    assert argv[4:6] == ["--add-dir", str(settings_home())]
+    prompt = argv[6]
     assert "Edit things" in prompt and "Make the edit." in prompt
     assert "- src/a.py" in prompt and "Write only these files" in prompt
 

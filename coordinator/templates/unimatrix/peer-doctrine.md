@@ -72,6 +72,11 @@ After a submit, watch the run with one blocking command, with the `fire_id` the 
 `coordinator-invoke workflow.fire_wait '{"fire_id": "<fire_id>"}'`. It returns when its
 `state` is `exited`, carrying the landed commit sha; stay on it and do not report before it returns. A run that died or halted
 (`state/warp/<run_id>/halted.json`) is reported and resumed or revised, never hand-done in parallel.
+A run that exited non-zero or halted is steered with `workflow.revise` or refired by its
+`owed_next_action`; hand edits and a hand commit never replace it.
+
+With no PM present (a headless EM), never end on a question: stop with a report of what ran, what
+failed and the `owed_next_action`.
 
 Hand-do only a confident XS by `coordinator/contract/xs-stop-rule.json`, and never while a run of
 the same ask is live.

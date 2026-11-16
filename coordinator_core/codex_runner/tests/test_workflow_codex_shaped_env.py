@@ -105,6 +105,7 @@ def test_codex_unrestricted_still_reaches_the_spawn(rig, tmp_path, monkeypatch):
     from coordinator_core.warm import sandboxed_spawn
 
     monkeypatch.setattr(sandboxed_spawn, "caller_is_sandboxed", lambda: False)
+    _dir_with_pwsh(rig["pf"], "PowerShell", "7")
     with pytest.raises(_Spawned):
         agents.run_agent("x", {}, repo_root=rig["repo"], artifact_dir=tmp_path / "agent")
 
