@@ -3,7 +3,7 @@
 `unproduced_hunks` compares the to-be-committed blob (worktree in checkin form) with HEAD and
 keeps a hunk only when this run produced it: the blob equals a `kept.json` fingerprint, or the
 hunk lies inside the run's `write_baseline`-to-committed delta, or a `kept.json` blob of the run
-carries the hunk and no other holding run's blob does. A hunk already in the baseline otherwise
+carries the hunk. A hunk already in the baseline otherwise
 has no producing row. Zero spawn; unknown (unreadable baseline, coarse delta) holds.
 """
 
@@ -178,10 +178,12 @@ def unproduced_hunks(
 ) -> list:
     """`[landing_integrity.Finding(path, FOREIGN_HUNK_UNPRODUCED, detail)]` per path whose committed
     blob holds a hunk no row of `run_id` produced; the detail names the probable owner (first
-    co-declaring sibling run, else `unknown`). Paths with no change against HEAD yield nothing.
-    With `settled` given, a path whose every probable owner is not live (`_non_live`) yields no
-    finding: `settled[path] = {"blob", "owner", "lines"}` carries the sha of HEAD plus only the run's
-    own hunks (the peer's stay dirty in the worktree) and the peer it names. A tracked path the run
+    co-declaring sibling run, else the halted run withholding the path, else `unknown`). Paths with
+    no change against HEAD yield nothing. With `settled` given, a path whose every co-declared owner
+    is not live (`_non_live`), or whose owner is a halted holder or unknown (the run did not produce
+    those lines), yields no finding: `settled[path] = {"blob", "owner", "lines"}` carries the sha of
+    HEAD plus only the run's own hunks (the foreign ones stay dirty in the worktree), the owner it
+    names (`UNKNOWN_OWNER` when none) and the foreign lines. A tracked path the run
     has no write_baseline for, never declared and did not produce settles to its HEAD blob with owner
     `NO_BASELINE_OWNER`: excluded from the landing, left dirty.
     Never raises: a read failure is a finding, except on a path the run's own record produced
@@ -207,7 +209,7 @@ def _unproduced_hunks(
         if not path:
             continue
         try:
-            bad, own, head_bytes = _provenance(Path(root), run_id, path, own_plan)
+            bad, own, head_bytes = _unproduced(Path(root), run_id, path)
         except Exception as exc:  # noqa: BLE001 -- unknown holds
             if (
                 isinstance(exc, NoWriteBaseline) and settled is not None and exc.head_sha
@@ -231,9 +233,10 @@ def _unproduced_hunks(
             continue
         if bad:
             owners = _owners(Path(root), run_id, path, own_plan)
-            owner = owners[0] if owners else UNKNOWN_OWNER
-            if settled is not None and head_bytes is not None and owners and all(
-                _non_live(Path(root), o) for o in owners
+            holder = None if owners else _halted_holder(Path(root), run_id, own_plan, path)
+            owner = owners[0] if owners else holder or UNKNOWN_OWNER
+            if settled is not None and head_bytes is not None and (
+                all(_non_live(Path(root), o) for o in owners) if owners else True
             ):
                 try:
                     blob = _settled_blob(Path(root), path, head_bytes, own)
@@ -317,32 +320,13 @@ def _kept_blocks(root: Path, common: Path, path: str, head: list, blobs: Sequenc
     return out
 
 
-def _own_hunk_evidence(
-    root: Path, common: Path, run_id: str, path: str, head: list, own_plan: Optional[str],
-) -> tuple:
-    """`(mine, peers)`: kept-blob blocks of `run_id` for `path`, and of every other run holding it
-    (co-declaring owners, the halted holder). Never raises: unreadable evidence is empty."""
-    inv = _inv(root, run_id)
-
-    def blocks(run: Optional[str]) -> set:
-        try:
-            blobs = (inv.kept(run) if run else inv.own_kept()).get(path)
-            return _kept_blocks(root, common, path, head, sorted(blobs)) if blobs else set()
-        except Exception:  # noqa: BLE001 -- unreadable evidence is none
-            return set()
-
-    mine = blocks(None)
-    if not mine:
-        return mine, set()
-    kin = {run_id, *inv.predecessors()}
-    others = [o for o in _owners(root, run_id, path, own_plan) if o not in kin]
-    holder = _halted_holder(root, run_id, own_plan, path)
-    if holder is not None and holder not in kin:
-        others.append(holder)
-    peers: set = set()
-    for other in others:
-        peers |= blocks(other)
-    return mine, peers
+def _own_hunk_evidence(root: Path, common: Path, run_id: str, path: str, head: list) -> set:
+    """Kept-blob blocks of `run_id` for `path`. Never raises: unreadable evidence is empty."""
+    try:
+        blobs = _inv(root, run_id).own_kept().get(path)
+        return _kept_blocks(root, common, path, head, sorted(blobs)) if blobs else set()
+    except Exception:  # noqa: BLE001 -- unreadable evidence is none
+        return set()
 
 
 def _occurrences(lines: list, block: list) -> int:
@@ -377,26 +361,79 @@ def landable_under_hold(
 
 def peer_split(
     root: Path, run_id: str, paths: Sequence[str], *, own_plan: Optional[str] = None,
+    untouched: Optional[list] = None,
 ) -> tuple:
     """`(split, unsettled)` over `paths` the run declares. `split[path] = {"blob", "owner", "lines"}`: the sha
     of HEAD plus only the run's own hunks, for a path whose worktree bytes also carry hunks outside the run's
     `write_baseline` delta (a peer's), whatever the peer's liveness. `unsettled[path] = {"owner", "lines"}`:
     a path carrying a peer's hunks (or whose provenance is unreadable while a peer co-declares it) that cannot
-    be split, naming the probable owner run. A path with no peer evidence appears in neither. Zero spawn;
-    never raises."""
+    be split, naming the probable owner run. A path with no peer evidence appears in neither, nor does a
+    declared path the run never rewrote (`untouched_declared`); a list passed as `untouched` receives those
+    paths. Zero spawn; never raises."""
     with invariants_scope(root, run_id):
-        return _peer_split(Path(root), run_id, paths, own_plan)
+        return _peer_split(Path(root), run_id, paths, own_plan, untouched)
 
 
-def _peer_split(root: Path, run_id: str, paths: Sequence[str], own_plan: Optional[str]) -> tuple:
+def untouched_declared(root: Path, run_id: str, paths: Sequence[str]) -> list:
+    """Sorted `paths` the run declares whose worktree bytes (checkin form) equal its `write_baseline`
+    blob, differ from HEAD and match no kept blob of the run: the run never rewrote them, so their in-tree
+    bytes are what it declared and no peer is named for them. Zero spawn; never raises."""
+    with invariants_scope(root, run_id):
+        root = Path(root)
+        return sorted({
+            p for p in (str(raw or "").replace("\\", "/") for raw in paths)
+            if p and _never_rewritten(root, run_id, p)
+        })
+
+
+def _never_rewritten(root: Path, run_id: str, path: str) -> bool:
+    """See `untouched_declared`; False on any read failure (unknown is not untouched)."""
+    try:
+        from coordinator_core.git import git_objects
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+        from coordinator_core.git.git_state import head_blobs
+        from coordinator_core.ops.dispatch_emit import kept_work
+
+        if not _declares(root, run_id, path):
+            return False
+        base = _inv(root, run_id).baseline()
+        if base is None or base.get(path) is None:
+            return False
+        form = kept_work.checkin_form(root, path, (root / path).read_bytes())
+        if form is None:
+            return False
+        sha = kept_work.blob_sha(form)
+        head = head_blobs(root, [path]).get(path)
+        if head is not None and head[1] == sha:
+            return False
+        obj = git_objects.read_object(resolve_git_common_dir(root), base[path])
+        if obj is None or obj[0] != "blob":
+            return False
+        base_form = kept_work.checkin_form(root, path, obj[1])
+        if base_form is None or kept_work.blob_sha(base_form) != sha:
+            return False
+        return not any(
+            kept_work.matches_committed(root, path, kept, sha) for kept in _inv(root, run_id).own_kept().get(path, ())
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _peer_split(
+    root: Path, run_id: str, paths: Sequence[str], own_plan: Optional[str], untouched: Optional[list] = None,
+) -> tuple:
     split: dict = {}
     unsettled: dict = {}
     for raw in paths:
         path = str(raw or "").replace("\\", "/")
         if not path:
             continue
+        if _never_rewritten(root, run_id, path):
+            if untouched is not None and path not in untouched:
+                untouched.append(path)
+            continue
         try:
-            bad, own, head_bytes = _provenance(root, run_id, path, own_plan)
+            bad, own, head_bytes = _unproduced(root, run_id, path)
         except Exception:  # noqa: BLE001 -- unreadable provenance names a peer only when one co-declares the path
             owner = _peer_owner(root, run_id, own_plan, path)
             if owner is not None and not _own_chain(root, run_id, owner):
@@ -414,10 +451,14 @@ def _peer_split(root: Path, run_id: str, paths: Sequence[str], own_plan: Optiona
                 blob = _settled_blob(root, path, head_bytes, own)
             except Exception:  # noqa: BLE001 -- an unsettleable path is named, not split
                 blob = None
+        try:
+            lines = _line_spans(bad)
+        except (ValueError, AttributeError):
+            lines = bad
         if blob is not None:
-            split[path] = {"blob": blob, "owner": owner, "lines": bad}
+            split[path] = {"blob": blob, "owner": owner, "lines": lines}
         else:
-            unsettled[path] = {"owner": owner, "lines": bad}
+            unsettled[path] = {"owner": owner, "lines": lines}
     return split, unsettled
 
 
@@ -508,20 +549,12 @@ def _run_produced(root: Path, run_id: str, path: str) -> bool:
         return False
 
 
-def _provenance(root: Path, run_id: str, path: str, own_plan: Optional[str]) -> tuple:
-    """`_unproduced`, handing `own_plan` over only when set so the plan-less call keeps its 3-arg shape."""
-    if own_plan is None:
-        return _unproduced(root, run_id, path)
-    return _unproduced(root, run_id, path, own_plan)
-
-
-def _unproduced(root: Path, run_id: str, path: str, own_plan: Optional[str] = None) -> tuple:
+def _unproduced(root: Path, run_id: str, path: str) -> tuple:
     """`(ranges, own, head_bytes)`: committed-side line ranges ("3-4, 9") of hunks no row produced
     ("" when all are produced); the produced hunks as `(i1, i2, j1, j2)` opcodes; the HEAD blob bytes
     (None when the path is absent from HEAD). A hunk outside the baseline-to-committed delta is produced
-    only when a kept blob of `run_id` carries its exact block against HEAD and no kept blob of another
-    run holding the path does; whole-file kept blobs carry peer hunks too, so any other hunk stays
-    unattributed."""
+    only when a kept blob of `run_id` carries its exact block against HEAD, even when a peer's blob
+    carries it too; any other hunk stays unattributed."""
     from coordinator_core.git import git_objects
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.git.git_state import head_blobs
@@ -547,7 +580,7 @@ def _unproduced(root: Path, run_id: str, path: str, own_plan: Optional[str] = No
             raise ValueError(f"HEAD blob {entry[1]} unreadable")
         head_bytes = obj[1]
         head = head_bytes.splitlines(keepends=True)
-    hunks = rhc.changed_opcodes(head, committed)
+    hunks = _hunk_ops(head, committed)
     if not hunks:
         return "", [], head_bytes
 
@@ -578,21 +611,42 @@ def _unproduced(root: Path, run_id: str, path: str, own_plan: Optional[str] = No
         h for h in hunks
         if not any(a <= _span(h)[1] and _span(h)[0] <= b for a, b in delta)
     ]
-    mine: set = set()
-    peers: set = set()
-    if outside:
-        mine, peers = _own_hunk_evidence(root, common, run_id, path, head, own_plan)
+    mine = _own_hunk_evidence(root, common, run_id, path, head) if outside else set()
 
     ranges: list = []
     own: list = []
     for hunk in hunks:
         _tag, i1, i2, j1, j2 = hunk
         block = (tuple(head[i1:i2]), tuple(committed[j1:j2]))
-        if hunk not in outside or (block in mine and block not in peers):
+        if hunk not in outside or block in mine:
             own.append((i1, i2, j1, j2))
         else:
             ranges.append(f"{j1 + 1}-{j2}" if j2 > j1 + 1 else str(j1 + 1))
     return ", ".join(ranges), own, head_bytes
+
+
+def _hunk_ops(head: list, committed: list) -> list:
+    """Changed opcodes of `head` against `committed`; a middle past the match bound is split at patience
+    anchors, so edits near both ends of a long file stay separate hunks, not one first-to-last span."""
+    from coordinator_core.ops.dispatch_emit import run_hunk_claims as rhc
+
+    if not rhc.exceeds_match_bound(head, committed):
+        return rhc.changed_opcodes(head, committed)
+    ops, _coarse = rhc.anchored_opcodes(head, committed, line_budget=rhc.MAX_DIFFLIB_LINES)
+    return [op for op in ops if op[0] != "equal"]
+
+
+def _line_spans(ranges: str) -> str:
+    """`"235-240, 9"` (committed-side ranges) as comma-joined `start,count` spans: `"235,6, 9,1"`."""
+    out = []
+    for part in ranges.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        first, _dash, last = part.partition("-")
+        start = int(first)
+        out.append(f"{start},{int(last) - start + 1 if last else 1}")
+    return ", ".join(out)
 
 
 def _span(hunk: tuple) -> tuple:

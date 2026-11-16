@@ -1,7 +1,9 @@
 """A shared registration file carrying a peer run's hunks at measure time judges by the run's own hunks."""
 from __future__ import annotations
 
+import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -9,7 +11,8 @@ from coordinator_core.git import git_objects
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import _git as _git_out, repo  # noqa: F401
-from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import halted  # noqa: F401
+from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import RUN2, halted  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_measured_tree_gate import _VERDICT, _record, _stage
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_met_over_footprint_breach_incident import C3_PATH, C4_PATH, LANE, LANE_TEST
 from coordinator_core.ops.dispatch_emit.tests.test_ledger_remaining_leg_footprint_fence import _terminal_with
@@ -106,7 +109,7 @@ def test_unmeasured_path_holding_an_own_hunk_is_still_the_runs(reg_repo):
     assert not land_run._peer_dirt_only(reg_repo, REG, {})
 
 
-def test_land_inner_drops_unmeasured_paths_that_hold_only_peer_dirt(halted, monkeypatch):  # noqa: F811
+def test_land_inner_drops_unmeasured_paths_that_hold_only_peer_dirt(halted, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     resume, token = _stage(halted)
     _record(halted, [C3_PATH, C4_PATH])
     monkeypatch.setattr(land_run, "_peer_dirt_only", lambda root, rel, baseline: rel in {LANE, LANE_TEST})
@@ -118,7 +121,50 @@ def test_land_inner_drops_unmeasured_paths_that_hold_only_peer_dirt(halted, monk
     assert LANE_TEST not in landed
 
 
-def test_land_inner_still_refuses_unmeasured_paths_that_are_not_peer_dirt(halted, monkeypatch):  # noqa: F811
+def _own_blobs_record(root, own: dict) -> None:
+    rec = measured_rev_record_path(root, RUN2)
+    data = json.loads(rec.read_text())
+    rec.write_text(json.dumps({**data, "own_blobs": own}), encoding="utf-8")
+
+
+def test_measured_own_blobs_keeps_only_string_entries_inside_the_commit_set() -> None:
+    record = {"own_blobs": {"a": "1" * 40, "b": "2" * 40, "c": 7, "d": ""}}
+    assert land_run._measured_own_blobs(record, ["a", "c", "d"]) == {"a": "1" * 40}
+    assert land_run._measured_own_blobs({}, ["a"]) == {}
+    assert land_run._measured_own_blobs({"own_blobs": ["a"]}, ["a"]) == {}
+
+
+def test_land_inner_commits_the_measured_own_blob_and_leaves_peer_hunks_in_the_worktree(halted) -> None:  # noqa: F811
+    resume, token = _stage(halted)
+    head_text = _git_out(halted, "show", f"HEAD:{C3_PATH}")
+    own_text = head_text + "own = 1\n"
+    peer_text = own_text + "peer = 1\n"
+    (halted / C3_PATH).write_text(peer_text, encoding="utf-8", newline="\n")
+    _record(halted, [C3_PATH, C4_PATH, LANE, LANE_TEST])
+    own_blob = _blob(halted, own_text)
+    _own_blobs_record(halted, {C3_PATH: own_blob})
+
+    out = _terminal_with(halted, token, resume, _VERDICT)
+
+    assert out["committed"] is True, out
+    assert _git_out(halted, "rev-parse", f"{out['sha']}:{C3_PATH}").strip() == own_blob
+    assert (halted / C3_PATH).read_text(encoding="utf-8") == peer_text
+    assert C3_PATH in _git_out(halted, "status", "--porcelain", "--", C3_PATH)
+
+
+def test_land_inner_without_own_blobs_still_commits_the_whole_worktree_blob(halted) -> None:  # noqa: F811
+    resume, token = _stage(halted)
+    peer_text = _git_out(halted, "show", f"HEAD:{C3_PATH}") + "peer = 1\n"
+    (halted / C3_PATH).write_text(peer_text, encoding="utf-8", newline="\n")
+    _record(halted, [C3_PATH, C4_PATH, LANE, LANE_TEST])
+
+    out = _terminal_with(halted, token, resume, _VERDICT)
+
+    assert out["committed"] is True, out
+    assert _git_out(halted, "rev-parse", f"{out['sha']}:{C3_PATH}").strip() == _blob(halted, peer_text)
+
+
+def test_land_inner_still_refuses_unmeasured_paths_that_are_not_peer_dirt(halted, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     resume, token = _stage(halted)
     _record(halted, [C3_PATH, C4_PATH])
     monkeypatch.setattr(land_run, "_peer_dirt_only", lambda root, rel, baseline: rel == LANE)

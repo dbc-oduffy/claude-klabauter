@@ -128,6 +128,20 @@ def test_kept_blob_equal_is_produced(world):
     assert _run(world) == []
 
 
+def test_block_in_own_and_peer_kept_blobs_is_produced_but_peer_only_block_is_refused(world):
+    world.head(_text({}))
+    world.baseline(_text({2: "SHARED", 6: "PEERONLY"}))
+    world.tree(_text({2: "SHARED", 6: "PEERONLY"}))
+    own_blob = world.store(_text({2: "SHARED"}))
+    peer_blob = world.store(_text({2: "SHARED", 6: "PEERONLY"}))
+    world.kept(own_blob)
+    world.kept(peer_blob, run=PEER)
+    found = _run(world)
+    assert len(found) == 1
+    assert "6" in found[0].detail.split("lines")[1].split("were")[0]
+    assert "2" not in found[0].detail.split("lines")[1].split("were")[0]
+
+
 def test_crlf_worktree_compares_in_checkin_form(world):
     world.head(_text({}))
     world.baseline(_text({}))
@@ -241,10 +255,11 @@ def test_one_live_owner_among_non_live_ones_keeps_the_finding(world, monkeypatch
     assert [f.reason for f in found] == [hp.FOREIGN_HUNK_UNPRODUCED] and settled == {}
 
 
-def test_unknown_owner_is_never_settled(world, monkeypatch):
-    found, settled, _seen = _settle(world, monkeypatch, non_live=True, owners=())
-    assert [f.reason for f in found] == [hp.FOREIGN_HUNK_UNPRODUCED]
-    assert settled == {}
+def test_unknown_owner_settles_out_and_the_run_keeps_its_own_hunks(world, monkeypatch):
+    found, settled, seen = _settle(world, monkeypatch, non_live=True, owners=())
+    assert found == []
+    assert settled == {PATH: {"blob": "b" * 40, "owner": hp.UNKNOWN_OWNER, "lines": "2"}}
+    assert seen["hunks"] == [(8, 1, 8, 1)]
 
 
 def test_foreign_hunk_finding_is_provenance_never_a_refusal():
@@ -281,8 +296,39 @@ def _peer_world(world, monkeypatch, *, live_owner: bool):
 def test_peer_split_keeps_only_the_own_hunks_whatever_the_owner_liveness(world, monkeypatch, live_owner):
     seen = _peer_world(world, monkeypatch, live_owner=live_owner)
     split, unsettled = hp.peer_split(world.root, ME, [PATH])
-    assert split == {PATH: {"blob": "c" * 40, "owner": PEER, "lines": "2"}} and unsettled == {}
+    assert split == {PATH: {"blob": "c" * 40, "owner": PEER, "lines": "2,1"}} and unsettled == {}
     assert seen["hunks"] == [(8, 1, 8, 1)]
+
+
+def test_peer_split_names_each_peer_hunk_span_not_one_whole_file_range(world, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import co_declared_settle
+
+    monkeypatch.setattr(co_declared_settle, "settled_blob", lambda *a, **k: "c" * 40)
+    monkeypatch.setattr(hp, "_non_live", lambda root, owner: False)
+    world.head(_text({}))
+    world.baseline(_text({2: "PEER", 9: "PEER"}))
+    world.tree(_text({2: "PEER", 5: "OWN", 9: "PEER"}))
+    world.owner(PEER)
+    split, _ = hp.peer_split(world.root, ME, [PATH])
+    assert split[PATH]["lines"] == "2,1, 9,1"
+
+
+def test_peer_split_names_separate_spans_in_a_file_past_the_match_bound(world, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import co_declared_settle
+
+    monkeypatch.setattr(co_declared_settle, "settled_blob", lambda *a, **k: "c" * 40)
+    monkeypatch.setattr(hp, "_non_live", lambda root, owner: False)
+    n = 700
+
+    def big(edits: dict) -> bytes:
+        return "".join(f"{edits.get(i, f'line{i}')}\n" for i in range(1, n + 1)).encode()
+
+    world.head(big({}))
+    world.baseline(big({20: "PEER", 680: "PEER"}))
+    world.tree(big({20: "PEER", 680: "PEER", 300: "OWN"}))
+    world.owner(PEER)
+    split, _ = hp.peer_split(world.root, ME, [PATH])
+    assert split[PATH]["lines"] == "20,1, 680,1"
 
 
 def test_peer_split_of_an_own_only_file_names_nothing(world):
@@ -296,7 +342,7 @@ def test_peer_split_names_the_owner_when_the_path_cannot_be_split(world, monkeyp
     _peer_world(world, monkeypatch, live_owner=True)
     monkeypatch.setattr(hp, "_settled_blob", lambda *a, **k: (_ for _ in ()).throw(ValueError("no")))
     split, unsettled = hp.peer_split(world.root, ME, [PATH])
-    assert split == {} and unsettled == {PATH: {"owner": PEER, "lines": "2"}}
+    assert split == {} and unsettled == {PATH: {"owner": PEER, "lines": "2,1"}}
 
 
 def test_peer_split_unreadable_provenance_names_a_co_declaring_peer_only(world, monkeypatch):
@@ -326,7 +372,7 @@ def test_peer_split_attributes_a_baseline_held_hunk_to_the_run_whose_kept_blob_c
     world.head(_text({}))  # run base: lacks the edit
     world.baseline(_text({2: "OWN"}))  # re-staged after the run's own edit
     world.tree(_text({2: "OWN"}))
-    assert hp.peer_split(world.root, ME, [PATH]) == ({PATH: {"blob": "d" * 40, "owner": hp.UNKNOWN_OWNER, "lines": "2"}}, {})
+    assert hp.peer_split(world.root, ME, [PATH]) == ({PATH: {"blob": "d" * 40, "owner": hp.UNKNOWN_OWNER, "lines": "2,1"}}, {})
     world.kept(world.store(_text({2: "OWN", 5: "KEPT"})))
     assert hp.peer_split(world.root, ME, [PATH]) == ({}, {})
     assert hp.unproduced_hunks(world.root, ME, [PATH], own_plan="plan-a") == []
@@ -351,16 +397,14 @@ def test_restaged_own_edit_is_credited_from_the_kept_blob(world):
     assert hp.peer_split(world.root, ME, [PATH]) == ({}, {})
 
 
-def test_hunk_carried_by_my_and_a_co_declaring_runs_kept_blob_stays_unattributed(world):
+def test_hunk_carried_by_my_and_a_co_declaring_runs_kept_blob_is_this_runs_own(world):
     world.head(_text({}))
     world.baseline(_text({2: "SHARED"}))
     world.tree(_text({2: "SHARED"}))
     world.owner(PEER)
     world.kept(world.store(_text({2: "SHARED", 5: "KEPT"})))
     world.kept(world.store(_text({2: "SHARED", 6: "THEIRS"})), run=PEER)
-    found = _run(world)
-    assert [f.reason for f in found] == [hp.FOREIGN_HUNK_UNPRODUCED]
-    assert PEER in found[0].detail
+    assert _run(world) == []
 
 
 def test_kept_blob_of_a_run_that_does_not_hold_the_path_does_not_exclude_my_hunk(world):
@@ -398,4 +442,29 @@ def test_peer_split_still_names_a_baseline_hunk_when_the_record_lists_another_pa
     world.tree(_text({2: "PEER"}))
     _record_writes(world, "src/other.py")
     split, _ = hp.peer_split(world.root, ME, [PATH])
-    assert split == {PATH: {"blob": "d" * 40, "owner": hp.UNKNOWN_OWNER, "lines": "2"}}
+    assert split == {PATH: {"blob": "d" * 40, "owner": hp.UNKNOWN_OWNER, "lines": "2,1"}}
+
+
+def _foreign_baseline_tree(world):
+    world.head(_text({}))
+    world.baseline(_text({2: "PEER"}))
+    data = _text({2: "PEER", 8: "OWN"})
+    world.tree(data)
+    return kept_work.blob_sha(data)
+
+
+def test_a_same_sizing_predecessors_kept_blob_is_this_runs_work(world, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_artifact_ownership as rao
+
+    pred = "ask-20261024T000000-cccccc"
+    monkeypatch.setattr(rao, "own_artifact_paths", lambda root, run: rao.OwnArtifacts(predecessors=(pred,)))
+    world.kept(_foreign_baseline_tree(world), run=pred)
+    assert _run(world) == []
+
+
+def test_a_non_predecessors_kept_blob_is_not_this_runs_work(world, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_artifact_ownership as rao
+
+    monkeypatch.setattr(rao, "own_artifact_paths", lambda root, run: rao.OwnArtifacts(predecessors=()))
+    world.kept(_foreign_baseline_tree(world), run=PEER)
+    assert [f.reason for f in _run(world)] == [hp.FOREIGN_HUNK_UNPRODUCED]

@@ -21,6 +21,11 @@ NOT_RUN_CHECK = "not-run"
 ZERO_FAIL_UNATTRIBUTED = "test-verdict-names-no-failure"
 INVARIANT_UNMEASURED = "invariant-unmeasured"
 ZERO_FAIL_CHECK = "zero-fail-unattributed"
+#: ``failed_targeted_tests`` check: owed ids no base check measured; the caller runs them, never refuses on them.
+UNRUN_OWED = "unrun-owed"
+#: ``failed_targeted_tests`` check: failing ids with no baseline evidence either way. Unknown, not caused:
+#: the landing treats it like ``"pre-existing-only"`` (never refuses on it); the ids ride ``GateFindings.unknown_ids``.
+UNKNOWN_ONLY = "unknown-only"
 
 #: Retest-record key naming why a verify run executed zero tests, and its values.
 ZERO_RUN_CAUSE_KEY = "zero_run_cause"
@@ -76,6 +81,42 @@ def tag_findings_with_peer_owners(findings: Sequence[Finding], owners: Mapping[s
         replace(f, detail=f"{f.detail}; {note}" if f.detail else note) if f.reason == TARGETED_TESTS_FAILED else f
         for f in findings
     ]
+
+
+#: Gate check when every red was waived on a green peer-free overlay verdict.
+PEER_WAIVED_CHECK = "peer-hunks-waived"
+
+
+def peers_all_split(measured: Optional[Mapping]) -> bool:
+    """True when the record carries `peer_hunks` and every entry is ``split: true`` (the overlay candidate
+    holds HEAD plus the run's own hunks only)."""
+    peers = measured.get("peer_hunks") if isinstance(measured, Mapping) else None
+    return isinstance(peers, Mapping) and bool(peers) and all(
+        isinstance(v, Mapping) and v.get("split") is True for v in peers.values()
+    )
+
+
+def waive_peer_reds(
+    findings: Sequence[Finding], owners: Mapping[str, str], seeds: Collection[str],
+) -> tuple[list[Finding], list[Finding]]:
+    """``(refusing, advisory)``: a ``TARGETED_TESTS_FAILED`` finding whose every test file is among the
+    overlay's ``seeds`` (the files it ran and passed) moves to ``advisory`` carrying the peer note; any
+    other finding, one naming no test file, or a file the overlay did not run stays refusing. Pure."""
+    ran = {norm_node_id(s) for s in seeds}
+    who = "; ".join(f"{p} (run {o})" for p, o in sorted(owners.items()))
+    note = (
+        f"declared paths carry another run's uncommitted hunks: {who}; the peer-free overlay verdict is green "
+        "on HEAD plus this run's own hunks, so the red is the peer's, not caused by this run"
+    )
+    refusing: list[Finding] = []
+    advisory: list[Finding] = []
+    for f in findings:
+        files = {_node_file(i) for i in _finding_node_ids(f)} or ({_node_file(f.path)} if f.path else set())
+        if type(f) is Finding and f.reason == TARGETED_TESTS_FAILED and files and files <= ran:
+            advisory.append(replace(f, detail=f"{f.detail}; {note}" if f.detail else note))
+        else:
+            refusing.append(f)
+    return refusing, advisory
 
 
 def unmeasured_finding(path: str, detail: str) -> Finding:
@@ -273,7 +314,8 @@ def retest_step(findings: Sequence[Finding], params: Optional[Mapping]) -> Optio
     first such finding's reason: the run
     launches the detached retest (``command``) on ``nodes``, polls it, and re-invokes the landing
     with ``retest_attempts`` raised by one; ``exhausted`` once ``params.retest_attempts`` reached
-    ``MAX_IN_RUN_REMEDY_ATTEMPTS``, when the refusal is the EM's. The landing never spawns pytest."""
+    ``MAX_IN_RUN_REMEDY_ATTEMPTS``, when the refusal is the EM's. The landing spawns the detached retest
+    launcher for unrun owed nodes and never pytest in-process."""
     first = next((f for f in findings if f.reason in TEST_EVIDENCE_REASONS), None)
     if first is None:
         return None
@@ -310,6 +352,27 @@ def advisory_entries(advisory: Sequence[Finding]) -> list[dict]:
     return [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in advisory]
 
 
+def _finding_node_ids(finding: Finding) -> list[str]:
+    """The ``file::test`` ids a finding's detail names (before any ``re-run:`` remedy); [] when it names none."""
+    head = finding.detail.split("; re-run:")[0]
+    parts = [t.strip().removeprefix("failing: ") for t in head.split(";") if "::" in t]
+    return [i for i in parts if _FILE_LIKE.match(_node_file(i))]
+
+
+def caused_only(findings: Sequence[Finding], base_red: Collection[str]) -> tuple[list[Finding], list[Finding]]:
+    """``(refusing, reported)``: a ``TARGETED_TESTS_FAILED`` finding whose named node ids all sit in
+    ``base_red`` (red at the run base, so not caused by the run's hunks) moves to ``reported`` (render with
+    ``advisory_entries``). A finding naming no node id, any id outside ``base_red``, or of another reason stays
+    refusing. Ids compare posix-normalised. Pure."""
+    red = {norm_node_id(n) for n in base_red if n}
+    refusing: list[Finding] = []
+    reported: list[Finding] = []
+    for f in findings:
+        ids = _finding_node_ids(f) if f.reason == TARGETED_TESTS_FAILED else []
+        (reported if ids and all(norm_node_id(i) in red for i in ids) else refusing).append(f)
+    return refusing, reported
+
+
 def _indeterminate_finding(error: object, remedy: str) -> Finding:
     cause = error if isinstance(error, str) and error.strip() else "no error recorded"
     return reverify_indeterminate_finding(
@@ -329,7 +392,7 @@ def failed_targeted_tests(
     nodes: Sequence[str] = (), cleared: Collection[str] = (),
 ) -> tuple[list[Finding], str]:
     """``(findings, check)`` for a carried test verdict; ``check`` is ``"no-verdict"``, ``"pass"``,
-    ``"not-run"``, ``"pre-existing-only"`` or ``"failed"``.
+    ``"not-run"``, ``"pre-existing-only"``, ``"unknown-only"`` or ``"failed"``.
 
     A fail/error verdict whose ``tests_run`` is the integer 0 executed nothing: ``([], NOT_RUN_CHECK)``,
     checked before the baseline, never a TARGETED_TESTS_FAILED finding.
@@ -342,9 +405,9 @@ def failed_targeted_tests(
     distinct caused test file (repo-relative POSIX), the detail naming up to three node ids. A
     fail/error verdict whose baseline has nothing caused is ``"pre-existing-only"`` only when every
     failing id (``pre_existing``, ``foreign``, ``unverified``) is in ``evidenced_clear_ids``; otherwise
-    each unevidenced id is a TARGETED_TESTS_FAILED finding (counted caused), and a baseline naming no
-    failing id at all is one unattributed finding. ``cleared`` (``base_red_cleared``) ids count as
-    evidenced, but only on a ``measured`` verdict and never against ``baseline.caused``.
+    the unevidenced ids are unknown, not caused: ``([], "unknown-only")`` on a ``measured`` verdict, and
+    a baseline naming no failing id at all is one unattributed finding. ``cleared`` (``base_red_cleared``)
+    ids count as evidenced, but only on a ``measured`` verdict and never against ``baseline.caused``.
     A ``fail`` verdict with ``tests_failed`` the integer 0 and no baseline names no failure and no
     evidence: one Finding(ZERO_FAIL_UNATTRIBUTED) with check ``ZERO_FAIL_CHECK``, never TARGETED_TESTS_FAILED.
     Trap: any other fail/error verdict with no baseline yields one Finding with ``path=""`` (unattributed,
@@ -354,7 +417,9 @@ def failed_targeted_tests(
     Every ``path=""`` finding's detail names ``nodes`` plus the verdict's ``failed_tests``, else
     ``NO_NODE_RECORDED``.
     ``measured`` is False for a verdict the caller carried in params: its ``baseline.evidence`` is
-    self-written, not read from a retest record the engine wrote, so no id clears on it."""
+    self-written, not read from a retest record the engine wrote, so no id clears on it. On such a verdict
+    an unevidenced id is a finding only when ``baseline.head_red`` measured it green (evidence of cause); with no ``head_red``
+    measurement it returns ``([], UNRUN_OWED)`` (the caller runs it), and an id in ``head_red`` is base red."""
     if not isinstance(verdict, Mapping):
         return [], "no-verdict"
     carried = verdict.get("failed_tests")
@@ -401,10 +466,18 @@ def failed_targeted_tests(
                 f"tests {status} with no failing node id and no baseline evidence of a red pre-change{note}; "
                 f"re-run: {remedy or retest_remedy(None)}",
             )], "failed"
+        if measured:
+            return [], UNKNOWN_ONLY
+        head_red = _measured_ids({"baseline": baseline}, HEAD_RED_KEY)
+        if head_red is None:
+            return [], UNRUN_OWED
+        unevidenced = [n for n in unevidenced if n not in head_red]
+        if not unevidenced:
+            return [], "pre-existing-only"
         return [
             tests_failed_finding(path,
                     "; ".join(nodes[:3])
-                    + "; no baseline evidence of red pre-change, counted caused; base check owed")
+                    + "; measured green at HEAD, red with the run's change")
             for path, nodes in _group_by_file(unevidenced).items()
         ], "failed"
     by_file: dict[str, list[str]] = {}
@@ -530,7 +603,7 @@ _HEAD_READ = re.compile(r"""['"]HEAD(?:[~^:@][^'"]*)?['"]|\bHEAD[~^:@]""")
 def base_red_cleared(worktree_root: Path, params: Mapping, verdict: Optional[Mapping]) -> set[str]:
     """The ``base_red_ids`` the run does not own: a node whose file the retest ran (``verdict["tests"]``)
     or whose test source names ``HEAD`` as a quoted git ref in code (it compares committed state, so it can only go green after
-    the commit). A base-red node neither targeted nor reading HEAD stays counted caused."""
+    the commit). A base-red node neither targeted nor reading HEAD is not cleared here."""
     red = base_red_ids(params)
     if not red:
         return set()
@@ -578,7 +651,7 @@ def _dirt_ids(baseline: Mapping) -> set[str]:
 
 def unevidenced_ids(baseline: Mapping, cleared: Collection[str] = (), measured: bool = True) -> list[str]:
     """The failing ids of a ``baseline`` with no baseline evidence and not in ``cleared``: the ids
-    ``failed_targeted_tests`` would count caused, base check owed. ``baseline.evidence`` ids and
+    ``failed_targeted_tests`` reports unknown (base check owed). ``baseline.evidence`` ids and
     ``undeclared-dirt`` foreign ids are evidenced only when ``measured`` (an engine retest record wrote
     them); an unmeasured baseline evidences nothing."""
     from coordinator_core.completion_receipts.verdict import evidenced_clear_ids

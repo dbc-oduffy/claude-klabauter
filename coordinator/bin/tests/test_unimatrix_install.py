@@ -3564,7 +3564,7 @@ def test_preflight_prints_chmod_remedy_for_untraversable_path_dir(monkeypatch, t
     rc, out = _run([], "2.1.316")
     assert rc == 0
     assert f"sudo chmod 755 {shut}" in out
-    assert str(ok) not in out and "absent" not in out
+    assert str(ok) not in out and str(tmp_path / "absent") not in out
 
 
 @posix_only
@@ -3631,8 +3631,11 @@ def test_grok_link_never_spawns_sudo(monkeypatch, tmp_path):
 @posix_only
 def test_install_default_run_links_grok(monkeypatch, tmp_path):
     home, brew, system = _grok_world(tmp_path, monkeypatch, system_writable=False)
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    monkeypatch.delenv("GROK_HOME", raising=False)
     monkeypatch.setattr(ui, "link_grok_local_bin", lambda: _REAL_LINK_GROK(home, str(brew), system))
-    rc, out = _run([], "2.1.316")
+    rc, out = _run(["--install"], "2.1.316", tmp_path / "dest")
     assert rc == 0
     assert "grok ~/.local/bin link linked" in out
     assert (home / ".local" / "bin" / "grok").is_symlink()

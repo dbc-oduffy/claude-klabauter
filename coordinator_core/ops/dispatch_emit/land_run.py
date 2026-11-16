@@ -3324,6 +3324,13 @@ def _drop_lost_baseline_verified(root: Path, refusals: list, measured: Optional[
     return kept
 
 
+def _drop_unattributed_overlaps(refusals: list) -> list:
+    """`refusals` minus each hunk no run claims (run None, a real header): it shares lines with an own
+    hunk and cannot be split out, so its path stages whole and the clean-overlay verify judges it.
+    A proven peer's overlap and an ``unreadable`` path stay refused."""
+    return [(p, run, header) for p, run, header in refusals if run is not None or header == "unreadable"]
+
+
 def _verified_preexisting(root: Path, rel: str, measured_blob: object, baseline: Mapping) -> bool:
     """True when *rel* holds none of the run's own hunks and its worktree still checks in to the
     measured blob: pre-existing dirt the run measured and verified, which lands as measured."""
@@ -3335,6 +3342,15 @@ def _verified_preexisting(root: Path, rel: str, measured_blob: object, baseline:
         return checkin_blob_sha(root, rel) == measured_blob
     except Exception:
         return False
+
+
+def _measured_own_blobs(record: Mapping, commit_set: Collection[str]) -> dict:
+    """The record's ``own_blobs`` (peer-split path -> HEAD plus the run's own hunks) for paths in *commit_set*."""
+    raw = record.get("own_blobs")
+    if not isinstance(raw, dict):
+        return {}
+    wanted = set(commit_set)
+    return {p: b for p, b in raw.items() if p in wanted and isinstance(p, str) and isinstance(b, str) and b}
 
 
 def _measured_rev_call(run_id: Optional[str]) -> str:
@@ -3466,7 +3482,12 @@ def _measured_mismatch(
     removed = set(_measured_strs(record, "removed"))
     landing, gone = set(product), set(deleted)
     head = _head_entries(root, [*blobs, *removed, *gone])
-    differing = {p for p in landing if blobs.get(p) != (settled.get(p) or checkin_blob_sha(root, p))}
+    measured_own = _measured_own_blobs(record, landing)
+    differing = {
+        p for p in landing
+        if blobs.get(p) != (settled.get(p) or checkin_blob_sha(root, p))
+        and not (p in measured_own and settled.get(p) == measured_own[p])
+    }
     differing |= {p for p in gone if p not in removed and p in head}
     differing |= {
         p for p, blob in blobs.items()
@@ -4839,6 +4860,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 refused="own-hunk-head-moved",
             )
         own_refusals = _drop_lost_baseline_verified(root, own_refusals, measured)
+        own_refusals = _drop_unattributed_overlaps(own_refusals)
         if own_refusals:
             _remove(root, receipt_paths)
             return _error(
@@ -4858,12 +4880,31 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 refused="own-hunk-stage-refused",
             )
         settled_blobs = {**settled_blobs, **own_blobs}
-    if settled_blobs and measured is not None and merge_plan is None and not measured.get("unreadable"):
+    if measured_run and merge_plan is None:
+        from coordinator_core.ops.dispatch_emit import measured_rev as _mr, unclaimed_dirt_stage as _uds
+
+        touched = [
+            p for p in _mr.touched_paths(root, measured_run)
+            if p in commit_set and p not in settled_blobs and (root / p).is_file()
+        ]
+        for p, e in (_uds.touched_own_split(root, measured_run, touched) if touched else {}).items():
+            settled_blobs[p] = e["blob"]
+    if measured is not None and merge_plan is None and not measured.get("unreadable"):
         verified = measured.get("blobs") if isinstance(measured.get("blobs"), dict) else {}
+        staged_own = dict(settled_blobs)
         settled_blobs = {
             p: b for p, b in settled_blobs.items()
             if not (isinstance(verified.get(p), str) and _worktree_blob(root, p) == verified[p])
         }
+        # A peer-split path's worktree equals the measured blob, so the filter above always drops it.
+        for p, b in _measured_own_blobs(measured, commit_set).items():
+            if staged_own.get(p, b) != b:
+                _remove(root, receipt_paths)
+                return _error(
+                    f"own-hunk staging refused: {p} stages {staged_own[p]} but the measured own-only blob is {b}",
+                    refused="own-hunk-stage-refused",
+                )
+            settled_blobs[p] = b
 
     # A "pre_existing" overlay (measured) or a "missing" one (the engine never produced a verdict) lands with
     # an advisory; red, inconclusive and mismatch refuse.

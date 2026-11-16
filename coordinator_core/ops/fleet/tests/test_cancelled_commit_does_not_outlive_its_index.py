@@ -493,7 +493,14 @@ def test_both_fleet_seams_are_covered():
         if name in seams:
             continue
         assert name in fn_by_name, f"{name} no longer exists in {fleet.name}"
-        assert _calls_any(fn_by_name[name], _COMMIT_LANDING_HELPERS), (
+        # An async seam may hand its body to a `<name>_sync` worker (asyncio.to_thread); the
+        # landing call then lives one hop down, and only that hop is followed.
+        worker = f"{name}_sync"
+        delegates = worker in fn_by_name and any(
+            isinstance(n, ast.Name) and n.id == worker for n in ast.walk(fn_by_name[name])
+        )
+        bodies = [fn_by_name[name], *([fn_by_name[worker]] if delegates else [])]
+        assert any(_calls_any(body, _COMMIT_LANDING_HELPERS) for body in bodies), (
             f"{name} has neither a kill-before-unlink-guarded private-index "
             f"commit spawn nor a call to {sorted(_COMMIT_LANDING_HELPERS)} — "
             f"its commit landing has silently disappeared, or the orphaned-"

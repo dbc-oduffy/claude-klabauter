@@ -861,9 +861,10 @@ def landing_key(measured: dict) -> str:
     """Digest of what the overlay verified: the landing set's blob shas plus the base (HEAD) sha and the
     candidate sha, as recorded by `measured_rev`. A change to any of them changes the key."""
     blobs = measured.get("blobs") if isinstance(measured.get("blobs"), dict) else {}
-    payload = json.dumps(
-        {"blobs": blobs, "base_sha": measured.get("base_sha"), "sha": measured.get("sha")}, sort_keys=True,
-    )
+    keyed = {"blobs": blobs, "base_sha": measured.get("base_sha"), "sha": measured.get("sha")}
+    if isinstance(measured.get("own_blobs"), dict) and measured["own_blobs"]:
+        keyed["own_blobs"] = measured["own_blobs"]
+    payload = json.dumps(keyed, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

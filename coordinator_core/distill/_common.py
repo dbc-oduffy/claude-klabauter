@@ -234,6 +234,29 @@ def _text_excluding_provenance_blocks(text: str) -> str:
     return split.preamble + stripped_fm + split.body_with_leading_newline
 
 
+POINTER_PAGE_STAMP = "mechanical_disposition.py --pointer-page"
+_POINTER_HEAD_CHARS = 4096
+
+
+def is_pointer_text(text: str) -> bool:
+    """True when `text` carries the generated-pointer-page stamp in its first 4096 chars.
+    A pointer page cites everything it indexes, yet a pointer is never a capture (G-EM
+    ruling) and is sha-pinned, so not a live dependency: it counts as a citation in neither
+    reading."""
+    return POINTER_PAGE_STAMP in text[:_POINTER_HEAD_CHARS]
+
+
+def is_pointer_page(path: Path) -> bool:
+    """`is_pointer_text` over a 4096-char head of `path`. Never raises: an unreadable file
+    returns False so it stays a reference (ambiguity blocks)."""
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            head = handle.read(_POINTER_HEAD_CHARS)
+    except OSError:
+        return False
+    return is_pointer_text(head)
+
+
 class RipgrepUnavailableError(RuntimeError):
     """`rg` is not on PATH. The reference guards have no in-process fallback (a corpus walk
     reads every file); a delete path must treat this as "referenced" (ambiguity blocks)."""
@@ -256,8 +279,10 @@ def active_reference_guard(
     """Return True if `needle` (typically a candidate-for-deletion path or slug) is still
     actively referenced somewhere under `scope` (default: docs/ tasks/ archive/) in `repo_root`.
 
-    `exclude_provenance_blocks=False` turns the exclusion OFF and restores a plain
-    "cited anywhere" search. That is not a laxity knob — it is the OTHER reading of the same
+    `exclude_provenance_blocks=False` turns the exclusion OFF and restores a "cited anywhere"
+    search that reads only the head of each matched file to drop stamped pointer pages (never
+    a provenance-block page, which is guard 7's canonical proof). That is not a laxity knob —
+    it is the OTHER reading of the same
     block. A caller asking "is this artifact's content durably captured somewhere?"
     (`delete_guard.check_harvest_provenance`, Guard 7) wants the tombstone to COUNT, because
     the tombstone is its positive proof; a caller asking "does anything still depend on this
@@ -307,7 +332,7 @@ def active_reference_guard(
         return False
     matched_paths = result.stdout.splitlines()
     if not exclude_provenance_blocks:
-        return bool(matched_paths)
+        return any(not is_pointer_page(Path(p)) for p in matched_paths if p)
     return referenced_needles([needle], matched_paths)[needle]
 
 
@@ -326,6 +351,8 @@ def referenced_needles(needles: list[str], matched_paths: list[str]) -> dict[str
             file_text = Path(matched_path).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             return {needle: True for needle in result}
+        if is_pointer_text(file_text):
+            continue
         live_text = _text_excluding_provenance_blocks(file_text)
         for needle in [n for n in pending if n in live_text]:
             result[needle] = True
@@ -449,6 +476,8 @@ def files_citing(needles: list[str], repo_root: Path, paths: list[str]) -> dict[
         except OSError:
             for needle in distinct:
                 hits[needle].append(rel)
+            continue
+        if is_pointer_text(text):
             continue
         for needle in distinct:
             if needle in text:

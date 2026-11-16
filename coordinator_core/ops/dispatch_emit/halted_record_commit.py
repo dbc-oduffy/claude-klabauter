@@ -474,8 +474,11 @@ def _land(
     if not (isinstance(session_id, str) and _UUID_RE.fullmatch(session_id)):
         session_id = None
 
-    finished = done_chunks(worktree_root, params)
-    finished += family_done_chunks(worktree_root, record_dir_rel, params, finished, params.get(CONSUMED_RETURNS_PARAM))
+    parsed_request = _run_request(worktree_root, params.get("script_path"))
+    finished = done_chunks(worktree_root, params, parsed_request)
+    finished += family_done_chunks(
+        worktree_root, record_dir_rel, params, finished, params.get(CONSUMED_RETURNS_PARAM), parsed_request
+    )
     declared: dict = {}  # path -> owning chunk id, first declarer wins
     report_cache: dict = {}
     for chunk in finished:

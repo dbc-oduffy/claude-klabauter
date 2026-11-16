@@ -214,12 +214,12 @@ def test_nothing_caused_clears_only_when_every_failing_id_is_evidenced():
     bad = {"status": "fail", "baseline": {"caused": [], "foreign": ["t/a.py::x", "t/b.py::y"],
                                           "evidence": ["t/a.py::x"]}}
     findings, check = li.failed_targeted_tests(bad)
-    assert check == "failed" and [f.path for f in findings] == ["t/b.py"]
+    assert check == li.UNKNOWN_ONLY and findings == []
     unlabelled = {"status": "fail", "baseline": {"caused": [], "pre_existing": ["t/a.py::x"]}}
-    assert li.failed_targeted_tests(unlabelled)[1] == "failed"
+    assert li.failed_targeted_tests(unlabelled)[1] == li.UNKNOWN_ONLY
     unverified = {"status": "fail", "baseline": {"caused": [], "foreign": ["t/a.py::x"],
                                                  "evidence": ["t/a.py::x"], "unverified": ["t/c.py::z"]}}
-    assert li.failed_targeted_tests(unverified)[1] == "failed"
+    assert li.failed_targeted_tests(unverified)[1] == li.UNKNOWN_ONLY
 
 
 def test_error_without_baseline_is_one_unattributed_finding():
@@ -294,16 +294,16 @@ def test_errored_retest_with_unknown_zero_run_cause_or_ran_tests_still_fails(tmp
     path.write_text(json.dumps({**record, "zero_run_cause": "budget-exhausted", "tests_run": 3,
                                 "failed_tests": ["t.py::test_x"]}), encoding="utf-8")
     findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
-    assert check == "failed" and findings and findings[0].reason == li.TARGETED_TESTS_FAILED
+    assert check == li.UNKNOWN_ONLY and findings.unknown_ids == ["t.py::test_x"]
 
 
-def test_failed_retest_that_ran_tests_is_still_targeted_tests_failed(tmp_path):
+def test_failed_retest_that_ran_tests_with_no_baseline_is_unknown_not_caused(tmp_path):
     root = _repo(tmp_path)
     path = _write_fresh(root, status="fail")
     record = json.loads(path.read_text(encoding="utf-8"))
     path.write_text(json.dumps({**record, "failed_tests": ["t.py::test_x"]}), encoding="utf-8")
     findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
-    assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
+    assert check == li.UNKNOWN_ONLY and list(findings) == [] and findings.unknown_ids == ["t.py::test_x"]
 
 
 def test_absent_verdict_is_no_verdict():
@@ -441,7 +441,7 @@ def test_failed_tests_param_outranks_an_errored_no_results_retest(tmp_path, monk
     assert check == "failed" and "errored without running tests" in findings[0].detail
     params = {**_RECORDED_FAIL, "failed_tests": ["t.py::test_x"]}
     findings, check = li.landing_test_gate(root, params, "r1")
-    assert check == "failed" and findings[0].path == "t.py"
+    assert check == li.UNKNOWN_ONLY and findings == [] and findings.unknown_ids == ["t.py::test_x"]
 
 
 def test_refusal_names_a_drifted_retest_record_and_its_route(tmp_path):
@@ -463,18 +463,18 @@ def test_head_movement_alone_never_stales_a_covered_retest(tmp_path):
     assert li.fresh_targeted_verdict(root, "r1") is None
 
 
-def test_unchanged_failing_files_since_base_are_not_inferred_pre_existing(tmp_path):
+def test_unchanged_failing_files_since_base_are_unknown_not_pre_existing_and_not_caused(tmp_path):
     root = _repo(tmp_path)
     params = {**_RECORDED_FAIL, "run_base_sha": B, "failed_tests": ["./t/test_x.py::test_a", "t/test_x.py::test_b"]}
     findings, check = li.landing_test_gate(root, params, None)
-    assert check == "failed" and [f.path for f in findings] == ["t/test_x.py"]
-    assert "unevidenced red" in findings[0].detail
+    assert check == li.UNKNOWN_ONLY and list(findings) == []
+    assert not findings.foreign_evidence and len(findings.unknown_ids) == 2
 
 
-def test_failed_tests_without_a_run_base_still_refuse(tmp_path):
+def test_failed_tests_without_a_run_base_are_unknown_not_refused(tmp_path):
     root = _repo(tmp_path)
     params = {**_RECORDED_FAIL, "failed_tests": ["t/test_x.py::test_a"]}
-    assert li.landing_test_gate(root, params, None)[1] == "failed"
+    assert li.landing_test_gate(root, params, None)[1] == li.UNKNOWN_ONLY
 
 
 @pytest.mark.parametrize("marker", [{"stale": True, "note": "no targeted set recorded"}, {"status": "stale"}])
@@ -597,24 +597,23 @@ def test_digest_named_failure_reaches_the_gate_and_is_retested_by_remedy(tmp_pat
     out = _digest(tmp_path, _NAMED)
     params = {**_RECORDED_FAIL, "run_base_sha": B, "task_output_path": out}
     findings, check = li.landing_test_gate(root, params, None)
-    assert check == "failed"
-    assert [f.path for f in findings] == ["src/lib/mcp/tool-manifest.test.ts", "a/test_y.py"]
-    assert "--tests src/lib/mcp/tool-manifest.test.ts" in findings[0].detail
+    assert check == li.UNKNOWN_ONLY and list(findings) == []
+    assert [n.split("::")[0].split(" > ")[0] for n in findings.unknown_ids] == [
+        "src/lib/mcp/tool-manifest.test.ts", "a/test_y.py"]
 
 
-def test_every_failing_file_refuses_whatever_its_age(tmp_path):
+def test_every_failing_file_is_reported_unknown_whatever_its_age(tmp_path):
     root = _repo(tmp_path)
     params = {**_RECORDED_FAIL, "run_base_sha": B, "failed_tests": ["t/test_old.py::a", "t/test_new.py::b"]}
     findings, check = li.landing_test_gate(root, params, None)
-    assert check == "failed" and [f.path for f in findings] == ["t/test_old.py", "t/test_new.py"]
-    assert "--tests t/test_new.py" in findings[1].detail
+    assert check == li.UNKNOWN_ONLY and findings.unknown_ids == ["t/test_old.py::a", "t/test_new.py::b"]
 
 
 def test_failed_tests_nested_under_params_is_honoured(tmp_path):
     root = _repo(tmp_path)
     params = {**_RECORDED_FAIL, "run_base_sha": B, "params": {"failed_tests": ["t/test_x.py::a"]}}
     findings, check = li.landing_test_gate(root, params, None)
-    assert check == "failed" and findings[0].path == "t/test_x.py"
+    assert check == li.UNKNOWN_ONLY and findings.unknown_ids == ["t/test_x.py::a"]
 
 
 def test_stale_verdict_after_head_and_tree_drift_still_refuses_a_recorded_failure(tmp_path):
@@ -760,7 +759,7 @@ def test_fresh_fail_record_node_ids_reach_attribution(tmp_path):
     root = _repo(tmp_path)
     _write_record(root, {"status": "fail", li.FAILED_TESTS_PARAM: ["t.py::test_x"]})
     findings, check = li.landing_test_gate(root, {}, "r1")
-    assert check == "failed" and "t.py::test_x" in findings[0].detail
+    assert check == li.UNKNOWN_ONLY and "t.py::test_x" in findings.unknown_ids
 
 
 def test_fresh_launcher_crash_without_tests_run_still_refuses(tmp_path):
@@ -862,11 +861,11 @@ def test_red_measured_at_the_run_base_but_caused_still_refuses(tmp_path):
     assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
 
 
-def test_foreign_red_measured_at_another_sha_and_unevidenced_still_refuses(tmp_path):
+def test_foreign_red_measured_at_another_sha_and_unevidenced_is_unknown_and_lands(tmp_path):
     findings, check = _gate_with_baseline(
         tmp_path, {"base_sha": "c" * 40, "caused": [], "foreign": [_RED], "evidence": []})
-    assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
-    assert "base check owed" in findings[0].detail
+    assert check == li.UNKNOWN_ONLY and list(findings) == []
+    assert findings.unknown_ids == [_RED]
 
 
 def test_pre_base_sha_record_with_matching_evidence_still_lands(tmp_path):
@@ -1013,3 +1012,54 @@ def test_gate_leaves_the_red_finding_unnamed_without_peer_hunks(tmp_path, monkey
     findings, _ = li._landing_test_gate(tmp_path, {}, "r1")
     assert findings[0].detail == "boom"
     assert li._landing_test_gate(tmp_path, {}, None)[0][0].detail == "boom"
+
+
+_PEER = {"a.py": {"owner": "peer-run", "lines": "1-2", "split": True}}
+
+
+def _red_on(monkeypatch, path):
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+
+    monkeypatch.setattr(
+        li, "_landing_test_gate_body",
+        lambda *a, **k: ([ltt.Finding(path, ltt.TARGETED_TESTS_FAILED, f"failing: {path}::test_x")], "failed"),
+    )
+
+
+def _verdict_for(tmp_path, record, *, verdict="green", seeds=("t/test_a.py",), timed_out=False, key=None):
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    _measured_with_peer(tmp_path, "r1", record)
+    cov.write_verdict(tmp_path, "r1", record, cov.OverlayVerdict(verdict, "tail", tuple(seeds), timed_out))
+    if key is not None:
+        path = cov.verdict_path(tmp_path, "r1")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["key"] = key
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_green_peer_free_verdict_with_all_peers_split_moves_the_red_to_advisory(tmp_path, monkeypatch):
+    _red_on(monkeypatch, "t/test_a.py")
+    _verdict_for(tmp_path, {"sha": "x", "base_sha": "b", "blobs": {}, "peer_hunks": _PEER})
+    findings, check = li._landing_test_gate(tmp_path, {}, "r1")
+    assert list(findings) == [] and check == "peer-hunks-waived"
+    (advised,) = findings.peer_advisory
+    assert advised.reason == "targeted-tests-failed" and "peer-run" in advised.detail and "a.py" in advised.detail
+
+
+@pytest.mark.parametrize("case", ["unsplit", "key-mismatch", "red", "timed-out", "unran-file", "no-verdict"])
+def test_the_red_still_refuses_unless_the_peer_free_verdict_covers_it(tmp_path, monkeypatch, case):
+    _red_on(monkeypatch, "t/test_other.py" if case == "unran-file" else "t/test_a.py")
+    peers = {"a.py": {**_PEER["a.py"], "split": False}} if case == "unsplit" else _PEER
+    record = {"sha": "x", "base_sha": "b", "blobs": {}, "peer_hunks": peers}
+    if case == "no-verdict":
+        _measured_with_peer(tmp_path, "r1", record)
+    else:
+        _verdict_for(
+            tmp_path, record, verdict={"red": "red", "timed-out": "inconclusive"}.get(case, "green"),
+            timed_out=case == "timed-out",
+            key="stale" if case == "key-mismatch" else None,
+        )
+    findings, check = li._landing_test_gate(tmp_path, {}, "r1")
+    assert check == "failed" and [f.reason for f in findings] == ["targeted-tests-failed"]
+    assert "peer-run" in findings[0].detail and not getattr(findings, "peer_advisory", ())

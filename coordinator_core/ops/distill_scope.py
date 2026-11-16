@@ -1190,14 +1190,11 @@ def _captured_keys(cache: _ScopeCache, worktree_root: Path, wiki_dirs: list[str]
 #: page cites every backlog file it indexes, so counting it as capture would mark pointer-only
 #: coverage as harvested and feed disposal guard 1 with it. Whether a pointer is capture is a ruling,
 #: never an accident of this join.
-_POINTER_PAGE_STAMP = "--pointer-page"
-
-
 def _is_pointer_page(cache: _ScopeCache, rel: str, entry: Any) -> bool:
     def compute() -> tuple[bool, bool]:
         try:
             with open(entry.path, encoding="utf-8", errors="replace") as fh:
-                return True, _POINTER_PAGE_STAMP in fh.read(4096)
+                return True, _distill_common.POINTER_PAGE_STAMP in fh.read(4096)
         except OSError:
             return False, False
 

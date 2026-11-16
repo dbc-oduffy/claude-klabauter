@@ -79,14 +79,14 @@ def _run_request(worktree_root: Path, script_path: object):
         return None, set()
 
 
-def done_chunks(worktree_root: Path, params: dict) -> list:
+def done_chunks(worktree_root: Path, params: dict, parsed_request=None) -> list:
     """The chunks a halted run finished. With ``params.incomplete_chunks`` the rest are done, as in
     the DAG mode; without it a chunk is done only when its own report reads DONE and not
     PARTIAL/BLOCKED. A manifest-withheld chunk and an unreadable request are never done."""
     from coordinator_core.ops.dispatch_emit.terminal_commit import _read_rel
     from coordinator_core.ops.dispatch_emit.terminal_commit_ledger import _DELIVERED_REPORT_RE, _UNDELIVERED_REPORT_RE
 
-    request, withheld = _run_request(worktree_root, params.get("script_path"))
+    request, withheld = parsed_request or _run_request(worktree_root, params.get("script_path"))
     if request is None:
         return []
     listed = params.get("incomplete_chunks")

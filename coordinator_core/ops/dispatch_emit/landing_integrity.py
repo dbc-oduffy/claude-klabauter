@@ -61,6 +61,8 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa:
     REVIEW_REVERIFY_INDETERMINATE,
     TARGETED_TESTS_FAILED,
     TARGETED_TESTS_PARAM,
+    UNKNOWN_ONLY,
+    UNRUN_OWED,
     ZERO_FAIL_CHECK,
     ZERO_FAIL_UNATTRIBUTED,
     INVARIANT_UNMEASURED,
@@ -81,6 +83,7 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa:
     baseline_caused_files,
     failed_targeted_tests,
     named_failures,
+    norm_node_id,
     recorded_targeted_set,
     retest_remedy,
     reverify_failing_nodes,
@@ -89,6 +92,7 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa:
     reverify_red_findings,
     reverify_verdict,
     sidecar_base_red,
+    unevidenced_ids,
     targeted_set,
     targeted_test_verdict,
 )
@@ -470,10 +474,15 @@ def _resumed_chain(worktree_root: Path, rid: Optional[str]) -> list:
 
 class GateFindings(list):
     """The gate's findings list; ``deleted_note`` is the receipt line naming run-deleted targets
-    (``""`` when none). A plain list otherwise, so ``== []`` and unpacking keep working."""
+    (``""`` when none). ``unknown_ids`` are the failing ids with no baseline evidence (check
+    ``"unknown-only"``): never refused on; no production caller reads them yet (tests only), so they are
+    speculative until a receipt surfaces them. A plain list otherwise, so ``== []`` and unpacking keep working."""
 
     deleted_note: str = ""
     foreign_evidence: Optional[dict] = None
+    unrun_owed: Sequence[str] = ()
+    unknown_ids: Sequence[str] = ()
+    peer_advisory: Sequence[Finding] = ()
 
 
 class RetestAwait(Finding):
@@ -498,25 +507,111 @@ def retest_await(findings: Sequence[Finding], params: Mapping) -> Optional[dict]
 
 def landing_test_gate(
     worktree_root: Path, params: Mapping, run_id: Optional[str],
-    landed_paths: Optional[Sequence[str]] = None,
+    landed_paths: Optional[Sequence[str]] = None, collect_unrun: bool = False,
 ) -> tuple[GateFindings, str]:
     """``_landing_test_gate_core`` plus the invariant gate: with ``landed_paths`` given, every
     repo-wide invariant whose measured set they touch must be in the run's fresh passing retest,
-    else one ``TARGETED_TESTS_FAILED`` finding per missing invariant (check ``"failed"``)."""
+    else one ``TARGETED_TESTS_FAILED`` finding per missing invariant (check ``"failed"``).
+    ``collect_unrun`` (the landing entry, which can launch the retest) returns the owed nodes nothing
+    measured in ``GateFindings.unrun_owed`` instead of findings; ``run_unrun_owed`` settles them."""
     findings, check = _landing_test_gate_core(worktree_root, params, run_id)
+    if check == UNRUN_OWED and not collect_unrun:
+        findings.extend(unrun_finding(n, params) for n in findings.unrun_owed)
+        findings.unrun_owed, check = (), "failed"
     if not landed_paths or check == "retest-running":
         return findings, check
     foreign: dict = {}
-    owed = invariant_findings(worktree_root, landed_paths, run_id, params, foreign)
+    unrun: Optional[list] = [] if collect_unrun else None
+    owed = invariant_findings(worktree_root, landed_paths, run_id, params, foreign, unrun)
     carried = findings.foreign_evidence or {}
+    unrun = list(dict.fromkeys([*findings.unrun_owed, *(unrun or ())]))
     if not owed:
         if foreign:
             findings.foreign_evidence = {**carried, **foreign}
+        findings.unrun_owed = unrun
         return findings, check
     out = GateFindings([*findings, *owed])
     out.deleted_note = findings.deleted_note
     out.foreign_evidence = {**carried, **foreign}
+    out.unrun_owed, out.unknown_ids = unrun, findings.unknown_ids
+    out.peer_advisory = findings.peer_advisory
     return out, "failed"
+
+
+def unrun_finding(node: str, params: Mapping) -> Finding:
+    """The refusal for an owed invariant ``node`` nothing measured on this tree."""
+    return tests_failed_finding(
+        node.split("::")[0],
+        f"repo-wide invariant {node} measures a path this landing touches and no fresh passing "
+        f"retest ran it; re-run: {retest_remedy(params, [node])}",
+    )
+
+
+def _retest_input(worktree_root: Path, params: Mapping, run_id: Optional[str]) -> Optional[tuple]:
+    """``(flag, value)`` the detached retest reads its params from: the run's params file when written,
+    else the task-output file; None when neither exists."""
+    from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import params_path
+
+    canonical = params_path(worktree_root, run_id)
+    if canonical is not None and canonical.is_file():
+        return "--params-file", str(canonical)
+    raw = params.get("task_output_path")
+    if isinstance(raw, str) and raw.strip() and Path(raw).is_file():
+        return "--from-task-output", raw
+    return None
+
+
+def run_unrun_owed(
+    worktree_root: Path, params: Mapping, run_id: Optional[str], tested: GateFindings,
+) -> GateFindings:
+    """Settle ``tested.unrun_owed``: when no other test-evidence finding stands, launch ``retest_targeted``'s
+    detached entry for exactly those nodes and answer one ``RetestAwait`` per node (poll, then re-invoke at
+    the same arguments); otherwise, or when no params source exists or the child fails to spawn, the
+    nodes become the ``unrun_finding`` refusals. The one process created is the detached child; the op
+    never waits on it. Mutates and returns ``tested``."""
+    nodes = list(tested.unrun_owed)
+    tested.unrun_owed = ()
+    if not nodes:
+        return tested
+    from coordinator_core.ops.dispatch_emit.landing_targeted_tests import TEST_EVIDENCE_REASONS
+
+    source = _retest_input(worktree_root, params, run_id) if run_id else None
+    if source is None or any(f.reason in TEST_EVIDENCE_REASONS for f in tested) or not _launch_retest(
+        worktree_root, run_id, source, nodes,
+    ):
+        tested.extend(unrun_finding(n, params) for n in nodes)
+        return tested
+    poll = retest_remedy(params) + " --poll"
+    tested.extend(
+        RetestAwait(
+            "", TARGETED_TESTS_FAILED,
+            f"repo-wide invariant {n} had no fresh run; its retest was launched; poll: {poll}, then re-invoke "
+            "this landing with the same arguments",
+        )
+        for n in nodes
+    )
+    return tested
+
+
+def _launch_retest(worktree_root: Path, run_id: Optional[str], source: tuple, nodes: Sequence[str]) -> bool:
+    """Start ``retest_targeted`` detached on ``nodes`` (isolated export); True when its record reads running."""
+    import argparse
+    import contextlib
+    import io
+
+    from coordinator_core.ops.dispatch_emit import retest_targeted as rt
+
+    flag, value = source
+    args = argparse.Namespace(
+        params_file=value if flag == "--params-file" else None,
+        from_task_output=value if flag == "--from-task-output" else None, isolated_export=True,
+    )
+    path = fresh_verdict_path(worktree_root, run_id)
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        code = rt._start_detached(
+            args, Path(worktree_root), path, path.with_suffix(".log"), str(run_id), list(nodes), rt.spawn_detached,
+        )
+    return code == 0
 
 
 def run_landing_paths(
@@ -617,11 +712,13 @@ def _guard_hit_verdict(
 
 def invariant_findings(
     worktree_root: Path, landed_paths: Sequence[str], run_id: Optional[str], params: Mapping,
-    foreign_out: Optional[dict] = None,
+    foreign_out: Optional[dict] = None, unrun_out: Optional[list] = None,
 ) -> list[Finding]:
     """One finding per repo-wide invariant a landing diff touches that no fresh passing retest
     ran. An invariant node red in a fresh ``fail`` retest and in its ``baseline.evidence`` (red on a
-    pure-HEAD export) is credited foreign, not a finding; ``foreign_out`` receives ``{node: evidence}``.
+    pure-HEAD export), or named red at the run base by the run's own records, is credited foreign, not
+    a finding; ``foreign_out`` receives ``{node: evidence}``. With ``unrun_out`` given and the retest
+    budget unspent, a node nothing measured is appended there instead of becoming a finding.
     Table lookup plus one record read; zero spawns. With the in-run retest budget spent and no verdict,
     nothing measured the node: it is an ``INVARIANT_UNMEASURED`` finding naming the retest remedy, never
     ``TARGETED_TESTS_FAILED`` (reserved for a measured failure). Paths other halted runs withhold
@@ -644,6 +741,9 @@ def invariant_findings(
         foreign = evidenced_clear_ids(fresh["baseline"], measured=True)
     red, only_base_red = _red_nodes(fresh, foreign)
     guards = set(_arg.declared_guards(worktree_root))
+    base_red = {
+        norm_node_id(n) for n in (base_red_ids(params) | sidecar_base_red(worktree_root, params))
+    } if params else set()
     out = list(config)
     for node in owed:
         if node in ran or node.split("::")[0] in ran:
@@ -661,8 +761,12 @@ def invariant_findings(
             if foreign_out is not None:
                 foreign_out[node] = [e for e in (fresh["baseline"].get("evidence") or []) if e == node]
             continue
-        from coordinator_core.ops.dispatch_emit.landing_targeted_tests import retests_spent
+        from coordinator_core.ops.dispatch_emit.landing_targeted_tests import base_check_red, retests_spent
 
+        if norm_node_id(node) in base_red or (fresh is not None and base_check_red(fresh, [node])[0]):
+            if foreign_out is not None:
+                foreign_out[node] = [FAILING_AT_BASE]
+            continue
         actual = sorted(red - {node}) if node not in red else []
         spent = retests_spent(params)
         if spent and actual:
@@ -685,10 +789,11 @@ def invariant_findings(
         elif spent:
             detail = f"repo-wide invariant {node} failed its in-run retest"
         else:
-            detail = (
-                f"repo-wide invariant {node} measures a path this landing touches and no fresh passing "
-                f"retest ran it; re-run: {retest_remedy(params, [node])}"
-            )
+            if node not in red and unrun_out is not None:
+                unrun_out.append(node)
+            else:
+                out.append(unrun_finding(node, params))
+            continue
         make = unmeasured_finding if spent and fresh is None and not actual else tests_failed_finding
         out.append(make(node.split("::")[0], detail))
     return out
@@ -735,12 +840,44 @@ def _landing_test_gate(
     owners = ltt.peer_hunk_owners(_measured_record(worktree_root, run_id))
     if not owners:
         return findings, check
-    named = ltt.tag_findings_with_peer_owners(findings, owners)
+    refusing, waived = _waive_on_peer_free_verdict(worktree_root, run_id, findings, owners)
+    named = ltt.tag_findings_with_peer_owners(refusing, owners)
     if isinstance(findings, GateFindings):
         out = GateFindings(named)
         out.deleted_note, out.foreign_evidence = findings.deleted_note, findings.foreign_evidence
-        return out, check
+        out.unrun_owed = getattr(findings, "unrun_owed", ())
+        out.unknown_ids = getattr(findings, "unknown_ids", ())
+        out.peer_advisory = waived
+        return out, (check if named or not waived else ltt.PEER_WAIVED_CHECK)
+    if waived:
+        out = GateFindings(named)
+        out.peer_advisory = waived
+        return out, (check if named else ltt.PEER_WAIVED_CHECK)
     return named, check
+
+
+def _waive_on_peer_free_verdict(
+    worktree_root: Path, run_id: Optional[str], findings: Sequence[Finding], owners: Mapping[str, str],
+) -> tuple[list[Finding], list[Finding]]:
+    """``(refusing, advisory)``: the reds on a file the run's overlay ran and passed move to advisory when
+    every peer path is split out and the overlay verdict is green for this landing key. A red, timed-out,
+    inconclusive, mismatched or missing verdict waives nothing."""
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+
+    measured = _measured_record(worktree_root, run_id)
+    if not run_id or not ltt.peers_all_split(measured):
+        return list(findings), []
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    verdict = cov.check_verdict(worktree_root, run_id, measured)
+    if verdict.verdict != "green" or verdict.timed_out:
+        return list(findings), []
+    return ltt.waive_peer_reds(findings, owners, verdict.seeds)
+
+
+def _unrun_nodes(verdict: Mapping, nodes: Sequence[str]) -> list[str]:
+    """The failing ids of a carried ``verdict`` with no head measurement: what the retest must run."""
+    return list(dict.fromkeys(unevidenced_ids(verdict.get("baseline") or {}, (), False))) or list(nodes)
 
 
 def _landing_test_gate_body(
@@ -822,6 +959,10 @@ def _landing_test_gate_body(
         findings, check = failed_targeted_tests(verdict, retest_remedy(params, files), measured=False, nodes=nodes)
         if any(f.reason == REVIEW_REVERIFY_INDETERMINATE for f in findings):
             return findings, check
+        if check == UNRUN_OWED:
+            owed = GateFindings()
+            owed.unrun_owed = _unrun_nodes(verdict, nodes)
+            return owed, check
         if check != "failed" or verdict.get("baseline"):
             return findings, check
         if nodes and set(nodes) <= (base_red_ids(params) | sidecar_base_red(worktree_root, params)):
@@ -838,13 +979,10 @@ def _landing_test_gate_body(
             return [Finding(findings[0].path, findings[0].reason,
                             f"{findings[0].detail}; or pass params.{FAILED_TESTS_PARAM} (failing node ids)"
                             f"{_stale_retest_note(worktree_root, run_id)}")], check
-        return [
-            tests_failed_finding(f,
-                    "; ".join([n for n in nodes if _node_file(n) == f][:3])
-                    + f"; unevidenced red (not shown red pre-change), counted caused; "
-                    f"re-run: {retest_remedy(params, [f])}")
-            for f in files
-        ], "failed"
+        unknown = GateFindings()
+        base_red = base_red_ids(params) | sidecar_base_red(worktree_root, params)
+        unknown.unknown_ids = list(dict.fromkeys(n for n in nodes if _node_file(n) and n not in base_red))
+        return unknown, UNKNOWN_ONLY
     sidecar_red = sidecar_base_red(worktree_root, params)
     sidecar_red = sidecar_red | _base_measured_foreign(worktree_root, params, run_id, fresh)
     cleared = base_red_cleared(worktree_root, params, fresh) | sidecar_red
@@ -852,11 +990,15 @@ def _landing_test_gate_body(
     from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
 
     base = fresh.get("baseline")
-    if check == "failed" and isinstance(base, Mapping) and not base.get("caused"):
+    if check in ("failed", UNKNOWN_ONLY) and isinstance(base, Mapping) and not base.get("caused"):
         owed = ltt.unevidenced_ids(base, cleared)
         passing = ltt.owed_check_cleared(fresh, owed) if owed else set()
         if passing:
             findings, check = failed_targeted_tests(fresh, retest_remedy(params), cleared=cleared | passing)
+        if owed and check == UNKNOWN_ONLY:
+            unknown = GateFindings(findings)
+            unknown.unknown_ids = [n for n in owed if n not in passing]
+            return unknown, check
         if owed and check == "failed":
             left = len(owed) - len(passing)
             findings = [
@@ -878,8 +1020,33 @@ def _landing_test_gate_body(
             }
             findings, check = failed_targeted_tests(
                 {**fresh, "baseline": moved}, retest_remedy(params), cleared=cleared | base_red)
+    if check == "failed" and findings:
+        red_now = {ltt.norm_node_id(n) for n in base_red | sidecar_red | base_red_ids(params)}
+        refusing, reported = ltt.caused_only(findings, red_now)
+        # A finding's detail names at most three ids per file; any caused id of that file outside base red keeps it refusing.
+        unlisted = {
+            ltt._node_file(ltt.norm_node_id(n)) for n in (base.get("caused") or [] if isinstance(base, Mapping) else [])
+            if ltt.norm_node_id(n) not in red_now
+        }
+        refusing += [f for f in reported if f.path in unlisted]
+        reported = [f for f in reported if f.path not in unlisted]
+        if reported:
+            carried = dict(getattr(findings, "foreign_evidence", None) or {})
+            carried.update({
+                n: [FAILING_AT_BASE] for f in reported for n in ltt._finding_node_ids(f)
+            })
+            attributed = GateFindings(refusing)
+            attributed.foreign_evidence = carried
+            if refusing:
+                findings = attributed
+            else:
+                findings, check, base_red = attributed, "pre-existing-only", base_red | set(carried)
     if check == "failed" and base_note:
-        findings = [replace(f, detail=f"{f.detail}; {base_note}") if f.detail else f for f in findings]
+        noted = [replace(f, detail=f"{f.detail}; {base_note}") if f.detail else f for f in findings]
+        if isinstance(findings, GateFindings):
+            noted = GateFindings(noted)
+            noted.foreign_evidence = findings.foreign_evidence
+        findings = noted
     if check == "pre-existing-only" and base_red:
         attributed = GateFindings(findings)
         attributed.foreign_evidence = {n: [FAILING_AT_BASE] for n in sorted(base_red)}

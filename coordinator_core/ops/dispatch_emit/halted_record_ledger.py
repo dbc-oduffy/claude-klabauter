@@ -119,6 +119,7 @@ def _post_checkpoint_candidates(
 
 def family_done_chunks(
     worktree_root: Path, record_dir_rel: str, params: dict, finished: Iterable, consumed: object,
+    parsed_request=None,
 ) -> list:
     """The marker chunks a family-stage row finished that ``finished`` lacks: a family runner writes no
     dispatch report, so its DONE is read from its consumed (or persisted) return. A manifest-withheld
@@ -127,7 +128,7 @@ def family_done_chunks(
     from coordinator_core.ops.dispatch_emit.halted_record_request import _manifest_doc, _run_request
     from coordinator_core.ops.dispatch_emit.stage_family import RUNNER_AGENT
 
-    request, withheld = _run_request(worktree_root, params.get("script_path"))
+    request, withheld = parsed_request or _run_request(worktree_root, params.get("script_path"))
     if request is None:
         return []
     record_dir = worktree_root / record_dir_rel

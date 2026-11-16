@@ -660,12 +660,14 @@ def box_label(remote):
 
 
 def box_key(remote):
-    """Identity of the box behind an ssh alias: `box_label` lower-cased and cut at its first dot, so
-    `machine-b` and `Machine-b.local` are one box. An address (IPv4, or IPv6 with colons) stays whole."""
+    """Identity of the box behind an ssh alias: `box_label` lower-cased, cut at its first dot and
+    stripped of a trailing `-lan`, so `machine-b`, `Machine-b.local` and `machine-b-lan` are one box
+    (the same normalisation as the peer contract's `box_id`). An address (IPv4, or IPv6 with colons) stays whole."""
     host = box_label(remote).lower()
     if ":" in host or re.fullmatch(r"\d+(?:\.\d+){3}", host):
         return host
-    return host.partition(LABEL_SEP)[0] or host
+    label = host.partition(LABEL_SEP)[0] or host
+    return label[:-4] if label.endswith("-lan") and len(label) > 4 else label
 
 
 def alias_duplicate(remote, far_sock, scan):
@@ -1276,6 +1278,21 @@ def mirror(row, cfg, say, scan=None):
 FAR_LIVENESS_FIELDS = ("updatedAt", "statusUpdatedAt", "status")  # the far session's activity, never the face's
 
 
+def far_identity_crossed(d, row, sock):
+    """True when mirror record `d`, bridged under far socket `sock`, holds another far session's name or socket than `row` shows.
+
+    The far name a mirror was built for may follow a rename only while the far session id vouches for it
+    (both sides carry the same non-empty id); without that, the pipe now answers as a different session."""
+    held = d.get(FAR_SOCKET_FIELD)
+    if isinstance(held, str) and held and held != sock:
+        return True
+    far_name, now = d.get("unimatrixFarName"), row["entry"].get("name")
+    if not (isinstance(far_name, str) and far_name and isinstance(now, str) and now) or far_name == now:
+        return False
+    sid = d.get("sessionId")
+    return not (isinstance(sid, str) and sid and sid == row["entry"].get("sessionId"))
+
+
 def rename_live_mirror(pid, sock, row, cfg, say, scan=None):
     """Refresh a live bridge's far identity when its stable remote socket is reused.
 
@@ -1320,7 +1337,7 @@ def rename_live_mirror(pid, sock, row, cfg, say, scan=None):
             updates[field] = value
     if not _liveness().stamp_fresh(d, FAR_SEEN_FIELD, POLL_SECONDS):
         updates.update(far_seen_fields())
-    if isinstance(name, str) and name:
+    if isinstance(name, str) and name and not far_identity_crossed(d, row, sock):
         want = mirror_entry_name(row["entry"], cfg.remote, sock, scan)
         if d.get("unimatrixFarName") != name:
             updates["unimatrixFarName"] = name
@@ -1338,7 +1355,8 @@ def crossed_mirrors(bridges, rows):
 
     Crossed means the bridge left a `<pid>.misroute` marker (the far end answered as another session),
     the mirror's `farPid` is not its row's pid (checked after the refresh), the mirror's `sessionId`
-    differs from (or, for a legacy mirror, is missing against) its row's non-empty one, or another
+    differs from (or, for a legacy mirror, is missing against) its row's non-empty one, it holds another
+    far session's name or socket than its row (`far_identity_crossed`; the refresh never rebinds those), or another
     live mirror of this remote carries the identical session name for a different far socket. Names
     compare in full: a box-labelled twin of a bare name is the intended disambiguation, not a crossing."""
     seen, by_name, crossed = {}, {}, set()
@@ -1361,7 +1379,7 @@ def crossed_mirrors(bridges, rows):
         far_sid = row["entry"].get("sessionId")
         if isinstance(far_sid, str) and far_sid and d.get("sessionId") != far_sid:
             crossed.add(sock)
-        if os.path.exists(os.path.join(sessions_dir(), f"{b.pid}.misroute")):
+        if far_identity_crossed(d, row, sock) or os.path.exists(os.path.join(sessions_dir(), f"{b.pid}.misroute")):
             crossed.add(sock)
         if isinstance(d.get("name"), str) and d["name"]:
             by_name.setdefault(d["name"], []).append(sock)

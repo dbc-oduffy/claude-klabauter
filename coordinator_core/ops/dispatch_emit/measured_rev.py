@@ -117,6 +117,16 @@ def touched_record_path(repo_root: Path, run_id: str) -> Path:
     return measured_rev_record_path(repo_root, run_id).with_name("measured-touched.json")
 
 
+def touched_paths(repo_root: Path, run_id: str) -> list:
+    """The paths the run's last measurement covered (`touched_record_path`), declared or not; [] when
+    the record is absent or unreadable."""
+    try:
+        data = json.loads(touched_record_path(repo_root, run_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [p for p in data if isinstance(p, str)] if isinstance(data, list) else []
+
+
 def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None = None) -> Dict[str, Any]:
     """Params `run_id`, `paths`; returns a dict keyed by `MEASURED_REV_KEYS`
     (`sha`, `base_sha`, `paths`, `removed`, `blobs`, `tree`) plus `reach_dirt`: tracked
@@ -125,7 +135,9 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
     `clean_overlay_verify.check_verdict` ties to the landing set.
     When a measured path also carries hunks outside the run's write_baseline delta (a peer's,
     `hunk_provenance.peer_split`) the record adds `peer_hunks` `{path: {owner, lines, split}}`, and `overlay_sha`:
-    a second candidate whose split paths hold only HEAD plus the run's own hunks. The record is replaced per
+    a second candidate whose split paths hold only HEAD plus the run's own hunks. A declared path the
+    run never rewrote (`hunk_provenance.untouched_declared`) is never a peer's: the record lists it as
+    `untouched_declared`, and it stays out of `split` so every candidate carries its in-tree bytes. The record is replaced per
     run_id and measures `paths` unioned with the run's own recorded write set (`_run_landing_paths`), so a re-run re-measures the current landing set; a
     path outside both stays unmeasured. A withheld path and an untracked gitignored path are dropped from
     that union and never read. Raises `MeasuredRevRefused` for no HEAD, an unmeasurable test reach, a
@@ -210,7 +222,13 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
         cand = write_object(gitdir, b"commit", body.encode("utf-8", "surrogateescape"))
         from coordinator_core.ops.dispatch_emit.hunk_provenance import peer_split
 
-        split, unsettled = peer_split(root, run_id, changed)
+        untouched: list = []
+        split, unsettled = peer_split(root, run_id, changed, untouched=untouched)
+        from coordinator_core.ops.dispatch_emit.unclaimed_dirt_stage import touched_own_split
+
+        for p, e in touched_own_split(root, run_id, [c for c in changed if c not in split and c not in untouched]).items():
+            split[p] = e
+            unsettled.pop(p, None)
         overlay_sha = None
         if split:
             tree = _rewrite_head_spine(
@@ -235,6 +253,10 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
         }
     if overlay_sha:
         result["overlay_sha"] = overlay_sha
+    if split:
+        result["own_blobs"] = {p: e["blob"] for p, e in split.items()}
+    if untouched:
+        result["untouched_declared"] = sorted(untouched)
     record.parent.mkdir(parents=True, exist_ok=True)
     record.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
     # Trap: the record is pinned equal to the reply and the reply to `MEASURED_REV_KEYS`, so `touched` is its own file.

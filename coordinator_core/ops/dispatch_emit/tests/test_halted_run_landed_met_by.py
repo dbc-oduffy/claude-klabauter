@@ -122,7 +122,21 @@ def test_ledger_check_blocking_item_row_accepts_met_by(tmp_path, key):
     root, marker, after = _ledger_halt_repo(tmp_path, **{key: [{"id": "R1", "remaining": [], "evidence": ""}]})
     out = _call(root, sha=after, met_by={"R1": after})
     assert out["ok"], out
+    assert out["blocking_rows"] == ["R1"]
     assert json.loads(marker.read_text(encoding="utf-8"))["met_by"] == {"R1": after}
+
+
+def test_ledger_check_blocking_items_are_the_rows_the_landing_requires_credit(tmp_path):
+    root, marker, after = _ledger_halt_repo(
+        tmp_path, items=[{"id": "C1"}, {"id": "C2"}], halted="ledger-check"
+    )
+    refused = _call(root, sha=after)
+    assert not refused["ok"] and "blocking rows C1, C2 carry no met_by credit" in refused["error"]
+
+    landed = _call(root, sha=after, met_by={"C1": after, "C2": after})
+    assert landed["ok"], landed
+    assert landed["blocking_rows"] == ["C1", "C2"]
+    assert json.loads(marker.read_text(encoding="utf-8"))["met_by"] == {"C1": after, "C2": after}
 
 
 def test_ledger_check_halt_still_refuses_a_row_it_did_not_block_on(tmp_path):

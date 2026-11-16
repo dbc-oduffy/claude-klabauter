@@ -108,15 +108,21 @@ def _withheld(marker: dict) -> list:
     return [b for b in blocking if isinstance(b, str)] if isinstance(blocking, list) else []
 
 
-def _met_by_rows(marker: dict) -> list:
-    """Register-row ids ``met_by`` may name: ``_withheld(marker)`` plus a ledger-check halt's ``blocking_items`` / ``items`` ids."""
+def _blocking_rows(marker: dict) -> list:
+    """The marker's blocking register rows, including ledger-check items, for replies and credit gates."""
     rows = _withheld(marker)
     if marker.get("halted") == "ledger-check":
         for key in ("blocking_items", "items"):
             seq = marker.get(key)
             if isinstance(seq, list):
-                rows.extend(i["id"] for i in seq if isinstance(i, dict) and isinstance(i.get("id"), str))
+                rows.extend(
+                    i["id"] for i in seq
+                    if isinstance(i, dict) and isinstance(i.get("id"), str) and i["id"] not in rows
+                )
     return rows
+
+
+_met_by_rows = _blocking_rows
 
 
 def _review_record(root: Path, run_id: str, session_id: Optional[str]) -> Optional[str]:
@@ -211,7 +217,7 @@ def _queue_close(root: Path, run_id: str, sha: str, marker: Optional[dict], sess
     from coordinator_core.ops.dispatch_emit import run_close
 
     marker = marker if isinstance(marker, dict) else {}
-    withheld = _withheld(marker)
+    withheld = _blocking_rows(marker)
     plan = marker.get("plan") or _sizing_plan(root, run_id, marker)
     if not isinstance(plan, str) or not plan:
         return {"close": {"status": "not-applicable", "detail": "halt record names no plan"}, "blocking_rows": withheld}
@@ -316,7 +322,7 @@ def _existing_close(root: Path, run_id: str, stem: str, marker: dict) -> dict:
 
     from coordinator_core.ops.dispatch_emit import run_close
 
-    withheld = _withheld(marker)
+    withheld = _blocking_rows(marker)
     now = datetime.now().astimezone()
     legs = run_close.read_close_job(root, stem, now)
     unpaid = [leg for leg, result in legs.items() if result.status == "failed"]
@@ -1040,7 +1046,7 @@ def _standing_halt_problem(root: Path, run_id: str, credited: dict) -> Optional[
         return None
     stamped = marker.get(MET_BY_FIELD)
     have = set(credited) | (set(stamped) if isinstance(stamped, dict) else set())
-    uncredited = [b for b in _withheld(marker) if b not in have]
+    uncredited = [b for b in _blocking_rows(marker) if b not in have]
     if uncredited:
         shape = "{" + ", ".join(f'"{b}": "<sha>"' for b in uncredited) + "}"
         return (

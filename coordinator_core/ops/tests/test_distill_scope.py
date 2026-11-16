@@ -1564,6 +1564,18 @@ def test_a_generated_pointer_page_is_not_a_capture(fixture_repo, wide_budget):
     assert _not_admitted(_admit_scope(fixture_repo))[pointed] == "already_captured"
 
 
+def test_a_page_with_only_the_loose_pointer_flag_is_still_a_capture(fixture_repo, wide_budget):
+    _harvest_log_row(fixture_repo, "archive/daily-summaries/2026-11-10.md")
+    _log(fixture_repo, "2026-11-10", "nothing")
+    _write(
+        fixture_repo / "docs" / "wiki" / "flag-notes.md",
+        "# Flag notes\n\nThe `--pointer-page` flag is documented here.\n\n"
+        "From archive/completed/2026-09-02-rec-p.md\n",
+    )
+    pointed = _completed(fixture_repo, "2026-09-02-rec-p", "Delivered 2026-09-06-open-plan\n")
+    assert _not_admitted(_admit_scope(fixture_repo))[pointed] == "already_captured"
+
+
 def test_pass_complete_holds_only_at_zero_backlog(tmp_path, monkeypatch):
     from coordinator_core import run_watermark
 

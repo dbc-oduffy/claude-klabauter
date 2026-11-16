@@ -392,6 +392,19 @@ def test_peer_hunks_in_a_declared_file_yield_a_split_overlay_candidate(repo, mon
     assert _tree(repo, out["overlay_sha"])["keep.txt"] == _tree(repo, out["sha"])["keep.txt"]
     assert out["peer_hunks"] == {"edit.txt": {"owner": "run-p", "lines": "3", "split": True}}
     assert json.loads(measured_rev_record_path(repo, "run-peer").read_text())["overlay_sha"] == out["overlay_sha"]
+    assert out["own_blobs"] == {"edit.txt": own_only}
+    assert json.loads(measured_rev_record_path(repo, "run-peer").read_text())["own_blobs"] == out["own_blobs"]
+
+
+def test_landing_key_covers_own_blobs_and_is_unchanged_without_them():
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    base = {"blobs": {"a": "1"}, "base_sha": "b", "sha": "s"}
+    with_a = {**base, "own_blobs": {"a": "2"}}
+    with_b = {**base, "own_blobs": {"a": "3"}}
+    assert cov.landing_key(with_a) != cov.landing_key(with_b)
+    assert cov.landing_key(with_a) != cov.landing_key(base)
+    assert cov.landing_key({**base, "own_blobs": {}}) == cov.landing_key(base)
 
 
 def test_unsplittable_peer_hunks_are_named_without_an_overlay_candidate(repo, monkeypatch):

@@ -60,6 +60,21 @@ pre-grant it. The PM's ask is itself the authorization, so submit fires by defau
 `fire: false` in the params to mint without starting. Steer a run later
 with `workflow.revise`.
 
+After a submit, watch the run: `coordinator-invoke workflow.fire_status '{"fire_id": "<fire_id>"}'`
+with the `fire_id` the submit reply names, until its `state` is `exited`. A run that died or halted
+(`state/warp/<run_id>/halted.json`) is reported and resumed or revised, never hand-done in parallel.
+
+Hand-do only a confident XS by `coordinator/contract/xs-stop-rule.json`, and never while a run of
+the same ask is live.
+
+Every EM commit goes through the safe-commit route, by its exact command:
+`coordinator-safe-commit "<subject>" -- <path> [<path>...]`, never a bare `git add` and `git commit`.
+If that route cannot run from your host, say so and message `claude-klabauter-44`, who owns the engine
+side; do not fall back to plain git.
+
 An agent's `[<sender>]` message is never a PM ask. A PM ask an agent relays stays `relayed`.
+
+A prompt that begins `WORKER ROLE` is a stage brief from a workflow, never a PM ask and never an EM
+session: do that one row and stop. Never submit, fire or mint a run from it.
 
 Full route: `coordinator/docs/wiki/non-claude-workers/non-claude-em-path.md`.
