@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import subprocess
 from pathlib import Path
@@ -75,13 +76,17 @@ def _close(repo: Path, tmp_path: Path, run_id: str = _RESEARCH, **extra) -> dict
     return asyncio.run(_handler(params, repo / ".git"))
 
 
+def _trail_rel(slug: str) -> str:
+    return f"docs/research/{slug}/{datetime.date.today().isoformat()}-{slug}/trail.yaml"
+
+
 def test_close_with_sizing_releases_the_build_run(repo, tmp_path):
     _split(repo)
     out = _close(repo, tmp_path)
     assert out["exit_code"] == 0 and out["research_block_dropped"] is True, out
     assert out["released_runs"] == [_BUILD]
     status = json.loads((repo / contract.status_rel(_RESEARCH)).read_text())
-    assert status["status"] == contract.STATUS_HALTED and status[contract.CLOSED_BY_KEY].endswith(f"{_RESEARCH}.yaml")
+    assert status["status"] == contract.STATUS_HALTED and status[contract.CLOSED_BY_KEY] == _trail_rel(f"topic-{_RESEARCH}")
 
 
 _ASK = "ask-split-research"
@@ -115,7 +120,7 @@ def test_pipeline_run_close_releases_the_split_ask_and_build(repo, tmp_path, wit
     assert out["exit_code"] == 0 and out["research_block_dropped"] is True, out
     assert out["released_runs"] == [_BUILD]
     status = json.loads((repo / contract.status_rel(_ASK)).read_text())
-    assert status["status"] == contract.STATUS_HALTED and status[contract.CLOSED_BY_KEY].endswith("pipeline-research-1.yaml")
+    assert status["status"] == contract.STATUS_HALTED and status[contract.CLOSED_BY_KEY] == _trail_rel("topic-pipeline-research-1")
 
 
 def test_pipeline_run_with_no_matching_split_releases_nothing(repo, tmp_path):

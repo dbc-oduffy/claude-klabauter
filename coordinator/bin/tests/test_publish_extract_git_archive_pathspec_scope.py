@@ -313,3 +313,31 @@ def test_root_on_disk_but_untracked_at_sha_is_left_out(tmp_path, monkeypatch):
 
     assert publish._relative_pathspec_entry(committed, root) in pathspec
     assert publish._relative_pathspec_entry(uncommitted, root) not in pathspec
+
+
+def _init_repo(root, tracked_rel):
+    root.mkdir()
+    for args in (["init", "-q", "-b", "main"], ["config", "user.email", "c1-test@claude-klabauter.test"],
+                 ["config", "user.name", "C1 Test"], ["config", "commit.gpgsign", "false"]):
+        subprocess.run(["git", "-C", str(root), *args], check=True, creationflags=_NO_WINDOW)
+    if tracked_rel:
+        f = root / tracked_rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"x\n")
+        subprocess.run(["git", "-C", str(root), "add", tracked_rel], check=True, creationflags=_NO_WINDOW)
+    subprocess.run(["git", "-C", str(root), "commit", "-q", "--allow-empty", "-m", "init"],
+                   check=True, creationflags=_NO_WINDOW)
+    return publish._git_rev_parse(root, "HEAD")
+
+
+def test_toplevel_path_is_tracked_iff_any_path_is_tracked(tmp_path):
+    root = tmp_path / "repo"
+    assert publish._path_tracked_at_sha(root, root, {"a/b.txt"}) is True
+    assert publish._path_tracked_at_sha(root, root, set()) is False
+    assert publish._path_tracked_at_sha(root / "missing", root, {"a/b.txt"}) is False
+
+
+def test_root_source_row_is_present_in_commit_not_declined(tmp_path):
+    root = tmp_path / "repo"
+    sha = _init_repo(root, "install.md")
+    assert publish._root_present_in_commit(root, {str(root.resolve()): sha}) is True

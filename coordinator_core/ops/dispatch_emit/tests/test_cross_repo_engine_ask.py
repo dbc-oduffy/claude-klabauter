@@ -112,8 +112,8 @@ def _command_span(script: str, op: str) -> str:
 
 
 def _pinned_root(span: str) -> Path | None:
-    hit = re.search(r"--repo[ =]+\\?['\"]?([^\s'\"`]+?)(?=\\?['\"\s`]|$)", span) or re.search(
-        r"\bcd \\?['\"]?([^\s'\"`;&]+?)(?=\\?['\"\s`;&]|$)", span
+    hit = re.search(r"--repo[ =]+\\?['\"]?([^\s'\"`]+?)(?=\\[n']|\\?['\"\s`]|$)", span) or re.search(
+        r"\bcd \\?['\"]?([^\s'\"`;&]+?)(?=\\n|\\?['\"\s`;&]|$)", span
     )
     return Path(hit.group(1)) if hit else None
 

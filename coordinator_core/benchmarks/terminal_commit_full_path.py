@@ -91,11 +91,12 @@ INLINE_REVIEW = {
     "wave_sidecar_paths": [],
     "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
     "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
-    "tests": {"status": "not_run", "run": 0, "failed": 0, "sidecar": None},
+    "tests": {"status": "pass", "run": 1, "failed": 0, "sidecar": None},
     "criterion": {
         "status": "met",
         "observation": "a.py exists at HEAD",
         "sidecar": "j.md",
+        "falsifier": {"verdict": "pass", "output": "a.py exists at HEAD"},
         "completion_summary": "Shipped a.py. It makes the fixture plan's criterion true.",
         "lesson_candidates": [
             {
@@ -105,7 +106,7 @@ INLINE_REVIEW = {
                 "target_wiki": "coordinator/docs/wiki/fixture.md",
             }
         ],
-        "authored_by": "terminal-judge",
+        "authored_by": "coordinator:exit-criterion-judge",
     },
 }
 

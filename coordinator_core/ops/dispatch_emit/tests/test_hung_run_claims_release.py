@@ -126,6 +126,10 @@ def test_a_staged_peer_with_recent_activity_still_withholds(repo):
 
 def test_a_stale_staged_peer_with_a_fresh_artifact_still_withholds(repo):
     peer = _peer(repo, stage="staged", age=warp_run_deliverable.STAGED_STALE_SECONDS + 600)
+    stage_file = peer / "run-stage.json"
+    data = json.loads(stage_file.read_text(encoding="utf-8"))
+    data["started_at"] = _stamp(60)
+    stage_file.write_text(json.dumps(data), encoding="utf-8")
     (peer / "resume.json").write_text("{}", encoding="utf-8")
     with pytest.raises(ValueError, match="no reviewable paths"):
         _paths(repo)

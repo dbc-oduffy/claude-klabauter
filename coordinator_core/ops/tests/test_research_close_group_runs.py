@@ -31,6 +31,7 @@ def repo(tmp_path: Path) -> Path:
     r = tmp_path / "repo"
     r.mkdir()
     _git(r, "init", "-q")
+    (r / ".git" / "info" / "exclude").write_text(".coordinator-local/\n")
     (r / "seed.txt").write_text("seed\n")
     p = r / _SIZING
     p.parent.mkdir(parents=True)

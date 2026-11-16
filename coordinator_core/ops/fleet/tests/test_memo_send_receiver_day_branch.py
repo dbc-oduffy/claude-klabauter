@@ -40,6 +40,7 @@ def _cadence(monkeypatch):
 
 
 LIVE = "work/machine-a/2026-10-20"
+HELPER_BRANCH = "work/test/2026-11-16"
 
 
 def _day_branch(root: Path) -> str:
@@ -52,6 +53,13 @@ def _cut_remote_only(root: Path) -> None:
     _git(root, "push", "-q", "origin", LIVE)
     _git(root, "checkout", "-q", "main")
     _git(root, "branch", "-q", "-D", LIVE)
+    _drop_helper_work_branch(root)
+
+
+def _drop_helper_work_branch(root: Path) -> None:
+    """The receiver helper's own work branch, local and tracking, so only `LIVE` is a work ref."""
+    _git(root, "branch", "-q", "-D", HELPER_BRANCH)
+    _git(root, "branch", "-q", "-dr", f"origin/{HELPER_BRANCH}")
 
 
 def _origin_of(root: Path) -> Path:
@@ -195,18 +203,23 @@ def test_dry_run_reports_the_upstream_tip_without_minting_or_switching(tmp_path,
     assert _pending_records(sender) == []
 
 
-def test_a_receiver_without_a_work_branch_is_refused_and_owes_no_push(tmp_path, monkeypatch):
+def test_a_receiver_with_no_branch_at_all_is_refused_and_owes_no_push(tmp_path, monkeypatch):
     sender, receiver, _bare = _setup(tmp_path, monkeypatch)
-    state_before = _checkout_state(receiver)
+    _git(receiver, "checkout", "-q", "--detach")
+    for branch in (HELPER_BRANCH, "main"):
+        _git(receiver, "branch", "-q", "-D", branch)
+    _git(receiver, "branch", "-q", "-dr", f"origin/{HELPER_BRANCH}")
+    _git(receiver, "branch", "-q", "-dr", "origin/main")
+    assert _git(receiver, "for-each-ref", "refs/heads", "refs/remotes") == ""
+    state_before = (_git(receiver, "rev-parse", "HEAD"), (receiver / ".git" / "index").read_bytes())
     _write_draft(sender, "t-nw")
 
     result = _memo_send({"dry_run": False, "topic": "t-nw"}, repo_root=sender)
 
     assert result["exit_code"] != 0
     assert result["acted"] == []
-    assert "no live work branch" in str(result)
-    assert _git(receiver, "branch", "--list", "work/*") == ""
-    assert _checkout_state(receiver) == state_before
+    assert "no deliverable branch" in str(result)
+    assert (_git(receiver, "rev-parse", "HEAD"), (receiver / ".git" / "index").read_bytes()) == state_before
     assert _pending_records(sender) == []
 
 

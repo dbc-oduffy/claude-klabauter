@@ -83,3 +83,33 @@ def test_fingerprint_row_normalises_only_the_run_id():
     a = refire_unchanged.fingerprint_row(["x.py"], f"run {PRIOR}", PRIOR)
     assert a == refire_unchanged.fingerprint_row(["x.py"], f"run {NEW}", NEW)
     assert a != refire_unchanged.fingerprint_row(["x.py"], f"run {NEW} more", NEW)
+
+
+
+
+def _same_run_refire(tmp_path, note: bool) -> dict:
+    """A rebound refire: the halted run restaged under its own id, its snapshot naming itself as the kept run."""
+    from coordinator_core.ops.dispatch_emit import resume_snapshot
+    from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
+    from coordinator_core.ops.dispatch_emit.tests.test_refire_brief_carries_halted_revise_note import (
+        PLAN_REL, PRIOR as RUN, WRITES, _halted_prior, _note,
+    )
+
+    _halted_prior(tmp_path)
+    if note:
+        _note(tmp_path)
+    resume_snapshot.write(tmp_path, RUN, PLAN_REL, [], list(WRITES), kept=(), kept_run=RUN)
+    return read_stage_reply(
+        tmp_path, _handler({"run_id": RUN, "plan_path": PLAN_REL, "only_rows": list(WRITES)}, repo_root=tmp_path)
+    )
+
+
+def test_same_run_refire_after_a_revise_note_stages(tmp_path):
+    reply = _same_run_refire(tmp_path, note=True)
+    assert "error" not in reply, reply
+    assert "rows" in reply
+
+
+def test_same_run_refire_without_a_note_is_still_refused(tmp_path):
+    assert "refire unchanged" in json.dumps(_same_run_refire(tmp_path, note=False))

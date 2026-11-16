@@ -340,6 +340,32 @@ def _archived_bytes(src: Path, roots: list[tuple[str, str]]) -> bytes:
     return relativize_text(text, roots).encode("utf-8")
 
 
+def _sizing_audience(sizing_path: Path) -> object:
+    """The sizing's ``research.audience`` as written (validated by ``_research_trail.record``), None
+    when the file is unreadable, not a mapping, or carries no such key. Must run before the research
+    block is dropped."""
+    import yaml
+
+    try:
+        data = yaml.safe_load(sizing_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return None
+    block = data.get("research") if isinstance(data, dict) else None
+    return block.get("audience") if isinstance(block, dict) else None
+
+
+def _landed_audience(trail_path: Path) -> object:
+    """The ``audience`` an already-landed trail carries, None when absent or unreadable. A re-close
+    finds the sizing's research block dropped and must keep the stamp the first close wrote."""
+    import yaml
+
+    try:
+        data = yaml.safe_load(trail_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return None
+    return data.get("audience") if isinstance(data, dict) else None
+
+
 def _extends(old_text: str, new_text: str) -> bool:
     """True when `new_text` is `old_text` plus outputs: every key but ``output_count`` and
     ``paths`` is equal, the old paths are a subset of the new, and the count did not shrink."""
@@ -538,6 +564,8 @@ def _close_archived(
     rel_paths = [] if local else [dst.relative_to(worktree).as_posix() for _, dst in pairs]
     try:
         trail_rel = _research_trail.trail_rel(run_dir_rel)
+        if meta.get("audience") is None and (worktree / trail_rel).is_file():
+            meta = {**meta, "audience": _landed_audience(worktree / trail_rel)}
         trail_text = _research_trail.render(
             _research_trail.record(
                 run_id=run_id,
@@ -547,6 +575,7 @@ def _close_archived(
                 destination="local-only" if local else "repo",
                 paths=rel_paths,
                 output_count=len(sources),
+                audience=meta.get("audience"),
             )
         )
     except ValueError as exc:
@@ -902,6 +931,7 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         if run_id not in group_runs:
             return _err(f"group_runs must include this run_id {run_id!r}: {group_runs!r}")
     sizing_rel = None
+    audience = None
     if sizing is not None:
         sized = contained_path(worktree / sizing, [worktree])
         if sized is None:
@@ -909,8 +939,10 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         if not sized.is_file():
             return _err(f"sizing is not on disk: {sizing!r}")
         sizing_rel = os.path.normpath(sizing).replace("\\", "/")
+        audience = _sizing_audience(sized)
     meta = {
         "tier": tier, "value_class": value_class, "sizing": sizing, "sizing_rel": sizing_rel,
+        "audience": audience,
         "group_runs": group_runs, "topic": topic,
         "session_id": str(params.get("session_id") or "") or resolve_current_session_id(worktree),
     }

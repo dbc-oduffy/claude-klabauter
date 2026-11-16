@@ -100,7 +100,7 @@ class RunInvariants:
         return self._once(("kept", target), lambda: kept_work.kept_fingerprints(record_dir(self.root, target)))
 
     def predecessors(self) -> tuple:
-        """Earlier runs of this run's lineage: those bound to its sizing, plus `ask_stage._lineage_kin`
+        """Earlier runs of this run's lineage: those bound to its sizing, plus `run_lineage.lineage_kin`
         (the `resumed_from` chain, earlier-sizing runs, an unbound first-fire ask). Empty when unreadable."""
 
         def build() -> tuple:
@@ -110,9 +110,9 @@ class RunInvariants:
             except Exception:  # noqa: BLE001 -- unreadable lineage names no predecessor
                 pass
             try:
-                from coordinator_core.ops.dispatch_emit.ask_stage import _lineage_kin
+                from coordinator_core.ops.dispatch_emit.run_lineage import lineage_kin
 
-                out.update(dict.fromkeys(_lineage_kin(self.root, self.run_id)))
+                out.update(dict.fromkeys(lineage_kin(self.root, self.run_id)))
             except Exception:  # noqa: BLE001
                 pass
             return tuple(out)
@@ -507,9 +507,9 @@ def _own_chain(root: Path, run_id: str, owner: str) -> bool:
     its hunks are this run's work, so splitting them out leaves a candidate missing half the change.
     Never raises; unreadable lineage is not kin."""
     try:
-        from coordinator_core.ops.dispatch_emit.ask_stage import _chain_kin
+        from coordinator_core.ops.dispatch_emit.run_lineage import chain_kin
 
-        return owner in _chain_kin(root, run_id, [owner])
+        return owner in chain_kin(root, run_id, [owner])
     except Exception:  # noqa: BLE001
         return False
 

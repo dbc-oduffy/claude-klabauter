@@ -39,6 +39,8 @@ VERDICT_FILE = "overlay-verdict.json"
 
 MIRROR_DIRNAME = "clean-mirror"
 MIRROR_SLOTS = 4
+MIRROR_WAIT_S = 90.0
+MIRROR_POLL_S = 0.25
 SETUP_TIMEOUT_S = 60
 TEST_TIMEOUT_S = 120
 PYTEST_STALL_S = 120
@@ -305,6 +307,34 @@ def teardown_only_error(returncode: int, output: str) -> bool:
     return any(marker in output for marker in _TEARDOWN_MARKERS)
 
 
+_FORCED_EXIT_RE = re.compile(r"^\[forced-exit\] rc=\d+: (.*)$", re.MULTILINE)
+_RESIDUE_CAUSE = "left in session Temp"
+
+
+def temp_residue_lines(output: str) -> list:
+    """The `[forced-exit]` and `managed-temp:` lines of `output` when every forced exit names a session-Temp
+    residue, else `[]`."""
+    causes = _FORCED_EXIT_RE.findall(output)
+    if not causes or any(_RESIDUE_CAUSE not in c for c in causes):
+        return []
+    return [ln.strip() for ln in output.splitlines() if ln.startswith(("[forced-exit]", "managed-temp:"))]
+
+
+def temp_residue_only(returncode: int, output: str) -> bool:
+    """True when a pytest exit 1 is only a managed-temp residue: the run reports passed tests, no failed or
+    errored test, no INTERNALERROR or collection error, and every forced exit is a session-Temp residue."""
+    if returncode != _PYTEST_FAILED or not _PASSED_RE.search(output):
+        return False
+    if _NOT_PASSED_RE.search(output) or "INTERNALERROR" in output or _COLLECTION_RE.search(output):
+        return False
+    return bool(temp_residue_lines(output))
+
+
+def hygiene_only_exit(returncode: int, output: str) -> bool:
+    """True when a non-zero pytest exit over passed tests is only session teardown or a temp residue."""
+    return teardown_only_error(returncode, output) or temp_residue_only(returncode, output)
+
+
 def collection_error(returncode: int, output: str) -> bool:
     """True when pytest stopped at exit 2 because a test file failed to collect (an import error such as a
     module only a peer's worktree carries): a red of the run's own tree, never an inconclusive run."""
@@ -409,26 +439,33 @@ def _drop(mroot: Path) -> None:
 @contextmanager
 def _mirror_lock(root: Path, label: str = "clean-overlay") -> Iterator[Path]:
     """Hold one free slot's lock of the repo's mirror pool for the scope and yield that slot's mirror holder.
-    Slots are tried in order, each without waiting, so a landing takes a free warm slot and never queues behind
-    another's run; every reader of a mirror holds its slot from advance through its last read. A pool with
-    every slot held is an `ExportError` at once."""
+    Slots are tried in order, each without waiting, so a landing takes a free warm slot; with every slot held the
+    pass repeats every `MIRROR_POLL_S` until `MIRROR_WAIT_S` elapses and takes the first slot to free. Every
+    reader of a mirror holds its slot from advance through its last read. A pool still full after the wait is an
+    `ExportError`."""
     try:
         holders = [mirror_root(root, slot) for slot in range(MIRROR_SLOTS)]
     except ValueError as exc:
         raise ExportError(f"clean mirror has no home for this repo: {exc}") from exc
-    last: Optional[LockTimeout] = None
-    for mroot in holders:
-        entered = False
-        try:
-            with held_lock(mroot, timeout=0, holder_label=label):
-                entered = True
-                yield mroot
-            return
-        except LockTimeout as exc:
-            if entered:
-                raise
-            last = exc
-    raise ExportError(f"clean mirror busy: all {MIRROR_SLOTS} mirror slots are held: {last}") from last
+    deadline = time.monotonic() + MIRROR_WAIT_S
+    while True:
+        last: Optional[LockTimeout] = None
+        for mroot in holders:
+            entered = False
+            try:
+                with held_lock(mroot, timeout=0, holder_label=label):
+                    entered = True
+                    yield mroot
+                return
+            except LockTimeout as exc:
+                if entered:
+                    raise
+                last = exc
+        if time.monotonic() >= deadline:
+            raise ExportError(
+                f"clean mirror busy: all {MIRROR_SLOTS} mirror slots are held after {MIRROR_WAIT_S:g}s: {last}"
+            ) from last
+        time.sleep(MIRROR_POLL_S)
 
 
 def reset_mirror(root: Path) -> None:
@@ -811,14 +848,14 @@ def verify(
             tail = full.strip()[-_OUTPUT_TAIL:]
             if shard is not None and shard.returncode not in (0, _PYTEST_FAILED) and not (
                 collection_error(shard.returncode, shard.stdout + shard.stderr)
-                or teardown_only_error(shard.returncode, shard.stdout + shard.stderr)
+                or hygiene_only_exit(shard.returncode, shard.stdout + shard.stderr)
             ):
                 shard_note = f"importer shard did not complete (pytest exit {shard.returncode}): {len(extras)} file(s) unverified"
                 runs = [ran]
                 full = ran.stdout + ran.stderr
                 tail = full.strip()[-_OUTPUT_TAIL:]
             notes = "; ".join(n for n in (scan_note, shard_note) if n)
-            bad = [r for r in runs if r.returncode != 0 and not teardown_only_error(r.returncode, r.stdout + r.stderr)]
+            bad = [r for r in runs if r.returncode != 0 and not hygiene_only_exit(r.returncode, r.stdout + r.stderr)]
             if pin.source != SOURCE_KEY and any(_MODULE_MISSING in r.stdout + r.stderr for r in bad):
                 notes = "; ".join(n for n in (f"ModuleNotFoundError under an undeclared interpreter: {REMEDY}", notes) if n)
             if notes:
@@ -858,6 +895,11 @@ def verify(
     if not bad:
         if any(r.returncode for r in runs):
             codes = ", ".join(str(r.returncode) for r in runs if r.returncode)
+            residue = [ln for r in runs for ln in temp_residue_lines(r.stdout + r.stderr)]
+            if residue:
+                return OverlayVerdict(
+                    "green", f"managed-temp residue after every test passed (exit {codes}): {'; '.join(residue)}: {tail}", seeds,
+                )
             return OverlayVerdict("green", f"pytest teardown error after every test passed (exit {codes}): {tail}", seeds)
         return OverlayVerdict("green", tail, seeds)
     if failed:

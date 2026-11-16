@@ -1380,11 +1380,13 @@ def test_dirty_publisher_refusal_retries_from_clean_export(tmp_path, monkeypatch
             return _completed(1, "", refusal)
         return _completed(1, "", "  Error: export run reached publish\n")
 
+    monkeypatch.setattr(_mod, "_commit_sha", lambda _root, _ref: "a" * 40)
     rc, out = _round_with_publish_stub(tmp_path, monkeypatch, _publish)
     assert rc == _mod._EXIT_FAIL
     assert len(calls) == 2
     retry = calls[1]
-    assert str(_mod._BASELINE_EXPORT) in retry and "--sha" in retry and "--" in retry
+    assert str(_mod._BASELINE_EXPORT) in retry and "--" in retry
+    assert retry[retry.index("--sha") + 1] == "a" * 40
     assert retry[retry.index("--") + 2] == "coordinator/bin/publish.py"
     assert "--no-commit" in retry and "--percolate-root" in retry
     assert "cause:     Error: export run reached publish" in out

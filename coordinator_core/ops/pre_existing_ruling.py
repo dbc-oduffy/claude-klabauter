@@ -53,7 +53,7 @@ def ruled_pre_existing(repo_root: "Path | str", run_key: str, failing: Iterable[
 
     Sources: `PRE_EXISTING_FILE` rows `{nodeid, reason, at}` of the run (which wins), its `resumed_from` chain
     (at most `CARRIED_HOP_CAP` hops, cycle-safe) and the earlier same-sizing runs of
-    `ask_stage._lineage_kin` (newest first), and live (unretracted) carried revise notes
+    `run_lineage.lineage_kin` (newest first), and live (unretracted) carried revise notes
     matching pre-existing|pre_existing that contain the id as a whole token. Ids outside `failing`
     are never returned. Missing or malformed files yield nothing; raises LedgerRefused on an unsafe run_key.
     """
@@ -71,9 +71,9 @@ def ruled_pre_existing(repo_root: "Path | str", run_key: str, failing: Iterable[
         cur_dir = rl.run_dir(root, prev)
         for k, v in _structured(cur_dir).items():
             ruled.setdefault(k, v)
-    from coordinator_core.ops.dispatch_emit.ask_stage import _lineage_kin
+    from coordinator_core.ops.dispatch_emit.run_lineage import lineage_kin
 
-    for kin in sorted(_lineage_kin(root, run_key), key=lambda n: (re.findall(r"\d{8}T\d{6}", n) or [""])[-1], reverse=True):
+    for kin in sorted(lineage_kin(root, run_key), key=lambda n: (re.findall(r"\d{8}T\d{6}", n) or [""])[-1], reverse=True):
         if kin in visited or not safe_id(kin):
             continue
         visited.add(kin)

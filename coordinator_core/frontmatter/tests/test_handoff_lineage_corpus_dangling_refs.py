@@ -103,6 +103,41 @@ def test_no_dangling_handoff_lineage_references_in_corpus():
     )
 
 
+_ID_TO_PATH_COMPANION = {'predecessor_id': 'predecessor', 'origin_handoff_id': 'origin_handoff'}
+
+
+def _id_warnings_without_path_companion(frontmatter: dict, warnings: list[dict]) -> list[dict]:
+    """Dangling-ID warnings the record's own path companion does not cover.
+
+    Corpus pruning deletes consumed handoffs, so an ID whose target was pruned
+    no longer resolves in the on-disk index. The path field beside it still
+    names the target, and test_no_dangling_handoff_lineage_references_in_corpus
+    proves that path resolves (live, archived, or git history). An ID with no
+    path companion has nothing else carrying its lineage and stays a finding.
+    """
+    kept = []
+    for w in warnings:
+        companion = _ID_TO_PATH_COMPANION.get(w['field'])
+        value = frontmatter.get(companion) if companion else None
+        if value is None or str(value).strip() in ('', 'none'):
+            kept.append(w)
+    return kept
+
+
+def test_id_warning_filter_keeps_an_id_with_no_path_companion():
+    warnings = [{'field': 'predecessor_id', 'error': 'x'}]
+    assert _id_warnings_without_path_companion({'predecessor_id': 'hnd-x-000000'}, warnings) == warnings
+    assert _id_warnings_without_path_companion(
+        {'predecessor_id': 'hnd-x-000000', 'predecessor': 'none'}, warnings
+    ) == warnings
+
+
+def test_id_warning_filter_drops_an_id_whose_path_companion_is_set():
+    warnings = [{'field': 'predecessor_id', 'error': 'x'}]
+    fm = {'predecessor_id': 'hnd-x-000000', 'predecessor': '2026-08-01-x.md'}
+    assert _id_warnings_without_path_companion(fm, warnings) == []
+
+
 def test_no_dangling_handoff_id_references_in_corpus():
     """Every predecessor_id / origin_handoff_id reference must resolve to a
     known handoff_id in the local corpus, and must agree with its path-field
@@ -119,7 +154,7 @@ def test_no_dangling_handoff_id_references_in_corpus():
         if not frontmatter:
             continue
         errors, warnings = _check_referential_integrity_id_refs(frontmatter, handoff_id_index)
-        for w in warnings:
+        for w in _id_warnings_without_path_companion(frontmatter, warnings):
             dangling.append(f'{repo_rel}: field "{w["field"]}" — {w["error"]}')
         for e in errors:
             disagreeing.append(f'{repo_rel}: field "{e["field"]}" — {e["error"]}')

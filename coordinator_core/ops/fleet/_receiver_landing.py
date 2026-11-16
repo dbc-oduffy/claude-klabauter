@@ -7,7 +7,8 @@ branch the clone happens to have checked out. Everything here is zero-spawn.
 
 ``resolve_receiver_landing`` only reads and decides; ``apply_receiver_landing`` mints the local
 branch ref when the winner is remote-only, and fast-forwards a local ref that trails the winning
-remote tip. Under no arm does a delivery land on ``main``.
+remote tip. A receiver with no ``work/*`` ref and no configured day branch lands on its existing
+HEAD branch, else ``main``, else ``master``; ``MODE_NONE`` is only a receiver with none of them.
 
 Negative-spec -- HEAD never moves on any arm; delivery goes ref-direct onto the branch ref
 (DR-214 A1 hazard), or ``MODE_HEAD`` when HEAD already sits on it.
@@ -39,7 +40,7 @@ _HEX40 = re.compile(r"[0-9a-f]{40}")
 
 class ReceiverLanding(NamedTuple):
     """`ref_relpath` is the ref the delivery commit lands on (empty for `MODE_NONE`, a receiver
-    with no live work branch). On a decision `minted` means "apply will mint the local ref at
+    with no work/* ref, no day branch, and no HEAD branch, `main` or `master`). On a decision `minted` means "apply will mint the local ref at
     `mint_sha`"; on an applied landing, "did mint". `advance_from` set: the local ref sits behind
     the winning remote tip (its ancestor) and apply fast-forwards it from `advance_from` to
     `mint_sha`."""
@@ -198,6 +199,11 @@ def resolve_receiver_landing(receiver_repo_path: str | Path) -> ReceiverLanding:
             or git_objects.read_ref_loose_or_packed(common_dir, f"{_HEADS}master")
         )
         return ReceiverLanding(mode, ref, seed is not None, False, root, seed, head_ref)
+
+    for branch in (head_branch, "main", "master"):
+        if branch and git_objects.read_ref_loose_or_packed(common_dir, _HEADS + branch):
+            mode = MODE_HEAD if branch == head_branch else MODE_REF_DIRECT
+            return ReceiverLanding(mode, _HEADS + branch, False, False, root, None, head_ref)
 
     return ReceiverLanding(MODE_NONE, "", False, False, root, None, head_ref)
 

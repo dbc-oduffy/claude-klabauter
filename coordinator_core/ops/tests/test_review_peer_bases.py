@@ -224,6 +224,7 @@ def test_a_hung_git_child_is_killed_and_degrades_as_timeout(repo, monkeypatch):
 
     real_run_git = git_run.run_git
     monkeypatch.setattr(git_run, "_git_exe", lambda: sys.executable)
+    monkeypatch.setattr(git_run, "_GC_AUTO_OFF", ())
     monkeypatch.setattr(git_run, "_SPAWN_SCHEDULING_HEADROOM_SECS", 0.5)
     monkeypatch.setattr(sp, "Popen", Recording)
     monkeypatch.setattr(

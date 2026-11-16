@@ -21,7 +21,8 @@ from coordinator_core.ops._path_guard import safe_id
 LEGACY_TRAIL_DIR = Path("docs/research/trail")
 TRAIL_NAME = "trail.yaml"
 
-_KEYS = ("run_id", "sizing", "value_class", "tier", "destination", "output_count", "paths")
+_KEYS = ("run_id", "sizing", "value_class", "tier", "destination", "audience", "output_count", "paths")
+AUDIENCES = ("client", "internal")
 
 
 def trail_rel(run_dir_rel: str) -> str:
@@ -75,9 +76,11 @@ def record(
     destination: str,
     paths: list[str] | tuple[str, ...] | None,
     output_count: int | None = None,
+    audience: str | None = None,
 ) -> dict[str, Any]:
     """Build a trail record. ``paths`` is the repo-relative artifact list (repo only);
-    ``output_count`` is the caller's count for a local-only run and ignored for repo."""
+    ``output_count`` is the caller's count for a local-only run and ignored for repo.
+    ``audience`` is ``client`` or ``internal``; None omits the key, any other value raises."""
     if not isinstance(run_id, str) or not safe_id(run_id):
         raise ValueError(f"run_id not a safe id: {run_id!r}")
     if destination not in rc.DESTINATIONS:
@@ -96,6 +99,10 @@ def record(
         "tier": tier,
         "destination": destination,
     }
+    if audience is not None:
+        if audience not in AUDIENCES:
+            raise ValueError(f"audience not in {AUDIENCES}: {audience!r}")
+        rec["audience"] = audience
     if destination == "local-only":
         if paths:
             raise ValueError("a local-only record carries no paths")

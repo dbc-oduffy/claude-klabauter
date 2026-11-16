@@ -1,7 +1,11 @@
 """--help names workflow.revise with its params shape, without importing the op registry."""
 
+import json
+import re
+from pathlib import Path
+
 from coordinator_core.invoke.__main__ import _build_arg_parser
-from coordinator_core.ops.dispatch_emit import requirements_ledger
+from coordinator_core.ops.dispatch_emit import refire_unchanged, requirements_ledger
 
 
 def test_help_names_workflow_revise_and_params():
@@ -32,3 +36,31 @@ def test_help_names_every_workflow_revise_param():
     epilog = _build_arg_parser().epilog
     for field in requirements_ledger._PARAMS:
         assert f"{field.name} (" in epilog, field.name
+
+
+def _remedy_sentence() -> str:
+    source = Path(refire_unchanged.__file__).read_text(encoding="utf-8")
+    match = re.search(r"send workflow\.revise[^\"]*", source)
+    assert match, "refire-unchanged refusal no longer names workflow.revise"
+    return match.group(0)
+
+
+def _remedy_params() -> list[str]:
+    names = {f.name for f in requirements_ledger._PARAMS}
+    return [w for w in re.findall(r"\w+", _remedy_sentence()) if w in names]
+
+
+def test_unchanged_refusal_remedy_names_params_workflow_revise_describes():
+    params = _remedy_params()
+    assert "add_paths" in params and "note" in params
+    doc = requirements_ledger._handler.__doc__
+    for name in params:
+        assert f"`{name}`" in doc, name
+
+
+def test_op_catalog_describes_every_param_the_unchanged_refusal_names():
+    catalog = Path(requirements_ledger.__file__).parents[2] / "contract" / "op-catalog.json"
+    ops = json.loads(catalog.read_text(encoding="utf-8"))["ops"]
+    description = next(o["description"] for o in ops if o["name"] == "workflow.revise")
+    for name in _remedy_params():
+        assert f"`{name}`" in description, name

@@ -598,6 +598,10 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "ineligible: lands the halted run's record files only; the session holds no claim on them",
         "confirmed": True,
     },
+    "ops/dispatch_emit/plan_checkpoints_close.py::_handler": {
+        "reason": "ineligible: lands an empty close commit carrying run-closed trailers anchored on the plan file; the session holds no claim on it",
+        "confirmed": True,
+    },
     "ops/dispatch_emit/land_credited.py::_commit": {
         "reason": "ineligible: lands the run's credited paths under the run's own holds; the landing carries no caller-supplied claim id",
         "confirmed": True,

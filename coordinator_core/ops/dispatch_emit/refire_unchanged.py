@@ -74,11 +74,19 @@ def fingerprint(run_dir: Path, root: Optional[Path] = None) -> dict[str, Fingerp
 
 
 def check(
-    root: Path, prior_run_dir: Path, new_run_id: str, new_rows: Mapping[str, tuple[Sequence[str], str]]
+    root: Path,
+    prior_run_dir: Path,
+    new_run_id: str,
+    new_rows: Mapping[str, tuple[Sequence[str], str]],
+    prior: Optional[Mapping[str, Fingerprint]] = None,
 ) -> Optional[str]:
     """The refusal text when every `new_rows` entry (row id -> (writes, brief text)) equals the prior
     run's fingerprint of that row and the prior halt is `criterion_not_met`; None otherwise (an added
-    row, a changed row, an empty `new_rows`, another halt reason, an unreadable marker or manifest)."""
+    row, a changed row, an empty `new_rows`, another halt reason, an unreadable marker or manifest).
+
+    `prior` is `fingerprint(prior_run_dir, root)` taken before the new briefs are written. A rebound
+    refire restages under the halted run's own id, so its briefs overwrite the prior's on disk; read
+    afterwards, the prior side equals the new side and every such refire refuses."""
     prior_run_dir = Path(prior_run_dir)
     if not new_rows:
         return None
@@ -88,7 +96,8 @@ def check(
         return None
     if marker is None or marker.get("halted") != HALT_CRITERION_NOT_MET:
         return None
-    prior = fingerprint(prior_run_dir, root)
+    if prior is None:
+        prior = fingerprint(prior_run_dir, root)
     paths: list[str] = []
     for row_id, (writes, brief) in new_rows.items():
         if prior.get(row_id) != fingerprint_row(writes, brief, new_run_id):

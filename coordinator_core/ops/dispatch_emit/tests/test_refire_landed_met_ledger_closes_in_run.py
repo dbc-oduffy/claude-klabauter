@@ -193,8 +193,11 @@ def test_zero_file_pass_anchor_lands_an_empty_delta_commit_carrying_the_review_t
     assert f"Review: {hashlib.sha256(record.read_bytes()).hexdigest()}" in body
 
 
-@pytest.mark.parametrize("integration", [None, {"unresolved": [], "confinement_violations": []}])
-def test_delivered_report_gets_ledger_credit_without_an_integration_leg(tmp_path, integration):
+@pytest.mark.parametrize(
+    "integration, expected",
+    [(None, {}), ({"unresolved": [], "confinement_violations": []}, {"C1": "ledger-met: R1, R2"})],
+)
+def test_delivered_report_gets_ledger_credit_only_with_a_clean_integration_verdict(tmp_path, integration, expected):
     from types import SimpleNamespace
 
     (tmp_path / "report.md").write_text("status: DONE\n", encoding="utf-8")
@@ -207,7 +210,7 @@ def test_delivered_report_gets_ledger_credit_without_an_integration_leg(tmp_path
         {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "met"}]},
         set(), None, None, None, None, {},
     )
-    assert got == {"C1": "ledger-met: R1, R2"}
+    assert got == expected
 
 
 @pytest.mark.parametrize("case", ["held", "unreviewed", "unresolved", "no-ledger", "blocked", "no-delivery", "delivery-failed"])
@@ -373,6 +376,8 @@ def test_default_sizing_refire_delivers_discharge_and_consistent_result(tmp_path
                 assert params["incomplete_chunks"] == ["C1"], params
                 assert params["inline_review"]["delivery"]["verdict"] == "PASS", params
                 assert params["inline_review"]["prep"]["slice_files"] == ["a.py"], params
+                assert not params["inline_review"].get("integration"), params
+                params["inline_review"]["integration"] = {"unresolved": [], "confinement_violations": []}
                 assert [i["status"] for i in params["ledger_verdict"]["items"]] == ["met", "met"], params
                 landed = land_run._handler(params, repo_root=root / ".git")
                 assert landed.get("committed") is True, landed

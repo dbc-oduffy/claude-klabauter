@@ -178,7 +178,8 @@ def test_symref_remote_head_is_skipped(repo):
 def test_non_work_branches_are_never_candidates(repo):
     _set_ref(repo, "refs/heads/feature/x", _commit(repo, "feat", when=999))
     _set_ref(repo, "refs/remotes/origin/release/1", _commit(repo, "rel", when=999))
-    assert RL.resolve_receiver_landing(repo).mode == RL.MODE_NONE
+    landing = RL.resolve_receiver_landing(repo)
+    assert (landing.mode, landing.ref_relpath) == (RL.MODE_HEAD, "refs/heads/main")
 
 
 def test_equal_times_tie_break_to_head_branch_then_lexical(repo):
@@ -204,12 +205,44 @@ def test_no_work_tip_falls_back_to_configured_day_branch(repo):
     assert RL.resolve_receiver_landing(repo).mode == RL.MODE_HEAD
 
 
-def test_no_work_tip_and_no_config_is_the_none_landing_never_main(repo):
+def test_main_only_receiver_lands_on_its_head_branch_without_minting(repo):
     before = _snapshot(repo)
+    landing = RL.resolve_receiver_landing(repo)
+    assert (landing.mode, landing.ref_relpath, landing.minted, landing.mint_sha) == (
+        RL.MODE_HEAD, "refs/heads/main", False, None,
+    )
+    assert RL.apply_receiver_landing(landing) == landing
+    assert _snapshot(repo) == before
+
+
+def test_head_on_a_non_work_branch_lands_there_not_on_main(repo):
+    _set_ref(repo, "refs/heads/feature/x", _commit(repo, "feat", when=5))
+    _set_head(repo, "ref: refs/heads/feature/x")
+    landing = RL.resolve_receiver_landing(repo)
+    assert (landing.mode, landing.ref_relpath) == (RL.MODE_HEAD, "refs/heads/feature/x")
+
+
+def test_detached_head_falls_to_main_ref_direct(repo):
+    _set_head(repo, _ref(repo, "refs/heads/main"))
+    landing = RL.resolve_receiver_landing(repo)
+    assert (landing.mode, landing.ref_relpath, landing.minted) == (
+        RL.MODE_REF_DIRECT, "refs/heads/main", False,
+    )
+
+
+def test_unborn_head_with_only_master_lands_on_master(repo):
+    _set_ref(repo, "refs/heads/master", _ref(repo, "refs/heads/main"))
+    (repo / ".git" / "refs" / "heads" / "main").unlink()
+    _set_head(repo, "ref: refs/heads/trunk")
+    landing = RL.resolve_receiver_landing(repo)
+    assert (landing.mode, landing.ref_relpath) == (RL.MODE_REF_DIRECT, "refs/heads/master")
+
+
+def test_receiver_with_no_branch_at_all_is_the_none_landing(repo):
+    (repo / ".git" / "refs" / "heads" / "main").unlink()
     landing = RL.resolve_receiver_landing(repo)
     assert landing.mode == RL.MODE_NONE and landing.ref_relpath == ""
     assert RL.apply_receiver_landing(landing) == landing
-    assert _snapshot(repo) == before
 
 
 def test_unreadable_tip_object_still_resolves_with_time_zero(repo):

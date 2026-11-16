@@ -59,7 +59,7 @@ def _close(repo: Path, scratch: Path, **extra) -> dict:
 def test_present_comparison_closes_and_is_archived(repo, scratch):
     out = _close(repo, scratch)
     assert out["exit_code"] == 0 and out["committed"] is True, out
-    dest = f"docs/research/{datetime.date.today().isoformat()}-topic/repo-compare/comparison.md"
+    dest = f"docs/research/topic/{datetime.date.today().isoformat()}-topic/outputs/repo-compare/comparison.md"
     assert dest in out["paths"]
 
 

@@ -72,7 +72,7 @@ def _fail(status: str, error: str, **kw) -> UpstreamDelivery:
 
 def resolve_base(common_dir: Path, remote: str, branch: str) -> Optional[str]:
     """Tracking tip, else the local branch tip, else the `main`/`master` tip; `None` if none exist
-    or `branch` is empty (a receiver with no live work branch)."""
+    or `branch` is empty (a receiver with no deliverable branch)."""
     if not branch:
         return None
     for ref in (
@@ -175,7 +175,7 @@ def deliver_onto_upstream(
     receiver_root = Path(receiver_root)
     landing = _receiver_landing.resolve_receiver_landing(receiver_root)
     if landing.mode == _receiver_landing.MODE_NONE:
-        return _fail(STATUS_NO_BASE, "no live work branch in the receiver repo (no work/* ref)")
+        return _fail(STATUS_NO_BASE, "no deliverable branch in the receiver repo (no work/*, HEAD, main or master)")
     branch = landing.ref_relpath[len(_HEADS):]
     remote = resolve_push_remote(receiver_root, branch)
     if remote is None:

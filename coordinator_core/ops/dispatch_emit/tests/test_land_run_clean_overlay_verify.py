@@ -5,6 +5,7 @@ never runs a test itself."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -397,6 +398,55 @@ def test_a_sessionfinish_error_after_every_test_passed_is_green_and_keeps_the_er
 )
 def test_a_failed_test_or_a_non_teardown_internal_error_stays_red_or_inconclusive(rc, text):
     assert not cov.teardown_only_error(rc, text.replace("\\n", "\n"))
+
+
+_RESIDUE_LINES = (
+    "managed-temp: left in session Temp: coordinator\n"
+    "[forced-exit] rc=1: 1 entry left in session Temp /x/pytest/r/tmp: coordinator\n"
+)
+
+
+def _fake_pytest(monkeypatch, rc, out, err=""):
+    real = cov._run
+
+    def fake(argv, cwd, timeout, **kw):
+        if "pytest" in argv:
+            return subprocess.CompletedProcess(argv, rc, out, err)
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", fake)
+
+
+def test_passed_only_output_with_a_session_temp_residue_is_green_and_reports_the_residue(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    _fake_pytest(monkeypatch, 1, "..  [100%]\n79 passed in 1.79s\n", _RESIDUE_LINES)
+    out = cov.verify(root, "run1", head, [READER])
+    assert out.verdict == "green"
+    assert "managed-temp residue" in out.detail and "[forced-exit] rc=1" in out.detail and "coordinator" in out.detail
+
+
+@pytest.mark.parametrize(
+    "rc,out",
+    [
+        (1, "F.  [100%]\nFAILED t/test_x.py::test_a\n1 failed, 1 passed in 0.1s\n"),
+        (1, "ERROR t/test_x.py::test_a\n1 passed, 1 error in 0.1s\n"),
+        (1, "INTERNALERROR> KeyError: x\n2 passed in 0.1s\n"),
+        (2, "ERROR collecting t/test_x.py\n1 error during collection\n2 passed in 0.1s\n"),
+    ],
+)
+def test_a_failure_alongside_a_session_temp_residue_stays_red(tmp_path, monkeypatch, rc, out):
+    root, head = _repo(tmp_path)
+    _fake_pytest(monkeypatch, rc, out, _RESIDUE_LINES)
+    assert not cov.temp_residue_only(rc, out + _RESIDUE_LINES)
+    assert cov.verify(root, "run1", head, [READER]).verdict != "green"
+
+
+def test_a_forced_exit_that_is_not_a_session_temp_residue_stays_red(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    err = "[forced-exit] rc=1: something else broke\n"
+    _fake_pytest(monkeypatch, 1, "2 passed in 0.1s\n", err)
+    assert not cov.temp_residue_only(1, "2 passed in 0.1s\n" + err)
+    assert cov.verify(root, "run1", head, [READER]).verdict != "green"
 
 
 def test_a_real_failed_test_is_still_red(tmp_path):
@@ -1085,6 +1135,8 @@ def test_an_interrupted_advance_leaves_the_mirror_marked_and_the_next_verify_reb
 def test_a_busy_mirror_fails_the_verify_naming_the_lock_and_never_runs_unlocked(tmp_path, monkeypatch):
     root, head = _repo(tmp_path)
     monkeypatch.setattr(cov, "MIRROR_SLOTS", 1)
+    monkeypatch.setattr(cov, "MIRROR_WAIT_S", 0.3)
+    monkeypatch.setattr(cov, "MIRROR_POLL_S", 0.05)
     ran = []
     real = cov._run
     monkeypatch.setattr(cov, "_run", lambda *a, **k: ran.append(a) or real(*a, **k))
@@ -1144,8 +1196,38 @@ def test_slot_zero_is_the_original_mirror_path_and_other_slots_are_siblings(tmp_
     assert all(p.parent == cov.mirror_root(root).parent for p in others)
 
 
-def test_taking_a_slot_never_waits_on_a_held_one_and_a_full_pool_is_a_typed_busy_error(tmp_path, monkeypatch):
+def test_a_full_pool_is_waited_on_and_a_slot_freed_mid_wait_is_taken_by_the_default_verify(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    monkeypatch.setattr(cov, "MIRROR_SLOTS", 2)
+    monkeypatch.setattr(cov, "MIRROR_WAIT_S", 30.0)
+    monkeypatch.setattr(cov, "MIRROR_POLL_S", 0.01)
+    holds = contextlib.ExitStack()
+    first = holds.enter_context(cov._mirror_lock(root, "peer-0"))
+    second = holds.enter_context(cov._mirror_lock(root, "peer-1"))
+    assert first != second
+    sleeps = []
+    real_sleep = time.sleep
+
+    def freeing_sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            holds.close()
+        real_sleep(0)
+
+    monkeypatch.setattr(cov.time, "sleep", freeing_sleep)
+    try:
+        out = cov.verify(root, "run1", head, [READER])
+    finally:
+        holds.close()
+
+    assert len(sleeps) >= 2
+    assert "busy" not in out.detail and out.verdict != "inconclusive", out
+
+
+def test_taking_a_free_slot_never_waits_and_a_pool_still_full_after_the_wait_is_a_typed_busy_error(tmp_path, monkeypatch):
     root, _head = _repo(tmp_path)
+    monkeypatch.setattr(cov, "MIRROR_WAIT_S", 0.3)
+    monkeypatch.setattr(cov, "MIRROR_POLL_S", 0.05)
 
     with cov._mirror_lock(root, "peer-0") as slot_zero:
         started = time.monotonic()
@@ -1218,6 +1300,7 @@ def test_export_run_runs_the_command_in_the_mirror_under_its_lock_and_passes_its
             slots = cov.MIRROR_SLOTS
             with pytest.raises(cov.ExportError, match="busy"):
                 monkeypatch.setattr(cov, "MIRROR_SLOTS", 1)
+                monkeypatch.setattr(cov, "MIRROR_WAIT_S", 0.0)
                 with cov._mirror_lock(root):
                     pass
             monkeypatch.setattr(cov, "MIRROR_SLOTS", slots)

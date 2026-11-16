@@ -65,6 +65,34 @@ def test_repo_record_field_set_and_count():
     assert rec["output_count"] == 2
 
 
+@pytest.mark.parametrize("value", ["client", "internal"])
+def test_audience_is_recorded_and_rendered_after_destination(value):
+    text = rt.render(_repo(audience=value))
+    lines = text.splitlines()
+    assert f'audience: "{value}"' in lines
+    assert lines.index(f'audience: "{value}"') == lines.index('destination: "repo"') + 1
+    assert lines[0] == 'run_id: "r-1"'
+
+
+def test_absent_audience_renders_no_line():
+    rec = _repo()
+    assert "audience" not in rec and "audience" not in rt.render(rec)
+
+
+@pytest.mark.parametrize("bad", ["other", "", "Client", 1])
+def test_invalid_audience_is_refused(bad):
+    with pytest.raises(ValueError):
+        _repo(audience=bad)
+
+
+def test_local_only_record_carries_audience():
+    rec = rt.record(
+        run_id="r-2", sizing=None, value_class="unblock", tier="unblock",
+        destination="local-only", paths=None, output_count=3, audience="internal",
+    )
+    assert rec["audience"] == "internal" and 'audience: "internal"' in rt.render(rec)
+
+
 def test_repo_ignores_caller_count():
     assert _repo(output_count=99)["output_count"] == 2
 

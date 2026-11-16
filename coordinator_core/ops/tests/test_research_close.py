@@ -109,6 +109,49 @@ def test_a_cited_sizing_lands_in_the_trail_commit_and_is_tracked(repo, scratch):
     assert _git(repo, "status", "--porcelain") == ""
 
 
+def _audience_sizing(repo: Path, audience: str | None) -> None:
+    p = repo / "state/sizings/x.yaml"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    research = "research:\n  question: q\n" + (f"  audience: {audience}\n" if audience else "")
+    p.write_text("size: S\n" + research, encoding="utf-8")
+
+
+@pytest.mark.parametrize("audience", ["client", "internal"])
+def test_a_sizing_audience_is_stamped_into_the_trail(repo, scratch, audience):
+    _audience_sizing(repo, audience)
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    assert out["exit_code"] == 0, out
+    assert f'audience: "{audience}"' in (repo / _TRAIL).read_text(encoding="utf-8")
+
+
+def test_no_audience_key_or_no_sizing_writes_no_audience_line(repo, scratch):
+    _audience_sizing(repo, None)
+    assert _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")["exit_code"] == 0
+    assert "audience" not in (repo / _TRAIL).read_text(encoding="utf-8")
+
+
+def test_a_close_with_no_sizing_writes_no_audience_line(repo, scratch):
+    assert _close(repo, scratch, "corpus", outputs=["final.md"])["exit_code"] == 0
+    assert "audience" not in (repo / _TRAIL).read_text(encoding="utf-8")
+
+
+def test_an_invalid_audience_refuses_the_close_and_writes_no_trail(repo, scratch):
+    _audience_sizing(repo, "everyone")
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    assert out["exit_code"] == 1 and "trail record refused" in out["error"]
+    assert not (repo / _TRAIL).exists() and _git(repo, "rev-parse", "HEAD") == head
+
+
+def test_reclose_after_the_research_block_dropped_keeps_the_stamped_audience_landed(repo, scratch):
+    _audience_sizing(repo, "client")
+    first = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    second = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    assert first["exit_code"] == 0 and second["exit_code"] == 0, second
+    assert second["sha"] == first["sha"]
+    assert 'audience: "client"' in (repo / _TRAIL).read_text(encoding="utf-8")
+
+
 def test_a_missing_sizing_is_refused_with_no_file_written(repo, scratch):
     head = _git(repo, "rev-parse", "HEAD")
     out = _close(repo, scratch, "corpus", sizing="state/sizings/nope.yaml")

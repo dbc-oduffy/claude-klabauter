@@ -10,6 +10,7 @@
   "description": "Prior-art-check sidecar — records conflicts/compatible/silent counts from a pre-review prior-art sweep. Lives at the plan-derivable state/plan-sidecars/<plan-stem>.prior-art-check.md home (moved out of docs/plans/ by docs/plans/2026-07-24-g2-plan-pipeline-sidecar-contract.md C11/D0). applies_to covers both canonical *.prior-art-check.md and legacy *.md.prior-art-check.md forms. status is NOT enumerated — legacy values like 'reviewed'/'complete' vary on disk.",
   "type": "object",
   "if": {"required": ["verdict"]},
+  "then": {},
   "else": {"required": ["plan"]},
   "properties": {
     "reviewer": {

@@ -2144,14 +2144,12 @@ def _is_delivered(text: str) -> bool:
 
 
 def _reviewed_files(inline_review: dict, *, need_pass: bool) -> Optional[set]:
-    """``prep.slice_files`` when the review has no unresolved finding or confinement violation (and,
-    with ``need_pass``, a PASS delivery verdict); None otherwise. Delivery PASS covers a roster
-    without an integration leg; an explicit integration finding still bars credit."""
+    """``prep.slice_files`` when the review carries an integration verdict with no unresolved finding or
+    confinement violation (and, with ``need_pass``, a PASS delivery verdict); None otherwise. An absent
+    integration verdict (key missing or null) credits nothing, even beside a PASS delivery verdict."""
     prep = inline_review.get("prep")
     delivery = inline_review.get("delivery")
     integration = inline_review.get("integration")
-    if integration is None and isinstance(delivery, dict) and delivery.get("verdict") == "PASS":
-        integration = {}
     unrostered = need_pass and _delivery_not_rostered(inline_review)
     if not (isinstance(prep, dict) and isinstance(integration, dict)):
         return None
@@ -2726,6 +2724,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_review import (  # noqa:
 
 
 CHANGED_AFTER_REVIEW = "changed-after-review"
+VERDICT_PIN_STALE = "verdict-pin-stale"
 
 
 def _changed_after_review(root: Path, rel: str, reviewed_hash: object) -> bool:
@@ -4655,6 +4654,16 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             refused=first.reason,
             integrity=[{"path": f.path, "reason": f.reason, "detail": f.detail} for f in findings],
             remedy_step=retest_step(findings, params),
+        )
+
+    from coordinator_core.ops.dispatch_emit.terminal_commit_review import _real_pin_mismatches, verdict_pin_refusal
+
+    stale_pins = _real_pin_mismatches(root, inline_review, list(paths))
+    if stale_pins:
+        _remove(root, receipt_paths)
+        return _error(
+            f"landing refused {VERDICT_PIN_STALE}: {verdict_pin_refusal(stale_pins)}",
+            refused=VERDICT_PIN_STALE, paths=stale_pins,
         )
 
     reach_summary: dict = {}

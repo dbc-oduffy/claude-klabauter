@@ -168,9 +168,11 @@ def _review(delivery, integration="absent"):
     return out
 
 
-def test_a_delivery_pass_stands_in_for_a_missing_integration_leg_and_nothing_else_does():
+def test_a_clean_integration_leg_with_a_pass_delivery_credits_and_a_missing_one_credits_nothing():
     passed = {"verdict": "PASS"}
-    assert land_run._reviewed_files(_review(passed), need_pass=True) == {"a.py"}
+    assert land_run._reviewed_files(_review(passed), need_pass=True) is None
+    assert land_run._reviewed_files(_review(passed, None), need_pass=True) is None
+    assert land_run._reviewed_files(_review(passed, {}), need_pass=True) == {"a.py"}
     assert land_run._reviewed_files(_review({"verdict": "FAIL"}), need_pass=True) is None
     assert land_run._reviewed_files(_review(None), need_pass=True) is None
     assert land_run._reviewed_files(_review(passed, {"unresolved": ["f1"]}), need_pass=True) is None
@@ -186,12 +188,12 @@ def _grade_delivered(root: Path, review: dict) -> dict:
 
 
 def test_a_done_delivered_incomplete_chunk_is_regraded_by_a_passed_ledger_and_clean_review(tmp_path):
-    graded = _grade_delivered(tmp_path, _review({"verdict": "PASS"}))
+    graded = _grade_delivered(tmp_path, _review({"verdict": "PASS"}, {}))
     assert set(graded) == {"C1"} and graded["C1"].startswith("ledger-met")
 
 
 def test_a_done_delivered_chunk_stays_incomplete_when_the_review_does_not_cover_its_files(tmp_path):
-    review = _review({"verdict": "PASS"})
+    review = _review({"verdict": "PASS"}, {})
     review["prep"]["slice_files"] = ["other.py"]
     assert _grade_delivered(tmp_path, review) == {}
 

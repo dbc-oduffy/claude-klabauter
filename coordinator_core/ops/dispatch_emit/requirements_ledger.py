@@ -2475,6 +2475,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `pre_existing` (list of `{nodeid, reason}`: failing tests the EM rules pre-existing at the run base,
     recorded to the run's `pre_existing_ruled.jsonl` for `review.reverify`; needs an emitted run, adds no
     row; replied as `pre_existing`),
+    `add_paths` (list of repo-relative path strings: write paths the run was not sized for, widening
+    the plan by an engine-written row; needs a run bound to a sizing with a readable plan; replied as
+    `footprint_widened`),
     `claim` (bool, needs `verbatim` and a run bound to a sizing whose plan claims it: the minted row is
     claimed on the plan with its pin and added to `ruled` on the plan's ledger-halt pointer in the
     same call; replied as `claimed: [id]`).

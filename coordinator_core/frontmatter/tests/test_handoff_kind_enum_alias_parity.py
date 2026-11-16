@@ -163,7 +163,7 @@ class TestLintReadPathParity:
         assert 'title' in error_fields
 
 
-def _write_handoff(repo_root, raw_kind: str):
+def _write_handoff(repo_root, raw_kind: str, extra_frontmatter: str = ''):
     handoff_dir = repo_root / 'state' / 'handoffs'
     handoff_dir.mkdir(parents=True, exist_ok=True)
     path = handoff_dir / '2026-07-10-legacy-baton.md'
@@ -182,6 +182,7 @@ def _write_handoff(repo_root, raw_kind: str):
         'wave: 1\n'
         'blocks: []\n'
         'blocked_by: []\n'
+        f'{extra_frontmatter}'
         '---\n\n'
         '# legacy baton\n',
         encoding='utf-8',
@@ -201,7 +202,10 @@ class TestLintFileEndToEnd:
         )
 
     def test_file_mode_still_rejects_a_genuinely_invalid_kind(self, tmp_path, capsys):
-        path = _write_handoff(tmp_path, 'definitely-not-a-kind')
+        # A declared kind no schema registers opts out of path-glob routing
+        # (match_schema), so `type: handoff` routes the record to the handoff
+        # schema, where the kind enum is what rejects the garbage value.
+        path = _write_handoff(tmp_path, 'definitely-not-a-kind', 'type: handoff\n')
         exit_code = _run_single_file_check(str(tmp_path), str(path), False)
         captured = capsys.readouterr()
         assert exit_code == 1, (

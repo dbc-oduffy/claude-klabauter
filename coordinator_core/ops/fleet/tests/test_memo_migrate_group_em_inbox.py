@@ -220,6 +220,8 @@ def test_remote_only_live_branch_is_minted_and_delivered_ref_direct(env):
     _git(receiver, "push", "-q", "origin", LIVE)
     _git(receiver, "checkout", "-q", "main")
     _git(receiver, "branch", "-q", "-D", LIVE)
+    _git(receiver, "branch", "-q", "-D", "work/test/2026-11-16")
+    _git(receiver, "branch", "-q", "-dr", "origin/work/test/2026-11-16")
     tip = _out(_git(receiver, "rev-parse", f"refs/remotes/origin/{LIVE}"))
     head_before = _out(_git(receiver, "rev-parse", "HEAD"))
 
@@ -236,8 +238,13 @@ def test_remote_only_live_branch_is_minted_and_delivered_ref_direct(env):
     assert not list(home.rglob("*.md"))
 
 
-def test_receiver_without_a_work_branch_refuses_and_moves_nothing(tmp_path, monkeypatch):
+def test_receiver_with_no_branch_at_all_refuses_and_moves_nothing(tmp_path, monkeypatch):
     receiver = _make_receiver_git_repo(tmp_path)
+    _git(receiver, "checkout", "-q", "--detach")
+    for branch in ("work/test/2026-11-16", "main"):
+        _git(receiver, "branch", "-q", "-D", branch)
+    _git(receiver, "branch", "-q", "-dr", "origin/work/test/2026-11-16")
+    _git(receiver, "branch", "-q", "-dr", "origin/main")
     home = _home(tmp_path)
     monkeypatch.setattr(gem_home, "resolve_home", lambda: home)
     monkeypatch.setattr(
@@ -250,7 +257,7 @@ def test_receiver_without_a_work_branch_refuses_and_moves_nothing(tmp_path, monk
 
     assert result["acted"] == []
     assert sorted(f["id"] for f in result["failed"]) == ["a.md", "b.md", "c.md"]
-    assert all("no live work branch" in f["reason"] for f in result["failed"])
+    assert all("no deliverable branch" in f["reason"] for f in result["failed"])
     assert _receiver_commit_count(receiver) == before
     assert len(list(home.rglob("*.md"))) == 3
 

@@ -374,6 +374,25 @@ class TestDryRun:
 # ---------------------------------------------------------------------------
 
 class TestEndToEndDelivery:
+    def test_main_only_receiver_receives_the_memo_on_main(self, tmp_path, monkeypatch):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        _git(receiver_repo, "checkout", "-q", "main")
+        _git(receiver_repo, "branch", "-q", "-D", "work/test/2026-11-16")
+        _git(receiver_repo, "branch", "-q", "-dr", "origin/work/test/2026-11-16")
+        assert _git(receiver_repo, "branch", "-a", "--list", "*work/*").stdout.strip() == b""
+        main_before = _git(receiver_repo, "rev-parse", "refs/heads/main").stdout
+        monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver_repo})))
+        _write_draft(sender_repo, "main-only-topic")
+
+        result = _memo_send({"dry_run": False, "topic": "main-only-topic"}, repo_root=sender_repo)
+
+        assert result["exit_code"] == 0, result
+        sha = result["acted"][0]["delivery_commit_sha"]
+        assert _git(receiver_repo, "rev-parse", f"{sha}^").stdout == main_before
+        assert _git(receiver_repo, "symbolic-ref", "HEAD").stdout.strip() == b"refs/heads/main"
+        assert _git(receiver_repo, "branch", "-a", "--list", "*work/*").stdout.strip() == b""
+
     def test_happy_path_three_writes(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)

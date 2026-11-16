@@ -15,7 +15,7 @@ Per home-inbox `*.md` (both layouts, `gem_home.home_inbox_dirs`):
   - present with different bytes, or already archived there -> both left: `collision`.
   - identical bytes in the receiver worktree but not committed at the landing tip -> both left:
     `pending` (a worktree file is not delivery; the home copy is the only durable one).
-  - target unresolvable, a mirror, no checkout, or no live work branch -> nothing moves: `refused`.
+  - target unresolvable, a mirror, no checkout, or no deliverable branch -> nothing moves: `refused`.
     A remote-only live branch is minted locally at its tip so the ref-direct commit has a parent.
 
 Negative-spec:
@@ -240,7 +240,7 @@ def migrate_group_em_inbox(dry_run: bool = False) -> dict:
         archive_rel = os.path.relpath(memo_archive_dest(receiver, target_file), receiver).replace(os.sep, "/")
         landing = _receiver_landing.resolve_receiver_landing(receiver)
         if landing.mode == _receiver_landing.MODE_NONE:
-            failed.append({"id": name, "reason": f"{REASON_REFUSED}: no live work branch in the receiver repo (no work/* ref)"})
+            failed.append({"id": name, "reason": f"{REASON_REFUSED}: no deliverable branch in the receiver repo (no work/*, HEAD, main or master)"})
             continue
         ref_direct = landing.mode == _receiver_landing.MODE_REF_DIRECT
         if ref_direct:

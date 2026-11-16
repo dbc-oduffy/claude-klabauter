@@ -2197,21 +2197,33 @@ class TestBatonUnificationSchemaBump:
         assert errors == []
 
     def test_on_disk_corpus_record_with_singular_fields_still_passes(self):
-        """AC2's back-compat proof: a real corpus record authored before
-        the bump, carrying only the singular deliverable_id/origin_plan_id,
-        still validates unchanged against the bumped schema."""
+        """AC2's back-compat proof: real corpus records carrying only the
+        singular deliverable_id/origin_plan_id still validate unchanged
+        against the bumped schema."""
         repo_root = Path(__file__).resolve().parents[3]
-        archive_dir = repo_root / 'archive' / 'handoffs' / '2026-07'
-        path = archive_dir / '2026-07-22_162946_wsc-rebuild-port-regression-audit.md'
+        archive_dir = repo_root / 'archive' / 'handoffs'
         if not archive_dir.is_dir():
-            pytest.skip('archive/handoffs/2026-07 absent (exported tree carries no corpus)')
-        assert path.exists(), f'corpus fixture missing: {path}'
-        content = path.read_text(encoding='utf-8')
-        fm = parse_frontmatter(content)['frontmatter']
-        assert fm.get('deliverable_id') == 'dlv-wsc-pure-python-rebuild-dd4482'
-        assert fm.get('origin_plan_id') == 'pln-rebuild-the-wsc-commit-ceremon-f7c2a0'
-        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
-        assert errors == [], errors
+            pytest.skip('archive/handoffs absent (exported tree carries no corpus)')
+        # No single record is pinned: archive pruning deletes consumed handoffs.
+        # Any archived record carrying the singular pair and no plural sibling
+        # is the back-compat witness.
+        checked = []
+        for path in sorted(archive_dir.glob('*/*.md')):
+            fm = parse_frontmatter(path.read_text(encoding='utf-8'))['frontmatter']
+            if not fm or not (fm.get('deliverable_id') and fm.get('origin_plan_id')):
+                continue
+            if 'plan_ids' in fm or 'deliverable_ids' in fm:
+                continue
+            errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+            # Corpus records carry unrelated defects of their own; the proof is
+            # that the singular fields never draw an error, and at least one
+            # record validates clean end to end.
+            assert not [e for e in errors if e['field'] in ('deliverable_id', 'origin_plan_id')], (
+                f'{path.name}: {errors}'
+            )
+            checked.append((path.name, errors))
+        assert checked, f'no singular-field corpus record under {archive_dir}'
+        assert any(errors == [] for _name, errors in checked), checked
 
     def test_baton_role_work_validates(self):
         fm = _valid_handoff(baton_role='work')
@@ -4549,7 +4561,19 @@ _QUEUE_SCHEMA_PINS = {
 # an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
 # intended lifecycle: declare, gate, converge, remove.
 #
-_QUEUE_SCHEMA_AHEAD_PINS: dict = {}
+_QUEUE_SCHEMA_AHEAD_PINS: dict = {
+    'sizing-object': {
+        'doe_ref': '8a85937400c250b9cfc4df7473b765884ccecba9',
+        'reason': (
+            'research.audience enum on the trail record (sha_memo) is claude-klabauter-first, '
+            'awaiting DoE canonical-first landing; every other leaf equals DoE HEAD'
+        ),
+        'provenance': (
+            'docs/plans/2026-11/2026-11-16-d0c070-6-research-close-audience-stamp C1; '
+            'memo to coordinator-content-repo-em (topic sizing-object-sha-memo)'
+        ),
+    },
+}
 
 # A claude-klabauter-first widening held under a version DoE has RESERVED and not yet
 # landed. The schema is byte-pinned to DoE HEAD while that holds; a worktree
