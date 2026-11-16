@@ -2097,13 +2097,13 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
     # The op admits: omitted cohort_specs means the PM-ruling set, not the legacy handoffs+memos
     # set its docstring (frozen into op-catalog.json) still names.
     kwargs: dict[str, Any] = {"run_id": run_id, "cohort_specs": list(PM_RULING_2026_08_06_COHORT_SPECS)}
-    for key in ("specs_dir", "plans_dir", "handoffs_dir", "memos_dir", "log_path", "wiki_dirs", "batch_size"):
+    for key in ("specs_dir", "plans_dir", "handoffs_dir", "memos_dir", "log_path", "wiki_dirs"):
         if key in params:
             kwargs[key] = params[key]
     # A measurement run sizes past the slice fit; the override is recorded in the manifest so such a
     # scope is never read as a default slice.
     override: dict[str, int] = {}
-    for key in ("max_scan_batches", "byte_budget"):
+    for key in ("max_scan_batches", "byte_budget", "batch_size"):
         if params.get(key) is not None:
             value = params[key]
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:

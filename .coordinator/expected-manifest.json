@@ -2513,8 +2513,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "16b331305636174fec26684eadd7e80fd0f0be08",
-    "coordinator_core/_engine_stamp": "d7275b15322afccd8463202ee2c6a83bb37a923c",
+    "coordinator_core/_engine_published_at": "6dacc4d419ec074e416954584a1306c0934c92fe",
+    "coordinator_core/_engine_stamp": "dd18d6d0f53963677ccf9f2f5dc02b61b479a191",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -8261,7 +8261,7 @@
     "coordinator_core/ops/distill_curation_status.py": "cca4d26155485a25da0a2ecfb368997471e5247a",
     "coordinator_core/ops/distill_disposal_manifest.py": "42e206d2272e861772b9a986b3ba7bbafc9ecb73",
     "coordinator_core/ops/distill_launch_args.py": "04023f4bf50cf07edab58f5eb147bcc704480869",
-    "coordinator_core/ops/distill_scope.py": "856da57631a11ab4d0efca2d4397b0d32c051775",
+    "coordinator_core/ops/distill_scope.py": "362b5b56b9c33edf4305bc188d52ff41e60bb374",
     "coordinator_core/ops/distill_stamp_disposal.py": "7452a0326390df59e48e70714aac1e4b16efb09e",
     "coordinator_core/ops/distill_workflow_input.py": "924761185ba3ccce8792bf181ae0abfb5d1693ea",
     "coordinator_core/ops/distill_write_curated_clusters.py": "9e5044b154ca171a262536be2cd3042514dd05ac",
@@ -9535,7 +9535,7 @@
     "coordinator_core/ops/tests/test_distill_curation_status.py": "4429c03ad682a5c685e2a88fd1f534ed2c88c6b3",
     "coordinator_core/ops/tests/test_distill_disposal_manifest.py": "3d76213422c78b3180e418225f22335ba0757ebd",
     "coordinator_core/ops/tests/test_distill_launch_args.py": "f841435051907795085de9947048acbc31834ccf",
-    "coordinator_core/ops/tests/test_distill_scope.py": "304f90197098a0d875c65ef4b43835bf39e88b7e",
+    "coordinator_core/ops/tests/test_distill_scope.py": "ebba7be5cfed20559616c445703b3483f032754b",
     "coordinator_core/ops/tests/test_distill_stamp_disposal.py": "5543ea0fbd2b91aef0bb27ab6f8a5f9f3bb10b17",
     "coordinator_core/ops/tests/test_distill_workflow_input.py": "522aaa15cc6890cdd054d085e239bcdc4c636525",
     "coordinator_core/ops/tests/test_distill_write_curated_clusters.py": "20857a0cd639fea2f47ac29f1f18cdae4fd116dc",
@@ -12526,5 +12526,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "6f47b7c1f57abce89c9255655f76c2da68dc1f5a"
+  "source_head": "e6bc61b494ee69a0a2f01fc78e3cb0304399b93f"
 }

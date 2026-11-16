@@ -1964,15 +1964,15 @@ def test_handler_passes_measurement_overrides_through_and_records_them(fixture_r
     real = ds.compute_scope
 
     def spy(*a, **k):
-        seen.update({key: k.get(key) for key in ("max_scan_batches", "byte_budget")})
+        seen.update({key: k.get(key) for key in ("max_scan_batches", "byte_budget", "batch_size")})
         return real(*a, **k)
 
     monkeypatch.setattr(ds, "compute_scope", spy)
     out = _handler(
-        {"run_id": "2026-11-15-22h00", "max_scan_batches": 7, "byte_budget": 900_000}, repo_root=fixture_repo / ".git"
+        {"run_id": "2026-11-15-22h00", "max_scan_batches": 7, "byte_budget": 900_000, "batch_size": 3}, repo_root=fixture_repo / ".git"
     )
-    assert seen == {"max_scan_batches": 7, "byte_budget": 900_000}
-    assert out["measurement_override"] == {"max_scan_batches": 7, "byte_budget": 900_000}
+    assert seen == {"max_scan_batches": 7, "byte_budget": 900_000, "batch_size": 3}
+    assert out["measurement_override"] == {"max_scan_batches": 7, "byte_budget": 900_000, "batch_size": 3}
 
 
 def test_handler_default_slice_carries_no_measurement_override(fixture_repo):
