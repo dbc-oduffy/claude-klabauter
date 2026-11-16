@@ -774,6 +774,68 @@ def inbound_names():
     return {bare_name(d.get("name")) for d in rows if d.get("unimatrixMirror") and listed_row(d, rows)}
 
 
+def pushed_from(d, remote):
+    """True when pushed mirror entry `d` was registered by `remote`'s own client: its box stamp, else its `<bare>.<box>` label."""
+    box = d.get(_contract().BOX_FIELD)
+    if box:
+        return box == _contract().box_id(remote)
+    label = re.sub(r"[^A-Za-z0-9_-]+", "-", box_label(remote)).strip("-")
+    return str(d.get("name") or "").endswith(LABEL_SEP + label)
+
+
+def superseded_inbound(far_rows, remote):
+    """(entry path, entry) of each pushed mirror from `remote` whose far session has been replaced under its name.
+
+    Superseded means the far roster lists the entry's bare name only under other session ids; an entry
+    without a session id, or whose session the roster still lists, is current."""
+    live = {}
+    for r in far_rows:
+        e = r["entry"]
+        sid = e.get("sessionId")
+        if isinstance(sid, str) and sid and isinstance(e.get("name"), str):
+            live.setdefault(bare_name(e["name"]), set()).add(sid)
+    stale = []
+    if not live:
+        return stale
+    sess = sessions_dir()
+    try:
+        files = os.listdir(sess)
+    except OSError:
+        return stale
+    for f in files:
+        path = os.path.join(sess, f)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if not (f.endswith(".json") and isinstance(d, dict) and d.get("unimatrixMirror")) or d.get(FAR_SOCKET_FIELD):
+            continue
+        sid, sids = d.get("sessionId"), live.get(bare_name(d.get("unimatrixMirrorName") or d.get("name")))
+        if sids and isinstance(sid, str) and sid and sid not in sids and pushed_from(d, remote):
+            stale.append((path, d))
+    return stale
+
+
+def prune_superseded_inbound(far_rows, remote, say):
+    """Drop the registry entry and key of each superseded pushed mirror, so its name stops shadowing the live far row."""
+    for path, d in superseded_inbound(far_rows, remote):
+        keys = [os.path.join(os.path.dirname(path), key_name(d["pid"], d["messagingSocketPath"]))] \
+            if isinstance(d.get("pid"), int) and isinstance(d.get("messagingSocketPath"), str) else []
+        for p in [path, *keys]:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        say(f"unlist pushed mirror {d.get('name')} session {d.get('sessionId')}: the far box lists another session under that name")
+
+
+def far_rows(fetched, remote, skip, say):
+    """The far rows worth mirroring after the superseded pushed mirrors of this box are dropped."""
+    prune_superseded_inbound(fetched, remote, say)
+    return mirrorable(fetched, skip, inbound_names())
+
+
 def mirrorable(rows, skip, inbound):
     """far socket -> row for the far rows worth mirroring: true far sessions only.
 
@@ -1309,6 +1371,19 @@ def crossed_mirrors(bridges, rows):
     return [(seen[s], s) for s in rows if s in crossed]
 
 
+def replaced_by_live_row(pid, far_sids):
+    """True when mirror `pid`'s far session has been replaced: `far_sids` (bare far name -> live session ids)
+    lists its far name only under other session ids, so no re-registration gap can bring it back."""
+    try:
+        with open(os.path.join(sessions_dir(), f"{pid}.json"), encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    live = far_sids.get(bare_name(d.get("unimatrixFarName"))) if isinstance(d, dict) else None
+    sid = d.get("sessionId") if isinstance(d, dict) else None
+    return bool(live) and isinstance(sid, str) and bool(sid) and sid not in live and None not in live
+
+
 ABSENT_POLLS_BEFORE_UNMIRROR = 2
 _ABSENT = {}  # far socket -> consecutive polls its row was missing from the far roster
 
@@ -1348,9 +1423,14 @@ def sync(bridges, rows, cfg, say):
     for name, sock in crossed_mirrors(bridges, rows):
         say(f"MISROUTE {name} {sock}")
         unmirror(bridges.pop(sock).pid)
+    far_sids = {}
+    for row in rows.values():
+        if isinstance(row["entry"].get("name"), str):
+            far_sids.setdefault(bare_name(row["entry"]["name"]), set()).add(row["entry"].get("sessionId"))
     for sock in [s for s in bridges if s not in rows]:
         missed = _ABSENT[sock] = _ABSENT.get(sock, 0) + 1
-        if missed < ABSENT_POLLS_BEFORE_UNMIRROR and bridges[sock].poll() is None:
+        if (missed < ABSENT_POLLS_BEFORE_UNMIRROR and bridges[sock].poll() is None
+                and not replaced_by_live_row(bridges[sock].pid, far_sids)):
             say(f"row for {sock} absent ({missed}/{ABSENT_POLLS_BEFORE_UNMIRROR}); mirror kept")
             continue
         _ABSENT.pop(sock, None)
@@ -1453,7 +1533,7 @@ def main(argv=None):
                                default=link)
             if _now() >= next_fetch:
                 try:
-                    rows = mirrorable(fetch_roster(cfg.remote, cfg.key, cfg.tunnel_remote), skip, inbound_names())
+                    rows = far_rows(fetch_roster(cfg.remote, cfg.key, cfg.tunnel_remote), cfg.remote, skip, say)
                 except Exception as ex:
                     failures += 1
                     if not stale:

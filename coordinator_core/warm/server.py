@@ -1922,14 +1922,16 @@ def _write_stall_record(
     full: Optional[bool] = None,
     repo_root_source: str = "op-worktree",
     stall_class: Optional[str] = None,
+    sample_box: bool = True,
 ) -> Optional[Path]:
     """One file per stall: sink line, blocked leg json, fs probe, repo-drive probe
-    (`repo_root`, the op's repo), op timing, every
+    (`repo_root`, the op's repo), a bounded box-side sample (`box_sample`), op timing, every
     thread's stack (temp + `os.replace`), then keep the newest `STALL_DUMP_KEEP`.
     `stall_class` leads the record as a `stall-class:` header line (full record and stub alike).
     `key`/`leg` name a record that has no claim (an accept-side hang). `full` is the caller's
     `_claim_stall_episode` verdict (None claims here); False writes a stub with no stacks or
-    probes. Returns the record path, or None when nothing was written. Never raises."""
+    probes. `sample_box=False` omits the 2 s box-side sample (a caller on the request thread). Returns the
+    record path, or None when nothing was written. Never raises."""
     try:
         if full is None:
             full = _claim_stall_episode(stall_dir)
@@ -1961,6 +1963,9 @@ def _write_stall_record(
         if not repo_root:
             repo_root, repo_root_source = _engine_clone_root(), "engine-root"
         repo_probe = _repo_drive_probe_ms(repo_root)
+        from coordinator_core.warm import box_sample
+
+        box_lines = box_sample.box_side_lines() if sample_box else ""
         if key is None:
             key = claim.name if claim is not None else "nokey"
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
@@ -1968,7 +1973,7 @@ def _write_stall_record(
         tmp = final.with_name(final.name + ".tmp")
         tmp.write_text(
             f"{_stall_class_line(stall_class)}{_ENGINE_STAMP_LINES}sinks: {sinks}\nleg: {leg}\nfs-probe-ms: {probe}\nrepo-drive-probe-ms: {repo_probe}\n"
-            f"repo-drive-probe-root: {repo_root_source} {repo_root}\n"
+            f"repo-drive-probe-root: {repo_root_source} {repo_root}\n{box_lines}"
             f"{_stall_timing_lines(op_ident, elapsed, cpu_delta)}--- threads ---\n{threads}",
             encoding="utf-8",
             newline="\n",
@@ -2676,6 +2681,7 @@ def _ensure_overdue_stall_dump(
         op_ident=threading.get_ident(),
         elapsed=elapsed,
         repo_root=repo_root,
+        sample_box=False,
     )
     if written is None:
         return "No stall dump written: the stall directory refused the write."
