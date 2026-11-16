@@ -363,6 +363,7 @@ def closing_bases(
 
 
 _SIBLING_LOG_CAP = 400
+_CAP_WARNED: set = set()
 
 
 def _run_plan_names(worktree_root: Path, rid: Optional[str], params: Mapping) -> frozenset:
@@ -420,7 +421,9 @@ def _open_sibling_bases(
             need = {_forward(p).casefold() for p in checkpoint_withheld(message)}
             if need and need <= covered:
                 candidates.append(cp.base)
-    if scanned >= _SIBLING_LOG_CAP:
+    if scanned >= _SIBLING_LOG_CAP and _SIBLING_LOG_CAP not in _CAP_WARNED:
+        # Any repo deeper than the cap hits it on every call; once per process per cap keeps it a signal.
+        _CAP_WARNED.add(_SIBLING_LOG_CAP)
         logging.getLogger(__name__).warning(
             "sibling checkpoint scan hit the %d-commit cap; older run-open checkpoints stay open", _SIBLING_LOG_CAP,
         )
