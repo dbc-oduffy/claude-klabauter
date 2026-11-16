@@ -5,6 +5,7 @@ Shared by the submit hook (a premint deferral, an emit that outran its budget, a
 
 from __future__ import annotations
 
+import os
 import re
 import uuid
 from pathlib import Path
@@ -208,15 +209,29 @@ const _fail = (why) => _halted({ status: 'failed', run_id: ASK_RUN_ID, error: 't
 // Trap: the payload rides a quoted heredoc on stdin; JSON.stringify escapes every newline, so the body is one line and cannot equal the tag.
 const _chainTag = 'CHAIN_PARAMS_JSON';
 // Trap: the hand-off the ask script returns names the sizing and no EM brief, so the chained run would compose without it; the deferred params' brief keys ride the hop.
-const _briefCarry = __BRIEF_CARRY__;
-const _chainJson = JSON.stringify({ ...chainParams, ..._briefCarry, __LAUNCHER_PARAM__: true });
+// Trap: an LLM retypes a 64-hex digest wrongly, so the brief keys never enter the relay's prompt: the emitting script wrote them, with the launcher flag, session_id and target_root, to _carryFile, and the fixed command merges that file over the hand-off.
+// Trap: sizing_path and chain_parent exist only after the ask run returns and a workflow script has no filesystem, so the fixed command reads them from the ask run's own run.json (sizing_rel) and a run-id argument, never from the heredoc body.
+const _carryFile = __CARRY_FILE__;
+const _askId = _pathRunId(ASK_SCRIPT_PATH) || ASK_RUN_ID;
+const _fromRunJson = _carryFile !== '' && chainParams.ask === true && typeof chainParams.sizing_path === 'string'
+  && typeof _askId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_askId) && (chainParams.chain_parent === undefined || chainParams.chain_parent === _askId);
+const { ask: _xa, sizing_path: _xs, session_id: _xi, target_root: _xt, chain_parent: _xc, launcher_child: _xl, ...chainExtras } = chainParams;
+const _chainJson = JSON.stringify(_fromRunJson ? chainExtras : (_carryFile !== '' ? chainParams : { ...chainParams, __LAUNCHER_PARAM__: true }));
+const _mergePy = "import json,sys; d=json.load(sys.stdin); d.update(json.load(open(sys.argv[1], encoding='utf-8'))); print(json.dumps(d))";
+const _runJsonPy = "import json,os,sys; c=json.load(open(sys.argv[1], encoding='utf-8')); d=json.load(sys.stdin); r=json.load(open(os.path.join(c.pop('warp_home'), sys.argv[2], 'run.json'), encoding='utf-8')); d.update(ask=True, sizing_path=r['sizing_rel'], chain_parent=sys.argv[2]); d.update(c); print(json.dumps(d))";
+const _emitTail = ' <<\'' + _chainTag + '\' | ' + INVOKE + ' ' + EMIT_OP + ' --params-file -\n';
+const _emitCmd = _fromRunJson
+  ? __PYTHON__ + ' -c "' + _runJsonPy + '" "' + _carryFile + '" "' + _askId + '"' + _emitTail
+  : (_carryFile !== ''
+    ? __PYTHON__ + ' -c "' + _mergePy + '" "' + _carryFile + '"' + _emitTail
+    : INVOKE + ' ' + EMIT_OP + ' --params-file - <<\'' + _chainTag + '\'\n');
 let chain;
 if (typeof _re === 'string' && _re !== '') return _fail('emit failed: ' + _re);
 function _relayEmit() {
   return agent(
     __AUTHORITY__
-    + ' Run this command once, with the command word exactly as written, and copy the heredoc body byte for byte:\n'
-    + INVOKE + ' ' + EMIT_OP + ' --params-file - <<\'' + _chainTag + '\'\n' + _chainJson + '\n' + _chainTag + '\n\n'
+    + ' Run this command once, with the command word exactly as written and copy the heredoc body byte for byte:\n'
+    + _emitCmd + _chainJson + '\n' + _chainTag + '\n\n'
     + 'Then '
     + 'return path, run_id and fire_args from its JSON reply verbatim. When the command is denied or fails, '
     + "return the command's error text verbatim in the error field, with path as an empty string and fire_args as {}; on success omit error. "
@@ -297,8 +312,9 @@ def _brief_carry(params: dict) -> dict:
     return {k: params[k] for k in ("ask_brief", "ask_brief_file", EM_CONTEXT_DIGEST_PARAM) if params.get(k)}
 
 
-def _chain_follow_values(brief_carry: Optional[dict] = None) -> dict:
-    """The `_CHAIN_FOLLOW_JS` and `_EMIT_RELAY_JS` placeholders shared by both start scripts; `brief_carry` rides the chain hop."""
+def _chain_follow_values(carry_file: Optional[str] = None) -> dict:
+    """The `_CHAIN_FOLLOW_JS` and `_EMIT_RELAY_JS` placeholders shared by both start scripts; the brief keys, launcher flag and
+    target_root ride the chain hop through `carry_file` (a JSON file the writing script made), never through the relay agent's prompt."""
     import json
 
     from coordinator_core.ops.dispatch_emit.fan_launcher import _EMIT_OP, _INVOKE, EMIT_RELAY_AUTHORITY, LAUNCHER_CHILD_EMIT_PARAM
@@ -306,7 +322,8 @@ def _chain_follow_values(brief_carry: Optional[dict] = None) -> dict:
 
     return {
         "__CHAIN_KEY__": CHAIN_HANDOFF_KEY,
-        "__BRIEF_CARRY__": json.dumps(brief_carry or {}, ensure_ascii=True),
+        "__CARRY_FILE__": json.dumps(carry_file or ""),
+        "__PYTHON__": json.dumps("python" if os.name == "nt" else "python3"),
         "__LAUNCHER_PARAM__": LAUNCHER_CHILD_EMIT_PARAM,
         "__AUTHORITY__": json.dumps(EMIT_RELAY_AUTHORITY),
         "__INVOKE__": json.dumps(_INVOKE),
@@ -355,13 +372,25 @@ def write_deferred_script(root: Path, params: dict, *, branch: Optional[str] = N
     if not params.get("target_root"):
         params = {**params, "target_root": Path(root).as_posix()}
     params = _spill_long_brief(root, params)
+    stem = f"defer-{uuid.uuid4().hex[:12]}"
     if params.get(LAUNCHER_CHILD_EMIT_PARAM) is True:
         start = f"return {{ {DEFERRED_EMIT_KEY}: {{ path: scriptPath, run_id: reply.run_id, fire_args: reply.fire_args || {{}} }} }};"
     else:
         params = {**params, LAUNCHER_CHILD_EMIT_PARAM: True}
+        # warp_home comes from record_homes so the relay's fixed command never hand-builds a state/<kind> join.
+        from coordinator_core.session import record_homes
+
+        carry = {**_brief_carry(params), LAUNCHER_CHILD_EMIT_PARAM: True, "target_root": params["target_root"],
+                 "warp_home": Path(record_homes.home_dir(params["target_root"], "warp")).as_posix()}
+        if isinstance(params.get("session_id"), str) and params["session_id"]:
+            carry["session_id"] = params["session_id"]
+        carry_path = root / "scratch" / "warp" / f"{stem}.carry.json"
+        carry_path.parent.mkdir(parents=True, exist_ok=True)
+        carry_path.write_text(json.dumps(carry, ensure_ascii=True), encoding="utf-8", newline="\n")
+        carry_file = carry_path.as_posix()
         start_values = {
             **_stage_loop_values(),
-            **_chain_follow_values(_brief_carry(params)),
+            **_chain_follow_values(carry_file),
         }
         start = re.sub("|".join(start_values), lambda m: start_values[m.group(0)], _DEFERRED_START_JS)
     params_json = json.dumps(params, default=str, ensure_ascii=True)
@@ -378,7 +407,7 @@ def write_deferred_script(root: Path, params: dict, *, branch: Optional[str] = N
         "__EMIT_OP__": json.dumps(_EMIT_OP),
         "__AUTHORITY__": json.dumps(EMIT_RELAY_AUTHORITY),
     }
-    script = root / "scratch" / "warp" / f"defer-{uuid.uuid4().hex[:12]}.workflow.mjs"
+    script = root / "scratch" / "warp" / f"{stem}.workflow.mjs"
     script.parent.mkdir(parents=True, exist_ok=True)
     body = re.sub("|".join(values), lambda m: values[m.group(0)], _DEFERRED_JS)
     # Encoded once and written raw, so the receipt hashes what landed without a read-back.

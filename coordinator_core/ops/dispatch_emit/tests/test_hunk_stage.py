@@ -356,7 +356,59 @@ def test_a_pure_addition_after_the_runs_shifting_hunks_stages_beside_pre_run_ins
     assert any(h.startswith("@@ -100,0 ") for h in got.own_headers)
 
 
-def test_a_pure_addition_beside_pre_run_dirt_that_rewrites_a_line_still_refuses(repo):
+def _fused_work(dirt_line: str, own: list[str], own_first: bool) -> str:
+    rows = _rows({}).splitlines(keepends=True)
+    at = 81  # the dirt replaces x_82; own lines sit beside it in one diff block
+    block = own + [dirt_line] if own_first else [dirt_line] + own
+    return "".join(rows[:at] + block + rows[at + 1 :])
+
+
+@pytest.mark.parametrize("own_first", [False, True])
+def test_unequal_block_of_one_dirt_line_and_many_own_lines_stages_own_with_dirt_at_head(
+    repo, own_first
+):
+    _put(repo, _fused_work("x_82 = 'DIRT'\n", [], True))
+    base_b = wb.capture(repo, [P])[P]
+    own = [f"def test_own_{i}():\n" for i in range(26)]
+    _put(repo, _fused_work("x_82 = 'DIRT'\n", own, own_first))
+
+    got = hunk_stage.split(repo, P, own_run_id=RUN_B, own_baseline_blob=base_b, foreign=[])
+
+    assert got.overlaps == []
+    assert got.staged_blob is not None
+    head_rows = _rows({}).splitlines(keepends=True)
+    block = own + ["x_82 = 82\n"] if own_first else ["x_82 = 82\n"] + own
+    assert _staged_text(repo, got.staged_blob) == "".join(head_rows[:81] + block + head_rows[82:])
+    assert got.own_headers == ["@@ -82,1 +82,27 @@"]
+
+
+def test_unequal_block_whose_dirt_does_not_account_for_the_head_lines_still_refuses(repo):
+    _put(repo, _fused_work("x_82 = 'DIRT'\nx_82b = 'DIRT'\n", [], True))
+    base_b = wb.capture(repo, [P])[P]
+    own = [f"own_{i} = {i}\n" for i in range(3)]
+    _put(repo, _fused_work("x_82 = 'DIRT'\nx_82b = 'DIRT'\n", own, False))
+
+    got = hunk_stage.split(repo, P, own_run_id=RUN_B, own_baseline_blob=base_b, foreign=[])
+
+    assert got.staged_blob is None
+    assert [run for run, _ in got.overlaps] == [None]
+
+
+def test_unequal_block_over_the_matched_middle_cap_still_refuses(repo):
+    from coordinator_core.ops.dispatch_emit.run_hunk_claims import MAX_MATCHED_MIDDLE
+
+    _put(repo, _fused_work("x_82 = 'DIRT'\n", [], True))
+    base_b = wb.capture(repo, [P])[P]
+    own = [f"own_{i} = {i}\n" for i in range(MAX_MATCHED_MIDDLE + 1)]
+    _put(repo, _fused_work("x_82 = 'DIRT'\n", own, False))
+
+    got = hunk_stage.split(repo, P, own_run_id=RUN_B, own_baseline_blob=base_b, foreign=[])
+
+    assert got.staged_blob is None
+    assert [run for run, _ in got.overlaps] == [None]
+
+
+def test_a_pure_addition_beside_pre_run_dirt_that_rewrites_a_line_stages_the_addition_only(repo):
     _put(repo, _rows({101: "DIRT"}))
     base_b = wb.capture(repo, [P])[P]
     text = _rows({101: "DIRT"}).replace("x_100 = 100\n", "x_100 = 100\nown_1 = 1\nown_2 = 2\n")
@@ -364,5 +416,6 @@ def test_a_pure_addition_beside_pre_run_dirt_that_rewrites_a_line_still_refuses(
 
     got = hunk_stage.split(repo, P, own_run_id=RUN_B, own_baseline_blob=base_b, foreign=[])
 
-    assert got.staged_blob is None
-    assert [run for run, _ in got.overlaps] == [None]
+    assert got.overlaps == []
+    want = _rows({}).replace("x_100 = 100\n", "x_100 = 100\nown_1 = 1\nown_2 = 2\n")
+    assert _staged_text(repo, got.staged_blob) == want

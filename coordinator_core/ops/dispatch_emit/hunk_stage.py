@@ -102,6 +102,26 @@ def _map(ops: List[_Op], pos: int, end: bool) -> int:
     return pos
 
 
+def _fused_insertions(
+    work: List[bytes], head_lines: List[bytes], blk: _Op, own_rs: List[_Range]
+) -> Optional[List[bytes]]:
+    """The staged lines of an unequal block whose own lines are pure insertions: each non-own worktree
+    line takes the next HEAD line of the block in order, each own line stays. None when the non-own
+    lines do not account for exactly the block's HEAD lines (the split is ambiguous)."""
+    _, i1, i2, j1, j2 = blk
+    kept: List[bytes] = []
+    nxt = i1
+    for k in range(j1, j2):
+        if any(_hit((k, k + 1), o) for o in own_rs):
+            kept.append(work[k])
+        elif nxt < i2:
+            kept.append(head_lines[nxt])
+            nxt += 1
+        else:
+            return None
+    return kept if nxt == i2 else None
+
+
 def _refuse(run: Optional[str], header: str) -> Split:
     return Split(staged_blob=None, overlaps=[(run, header)])
 
@@ -266,6 +286,15 @@ def split(
                     out.append(work[j1 + k])
                 elif i1 != i2:
                     out.append(head_lines[i1 + k])
+            own_headers.append(_header(blk))
+        elif (
+            i1 < i2
+            and j2 > j1
+            and max(i2 - i1, j2 - j1) <= MAX_MATCHED_MIDDLE
+            and all(op[1] == op[2] for op, wr in own if _touch(wr, rng))
+            and (fused := _fused_insertions(work, head_lines, blk, own_rs)) is not None
+        ):
+            out.extend(fused)
             own_headers.append(_header(blk))
         else:
             return _refuse(None, _header(blk))

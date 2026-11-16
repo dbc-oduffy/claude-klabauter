@@ -135,6 +135,44 @@ class RunInvariants:
 
         return self._once("own_kept", build)
 
+    def predecessor_withheld_prints(self) -> dict:
+        """`{path: frozenset(blob ids)}`: the bytes each same-sizing predecessor left withheld at its halt
+        (halt-record-only, run-dirt-uncommitted), from its halt-withheld index entry, else its record-dir
+        `withheld-prints.json`. Those hunks have no kept record yet are this run's work. A different
+        sizing's run is never read; an unreadable predecessor contributes nothing."""
+
+        def build() -> dict:
+            import json
+            from pathlib import PurePosixPath
+
+            from coordinator_core.ops.dispatch_emit import halted_withheld_index as hwi
+            from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+            def norm(rel: str) -> str:
+                posix = PurePosixPath(rel.replace("\\", "/")).as_posix()
+                return posix[2:] if posix.startswith("./") else posix
+
+            def record_prints(pred: str) -> dict:
+                try:
+                    data = json.loads((record_dir(self.root, pred) / "withheld-prints.json").read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    return {}
+                return data if isinstance(data, dict) else {}
+
+            out: dict = {}
+            for pred in self.own_artifacts().predecessors:
+                try:
+                    entry = hwi.run_entry(self.root, pred)
+                    prints = entry.prints if entry is not None and entry.prints else record_prints(pred)
+                    for rel, blob in prints.items():
+                        if isinstance(rel, str) and isinstance(blob, str) and blob:
+                            out.setdefault(norm(rel), set()).add(blob)
+                except Exception:  # noqa: BLE001 -- unreadable evidence is none
+                    continue
+            return {k: frozenset(v) for k, v in out.items()}
+
+        return self._once("predecessor_withheld", build)
+
 
 _ACTIVE: ContextVar[Optional[RunInvariants]] = ContextVar("hunk_provenance_invariants", default=None)
 
@@ -321,9 +359,11 @@ def _kept_blocks(root: Path, common: Path, path: str, head: list, blobs: Sequenc
 
 
 def _own_hunk_evidence(root: Path, common: Path, run_id: str, path: str, head: list) -> set:
-    """Kept-blob blocks of `run_id` for `path`. Never raises: unreadable evidence is empty."""
+    """Blocks of `run_id` for `path` from its kept blobs and its same-sizing predecessors' withheld prints.
+    Never raises: unreadable evidence is empty."""
     try:
-        blobs = _inv(root, run_id).own_kept().get(path)
+        inv = _inv(root, run_id)
+        blobs = set(inv.own_kept().get(path, ())) | set(inv.predecessor_withheld_prints().get(path, ()))
         return _kept_blocks(root, common, path, head, sorted(blobs)) if blobs else set()
     except Exception:  # noqa: BLE001 -- unreadable evidence is none
         return set()

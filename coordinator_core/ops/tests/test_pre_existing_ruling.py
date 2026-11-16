@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -77,6 +78,32 @@ def test_resume_cycle_terminates(tmp_path):
     rl._write_run(_dir(tmp_path, RUN), {rl.RESUMED_FROM_FIELD: PREV})
     rl._write_run(_dir(tmp_path, PREV), {rl.RESUMED_FROM_FIELD: RUN})
     assert ruled_pre_existing(tmp_path, RUN, [T]) == {}
+
+
+SIZING = "state/sizings/2026-11/2026-11-16-some-work-aa0c96.yaml"
+OTHER_SIZING = "state/sizings/2026-11/2026-11-16-other-work-bb1d07.yaml"
+
+
+def _ruled(repo, run, nodeid, reason) -> None:
+    (_dir(repo, run) / PRE_EXISTING_FILE).write_text(json.dumps({"nodeid": nodeid, "reason": reason}) + "\n", encoding="utf-8")
+
+
+def test_ruling_follows_same_sizing_refire_without_resumed_from(tmp_path: Path) -> None:
+    first, refire = "ask-20261116T061241-aa0c96", "warp-2026-11-16-some-work-aa0c96-20261116T070223-911962"
+    rl._write_run(_dir(tmp_path, first), {"sizing_rel": SIZING})
+    rl._write_run(_dir(tmp_path, refire), {"sizing_rel": SIZING})
+    _ruled(tmp_path, first, T, "red at base")
+    assert ruled_pre_existing(tmp_path, refire, [T]) == {T: "red at base"}
+    _ruled(tmp_path, refire, T, "own reason")
+    assert ruled_pre_existing(tmp_path, refire, [T]) == {T: "own reason"}
+
+
+def test_other_sizings_ruling_never_read(tmp_path: Path) -> None:
+    other, refire = "ask-20261116T061241-bb1d07", "warp-2026-11-16-some-work-aa0c96-20261116T070223-911962"
+    rl._write_run(_dir(tmp_path, other), {"sizing_rel": OTHER_SIZING})
+    rl._write_run(_dir(tmp_path, refire), {"sizing_rel": SIZING})
+    _ruled(tmp_path, other, T, "not mine")
+    assert ruled_pre_existing(tmp_path, refire, [T]) == {}
 
 
 def test_unsafe_run_key_refused(tmp_path):

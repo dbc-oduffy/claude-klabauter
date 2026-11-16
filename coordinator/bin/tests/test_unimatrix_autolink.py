@@ -56,6 +56,7 @@ def env(tmp_path, monkeypatch):
     real_pull = al.pull_membership
     monkeypatch.setattr(al, "pull_membership", lambda *a, **k: False)
     monkeypatch.setattr(al, "live_name", lambda *a, **k: None)
+    monkeypatch.setattr(al, "ssh_config_aliases", lambda *a, **k: [])
     monkeypatch.setattr(al, "ssh_identity_file", lambda roster, alias, run=None: None)
     monkeypatch.setattr(al, "pin_key_value", lambda roster, run=None: None)
     roster = al._roster()
@@ -564,6 +565,74 @@ def test_mdns_is_asked_fresh_on_every_failed_attempt(live_env):
     for _ in range(2):
         env.al.mdns_fallback(env.roster, "machine-a", "/k", "rc=255", stale_ip_probe(set()), mdns)
     assert asked == ["machine-a.local", "machine-a.local"]
+
+
+def _alias_env(env, monkeypatch, hostnames):
+    add_key(env)
+    monkeypatch.setattr(env.al, "ssh_config_aliases", lambda *a, **k: list(hostnames))
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: hostnames.get(a))
+    return env
+
+
+def test_recorded_name_fails_and_the_ssh_alias_naming_the_box_links_both_supervisors(env, monkeypatch):
+    _alias_env(env, monkeypatch, {"other": "elsewhere.local", "boxalias": "Mini-Box.local"})
+    sp, probe_fn = Spawner(), stale_ip_probe({"kim@boxalias"})
+    env.al.run(roster=env.roster, boxes=["kim@mini-box.local"], spawn=sp, probe_fn=probe_fn,
+               stable_fn=boom, mdns_fn=lambda name: [])
+    assert probe_fn.seen == ["kim@mini-box.local", "kim@boxalias"]
+    assert {c[c.index("--remote") + 1] for c in sp.cmds} == {"kim@boxalias"} and len(sp.cmds) == 2
+    assert "linked via kim@boxalias" in (env.sdir / "autolink.log").read_text()
+
+
+def test_ssh_alias_whose_hostname_resolves_to_a_live_mdns_address_is_taken(env, monkeypatch):
+    _alias_env(env, monkeypatch, {"boxalias": "box.lan"})
+    monkeypatch.setattr(env.al, "live_name", lambda *a, **k: "mini-box.local")
+    monkeypatch.setattr(env.roster, "ssh_fields", lambda a: {"user": ""})
+    monkeypatch.setattr(env.al, "_resolved_v4", lambda name: "192.0.2.9" if name == "box.lan" else "192.0.2.1")
+    sp = Spawner()
+    env.al.run(roster=env.roster, boxes=["mini-box.local"], spawn=sp, probe_fn=stale_ip_probe({"boxalias"}),
+               stable_fn=boom, mdns_fn=lambda name: ["192.0.2.9"] if name == "mini-box.local" else [])
+    assert {c[c.index("--remote") + 1] for c in sp.cmds} == {"boxalias"} and len(sp.cmds) == 2
+
+
+def test_no_ssh_alias_naming_the_box_keeps_the_original_reason(env, monkeypatch):
+    _alias_env(env, monkeypatch, {"other": "elsewhere.local"})
+    sp, probe_fn = Spawner(), stale_ip_probe(set())
+    env.al.run(roster=env.roster, boxes=["mini-box.local"], spawn=sp, probe_fn=probe_fn,
+               stable_fn=lambda a: None, mdns_fn=lambda name: [])
+    assert sp.cmds == [] and probe_fn.seen == ["mini-box.local"]
+    assert "mini-box.local unreachable: rc=255: No route to host" in (env.sdir / "autolink.log").read_text()
+
+
+def test_ssh_alias_that_also_fails_links_nothing_and_says_so(env, monkeypatch):
+    _alias_env(env, monkeypatch, {"boxalias": "mini-box.local"})
+    sp, probe_fn = Spawner(), stale_ip_probe(set())
+    env.al.run(roster=env.roster, boxes=["mini-box.local"], spawn=sp, probe_fn=probe_fn,
+               stable_fn=lambda a: None, mdns_fn=lambda name: [])
+    assert sp.cmds == [] and probe_fn.seen == ["mini-box.local", "boxalias"]
+    assert "ssh alias boxalias named the same box and did not answer" in (env.sdir / "autolink.log").read_text()
+
+
+def test_healthy_primary_never_looks_up_ssh_aliases(env, monkeypatch):
+    add_key(env)
+
+    def boom_aliases(*a, **k):
+        raise AssertionError("alias lookup on the healthy path")
+
+    monkeypatch.setattr(env.al, "ssh_config_aliases", boom_aliases)
+    sp = Spawner()
+    env.al.run(roster=env.roster, boxes=["mini-box.local"], spawn=sp, probe_fn=ok, stable_fn=boom)
+    assert len(sp.cmds) == 2
+
+
+def test_ssh_config_aliases_reads_concrete_hosts_and_follows_include(env, tmp_path):
+    inc = tmp_path / "extra.conf"
+    inc.write_text("Host viainc\n  HostName x\n", encoding="utf-8")
+    cfg = tmp_path / "config"
+    cfg.write_text(f"Host *\n  ForwardAgent no\nHost macalias other # c\n  HostName y\nHost !neg\n"
+                   f"Include {inc.as_posix()}\n", encoding="utf-8")
+    real = load("unimatrix-autolink")
+    assert real.ssh_config_aliases(cfg) == ["macalias", "other", "viainc"]
 
 
 def test_healthy_primary_never_asks_mdns(live_env):

@@ -203,11 +203,10 @@ def test_deferred_chain_hop_carries_the_brief_and_digest(repo, monkeypatch):
     """The M+ hand-off names the sizing and no brief; the deferred script's hop adds the params' brief keys to the chained emit."""
     params = _deferred_params(repo, {"ask": "build it", "source": "relayed", "em_context": SENTINEL}, monkeypatch)
     (script,) = (repo / "scratch" / "warp").glob("defer-*.workflow.mjs")
-    carry = json.loads(re.search(r"^const _briefCarry = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1))
-    assert carry == {
-        "ask_brief_file": params["ask_brief_file"],
-        contract.EM_CONTEXT_DIGEST_PARAM: contract.em_context_digest(SENTINEL),
-    }
+    carry_file = json.loads(re.search(r"^const _carryFile = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1))
+    carry = json.loads(Path(carry_file).read_text(encoding="utf-8"))
+    assert carry["ask_brief_file"] == params["ask_brief_file"]
+    assert carry[contract.EM_CONTEXT_DIGEST_PARAM] == contract.em_context_digest(SENTINEL)
 
 
 @pytest.mark.parametrize("args", [

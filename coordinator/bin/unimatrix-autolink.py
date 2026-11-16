@@ -20,6 +20,8 @@ the alias (an existing non-default file), else the shared key (settings home, el
 The hands-on `unimatrix-01` key is never used: a source naming it is skipped for the next.
 A probe that fails at the resolved address asks mDNS (one fresh sub-second multicast A query for the box's
 .local name, no shell-out) for the live addresses, probes each other than the resolved one once, and logs both.
+When that fails too, each ssh-config alias whose HostName names the same box (same host, or a live mDNS
+address) is probed once with the same key; the first that answers is the remote both supervisors use.
 
 Independently of any alias, a dead per-box `unimatrix-peer-router.py` is started once (record
 `autolink-router.json`; a router holding its own lease, e.g. started by hand, counts as live).
@@ -501,12 +503,61 @@ def mdns_fallback(roster, alias, key, why, probe_fn, mdns_fn=None, resolve_fn=No
     return alias, why, f"resolved {resolved or 'nothing'} and live mDNS {', '.join(live)} did not answer"
 
 
+def ssh_config_aliases(path=None, depth=0):
+    """Concrete `Host` names of the user's ssh config (wildcard and negated patterns dropped), `Include`s followed."""
+    base = Path(os.path.expanduser("~/.ssh"))
+    try:
+        text = Path(path or base / "config").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out = []
+    for line in text.splitlines():
+        parts = line.split("#", 1)[0].replace("=", " ", 1).split()
+        if not parts:
+            continue
+        kw, args = parts[0].lower(), parts[1:]
+        if kw == "host":
+            out += [a for a in args if ALIAS_RE.fullmatch(a)]
+        elif kw == "include" and depth < 4:
+            for pat in args:
+                pat = os.path.expanduser(pat)
+                pat = pat if os.path.isabs(pat) else str(base / pat)
+                for p in sorted(Path(pat).parent.glob(Path(pat).name)):
+                    out += ssh_config_aliases(p, depth + 1)
+    return list(dict.fromkeys(out))
+
+
+def ssh_alias_fallback(roster, alias, key, why, probe_fn, aliases_fn=None, hostname_fn=None, mdns_fn=None,
+                       resolve_fn=None):
+    """(remote, why, note) after the recorded name and mDNS failed: probe each ssh-config alias naming the same box.
+
+    An alias names the box when its `ssh -G` HostName equals the recorded host (`.local`, case ignored), or is
+    or resolves to a live mDNS address (asked once, only when no HostName matched by name). The first alias
+    that answers a probe with the same key is `remote` (`<user>@<alias>` when the recorded name had a user)."""
+    host = alias.rpartition("@")[2]
+    want, user = _host_key(host), alias.rpartition("@")[0]
+    hostname_fn = hostname_fn or ssh_hostname
+    cands = [a for a in (aliases_fn or ssh_config_aliases)() if _host_key(a) != want]
+    names = [(a, hostname_fn(roster, a) or "") for a in cands]
+    matched = [a for a, h in names if _host_key(h) == want]
+    if not matched:
+        name = live_name(roster, alias)
+        live = set((mdns_fn or mdns_a_records)(name) if name and names else [])
+        resolve = resolve_fn or _resolved_v4
+        matched = [a for a, h in names if h and (h in live or resolve(h) in live)] if live else []
+    for cand in matched:
+        remote = f"{user}@{cand}" if user else cand
+        if not probe_fn(roster, alias, key, remote=remote):
+            return remote, None, f"ssh alias {cand} names the same box and answered"
+    return alias, why, (f"ssh alias {', '.join(matched)} named the same box and did not answer" if matched else None)
+
+
 def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe, stable_fn=None, now=None, liveness=None,
-              pull_fn=None, mdns_fn=None):
+              pull_fn=None, mdns_fn=None, alias_fn=None):
     """Start whichever of the peer's two supervisors is not live. Never raises for a down peer.
 
-    The mDNS live-address retry, then the stable-name fallback, run only after the alias itself failed to
-    answer; the probe outcome feeds the backoff."""
+    The mDNS live-address retry, the ssh-config alias retry, then the stable-name fallback, run only after the
+    recorded name itself failed to answer; the probe outcome feeds the backoff."""
     stable_fn = stable_fn or roster.stable_remote
     liveness = liveness or _liveness()
     sdir = state_dir(roster)
@@ -539,6 +590,10 @@ def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe, stable_fn
         remote, note = alias, None
         if why:
             remote, why, note = mdns_fallback(roster, alias, key, why, probe_fn, mdns_fn)
+        if why:
+            first_note = note
+            remote, why, note = ssh_alias_fallback(roster, alias, key, why, probe_fn, alias_fn, mdns_fn=mdns_fn)
+            note = "; ".join(n for n in (first_note, note) if n) or None
         if why:
             remote, why = stable_fallback(roster, alias, key, why, probe_fn, stable_fn)
         liveness.note_probe(sdir, alias, not why, now)
@@ -1018,7 +1073,7 @@ def _epoch_moved(sdir, liveness):
 
 
 def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, stable_fn=None, now=None,
-        membership=None, pull_fn=None, self_names=None, agent_fn=None, kill=None, mdns_fn=None):
+        membership=None, pull_fn=None, self_names=None, agent_fn=None, kill=None, mdns_fn=None, alias_fn=None):
     """Link every far box whose supervisors are down. A healthy box returns after reading records only.
 
     Explicit `boxes` are ssh aliases and bypass the snapshot. Otherwise the verified membership snapshot
@@ -1146,7 +1201,7 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
                         f"unavailable; encrypted key {key} not loaded")
                     continue
                 link_peer(roster, alias, key, say, spawn=spawn, probe_fn=probe_fn, stable_fn=stable_fn,
-                          now=now, liveness=liveness, pull_fn=pull_fn, mdns_fn=shared_mdns)
+                          now=now, liveness=liveness, pull_fn=pull_fn, mdns_fn=shared_mdns, alias_fn=alias_fn)
             except Exception as ex:  # one peer's failure must not stop the next or fail the session
                 say(f"far box {alias} link failed: {type(ex).__name__}: {str(ex)[:120]}")
 
