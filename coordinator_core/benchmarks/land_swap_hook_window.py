@@ -898,11 +898,13 @@ def run_modelled_round(
 def _load_publish_module():
     import importlib.util
 
+    from coordinator_core.bin_lib_binding import exec_module_bin_bound
+
     path = _SOURCE_ROOT / "coordinator" / "bin" / "publish.py"
     spec = importlib.util.spec_from_file_location("publish_under_land_swap_hook_window", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    exec_module_bin_bound(spec.loader, module, str(path.parent))
     return module
 
 

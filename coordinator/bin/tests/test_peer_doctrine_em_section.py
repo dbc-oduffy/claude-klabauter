@@ -63,6 +63,14 @@ def test_em_revises_or_refires_a_failed_run_and_stops_with_a_report_when_no_pm_i
     assert "With no PM present" in flat and "never end on a question: stop with a report" in flat
 
 
+def test_a_repeated_halt_is_reported_with_both_runs_and_never_hand_landed():
+    # 1b attempt 6: a revised refire also halted; the EM ran the test itself and hand-committed.
+    flat = re.sub(r"\s+", " ", _em_section())
+    assert "A repeated halt is reported, never hand-landed" in flat
+    assert "once a refire or revised run also halts, stop with a report naming both runs and the `owed_next_action`" in flat
+    assert "do not run the test or commit by hand" in flat
+
+
 def test_the_em_section_applies_only_under_the_headless_em_token_or_an_interactive_pm():
     # Prose alone did not stop a codex sizing-scout obeying the EM rules (1b attempt 3, run 1712a5); the
     # gate names the env var only headless-em-launch sets, and the executor strips from agent children.

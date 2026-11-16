@@ -92,8 +92,9 @@ def test_worker_launch_keeps_sandbox_defaults_and_roster_cleanup(tmp_path, monke
     assert worker.launch(tmp_path, "Do the assigned work", assignment, popen=spawn) == 0
     assert seen["removed"] == 123
     assert seen["roster"][2] == "worker"
-    assert seen["argv"] == ["codex-native", "--ask-for-approval", "on-request", "exec",
-                            "--sandbox", "workspace-write", "-"]
+    assert seen["argv"][:6] == ["codex-native", "--ask-for-approval", "on-request", "exec",
+                                "--sandbox", "workspace-write"]
+    assert seen["argv"][-1] == "-" and "--add-dir" in seen["argv"]
     assert seen["kwargs"]["shell"] is False
     assert seen["kwargs"]["env"]["COORDINATOR_AGENT_PROVIDER"] == "codex"
     assert "--worker" not in seen["argv"]

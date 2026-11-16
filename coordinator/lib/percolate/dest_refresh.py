@@ -137,10 +137,12 @@ def _fetch_failure_module():
     if _FETCH_FAILURE_MODULE is None:
         import importlib.util
 
+        from coordinator_core.bin_lib_binding import exec_module_bin_bound
+
         path = Path(__file__).resolve().parents[2] / "bin" / "lib" / "git_fetch_failure.py"
         spec = importlib.util.spec_from_file_location("git_fetch_failure", path)
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        exec_module_bin_bound(spec.loader, module, str(path.parent.parent))
         _FETCH_FAILURE_MODULE = module
     return _FETCH_FAILURE_MODULE
 

@@ -23,7 +23,8 @@ keeps the snapshot baseline and adds ``"head_unreadable": true``.
 List mode (no ``failing``): ``{"edited", "created", "foreign", "tripwires", "snapshot", "error"}``,
 plus ``head_unreadable`` when applicable. When review changed nothing (``edited`` and ``created`` both
 empty), they are derived from the run diff instead: manifest paths whose bytes differ from the ``base``
-commit's blob (``edited``) or that base lacks (``created``), with ``"derived_from": "run_diff"``.
+commit's blob (``edited``) or that base lacks (``created``), using HEAD instead for paths moved
+since the snapshot, with ``"derived_from": "run_diff"``.
 ``tripwires`` is the sorted tracked test modules (not already edited or created) whose source holds a string
 literal naming an edited or created path; empty for an empty edit set. When the tracked-file index cannot
 be read, ``tripwires`` is empty and ``error`` is ``"tripwire scan unavailable: <reason>"``; the other
@@ -389,9 +390,10 @@ def _edited(repo_root: Path, manifest: dict, view: _View) -> List[str]:
     return sorted(out)
 
 
-def _run_diff(repo_root: Path, manifest: dict) -> Tuple[List[str], List[str]]:
+def _run_diff(repo_root: Path, manifest: dict, view: _View) -> Tuple[List[str], List[str]]:
     """(edited, created): manifest paths whose current bytes differ from the manifest ``base``
-    commit's blob, or that the base tree lacks. Spawn-free; an unreadable base answers empty."""
+    commit's blob, or that the base tree lacks; moved paths use HEAD's leaf instead.
+    Spawn-free; an unreadable base answers empty."""
     base = manifest.get("base")
     if not _is_sha(base):
         return [], []
@@ -406,7 +408,7 @@ def _run_diff(repo_root: Path, manifest: dict) -> Tuple[List[str], List[str]]:
         target = repo_root / rel
         if not target.is_file():
             continue
-        entry = leaves.get(rel)
+        entry = view.head_map.get(rel) if view.moved(rel) else leaves.get(rel)
         if entry is None:
             created.append(rel)
             continue
@@ -880,7 +882,7 @@ def review_reverify(
         scan_error = None
         derived = None
         if not edited and not created:
-            edited, created = _run_diff(repo_root, manifest)
+            edited, created = _run_diff(repo_root, manifest, view)
             derived = "run_diff" if edited or created else None
         try:
             skip_paths = set(edited) | set(created)

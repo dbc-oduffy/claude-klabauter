@@ -84,7 +84,9 @@ def _caller(mode: str) -> int:
         sys.path.insert(0, str(bin_dir))
         spec = importlib.util.spec_from_file_location("_crm_storm", bin_dir / "cross-repo-memo.py")
         mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        from coordinator_core.bin_lib_binding import exec_module_bin_bound
+
+        exec_module_bin_bound(spec.loader, mod, str(bin_dir))
         mod._machine_local_dump()
     else:
         from coordinator_core import machine_local_spawn

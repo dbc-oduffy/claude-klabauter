@@ -71,10 +71,13 @@ def _cold_child() -> int:
     """Child entry: stdlib-only, so startup CPU is the entrypoint's own cost, not the harness's."""
     import importlib.util
 
+    from coordinator_core.bin_lib_binding import exec_module_bin_bound
+
     calls, restore = _count_popen()
-    spec = importlib.util.spec_from_file_location("_ml_entry", REPO_ROOT / "coordinator" / "bin" / "machine-local.py")
+    bin_dir = REPO_ROOT / "coordinator" / "bin"
+    spec = importlib.util.spec_from_file_location("_ml_entry", bin_dir / "machine-local.py")
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    exec_module_bin_bound(spec.loader, mod, str(bin_dir))
     saved_out = sys.stdout
     import io
 

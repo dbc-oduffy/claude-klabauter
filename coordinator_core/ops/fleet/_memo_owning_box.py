@@ -16,6 +16,8 @@ import os
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
+from coordinator_core.bin_lib_binding import exec_module_bin_bound
+
 # Mirrors unimatrix-roster FAR_SEEN_MAX_AGE_SECONDS (5 * POLL_SECONDS, POLL_SECONDS = 30); pinned by test.
 FAR_SEEN_MAX_AGE_SECONDS = 150
 _FAR_SEEN_FIELD = "unimatrixFarSeen"
@@ -40,7 +42,7 @@ def _load(key: str, filename: str) -> Any:
     if mod is None:
         spec = importlib.util.spec_from_file_location(f"memo_owning_box_{key}", _BIN / filename)
         mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        exec_module_bin_bound(spec.loader, mod, str(_BIN))
         _MODULES[key] = mod
     return mod
 

@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 import jsonschema
 
+from coordinator_core.agent_pipe.worker_mode import lock_and_gitdir_add_dir_argv, settings_home_add_dir_argv
 from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
 from coordinator_core.codex_runner.resolve import preflight_auth, resolve_codex
 from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
@@ -304,6 +305,7 @@ def run_agent(
     if backend == "codex":
         preflight_auth(env=env, requested=False)
         argv = [*resolve_codex(env=env), "exec", "--json", "--sandbox", "workspace-write",
+                *settings_home_add_dir_argv(), *lock_and_gitdir_add_dir_argv(repo_root),
                 "--ephemeral", "-o", str(last)]
         if schema is not None:
             schema_path = artifact_dir / "schema.json"

@@ -135,7 +135,7 @@ def test_second_destination_refusal_occurs_before_any_quiesce():
     # Extract the real publisher's containing statement list and exact preflight block.
     owner = next(n for n in ast.walk(tree) if hasattr(n, "body") and isinstance(n.body, list) and starts[0] in n.body)
     index = owner.body.index(starts[0])
-    quiesce = next(i for i, n in enumerate(owner.body) if isinstance(n, ast.With) and any(isinstance(item.context_expr, ast.Call) and isinstance(item.context_expr.func, ast.Name) and item.context_expr.func.id == "_quiesced_engine_roots" for item in n.items))
+    quiesce = next(i for i, n in enumerate(owner.body) if isinstance(n, ast.With) and any(isinstance(item.context_expr, ast.Call) and isinstance(item.context_expr.func, ast.Name) and item.context_expr.func.id == "_quiesced_per_repo" for item in n.items))
     assert quiesce > index + 2
     block = owner.body[index:index + 3]
     events = []

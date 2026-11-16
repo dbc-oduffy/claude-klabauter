@@ -10,8 +10,9 @@ Traps:
     are verified against their official CLI references (WORKER_ARGV_SOURCE); local binary
     availability is checked by the launcher before admission.
   - Every engine codex launch (this table, codex_runner.execute, codex_runner.workflow) widens the
-    workspace-write sandbox by exactly the settings home through `settings_home_add_dir_argv`, so
-    engine ops a worker runs can write their settings-home state.
+    workspace-write sandbox by the settings home (`settings_home_add_dir_argv`) plus the machine lock
+    root and the repo git common dir (`lock_and_gitdir_add_dir_argv`), so engine ops a worker runs
+    can write their settings-home state, foreign-target locks and git objects.
   - There is no per-agent seat record on the box. The only G-EM slot record is
     group_em.slot_grant (a memory-slot grant keyed by grantee session id and run), so the slot
     rule is: a live verified box holder (a Group EM exists, e.g. Machine-a) requires that grant;
@@ -33,8 +34,24 @@ def settings_home_add_dir_argv() -> list[str]:
     return ["--add-dir", str(settings_home())]
 
 
+def lock_and_gitdir_add_dir_argv(repo=None) -> list[str]:
+    """`--add-dir` grants for the machine lock root and the git common dir of `repo` (default cwd).
+
+    Both are roots the engine's own ops write (locked_write foreign-target locks, git object writes).
+    Walk-resolved, zero spawn; outside a git repo only the lock root is granted.
+    """
+    from coordinator_core.git import repo_root as _repo_root
+    from coordinator_core.locked_write import _machine_lock_dir
+
+    argv = ["--add-dir", str(_machine_lock_dir())]
+    common = _repo_root.git_common_dir(None if repo is None else str(repo))
+    if common:
+        argv += ["--add-dir", common]
+    return argv
+
+
 class _WorkerArgv(Mapping):
-    """WORKER_ARGV view: static agent flags, with the codex settings-home root resolved on each read."""
+    """WORKER_ARGV view: static agent flags, with the codex writable roots resolved on each read."""
 
     _STATIC: dict[str, tuple[str, ...]] = {
         "codex": ("--sandbox", "workspace-write", "--ask-for-approval", "never"),
@@ -44,7 +61,9 @@ class _WorkerArgv(Mapping):
 
     def __getitem__(self, agent: str) -> tuple[str, ...]:
         base = self._STATIC[agent]
-        return (*base, *settings_home_add_dir_argv()) if agent == "codex" else base
+        if agent != "codex":
+            return base
+        return (*base, *settings_home_add_dir_argv(), *lock_and_gitdir_add_dir_argv())
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._STATIC)

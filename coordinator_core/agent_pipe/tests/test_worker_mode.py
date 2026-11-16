@@ -28,6 +28,7 @@ def test_argv_table_covers_the_three_clis_with_a_source_each():
     assert set(wm.WORKER_ARGV) == {"codex", "grok", "agy"} == set(wm.WORKER_ARGV_SOURCE)
     assert wm.WORKER_ARGV["codex"] == (
         "--sandbox", "workspace-write", "--ask-for-approval", "never", "--add-dir", str(settings_home()),
+        *wm.lock_and_gitdir_add_dir_argv(),
     )
     assert "danger-full-access" not in wm.WORKER_ARGV["codex"]
     assert wm.WORKER_ARGV["grok"] == ("--always-approve",) and "--add-dir" not in wm.WORKER_ARGV["agy"]
@@ -37,8 +38,27 @@ def test_codex_worker_settings_home_root_follows_the_resolver(tmp_path, monkeypa
     home = tmp_path / "sh"
     home.mkdir()
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
-    assert wm.WORKER_ARGV["codex"][-2:] == ("--add-dir", str(settings_home()))
+    assert ("--add-dir", str(settings_home())) == wm.WORKER_ARGV["codex"][4:6]
     assert wm.settings_home_add_dir_argv() == ["--add-dir", str(settings_home())]
+
+
+def test_lock_and_gitdir_roots_follow_env_override_and_repo(tmp_path, monkeypatch):
+    locks = tmp_path / "lockroot"
+    monkeypatch.setenv("COORDINATOR_LOCK_ROOT", str(locks))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    argv = wm.lock_and_gitdir_add_dir_argv(repo)
+    assert argv[:2] == ["--add-dir", str(locks / "coordinator-locks")]
+    assert argv[2] == "--add-dir" and argv[3].endswith(".git") and len(argv) == 4
+
+
+def test_lock_and_gitdir_roots_omit_git_dir_outside_a_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_LOCK_ROOT", str(tmp_path / "lr"))
+    bare = tmp_path / "plain"
+    bare.mkdir()
+    if any((p / ".git").exists() for p in (bare, *bare.parents)):
+        pytest.skip("tmp_path sits inside a git repo")
+    assert wm.lock_and_gitdir_add_dir_argv(bare) == ["--add-dir", str(tmp_path / "lr" / "coordinator-locks")]
 
 
 def test_branch_name_slugs_host_and_never_main():

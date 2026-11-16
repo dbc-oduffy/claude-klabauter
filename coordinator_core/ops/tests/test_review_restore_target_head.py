@@ -8,6 +8,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops import review_findings_ledger
 from coordinator_core.ops import review_reverify as rr
 from coordinator_core.ops.dispatch_emit import review_edits
@@ -84,6 +86,27 @@ def test_unedited_path_a_peer_commit_changed_is_not_reported_edited_and_stays_he
     out = rr.review_reverify(tmp_path, base=base, slice_prefix=PREFIX, session_id=SESSION)
     assert out["error"] is None and out["edited"] == []
     assert (tmp_path / "pkg/op.py").read_bytes() == PEER_OP
+
+
+@pytest.mark.parametrize("peer_added", [False, True])
+def test_list_fallback_keeps_run_edits_but_excludes_peer_only_changes(tmp_path, monkeypatch, peer_added):
+    _git(tmp_path, "init", "-q")
+    base_files = {"pkg/run.py": BASE_OP}
+    if not peer_added:
+        base_files["pkg/op.py"] = BASE_OP
+    base = _commit(tmp_path, base_files, "base")
+    _commit(tmp_path, {"pkg/op.py": PEER_OP}, "peer commit")
+    run_op = BASE_OP.replace(b"return 1", b"return 2")
+    (tmp_path / "pkg/run.py").write_bytes(run_op)
+    _snapshot(tmp_path, base, {"pkg/op.py": PEER_OP, "pkg/run.py": run_op})
+    _arm(monkeypatch, [])
+    out = rr.review_reverify(tmp_path, base=base, slice_prefix=PREFIX, session_id=SESSION)
+    assert out["error"] is None
+    assert out["edited"] == ["pkg/run.py"]
+    assert out["created"] == []
+    assert out["derived_from"] == "run_diff"
+    assert (tmp_path / "pkg/op.py").read_bytes() == PEER_OP
+    assert (tmp_path / "pkg/run.py").read_bytes() == run_op
 
 
 def test_reverify_prompts_name_head_as_the_restore_target():

@@ -277,22 +277,59 @@ def _workspace_write_modules() -> list[str]:
 _ADD_DIR_SITES = _workspace_write_modules()
 
 
-def _launches_without_settings_home_root(tree: ast.AST) -> list[str]:
-    """Functions whose `workspace-write` argv literal lacks a settings_home_add_dir_argv call in the same function."""
+_ADD_DIR_LOCKS_GIT = "lock_and_gitdir_add_dir_argv"
+
+
+def _launches_missing_grant(tree: ast.AST, grant: str) -> list[str]:
+    """Functions whose `workspace-write` argv literal lacks a `grant` call in the same function."""
     parents = _parents(tree)
     bad: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and node.value == "workspace-write":
             fn = _enclosing_function(node, parents)
-            if fn is None or _ADD_DIR not in _called_names(fn):
+            if fn is None or grant not in _called_names(fn):
                 bad.add(getattr(fn, "name", "<module>"))
     return sorted(bad)
+
+
+def _launches_without_settings_home_root(tree: ast.AST) -> list[str]:
+    return _launches_missing_grant(tree, _ADD_DIR)
+
+
+def _launches_without_locks_and_gitdir_roots(tree: ast.AST) -> list[str]:
+    return _launches_missing_grant(tree, _ADD_DIR_LOCKS_GIT)
 
 
 @pytest.mark.parametrize("site", _ADD_DIR_SITES)
 def test_workspace_write_launch_grants_the_settings_home_root(site: str) -> None:
     tree = _tree(CORE / site)
     assert _launches_without_settings_home_root(tree) == [], f"{site} launches workspace-write without the settings-home --add-dir root"
+
+
+@pytest.mark.parametrize("site", _ADD_DIR_SITES)
+def test_workspace_write_launch_grants_the_lock_and_git_common_dir_roots(site: str) -> None:
+    tree = _tree(CORE / site)
+    assert _launches_without_locks_and_gitdir_roots(tree) == [], f"{site} launches workspace-write without the lock-root/git-common-dir --add-dir roots"
+
+
+def test_locks_and_gitdir_pin_rejects_a_launch_that_omits_them() -> None:
+    omitted = "def go(c):\n    return c + ['exec', '--sandbox', 'workspace-write', *settings_home_add_dir_argv()]\n"
+    granted = (
+        "def go(c):\n    return c + ['exec', '--sandbox', 'workspace-write', *settings_home_add_dir_argv(),"
+        " *lock_and_gitdir_add_dir_argv(c)]\n"
+    )
+    assert _launches_without_locks_and_gitdir_roots(ast.parse(omitted)) == ["go"]
+    assert _launches_without_locks_and_gitdir_roots(ast.parse(granted)) == []
+
+
+def test_worker_mode_codex_argv_grants_the_lock_and_git_common_dir_roots() -> None:
+    from coordinator_core.agent_pipe import worker_mode
+    from coordinator_core.locked_write import _machine_lock_dir
+
+    argv = worker_mode.WORKER_ARGV["codex"]
+    granted = [argv[i + 1] for i, a in enumerate(argv) if a == "--add-dir"]
+    assert str(_machine_lock_dir()) in granted
+    assert len(granted) == 3
 
 
 def test_worker_mode_codex_argv_grants_the_settings_home_root() -> None:

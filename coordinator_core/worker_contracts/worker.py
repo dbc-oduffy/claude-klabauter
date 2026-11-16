@@ -7,6 +7,7 @@ import subprocess
 import sys
 import uuid
 
+from coordinator_core.agent_pipe.worker_mode import lock_and_gitdir_add_dir_argv, settings_home_add_dir_argv
 from coordinator_core.codex_runner import roster
 from coordinator_core.codex_runner.resolve import resolve_codex, preflight_auth
 from coordinator_core.codex_runner.execute import _child_env
@@ -60,7 +61,8 @@ def launch(repo: Path, task: str, assignment: dict, *, popen=None, stdout=None, 
         raise ValueError(f"box is not quiet: {len(peers)} live sessions exceeds assignment limit {limit}")
     preflight_auth(requested=False)
     argv = [*resolve_codex(), "--ask-for-approval", "on-request", "exec",
-            "--sandbox", "workspace-write", "-"]
+            "--sandbox", "workspace-write", *settings_home_add_dir_argv(),
+            *lock_and_gitdir_add_dir_argv(repo), "-"]
     return supervise(repo, POLICY + "\nAssigned task:\n" + task, assignment, argv,
                      provider="codex", mode="worker", popen=popen, stdout=stdout, on_spawn=on_spawn)
 

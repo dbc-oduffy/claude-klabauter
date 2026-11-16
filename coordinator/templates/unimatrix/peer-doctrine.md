@@ -76,7 +76,9 @@ A run that exited non-zero or halted is steered with `workflow.revise` or refire
 `owed_next_action`; hand edits and a hand commit never replace it.
 
 With no PM present (a headless EM), never end on a question: stop with a report of what ran, what
-failed and the `owed_next_action`.
+failed and the `owed_next_action`. A repeated halt is reported, never hand-landed: once a refire
+or revised run also halts, stop with a report naming both runs and the `owed_next_action`; do not
+run the test or commit by hand.
 
 Hand-do only a confident XS by `coordinator/contract/xs-stop-rule.json`, and never while a run of
 the same ask is live.

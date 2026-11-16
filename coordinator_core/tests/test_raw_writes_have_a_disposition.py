@@ -638,6 +638,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/install/door_uninstall.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_uninstall_fallback_cmd_forwarder'),
     'coordinator_core/install/host_sampler_scheduler.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: register_host_sampler_task'),
     'coordinator_core/install/plugin_cache_sessions.py': ('outside-repo', 'per-session binding files under the claude config dir, never a repo path: write_binding, prune_dead_bindings'),
+    'coordinator_core/install/pruner_scheduler.py': ('in-repo-non-state', 'scheduler task XML temp file under the managed tempdir, never state/: register_pruner_task'),
     'coordinator_core/install/sandbox_check.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _tier1_filesystem_shape, _tier1b_mirror_and_cold_tier, _tier1b_pointer_and_shim, _tier1c_publish_repo_parity, _write_claude_author_argv_stub'),
     'coordinator_core/locked_write.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: held_lock, locked_rmw, replace_with_retry'),
     'coordinator_core/machine_profile.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: per-session advisory-event claim files under share_dir'),

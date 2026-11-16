@@ -294,6 +294,12 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("bin", "unimatrix-install.py", "_mint", "os.replace", "os.replace(part, priv if part == side[0] else Path(str(priv) + '.pub'))", 1):
         "swaps a freshly minted Unimatrix key pair from its '.new' sibling over the superseded key under ~/.ssh before the old item is deleted; "
         "machine-local credential files outside the worktree, never a T-claimed work path",
+    ("bin", "lib/commit_clone.py", "materialise_commit_clone", "os.replace", "os.replace(staging, dest)", 1):
+        "atomically publishes a freshly built commit-clone staging dir (mkdtemp under the clone cache root) to its sha-keyed cache path; "
+        "engine-owned cache outside the worktree, never a T-claimed work path",
+    ("bin", "unimatrix-autolink.py", "retire_non_targets", "os.replace", "os.replace(path, Path(sdir) / 'retired' / Path(path).name)", 1):
+        "moves an autolink supervisor record into the 'retired' subdir of the engine's own autolink state dir; "
+        "machinery state, never a claimable work path",
     ("bin", "publish.py", "_rename_with_retry", "os.rename", "os.rename(src, dst)", 1):
         "the ONE raw os.rename left in publish.py -- the retry primitive every "
         "publish-swap rename now funnels through (`_swap_publish_staging_into_"
@@ -526,6 +532,9 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "ops/dispatch_emit/ask_stage_plan.py", "_set_aside_prior_report", "Path.replace", "report.replace(prior)", 1): "same set-aside as ask_stage.py's entry: a prior row report to `<id>.prior.md` under the gitignored dispatch-reports tree; machine-written, never T-claimed",
     ("coordinator_core", "ops/dispatch_emit/run_token.py", "_adopt_expired_claim", "os.replace", "os.replace(claimed, aside)", 1): "run-token `.claimed` record renamed aside so exactly one adopter wins an expired claim; engine bookkeeping under the run's machinery directory, never a session-touched work path",
     ("coordinator_core", "ops/dispatch_emit/ask_fanout.py", "_fanout", "os.replace", "os.replace(src, dest)", 1): "publishes a freshly staged record from the fanout stage dir into place; dest must not exist (refused otherwise) and src is engine scratch, so there is no claim on either end to carry",
+    ("coordinator_core", "git/ref_lock.py", "_claim_owner", "os.replace", "os.replace(owner, claimed)", 1): "ref-lock owner file renamed to claim a dead holder's recovery, so two racing recoverers cannot both reap; .git/ internals, outside claimable space",
+    ("coordinator_core", "git/ref_lock.py", "_resolve_lock", "os.replace", "os.replace(lock, gitdir / ref)", 1): "a stale ref lock holding the completed new sha is renamed over its ref, finishing git's own lock-then-rename protocol; .git/ internals, never a claimable working-tree path",
+    ("coordinator_core", "git/ref_lock.py", "_resolve_lock", "os.replace", "os.replace(lock, dest)", 1): "a stale ref lock moved aside into the .git/ recovery dir: git bookkeeping, never a claimable working-tree path, so no T-claim exists on either end",
     ("coordinator_core", "git/index_write.py", "_recover_dead_writer", "os.replace", "os.replace(owner, claimed)", 1): "index-lock owner file renamed to claim a dead writer's recovery, so two racing recoverers cannot both reap; .git/ internals, outside claimable space",
     ("coordinator_core", "git/index_write.py", "_reclaim_ownerless_lock", "os.replace", "os.replace(lock_path, dest)", 1): "an ownerless, unheld, aged index.lock moved aside to `index.lock.reclaimed-<ts>-<pid>` in the same .git/ dir: git bookkeeping, never a claimable working-tree path, so no T-claim exists on either end",
     ("coordinator_core", "ops/fleet/terminal_sizing_drain.py", "land_moves", "os.replace", "os.replace(str(m.src), str(m.dst))", 1): "same F-5 archival-mover shape as archive_and_commit's entry: pre-planned moves of already-terminal sizing records, no live touch-claim by construction, no session_id in scope",

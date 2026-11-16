@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from coordinator_core.agent_pipe.contract import peers_path
+from coordinator_core.bin_lib_binding import exec_module_bin_bound
 
 UNKNOWN = "unknown"
 PARTIAL_MARK = "+ [coverage incomplete]"  # appended to the cost with no separator: "~$1.00+ [coverage incomplete]"
@@ -66,7 +67,7 @@ def _load_bin_script(filename: str, modname: str):
     try:
         spec = importlib.util.spec_from_file_location(modname, path)
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        exec_module_bin_bound(spec.loader, module, str(path.parent))
         return module
     except Exception:
         return None

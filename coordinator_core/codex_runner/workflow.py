@@ -42,7 +42,7 @@ from coordinator_core.bash_guards import _heavy_command_class as capacity
 from coordinator_core.group_em import admission_post, slot_grant, slot_wait
 from coordinator_core.agent_pipe.agy import family_stage_argv
 from coordinator_core.agent_pipe.model_tiers import model_for_tier
-from coordinator_core.agent_pipe.worker_mode import settings_home_add_dir_argv
+from coordinator_core.agent_pipe.worker_mode import lock_and_gitdir_add_dir_argv, settings_home_add_dir_argv
 from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV
 from coordinator_core.ops.workflow_fire.worker_preamble import with_worker_preamble
 from coordinator_core._settings_home import settings_home
@@ -1015,7 +1015,8 @@ def run_agent(
         except SandboxSetupRefused as exc:
             raise AgentFailed(str(exc)) from exc
         argv = [*native_cli, "exec", "--json", "--sandbox", "workspace-write",
-                "--ephemeral", "-o", str(last), *settings_home_add_dir_argv()]
+                "--ephemeral", "-o", str(last), *settings_home_add_dir_argv(),
+                *lock_and_gitdir_add_dir_argv(repo_root)]
         if schema is not None:
             schema_path = artifact_dir / "schema.json"
             schema_path.write_text(json.dumps(schema), encoding="utf-8")

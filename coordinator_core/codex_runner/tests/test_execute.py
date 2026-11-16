@@ -114,7 +114,10 @@ def test_spawn_form_is_workspace_write_in_shared_tree(env):
     argv = json.loads(argv_out.read_text())
     assert argv[:4] == ["exec", "--json", "--sandbox", "workspace-write"]
     assert argv[4:6] == ["--add-dir", str(settings_home())]
-    prompt = argv[6]
+    from coordinator_core.agent_pipe.worker_mode import lock_and_gitdir_add_dir_argv
+    grants = lock_and_gitdir_add_dir_argv(root)
+    assert argv[6:6 + len(grants)] == grants and argv.count("--add-dir") == 1 + len(grants) // 2
+    prompt = argv[-1]
     assert "Edit things" in prompt and "Make the edit." in prompt
     assert "- src/a.py" in prompt and "Write only these files" in prompt
 
