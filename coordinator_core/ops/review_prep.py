@@ -94,6 +94,7 @@ from coordinator_core.git.literal_pathspec import git_pathspec, is_magic_pathspe
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import review_prep_legs
+from coordinator_core.ops.dispatch_emit.record_paths import is_record_path
 from coordinator_core.ops.dispatch_emit.run_ownership import LiveRun, blocks, holders_from_held, owns_path
 from coordinator_core.session import claim_index
 from coordinator_core.session.core import resolve_session_id
@@ -144,6 +145,7 @@ def _fail(message: str) -> dict:
         "whole_diff_sidecars": {"kira": "", "personas": [], "delivery": ""},
         "excluded": [],
         "peer_held": [],
+        "review_skip": None,
         "error": message,
     }
 
@@ -399,7 +401,7 @@ def _for_group(reply: dict, group_index: Optional[int], group_count: Optional[in
 
 _STORED_KEYS = (
     "plan_id", "share_dir", "run_base_sha", "verdict", "basis", "whole_diff_path", "product_files",
-    "foreign_claims", "slices", "whole_diff_sidecars", "sidecar_path", "excluded",
+    "foreign_claims", "slices", "whole_diff_sidecars", "sidecar_path", "excluded", "review_skip",
 )
 REVIEW_PREP_BUSY_PREFIX = "review.prep busy:"
 _LOCK_WAIT_SECS = 0.5
@@ -713,6 +715,20 @@ def review_prep(
             error=None,
         )
         return _for_group(zero, group_index, group_count)
+    if all(is_record_path(p) for p in paths):
+        # Records are never product: answer a typed skip before any git, lock or sidecar.
+        skip = _fail("")
+        skip.update(
+            plan_id=_plan_id(repo_root, plan_path),
+            share_dir=_rel(Path(share_dir(str(repo_root), session_id)), repo_root) if session_id else "",
+            basis="range" if head else "worktree",
+            run_base_sha=base,
+            excluded=excluded,
+            peer_held=peer_held,
+            review_skip={"kind": "records-only", "paths": list(paths)},
+            error=None,
+        )
+        return _for_group(skip, group_index, group_count)
     from coordinator_core.ops.dispatch_emit.landing_integrity import unparseable_py, unparseable_py_at
 
     from coordinator_core.ops.review_peer_bases import _has_object_store

@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -52,6 +53,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("UNIMATRIX_TEST_ALLOWED_BOXES", "machine-a a@b fallbackbox")
     al = load("unimatrix-autolink")
     real_ssh = al.ssh_identity_file
+    real_pull = al.pull_membership
+    monkeypatch.setattr(al, "pull_membership", lambda *a, **k: False)
+    monkeypatch.setattr(al, "live_name", lambda *a, **k: None)
     monkeypatch.setattr(al, "ssh_identity_file", lambda roster, alias, run=None: None)
     monkeypatch.setattr(al, "pin_key_value", lambda roster, run=None: None)
     roster = al._roster()
@@ -67,6 +71,7 @@ def env(tmp_path, monkeypatch):
 
     e = E()
     e.real_ssh_identity_file = real_ssh
+    e.real_pull_membership = real_pull
     e.home, e.al, e.roster, e.live = home, al, roster, live
     e.sdir = home / "unimatrix"
     e.key = Path(roster.default_key())
@@ -427,6 +432,167 @@ def test_each_alias_gets_its_own_key_in_probe_and_both_supervisors(env, tmp_path
     assert got == {("alpha", ka), ("beta", kb)} and len(sp.cmds) == 4
 
 
+def dns_reply(name, addrs, pointer=True):
+    """A DNS response for `name`; answers use a compression pointer to the question name when `pointer`."""
+    import struct
+    q = b"".join(bytes([len(p)]) + p.encode() for p in name.split(".")) + b"\0"
+    out = struct.pack(">6H", 0, 0x8400, 1, len(addrs), 0, 0) + q + struct.pack(">HH", 1, 1)
+    for a in addrs:
+        out += (b"\xc0\x0c" if pointer else q) + struct.pack(">HHIH", 1, 0x8001, 120, 4) + bytes(map(int, a.split(".")))
+    return out
+
+
+def test_parse_a_records_reads_compressed_and_plain_names_and_ignores_others():
+    al = load("unimatrix-autolink")
+    assert al.parse_a_records(dns_reply("Mac-mini.local", ["192.0.2.7", "192.0.2.8"]), "mac-mini.local") == ["192.0.2.7", "192.0.2.8"]
+    assert al.parse_a_records(dns_reply("Mac-mini.local", ["192.0.2.7"], pointer=False), "Mac-mini.local") == ["192.0.2.7"]
+    assert al.parse_a_records(dns_reply("other.local", ["192.0.2.9"]), "mac-mini.local") == []
+    assert al.parse_a_records(b"\x00\x01garbage", "mac-mini.local") == []
+    assert al.parse_a_records(dns_reply("a.local", ["192.0.2.7"])[:-2], "a.local") == []
+
+
+def test_mdns_a_records_sends_one_query_to_the_group_and_returns_the_answer(env, monkeypatch):
+    import socket as real
+    sent = []
+
+    class FakeSock:
+        def __init__(self, *a):
+            self.replies = [dns_reply("Mac-mini.local", ["192.0.2.5"])]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def setsockopt(self, *a):
+            pass
+
+        def settimeout(self, t):
+            assert 0 < t <= env.al.MDNS_SECONDS
+
+        def sendto(self, data, dest):
+            sent.append((data, dest))
+
+        def recv(self, n):
+            if self.replies:
+                return self.replies.pop()
+            raise real.timeout()
+
+    monkeypatch.setattr(env.al.socket, "socket", FakeSock)
+    assert env.al.mdns_a_records("Mac-mini.local") == ["192.0.2.5"]
+    assert len(sent) == 1 and sent[0][1] == ("224.0.0.251", 5353) and b"\x08Mac-mini\x05local\x00" in sent[0][0]
+
+
+def test_mdns_a_records_with_no_answer_returns_empty_within_the_timeout(env, monkeypatch):
+    import socket as real
+
+    class Silent:
+        def __init__(self, *a):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def setsockopt(self, *a):
+            pass
+
+        def settimeout(self, t):
+            pass
+
+        def sendto(self, *a):
+            pass
+
+        def recv(self, n):
+            raise real.timeout()
+
+    monkeypatch.setattr(env.al.socket, "socket", Silent)
+    assert env.al.mdns_a_records("gone.local", timeout=0.05) == []
+
+
+def test_live_name_takes_a_local_host_or_a_bare_hostname_and_refuses_an_ip():
+    al = load("unimatrix-autolink")
+    r = None
+    assert al.live_name(r, "example-operator@Mac-mini.local") == "Mac-mini.local"
+    assert al.live_name(r, "um01-macmini", lambda *a: "Mac-mini.local") == "Mac-mini.local"
+    assert al.live_name(r, "machine-a", lambda *a: "machine-a") == "machine-a.local"
+    assert al.live_name(r, "um01-macmini", lambda *a: "192.0.2.4") is None
+    assert al.live_name(r, "x", lambda *a: "box.example.com") is None
+
+
+@pytest.fixture
+def live_env(env, monkeypatch):
+    add_key(env)
+    monkeypatch.setattr(env.al, "live_name", lambda *a, **k: "machine-a.local")
+    monkeypatch.setattr(env.al, "_resolved_v4", lambda name: "192.0.2.1")
+    monkeypatch.setattr(env.roster, "ssh_fields", lambda a: {"user": "kim"})
+    return env
+
+
+def test_probe_timeout_then_mdns_live_address_answers_and_both_addresses_are_logged(live_env):
+    env, sp = live_env, Spawner()
+    probe_fn = stale_ip_probe({"kim@192.0.2.3"})
+    asked = []
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=probe_fn, stable_fn=lambda a: None,
+               mdns_fn=lambda name: asked.append(name) or ["192.0.2.1", "192.0.2.2", "192.0.2.3"])
+    assert asked == ["machine-a.local"]
+    assert probe_fn.seen == ["machine-a", "kim@192.0.2.2", "kim@192.0.2.3"]
+    assert {c[c.index("--remote") + 1] for c in sp.cmds} == {"kim@192.0.2.3"} and len(sp.cmds) == 2
+    log = (env.sdir / "autolink.log").read_text()
+    assert "192.0.2.1" in log and "192.0.2.3" in log and "linked via kim@192.0.2.3" in log
+
+
+def test_every_live_address_timing_out_returns_the_original_reason_and_links_nothing(live_env):
+    env, sp = live_env, Spawner()
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=stale_ip_probe(set()),
+               stable_fn=lambda a: None, mdns_fn=lambda name: ["192.0.2.2", "192.0.2.3"])
+    assert sp.cmds == []
+    log = (env.sdir / "autolink.log").read_text()
+    assert "machine-a unreachable: rc=255: No route to host" in log and "192.0.2.1" in log and "192.0.2.3" in log
+
+
+def test_mdns_is_asked_fresh_on_every_failed_attempt(live_env):
+    env, asked = live_env, []
+
+    def mdns(name):
+        asked.append(name)
+        return []
+
+    for _ in range(2):
+        env.al.mdns_fallback(env.roster, "machine-a", "/k", "rc=255", stale_ip_probe(set()), mdns)
+    assert asked == ["machine-a.local", "machine-a.local"]
+
+
+def test_healthy_primary_never_asks_mdns(live_env):
+    def boom_mdns(name):
+        raise AssertionError("mDNS asked on the healthy path")
+
+    sp = Spawner()
+    live_env.al.run(roster=live_env.roster, boxes=["machine-a"], spawn=sp, probe_fn=stale_ip_probe({"machine-a"}),
+                    stable_fn=boom, mdns_fn=boom_mdns)
+    assert len(sp.cmds) == 2
+
+
+def test_resolve_key_never_returns_the_hands_on_unimatrix_01_key(env):
+    hands_on = str(env.home / ".secrets" / "ssh" / "unimatrix-01")
+    other = str(env.home / ".secrets" / "ssh" / "relay-key")
+    assert env.al.resolve_key(env.roster, "a", lambda r, a: hands_on, lambda r, a: None) == str(env.key)
+    assert env.al.resolve_key(env.roster, "a", lambda r, a: None, lambda r, a: hands_on) == str(env.key)
+    assert env.al.resolve_key(env.roster, "a", lambda r, a: hands_on, lambda r, a: other) == other
+
+
+def test_ssh_identity_file_skips_the_unimatrix_01_file_for_the_next_one(env, tmp_path):
+    first, second = tmp_path / "unimatrix-01", tmp_path / "unimatrix-zero"
+    first.write_text("k")
+    second.write_text("k")
+    out = f"hostname h\nidentityfile {first}\nidentityfile {second}\n"
+    run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, out, "")
+    assert env.real_ssh_identity_file(env.roster, "um01-macmini", run=run) == str(second)
+
+
 def test_resolution_order_machine_local_then_ssh_config_then_default(env, tmp_path):
     local, ssh = write_key(env.home / "local"), write_key(env.home / "ssh")
     add_key(env)
@@ -690,7 +856,13 @@ def boom(*a, **kw):
     raise AssertionError("called on the healthy path")
 
 
+def stamp_pull(env, at=None):
+    env.sdir.mkdir(parents=True, exist_ok=True)
+    (env.sdir / env.al.PULL_STAMP_NAME).write_text(json.dumps({"at": time.time() if at is None else at}))
+
+
 def test_healthy_cache_makes_no_key_probe_or_spawn_call_and_logs_nothing(env):
+    stamp_pull(env)
     seed_live_pair(env, "machine-a")
     (env.sdir / "autolink-boxes.json").write_text(json.dumps({"aliases": ["machine-a"]}))
     env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, stable_fn=boom)
@@ -854,7 +1026,7 @@ def test_snapshot_member_key_is_resolved_by_the_ssh_alias_whose_hostname_matches
 
     env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok, key_fn=key_fn, self_names=set(),
                pull_fn=lambda *a: False)
-    assert seen == ["macmini-lan"]
+    assert seen == ["other", "macmini-lan"]
 
 
 @needs_keygen
@@ -930,7 +1102,7 @@ def test_no_signer_is_constructed_by_a_snapshot_run(env, snap, monkeypatch):
     monkeypatch.setattr(snap.m, "FakeSigner", refuse)
     monkeypatch.setattr(snap.m, "AgentSigner", refuse)
     env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok, self_names=set(), pull_fn=lambda *a: False)
-    assert (env.sdir / f"autolink-{env.al.slug('kim@machine-a.local')}.json").is_file()
+    assert env.al.record_path(env.sdir, "kim@machine-a.local").is_file()
 
 
 @needs_keygen
@@ -970,7 +1142,7 @@ def test_pull_adopts_a_higher_epoch_from_an_answering_member_and_links_the_new_m
 
     sp = Spawner()
     env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names=set(),
-               pull_fn=lambda roster, remote, key: env.al.pull_membership(roster, remote, key, run=fake_run))
+               pull_fn=lambda roster, remote, key: env.real_pull_membership(roster, remote, key, run=fake_run))
     assert calls and calls[0][-2:] == ["membership", "get"] and "kim@machine-a.local" in calls[0]
     assert m.load_snapshot(env.home)[0]["epoch"] == 2
     assert remotes(sp) == {"kim@machine-a.local", "kim@bishop.local"}
@@ -985,8 +1157,8 @@ def test_pull_ignores_an_equal_or_lower_epoch_and_a_failed_ask(env, snap):
     out = m.canonical_bytes(snap.snap) + b"\n" + base64.b64encode(sig) + b"\n"
     same = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, out, b"")
     failed = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, b"", b"no membership snapshot held")
-    assert env.al.pull_membership(env.roster, "kim@x", "/k", run=same) is False
-    assert env.al.pull_membership(env.roster, "kim@x", "/k", run=failed) is False
+    assert env.real_pull_membership(env.roster, "kim@x", "/k", run=same) is False
+    assert env.real_pull_membership(env.roster, "kim@x", "/k", run=failed) is False
     assert not (env.sdir / "membership" / "events.log").exists() or "refused" not in (env.sdir / "membership" / "events.log").read_text()
 
 
@@ -1370,10 +1542,142 @@ def test_probe_and_pull_dial_ipv4_only(env):
         return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
     env.al.probe(env.roster, "machine-a", "/k/relay", run=fake_run)
-    env.al.pull_membership(env.roster, "kim@x", "/k/relay", run=fake_run)
+    env.real_pull_membership(env.roster, "kim@x", "/k/relay", run=fake_run)
     assert len(seen) == 2 and all("AddressFamily=inet" in c for c in seen)
 
 
+def test_link_key_collapses_case_local_and_trailing_dot():
+    al = load("unimatrix-autolink")
+    keys = {al.link_key(n) for n in ("example-operator@machine-b", "example-operator@Machine-b.local", "example-operator@MACHINE-B.local.")}
+    assert keys == {"example-operator@machine-b"}
+
+
+def test_link_key_distinguishes_user_and_host_and_allows_no_user():
+    al = load("unimatrix-autolink")
+    assert al.link_key("alice@machine-b") != al.link_key("example-operator@machine-b")
+    assert al.link_key("example-operator@machine-b") != al.link_key("example-operator@machine-a")
+    assert al.link_key("Machine-b.local") == "machine-b"
+
+
+def test_pull_sources_drops_members_dedupes_by_link_key_and_keeps_registry_before_records():
+    al = load("unimatrix-autolink")
+    got = al.pull_sources({"kim@machine-a.local": "machine-a"}, ["example-operator@machine-b", "machine-a", "kim@Machine-a.local"],
+                          ["example-operator@Machine-b.local", "example-operator@bishop"])
+    assert got == ["example-operator@machine-b", "example-operator@bishop"]
+
+
+def test_record_aliases_reads_link_records_and_skips_cache_router_and_backoff_files(env):
+    env.sdir.mkdir(parents=True)
+    for n in ("autolink-example_operator_at_machine_b.json", "autolink-machine-a.json", "autolink-boxes.json",
+              "autolink-router.json", "autolink-machine-a.backoff.json", "autolink-machine-a.lock"):
+        (env.sdir / n).write_text("{}")
+    assert env.al.record_aliases(env.sdir) == ["example-operator@machine-b", "machine-a"]
+
+
+def far_boxes_reader(env, aliases):
+    (env.home / "bin" / "_machine_local.py").write_text(
+        f"import sys\nk = sys.argv[-1]\nprint({aliases!r} if k == 'unimatrix.far_boxes' else '')\n"
+        "sys.exit(0 if k == 'unimatrix.far_boxes' else 1)\n")
+
+
+def roll_back(env, snap, first, second, signer=None):
+    """Store epoch 1 (`first` only) and return (epoch 2 snapshot, its signature by `signer`, default the pinned one)."""
+    snap.adopt(first)
+    held = dict(snap.snap)
+    snap.adopt(second)
+    higher = snap.snap
+    m, d = snap.m, env.sdir / "membership"
+    sig = m.FakeSigner(signer or snap.signer, environ={}).sign(m.canonical_bytes(higher))
+    (d / "snapshot.json").write_bytes(m.canonical_bytes(held))
+    (d / "snapshot.sig").write_bytes(m.FakeSigner(snap.signer, environ={}).sign(m.canonical_bytes(held)))
+    (d / "verified.json").unlink()
+    return higher, sig
+
+
+def serving(env, snap, higher, sig):
+    asked = []
+
+    def fake_run(cmd, **kw):
+        out = snap.m.canonical_bytes(higher) + b"\n" + base64.b64encode(sig) + b"\n"
+        return subprocess.CompletedProcess(cmd, 0, out, b"")
+
+    def pull(roster, remote, key):
+        asked.append(remote)
+        return env.real_pull_membership(roster, remote, key, run=fake_run)
+
+    return asked, pull
+
+
+@needs_keygen
+def test_a_registry_only_alias_serving_a_signed_higher_epoch_is_adopted_and_linked_on_a_healthy_cache(env, snap):
+    add_key(env)
+    higher, sig = roll_back(env, snap, "machine-a", "bishop")
+    far_boxes_reader(env, "boxb")
+    seed_live_pair(env, env.al.slug("kim@machine-a.local"))
+    (env.sdir / "autolink-boxes.json").write_text(json.dumps({"aliases": ["kim@machine-a.local"], "epoch": 1}))
+    asked, pull = serving(env, snap, higher, sig)
+    sp = Spawner()
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names=set(), key_fn=lambda r, a: str(env.key),
+               agent_fn=lambda k: "unencrypted", pull_fn=pull)
+    assert asked[0] == "boxb"
+    assert snap.m.load_snapshot(env.home)[0]["epoch"] == 2
+    assert remotes(sp) == {"kim@bishop.local"}
+    assert json.loads((env.sdir / "autolink-boxes.json").read_text())["epoch"] == 2
+
+
+@needs_keygen
+def test_a_registry_only_alias_is_asked_when_the_snapshot_lists_no_other_member(env, snap):
+    add_key(env)
+    higher, sig = roll_back(env, snap, "me", "bishop")
+    far_boxes_reader(env, "boxb")
+    asked, pull = serving(env, snap, higher, sig)
+    sp = Spawner()
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names={"me"}, key_fn=lambda r, a: str(env.key),
+               agent_fn=lambda k: "unencrypted", pull_fn=pull)
+    assert asked[0] == "boxb" and snap.m.load_snapshot(env.home)[0]["epoch"] == 2
+    assert remotes(sp) == {"kim@bishop.local"}
+
+
+@needs_keygen
+def test_an_unsigned_higher_epoch_from_a_registry_only_alias_is_refused_and_logged(env, snap, tmp_path):
+    add_key(env)
+    higher, sig = roll_back(env, snap, "machine-a", "bishop", signer=_keygen(tmp_path / "rogue")[0])
+    far_boxes_reader(env, "boxb")
+    asked, pull = serving(env, snap, higher, sig)
+    sp = Spawner()
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names=set(), key_fn=lambda r, a: str(env.key),
+               agent_fn=lambda k: "unencrypted", pull_fn=pull)
+    assert asked[0] == "boxb" and snap.m.load_snapshot(env.home)[0]["epoch"] == 1
+    assert remotes(sp) == {"kim@machine-a.local"}
+    assert any("far box boxb: membership pull skipped" in ln for ln in log_lines(env))
+
+
+def test_without_a_snapshot_each_configured_alias_is_asked_once(env):
+    add_key(env)
+    far_boxes_reader(env, "machine-a")
+    asked = []
+    env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok, self_names=set(), key_fn=lambda r, a: str(env.key),
+               agent_fn=lambda k: "unencrypted", pull_fn=lambda roster, remote, key: asked.append(remote) or False)
+    assert asked == ["machine-a"]
+
+
+def test_the_off_snapshot_pull_is_throttled_and_the_healthy_path_inside_the_interval_spawns_nothing(env, monkeypatch):
+    add_key(env)
+    seed_live_pair(env, "machine-a")
+    (env.sdir / "autolink-boxes.json").write_text(json.dumps({"aliases": ["machine-a"]}))
+    spawned = []
+    stamp_pull(env)
+    with monkeypatch.context() as mp:
+        mp.setattr(env.al.subprocess, "run", lambda *a, **k: spawned.append(a) or boom())
+        env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, pull_fn=boom)
+    assert spawned == [] and not (env.sdir / "autolink.log").exists()
+    stamp_pull(env, at=time.time() - env.al.PULL_SOURCES_INTERVAL_SECONDS - 1)
+    asked = []
+    pull = lambda roster, remote, key: asked.append(remote) or False
+    for _ in range(2):
+        env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=lambda r, a: str(env.key),
+                   agent_fn=lambda k: "unencrypted", pull_fn=pull)
+    assert asked == ["machine-a"]
 def test_a_niced_fallback_router_is_named_loudly_with_the_launchd_fix():
     al = load("unimatrix-autolink")
     line = al.niced_router_warning(4242, al.LOGIN_AGENT_LABEL, nice_fn=lambda: 10)

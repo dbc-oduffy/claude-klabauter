@@ -38,6 +38,7 @@ from coordinator_core.ops.review_mint.wave_not_run import (
 )
 from coordinator_core.ops.dispatch_emit.ask_contract import GAP_TITLE_PREFIX
 from coordinator_core.ops.dispatch_emit.interpreter_pin import interpreter_clause
+from coordinator_core.ops.dispatch_emit.record_paths import record_prefix_js_regex
 from coordinator_core.ops.dispatch_emit.landing_targeted_tests import REVERIFY_INDETERMINATE
 from coordinator_core.ops.dispatch_emit.ue_engine_facts import ue_engine_facts_clause
 from coordinator_core.ops.dispatch_emit.wake_digest import INTEGRATION_NOT_RUN_VAR
@@ -510,7 +511,7 @@ REVIEW_PREP_SLICES_JS = "(Array.isArray(_reviewPrep?.slices) ? _reviewPrep.slice
 #: certify "no product changed". Composers that bind no `_reviewPaths` read as no declared product.
 _DECLARED_PRODUCT_WRITE_JS = (
     "(typeof _reviewPaths !== 'undefined' && (Array.isArray(_reviewPaths) ? _reviewPaths : []).some(p => "
-    "!/^(state|archive|scratch|tasks|cross-repo|docs|\\.coordinator-local)\\//.test(String(p)) && "
+    f"!/{record_prefix_js_regex()}/.test(String(p)) && "
     "!/\\.md$/.test(String(p))))"
 )
 
@@ -519,7 +520,7 @@ _DECLARED_PRODUCT_WRITE_JS = (
 #: `_landed` (the ask route) reads the evidence off a bound `_reviewPaths`. An entry that names no
 #: paths is unknown, never "no product".
 _NO_PRODUCT_LANDED_JS = (
-    "(() => { const isP = (p) => !/^(state|archive|scratch|tasks|cross-repo|docs|\\.coordinator-local)\\//.test(String(p)) && "
+    f"(() => {{ const isP = (p) => !/{record_prefix_js_regex()}/.test(String(p)) && "
     "!/\\.md$/.test(String(p)); "
     "if (typeof _landed === 'undefined') return typeof _reviewPaths !== 'undefined'; "
     "const rows = Object.values(_landed); "
@@ -576,7 +577,7 @@ _PREP_GUARDS_JS = (
     # The same clean-prep predicate as the no-op halt, minus its
     # landed-rows condition; a refused prep fails `verdict`, and a prep
     # with product files fails `product_files`, so both still throw.
-    "  const _verifyOnly = !!((_prepNothing && "
+    "  const _verifyOnly = !!(_reviewPrep?.review_skip?.kind === 'records-only' || (_prepNothing && "
     "(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
     "!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).some(s => (s?.files ?? []).length)) || "
     # A wave whose landed rows wrote no product path and whose declared paths hold none has nothing

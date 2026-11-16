@@ -73,6 +73,7 @@ from coordinator_core.ops.dispatch_emit.halted_record_ledger import (  # noqa: F
     _record_kept,
     _record_withheld_prints,
     _xs_spine_halt,
+    family_done_chunks,
 )
 from coordinator_core.ops.dispatch_emit.halted_record_eviction import (  # noqa: F401 -- re-exported
     EVICTED_NOT_IMPORTABLE,
@@ -474,6 +475,7 @@ def _land(
         session_id = None
 
     finished = done_chunks(worktree_root, params)
+    finished += family_done_chunks(worktree_root, record_dir_rel, params, finished, params.get(CONSUMED_RETURNS_PARAM))
     declared: dict = {}  # path -> owning chunk id, first declarer wins
     report_cache: dict = {}
     for chunk in finished:

@@ -1181,8 +1181,27 @@ def _captured_keys(cache: _ScopeCache, worktree_root: Path, wiki_dirs: list[str]
     )
     captured: set[str] = set()
     for rel, entry in files:
-        captured.update(_cites_fact(cache, rel, entry))
+        if not _is_pointer_page(cache, rel, entry):
+            captured.update(_cites_fact(cache, rel, entry))
     return captured
+
+
+#: Stamp of a generated pointer page (DoE ``mechanical_disposition.py --pointer-page``). Trap: such a
+#: page cites every backlog file it indexes, so counting it as capture would mark pointer-only
+#: coverage as harvested and feed disposal guard 1 with it. Whether a pointer is capture is a ruling,
+#: never an accident of this join.
+_POINTER_PAGE_STAMP = "--pointer-page"
+
+
+def _is_pointer_page(cache: _ScopeCache, rel: str, entry: Any) -> bool:
+    def compute() -> tuple[bool, bool]:
+        try:
+            with open(entry.path, encoding="utf-8", errors="replace") as fh:
+                return True, _POINTER_PAGE_STAMP in fh.read(4096)
+        except OSError:
+            return False, False
+
+    return cache.fact(rel, entry, "pointer_page", compute)
 
 
 #: Cohorts whose candidates are ripe (implemented/shipped) by construction: terminal, so the

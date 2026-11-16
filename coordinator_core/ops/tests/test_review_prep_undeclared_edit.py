@@ -23,7 +23,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 SESSION = "sess-own"
 RUN = "ask-20261031T000000-4d5478"
-SHRUNK = "docs/wiki/fu7-extraction.md"
+SHRUNK = "wikisrc/fu7-extraction.txt"
 PEER = "peer/dirty.txt"
 
 

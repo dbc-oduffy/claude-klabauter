@@ -117,6 +117,34 @@ def _post_checkpoint_candidates(
     return list(out)
 
 
+def family_done_chunks(
+    worktree_root: Path, record_dir_rel: str, params: dict, finished: Iterable, consumed: object,
+) -> list:
+    """The marker chunks a family-stage row finished that ``finished`` lacks: a family runner writes no
+    dispatch report, so its DONE is read from its consumed (or persisted) return. A manifest-withheld
+    or ``incomplete_chunks`` row, and one whose manifest row is not family-stage-runner, never is."""
+    from coordinator_core.ops.dispatch_emit import row_returns
+    from coordinator_core.ops.dispatch_emit.halted_record_request import _manifest_doc, _run_request
+    from coordinator_core.ops.dispatch_emit.stage_family import RUNNER_AGENT
+
+    request, withheld = _run_request(worktree_root, params.get("script_path"))
+    if request is None:
+        return []
+    record_dir = worktree_root / record_dir_rel
+    family_rows = {
+        r["id"] for r in _manifest_doc(record_dir).get("rows") or ()
+        if isinstance(r, dict) and isinstance(r.get("id"), str) and r.get("agent_type") == RUNNER_AGENT
+    }
+    listed = params.get("incomplete_chunks")
+    skip = {c.id for c in finished} | withheld | (set(listed) if isinstance(listed, list) else set())
+    replies = {k: e["text"] for k, e in row_returns.read(record_dir).items()}
+    replies.update({k: v for k, v in (consumed.items() if isinstance(consumed, dict) else ()) if isinstance(v, str)})
+    return [
+        c for c in request.chunks
+        if c.id in family_rows and c.id not in skip and row_returns.is_done(replies.get(c.id))
+    ]
+
+
 def _carried_returns(root: Path, record_dir: Path, returns: dict) -> dict:
     """``returns`` with each kept-from-prior-run row's text replaced by that run's persisted entry
     (a kept row's reply is a stub); a row with no such entry keeps its own text."""

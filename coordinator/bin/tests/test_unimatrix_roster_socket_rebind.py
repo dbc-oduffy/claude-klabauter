@@ -8,7 +8,7 @@ import pytest
 
 BIN = Path(__file__).resolve().parents[1]
 FAR = "/tmp/cc-socks/cc-msg-far.sock"
-REMOTE = "example-operator@192.168.0.174"
+REMOTE = "example-operator@far-box.example"
 
 
 class Bridge:
