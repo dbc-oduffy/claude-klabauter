@@ -121,6 +121,7 @@ from coordinator_core.git.git_objects import (
     write_object,
 )
 from coordinator_core.git import rollback_check
+from coordinator_core.git.ref_lock import RefLockHeld
 from coordinator_core.git.git_state import (
     IndexEntry,
     IndexParseError,
@@ -5188,15 +5189,19 @@ def _commit_via_head_spine(
     if build_only:
         return GitResult(returncode=0, stdout=new_commit_sha, stderr="")
 
-    landed = cas_ref(
-        ref_gitdir,
-        ref_relpath,
-        old_head,
-        new_commit_sha,
-        reflog_committer=who,
-        reflog_message=subject,
-        head_gitdir=resolve_git_dir(root),
-    )
+    try:
+        landed = cas_ref(
+            ref_gitdir,
+            ref_relpath,
+            old_head,
+            new_commit_sha,
+            reflog_committer=who,
+            reflog_message=subject,
+            head_gitdir=resolve_git_dir(root),
+            report_lock=True,
+        )
+    except RefLockHeld as exc:
+        return GitResult(returncode=1, stdout="", stderr=f"{caller}: {exc}")
     if not landed:
         return GitResult(
             returncode=1,

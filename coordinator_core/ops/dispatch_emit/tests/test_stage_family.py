@@ -1,8 +1,11 @@
 """Pins the stage-family resolver: closed enum, absent means claude."""
 from __future__ import annotations
 
+import re
+
 import pytest
 
+from coordinator_core.codex_runner import grok
 from coordinator_core.ops.dispatch_emit import stage_family as sf
 
 
@@ -95,6 +98,35 @@ def test_record_refusals():
         sf.stage_record("research", _res("agy", "FAILED", blocked_reason="x"), fb)
     with pytest.raises(ValueError, match="stage role"):
         sf.stage_record("size", _res("agy"))
+
+
+_BOX = {
+    "USERPROFILE": r"C:\Users\box",
+    "HOME": r"C:\Users\box",
+    "APPDATA": r"C:\Users\box\AppData\Roaming",
+    "LOCALAPPDATA": r"C:\Users\box\AppData\Local",
+    "GROK_HOME": r"C:\Users\box\.grok",
+    "XAI_API_KEY": "secret",
+    "OPENAI_API_KEY": "secret",
+}
+
+
+def test_grok_spawn_env_keeps_every_sign_in_locator_the_brief_names():
+    """Binds the brief to the spawn: each env name SIGN_IN_LINE promises is one _build_env forwards."""
+    named = re.findall(r"\b[A-Z][A-Z_]{2,}\b", sf.SIGN_IN_LINE.split(";", 1)[0])
+    assert named, sf.SIGN_IN_LINE
+    box = {**_BOX, **{k: f"v-{k}" for k in named if k not in _BOX}}
+    env = grok._build_env(box, windows=True)
+    assert {k: env.get(k) for k in named} == {k: box[k] for k in named}
+
+
+def test_grok_spawn_env_drops_api_keys():
+    env = grok._build_env(_BOX, windows=True)
+    assert "XAI_API_KEY" not in env and "OPENAI_API_KEY" not in env
+
+
+def test_grok_spawn_env_without_profile_has_none():
+    assert "USERPROFILE" not in grok._build_env({"PATH": r"C:\bin"}, windows=True)
 
 
 def test_brief_refuses_bad_stage_family_and_scratch():

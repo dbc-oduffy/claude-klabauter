@@ -28,6 +28,7 @@ RELEASE_MARKER_SUPERSEDED = "marker-superseded"
 RELEASE_SUCCESSOR = "successor-run"
 RELEASE_PLAN_LANDING = "plan-landing"
 RELEASE_SUCCESSOR_LANDED = "successor-landed"
+RELEASE_SUCCESSOR_PARKED = "successor-parked-behind-committer"
 RELEASE_RECORDED_LANDED = "recorded-landed"
 RELEASE_SIZING_SHIPPED = "sizing-shipped"
 RELEASE_KEPT_AT_HEAD = "kept-at-head"
@@ -638,7 +639,9 @@ def _release_reason(
         if status not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
             return None
         if status == halted_run.STATUS_RESUMED:
-            return RELEASE_SUCCESSOR_LANDED if head[4] else None
+            if head[4]:
+                return RELEASE_SUCCESSOR_LANDED
+            return RELEASE_SUCCESSOR_PARKED if _successor_parked(root, halted_run_id, sizing, committing_run_id) else None
         if committing_run_id and sizing:
             other = wrd.record_sizing_rel(root, committing_run_id)
             if other and other == sizing:
@@ -649,11 +652,54 @@ def _release_reason(
         plan = marker.get(HALT_PLAN_FIELD)
         if committing_plan and isinstance(plan, str) and wrd._norm(plan) == wrd._norm(committing_plan):
             return RELEASE_PLAN_LANDING
+        if _successor_parked(root, halted_run_id, sizing, committing_run_id):
+            return RELEASE_SUCCESSOR_PARKED
         return landing_halted_view.shared(
             "release_tail", (str(root), halted_run_id), lambda: _release_tail(root, halted_run_id, marker),
         )
     except Exception:
         return None
+
+
+def _parked_behind(root: Path, blocker: str) -> list:
+    """Run ids whose unstarted stage-wait record names `blocker`. One listing of the wait directory per
+    `release_scope`, one read per record; empty when the directory is absent or unreadable."""
+    state = _SCOPE.get()
+    key = ("parked-waiters", str(root))
+    if state is not None and key in state["memo"]:
+        return state["memo"][key].get(blocker, [])
+    from coordinator_core.ops.dispatch_emit import stage_wait
+
+    by_blocker: dict = {}
+    try:
+        wait_dir = stage_wait._wait_dir(Path(root))
+        names = sorted(n for n in os.listdir(wait_dir) if n.endswith(".json")) if wait_dir is not None else []
+    except OSError:
+        names = []
+    for name in names:
+        record = stage_wait.read(Path(root), name[: -len(".json")])
+        if not record or record.get("started"):
+            continue
+        for b in record.get("blockers") or ():
+            by_blocker.setdefault(b, []).append(record.get("run_id") or name[: -len(".json")])
+    if state is not None:
+        state["memo"][key] = by_blocker
+    return by_blocker.get(blocker, [])
+
+
+def _successor_parked(root: Path, halted_run_id: str, sizing: str, committing_run_id: Optional[str]) -> bool:
+    """True when the halted run, or a run of its sizing, is parked (stage-wait) behind the committing run:
+    the halt then holds nothing against that commit, and holding would make each wait on the other."""
+    if not committing_run_id:
+        return False
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    for waiter in _parked_behind(root, committing_run_id):
+        if waiter == halted_run_id:
+            return True
+        if sizing and waiter != committing_run_id and wrd.record_sizing_rel(Path(root), waiter) == sizing:
+            return True
+    return False
 
 
 def _release_head(root: Path, halted_run_id: str) -> tuple:

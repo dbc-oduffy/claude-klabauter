@@ -42,7 +42,7 @@ def _blob(repo: Path, text: str) -> str:
 
 
 @pytest.fixture
-def halted(tmp_path):
+def halted(tmp_path: Path) -> tuple[Path, Path]:
     """A repo with a halted RUN withholding a.txt and b.txt; both unchanged at HEAD since the halt anchor."""
     _git(tmp_path, "init", "-q")
     base = _commit(tmp_path, {"a.txt": "a0", "b.txt": "b0"}, date="2026-01-01T00:00:00Z")
@@ -62,12 +62,12 @@ def _indexed(root) -> bool:
     return (root / halted_withheld_index.INDEX_DIR / f"{RUN}.json").is_file()
 
 
-def _unchanged(root, record, before):
+def _unchanged(root, record, before) -> None:
     assert (record / halted_run.HALTED_FILE).read_text(encoding="utf-8") == before
     assert _indexed(root)
 
 
-def test_rejected_paths_equal_to_anchor_close_run_and_release_index(halted):
+def test_rejected_paths_equal_to_anchor_close_run_and_release_index(halted) -> None:
     root, record = halted
     assert _indexed(root)
     reply = _call(root, ["a.txt", "b.txt"])
@@ -108,7 +108,7 @@ def test_mixed_rejected_and_landed_closes(halted):
     assert not _indexed(root)
 
 
-def test_unrejected_path_hand_landed_with_a_different_blob_closes_superseded(halted):
+def test_unrejected_path_hand_landed_with_a_different_blob_closes_superseded(halted) -> None:
     # 124b4d: the EM hand-landed the kept SKILL.md edit, but HEAD's blob is not byte-equal to the kept blob.
     root, record = halted
     sha = _commit(root, {"b.txt": "b-kept-as-landed"})
@@ -118,7 +118,7 @@ def test_unrejected_path_hand_landed_with_a_different_blob_closes_superseded(hal
     assert not _indexed(root)
 
 
-def test_rejected_path_changed_at_head_refuses_naming_path(halted):
+def test_rejected_path_changed_at_head_refuses_naming_path(halted) -> None:
     root, record = halted
     _commit(root, {"a.txt": "a-later"})
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
@@ -127,7 +127,7 @@ def test_rejected_path_changed_at_head_refuses_naming_path(halted):
     _unchanged(root, record, before)
 
 
-def test_unrejected_untouched_path_refuses(halted):
+def test_unrejected_untouched_path_refuses(halted) -> None:
     root, record = halted
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
     reply = _call(root, ["a.txt"])
@@ -136,7 +136,7 @@ def test_unrejected_untouched_path_refuses(halted):
 
 
 @pytest.mark.parametrize("reason", [None, "", "   "])
-def test_reason_is_required(halted, reason):
+def test_reason_is_required(halted, reason) -> None:
     root, record = halted
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
     reply = _call(root, ["a.txt", "b.txt"], reason=reason)
@@ -144,7 +144,7 @@ def test_reason_is_required(halted, reason):
     _unchanged(root, record, before)
 
 
-def test_rejected_paths_required_and_must_be_withheld(halted):
+def test_rejected_paths_required_and_must_be_withheld(halted) -> None:
     root, record = halted
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
     assert _call(root, [])["ok"] is False
@@ -153,8 +153,57 @@ def test_rejected_paths_required_and_must_be_withheld(halted):
     _unchanged(root, record, before)
 
 
-def test_non_halted_run_refuses(halted):
+def test_non_halted_run_refuses(halted) -> None:
     root, record = halted
     assert _call(root, ["a.txt", "b.txt"])["ok"] is True
     reply = _call(root, ["a.txt", "b.txt"])
+    assert reply["ok"] is False and "closed" in reply["error"]
+
+
+@pytest.fixture
+def unstarted(tmp_path: Path) -> tuple[Path, Path]:
+    """A repo with a RUN halted dependents_unstarted that withholds nothing."""
+    _git(tmp_path, "init", "-q")
+    base = _commit(tmp_path, {"a.txt": "a0"}, date="2026-01-01T00:00:00Z")
+    record = tmp_path / ask_contract.RECORD_DIR_ROOT / RUN
+    halted_run.write_halt_marker(
+        record, halted=ask_contract.HALT_DEPENDENTS_UNSTARTED, sizing_rel=None, run_base_sha=base, reason="C2 held on C1",
+    )
+    ask_contract.write_run_stage_at(record, "halted", now=HALT_AT)
+    return tmp_path, record
+
+
+def test_zero_withheld_dependents_unstarted_closes_rejected_without_rejected_paths(unstarted) -> None:
+    root, record = unstarted
+    reply = op._handler({"run_id": RUN, "reason": REASON}, root)
+    assert reply["ok"] is True and reply["dispositions"] == {} and reply["reason"] == REASON
+    marker = halted_run._read(record)
+    assert marker["status"] == halted_run.STATUS_CLOSED
+    assert marker["closed"]["reason"] == REASON and marker["closed"]["disposition"] == "rejected"
+    assert marker[halted_run.PATH_DISPOSITIONS_FIELD] == {}
+    assert not _indexed(root)
+
+
+def test_zero_withheld_still_refuses_a_named_rejected_path(unstarted) -> None:
+    root, record = unstarted
+    before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
+    reply = op._handler({"run_id": RUN, "rejected_paths": ["a.txt"], "reason": REASON}, root)
+    assert reply["ok"] is False and "a.txt" in reply["error"]
+    assert (record / halted_run.HALTED_FILE).read_text(encoding="utf-8") == before
+
+
+def test_zero_withheld_live_successor_refuses(unstarted, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, record = unstarted
+    from coordinator_core.ops.dispatch_emit import halted_run_landed
+
+    monkeypatch.setattr(halted_run_landed, "_live_successor", lambda r, run: "warp-live-1")
+    reply = op._handler({"run_id": RUN, "reason": REASON}, root)
+    assert reply["ok"] is False and "warp-live-1" in reply["error"]
+    assert halted_run._read(record)["status"] == halted_run.STATUS_HALTED
+
+
+def test_zero_withheld_non_halted_run_refuses(unstarted) -> None:
+    root, _ = unstarted
+    assert op._handler({"run_id": RUN, "reason": REASON}, root)["ok"] is True
+    reply = op._handler({"run_id": RUN, "reason": REASON}, root)
     assert reply["ok"] is False and "closed" in reply["error"]

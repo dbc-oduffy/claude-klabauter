@@ -40,6 +40,7 @@ from coordinator_core.codex_runner.review import (
 )
 from coordinator_core.bash_guards import _heavy_command_class as capacity
 from coordinator_core.group_em import admission_post, slot_grant, slot_wait
+from coordinator_core.agent_pipe.agy import family_stage_argv
 from coordinator_core.agent_pipe.model_tiers import model_for_tier
 from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV
 from coordinator_core._settings_home import settings_home
@@ -725,9 +726,6 @@ _AGY_LOG_NAME = "agy.log"
 _AGY_OK = frozenset({"success", "ok", "completed", "done"})
 _FENCE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$", re.DOTALL)
 
-# agy denies unlisted shell commands headlessly; this allow rule is the narrowest non-bypass grant.
-_AGY_SETTINGS = json.dumps({"permissions": {"allow": ["command(*)"]}})
-
 
 def _trailing_json(text: str):
     """Parse a reply that is JSON, a fenced JSON block, or narration ending in a JSON object.
@@ -764,9 +762,10 @@ _RELAY_ALLOW = "Bash(coordinator-invoke:*)"
 def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None) -> list[str]:
     """Write-capable argv for a grok/agy stage (prompt via file for grok, stdin for agy).
 
-    Never carries grok.FORBIDDEN_FLAGS or agy --dangerously-skip-permissions; the
-    stage model is left to the CLI default because Workflow tiers do not map to
-    these families. A grok op-relay or commit-stage child gets only a coordinator-invoke allow rule.
+    Never carries grok.FORBIDDEN_FLAGS; the agy arm delegates to family_stage_argv (single builder)
+    and runs unrestricted (--dangerously-skip-permissions, no sandbox, shell and file permission
+    granted) per PM ruling. The stage model is left to the CLI default because Workflow tiers do not
+    map to these families. A grok op-relay or commit-stage child gets only a coordinator-invoke allow rule.
     """
     try:
         if backend == "grok":
@@ -774,9 +773,7 @@ def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None
             return [*resolve_grok(), "--prompt-file", str(artifact_dir / "prompt.txt"),
                     "--output-format", "json", "--permission-mode", "acceptEdits",
                     "--allow", allow, "--no-subagents", "--no-auto-update"]
-        return [*resolve_agy(), "--input-format", "stream-json", "--output-format", "stream-json",
-                "-p=", "--mode", "accept-edits", "--settings", _AGY_SETTINGS,
-                "--log-file", str(artifact_dir / _AGY_LOG_NAME)]
+        return family_stage_argv(resolve_agy(), log_file=str(artifact_dir / _AGY_LOG_NAME))
     except (GrokUnavailable, AgyUnavailable) as exc:
         raise AgentFailed(f"{backend} executable unavailable: {exc}") from exc
 

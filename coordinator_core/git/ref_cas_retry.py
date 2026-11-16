@@ -27,10 +27,18 @@ def is_ref_moved_text(text: object) -> bool:
 
 
 def is_ref_moved(exc: BaseException) -> bool:
-    """True for a plain ``CommitRefused`` of a lost ref CAS; subclasses are never retried."""
-    from coordinator_core.git.commit import CommitRefused
+    """True for a plain ``CommitRefused`` of a lost ref CAS, and for a fresh (``stale=False``)
+    ``RefLockHeld`` / ``RefLockRefused``: a lock a peer holds for milliseconds is the same race.
+    Other subclasses and a stale lock are never retried."""
+    from coordinator_core.git import commit as _commit
+    from coordinator_core.git.ref_lock import RefLockHeld
 
-    return type(exc) is CommitRefused and is_ref_moved_text(str(exc))
+    if isinstance(exc, RefLockHeld):
+        return not exc.stale
+    refused = getattr(_commit, "RefLockRefused", None)
+    if refused is not None and isinstance(exc, refused):
+        return not getattr(exc, "stale", False)
+    return type(exc) is _commit.CommitRefused and is_ref_moved_text(str(exc))
 
 
 def head_sha(worktree_root: Path) -> Optional[str]:

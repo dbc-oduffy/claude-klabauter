@@ -290,7 +290,7 @@ def test_native_child_facts_rejects_same_basename_different_binary(tmp_path,monk
 _SCHEMA = {'type': 'object', 'properties': {'a': {'type': 'integer'}}, 'required': ['a']}
 
 
-def _stub_family(monkeypatch, tmp_path, *, stdout_text, returncode=0):
+def _stub_family(monkeypatch, tmp_path, *, stdout_text, returncode: int = 0):
     calls = []
 
     def fake_run(argv, prompt, *, stdout, stderr, **kwargs):
@@ -343,7 +343,7 @@ def test_agy_stage_spawns_resolved_binary_and_parses_result_event(tmp_path, monk
     assert _run(tmp_path, 'agy') == {'a': 2}
     argv, stdin = calls[0]
     assert argv[0] == '/bin/agy-x'
-    assert argv[argv.index('--mode') + 1] == 'accept-edits' and '--dangerously-skip-permissions' not in argv
+    assert '--dangerously-skip-permissions' in argv and not {'--mode', '--settings', '--sandbox'} & set(argv)
     assert json.loads(stdin)['event'] == 'user' and 'do it' in json.loads(stdin)['message']['content']
 
 
@@ -530,3 +530,14 @@ def test_agy_without_log_model_line_stays_unknown(tmp_path, monkeypatch):
     assert _family_model(tmp_path, monkeypatch, 'agy', _AGY_REAL) == 'unknown'
     (tmp_path / 'art' / 'agy.log').write_text('model=""\n', encoding='utf-8')
     assert workflow._event_provenance(tmp_path / 'art' / 'stdout.jsonl', 'agy')['model'] == 'unknown'
+
+
+def test_family_argv_agy_delegates_to_family_stage_argv_unrestricted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(workflow, 'resolve_agy', lambda: ['/bin/agy-x'])
+    argv = workflow._family_argv('agy', tmp_path)
+    assert argv == workflow.family_stage_argv(['/bin/agy-x'], log_file=str(tmp_path / 'agy.log'))
+    assert '--dangerously-skip-permissions' in argv
+    assert not {'--mode', 'accept-edits', '--settings', '--sandbox'} & set(argv)
+    assert argv[argv.index('--input-format') + 1] == 'stream-json'
+    assert argv[argv.index('--output-format') + 1] == 'stream-json'
+

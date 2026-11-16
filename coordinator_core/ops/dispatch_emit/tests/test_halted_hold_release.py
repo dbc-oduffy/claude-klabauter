@@ -49,7 +49,7 @@ def _root(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_superseded_sizing_releases_halted(tmp_path):
+def test_superseded_sizing_releases_halted(tmp_path: Path) -> None:
     root = _root(tmp_path)
     _sizing(root, SIZING, "superseded")
     h = _rid("ask", 300, "aaaaaa")
@@ -57,7 +57,7 @@ def test_superseded_sizing_releases_halted(tmp_path):
     assert hr.release_reason(root, h, _rid("ask", 10, "bbbbbb"), None) == hr.RELEASE_SUPERSEDED
 
 
-def test_superseded_marker_releases_while_halted_with_open_sizing_holds(tmp_path):
+def test_superseded_marker_releases_while_halted_with_open_sizing_holds(tmp_path: Path) -> None:
     root = _root(tmp_path)
     c = _rid("ask", 10, "bbbbbb")
     sup, held = _rid("ask", 300, "aaaaaa"), _rid("ask", 290, "cccccc")
@@ -68,7 +68,7 @@ def test_superseded_marker_releases_while_halted_with_open_sizing_holds(tmp_path
     assert hr.release_reason(root, held, c, None) is None
 
 
-def test_successor_same_sizing_releases(tmp_path):
+def test_successor_same_sizing_releases(tmp_path: Path) -> None:
     root = _root(tmp_path)
     h, c = _rid("ask", 300, "aaaaaa"), _rid("ask", 10, "bbbbbb")
     _run(root, h, marker="halted")
@@ -76,7 +76,7 @@ def test_successor_same_sizing_releases(tmp_path):
     assert hr.release_reason(root, h, c, None) == hr.RELEASE_SUCCESSOR
 
 
-def test_successor_same_deliverable_releases(tmp_path):
+def test_successor_same_deliverable_releases(tmp_path: Path) -> None:
     root = _root(tmp_path)
     _sizing(root, SIZING, deliverable="dlv-x")
     _sizing(root, "state/sizings/t.yaml", deliverable="dlv-x")
@@ -86,7 +86,7 @@ def test_successor_same_deliverable_releases(tmp_path):
     assert hr.release_reason(root, h, c, None) == hr.RELEASE_SUCCESSOR
 
 
-def test_plan_landing_releases_and_other_plan_holds(tmp_path):
+def test_plan_landing_releases_and_other_plan_holds(tmp_path: Path) -> None:
     root = _root(tmp_path)
     h, c = _rid("ask", 300, "aaaaaa"), _rid("warp", 10, "bbbbbb")
     _run(root, h, marker="halted")
@@ -96,7 +96,7 @@ def test_plan_landing_releases_and_other_plan_holds(tmp_path):
     assert hr.release_reason(root, h, c, None) is None
 
 
-def test_none_cases_landed_markerless_unrelated_unreadable(tmp_path):
+def test_none_cases_landed_markerless_unrelated_unreadable(tmp_path: Path) -> None:
     root = _root(tmp_path)
     c = _rid("ask", 10, "bbbbbb")
     _run(root, c, sizing="state/sizings/other.yaml")
@@ -109,7 +109,7 @@ def test_none_cases_landed_markerless_unrelated_unreadable(tmp_path):
     assert hr.release_reason(root, "missing-20260101T000000-abcdef", c, PLAN) is None
 
 
-def test_recorded_landed_marker_releases_and_shipped_sizing_frees_halted_and_resumed(tmp_path):
+def test_recorded_landed_marker_releases_and_shipped_sizing_frees_halted_and_resumed(tmp_path: Path) -> None:
     root = _root(tmp_path)
     c = _rid("ask", 10, "bbbbbb")
     _run(root, c, sizing="state/sizings/other.yaml")
@@ -125,7 +125,7 @@ def test_recorded_landed_marker_releases_and_shipped_sizing_frees_halted_and_res
     assert hr.release_reason(root, halted, c, None) is None
 
 
-def test_resumed_released_by_superseded_sizing(tmp_path):
+def test_resumed_released_by_superseded_sizing(tmp_path: Path) -> None:
     root = _root(tmp_path)
     _sizing(root, SIZING, "superseded")
     r = _rid("ask", 300, "aaaaaa")
@@ -133,7 +133,7 @@ def test_resumed_released_by_superseded_sizing(tmp_path):
     assert hr.release_reason(root, r, None, None) == hr.RELEASE_SUPERSEDED
 
 
-def test_resumed_released_by_later_successor_marker_landed(tmp_path):
+def test_resumed_released_by_later_successor_marker_landed(tmp_path: Path) -> None:
     root = _root(tmp_path)
     r, s = _rid("ask", 300, "aaaaaa"), _rid("ask", 100, "bbbbbb")
     _run(root, r, marker="resumed")
@@ -141,7 +141,7 @@ def test_resumed_released_by_later_successor_marker_landed(tmp_path):
     assert hr.release_reason(root, r, None, None) == hr.RELEASE_SUCCESSOR_LANDED
 
 
-def test_resumed_released_by_successor_spent_receipt(tmp_path):
+def test_resumed_released_by_successor_spent_receipt(tmp_path: Path) -> None:
     root = _root(tmp_path)
     r, s = _rid("ask", 300, "aaaaaa"), _rid("ask", 100, "bbbbbb")
     _run(root, r, marker="resumed")
@@ -150,7 +150,7 @@ def test_resumed_released_by_successor_spent_receipt(tmp_path):
     assert hr.release_reason(root, r, None, None) == hr.RELEASE_SUCCESSOR_LANDED
 
 
-def test_successor_scan_reads_each_record_dir_once_per_scope(tmp_path, monkeypatch):
+def test_successor_scan_reads_each_record_dir_once_per_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import warp_run_deliverable as wrd
 
     root = _root(tmp_path)
@@ -170,7 +170,7 @@ def test_successor_scan_reads_each_record_dir_once_per_scope(tmp_path, monkeypat
     assert [p.parent.name for p in reads].count(s) == 2
 
 
-def test_successor_scan_still_holds_when_no_successor_landed(tmp_path):
+def test_successor_scan_still_holds_when_no_successor_landed(tmp_path: Path) -> None:
     root = _root(tmp_path)
     r, s = _rid("ask", 300, "aaaaaa"), _rid("ask", 100, "bbbbbb")
     _run(root, r, marker="resumed")
@@ -179,7 +179,7 @@ def test_successor_scan_still_holds_when_no_successor_landed(tmp_path):
         assert hr._successor_landed(root, r, SIZING) is False
 
 
-def test_resumed_holds_when_successor_not_landed_even_sharing_sizing_and_plan(tmp_path):
+def test_resumed_holds_when_successor_not_landed_even_sharing_sizing_and_plan(tmp_path: Path) -> None:
     root = _root(tmp_path)
     r, s, older = _rid("ask", 300, "aaaaaa"), _rid("ask", 100, "bbbbbb"), _rid("ask", 500, "cccccc")
     _run(root, r, marker="resumed")
@@ -197,7 +197,7 @@ def _released(root: Path, run_id: str, marker: str, released) -> None:
     path.write_text(json.dumps(data), encoding="utf-8")
 
 
-def test_recorded_criterion_met_release_frees_halted_only(tmp_path):
+def test_recorded_criterion_met_release_frees_halted_only(tmp_path: Path) -> None:
     root = _root(tmp_path)
     record = {"reason": hr.RELEASE_CRITERION_MET, "sha": "a" * 40}
     h, r = _rid("ask", 300, "aaaaaa"), _rid("ask", 200, "bbbbbb")
@@ -207,7 +207,7 @@ def test_recorded_criterion_met_release_frees_halted_only(tmp_path):
     assert hr.release_reason(root, r, None, None) is None
 
 
-def test_recorded_owner_not_live_release_frees_halted_only(tmp_path):
+def test_recorded_owner_not_live_release_frees_halted_only(tmp_path: Path) -> None:
     root = _root(tmp_path)
     record = {"reason": hr.RELEASE_OWNER_NOT_LIVE, "sha": "a" * 40}
     h, r = _rid("ask", 300, "aaaaaa"), _rid("ask", 200, "bbbbbb")
@@ -219,7 +219,7 @@ def test_recorded_owner_not_live_release_frees_halted_only(tmp_path):
     assert hr.release_reason(root, r, None, None) is None
 
 
-def test_malformed_released_record_holds(tmp_path):
+def test_malformed_released_record_holds(tmp_path: Path) -> None:
     root = _root(tmp_path)
     for i, bad in enumerate(("criterion-met-at-head", {"reason": "other", "sha": "a"}, ["x"], {})):
         h = _rid("ask", 300 + i, f"a0000{i}")
@@ -227,7 +227,7 @@ def test_malformed_released_record_holds(tmp_path):
         assert hr.release_reason(root, h, None, None) is None
 
 
-def test_release_calls_register_lines(tmp_path):
+def test_release_calls_register_lines(tmp_path: Path) -> None:
     root = _root(tmp_path)
     h = _rid("ask", 300, "aaaaaa")
     _run(root, h, marker="halted")
@@ -239,7 +239,7 @@ def test_release_calls_register_lines(tmp_path):
     assert lone == ("dispatch.record_halted_run_landed {run_id: nope-20260101T000000-abcdef, sha: <landing sha>}",)
 
 
-def test_mark_plan_origins_landed_flips_only_the_covered_match(tmp_path):
+def test_mark_plan_origins_landed_flips_only_the_covered_match(tmp_path: Path) -> None:
     root = _root(tmp_path)
     match, other_plan, old, partial, landing = (
         _rid("ask", 300, "aaaaaa"), _rid("ask", 290, "bbbbbb"), _rid("ask", 3 * 86400, "cccccc"),
@@ -257,7 +257,7 @@ def test_mark_plan_origins_landed_flips_only_the_covered_match(tmp_path):
         assert status(rid)["status"] == "halted", rid
 
 
-def test_mark_plan_origins_landed_skips_excluded_run(tmp_path):
+def test_mark_plan_origins_landed_skips_excluded_run(tmp_path: Path) -> None:
     root = _root(tmp_path)
     h = _rid("ask", 300, "aaaaaa")
     _run(root, h, marker="halted")
@@ -275,7 +275,7 @@ def _git(root: Path, *args: str, stdin: str = "") -> str:
     ).stdout.strip()
 
 
-def _kept_repo(tmp_path: Path, head_text: str, kept_text: str):
+def _kept_repo(tmp_path: Path, head_text: str, kept_text: str) -> tuple[str, str]:
     """Real repo: base commit of `a.py`, then HEAD holds `head_text`; a halted run withheld `a.py` keeping `kept_text`."""
     base_text = "def f():\n    return 1\n"
     _git(tmp_path, "init", "-q")
@@ -302,12 +302,12 @@ def _kept_repo(tmp_path: Path, head_text: str, kept_text: str):
 KEPT = "def f():\n    return 1\n\n\ndef g(a, b):\n    return a + b\n"
 
 
-def test_kept_blob_equal_to_head_releases(tmp_path):
+def test_kept_blob_equal_to_head_releases(tmp_path: Path) -> None:
     h, c = _kept_repo(tmp_path, KEPT, KEPT)
     assert hr.release_reason(tmp_path, h, c, None) == hr.RELEASE_KEPT_AT_HEAD
 
 
-def test_kept_crlf_blob_whose_lf_form_is_at_head_releases(tmp_path):
+def test_kept_crlf_blob_whose_lf_form_is_at_head_releases(tmp_path: Path) -> None:
     """ue-addon cd5bb6: under core.autocrlf the keep is a raw CRLF blob while HEAD stores the LF form."""
     import subprocess
 
@@ -329,7 +329,7 @@ def test_kept_crlf_blob_whose_lf_form_is_at_head_releases(tmp_path):
     assert hr.release_reason(tmp_path, h, c, None) == hr.RELEASE_KEPT_AT_HEAD
 
 
-def test_kept_crlf_blob_with_different_content_holds(tmp_path):
+def test_kept_crlf_blob_with_different_content_holds(tmp_path: Path) -> None:
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
@@ -345,25 +345,25 @@ def test_kept_crlf_blob_with_different_content_holds(tmp_path):
     assert hr.release_reason(tmp_path, h, c, None) is None
 
 
-def test_kept_hunks_present_after_reflow_release(tmp_path):
+def test_kept_hunks_present_after_reflow_release(tmp_path: Path) -> None:
     reflowed = "def f():\n    return 1\n\n\ndef g(\n    a, b\n):\n    return a + b\n"
     h, c = _kept_repo(tmp_path, reflowed, KEPT)
     assert hr.release_reason(tmp_path, h, c, None) == hr.RELEASE_KEPT_AT_HEAD
 
 
-def test_unlanded_kept_hunks_still_hold(tmp_path):
+def test_unlanded_kept_hunks_still_hold(tmp_path: Path) -> None:
     h, c = _kept_repo(tmp_path, "def f():\n    return 1\n", KEPT)
     assert hr.release_reason(tmp_path, h, c, None) is None
 
 
-def test_withheld_path_without_kept_blob_holds(tmp_path):
+def test_withheld_path_without_kept_blob_holds(tmp_path: Path) -> None:
     h, c = _kept_repo(tmp_path, KEPT, KEPT)
     rec = tmp_path / "state/warp" / h
     _write(rec / "kept.json", json.dumps({"chunks": {}, "plan_gate": None}))
     assert hr.release_reason(tmp_path, h, c, None) is None
 
 
-def test_withhold_with_no_own_hunk_releases(tmp_path):
+def test_withhold_with_no_own_hunk_releases(tmp_path: Path) -> None:
     """The 4b2001 shape: the kept blob is the run base, so the run holds no hunk of its own in the path."""
     base_text = "def f():\n    return 1\n"
     h, c = _kept_repo(tmp_path, KEPT, base_text)
@@ -391,19 +391,19 @@ def _two_path_run(tmp_path: Path, b_head_text: str):
     return h, c, rec, halted
 
 
-def test_kept_at_head_paths_releases_per_path(tmp_path):
+def test_kept_at_head_paths_releases_per_path(tmp_path: Path) -> None:
     h, c, rec, halted = _two_path_run(tmp_path, "x = 2\n")
     assert hr.kept_at_head_paths(tmp_path, rec, halted) == {"a.py"}
     assert hr.release_reason(tmp_path, h, c, None) is None
 
 
-def test_kept_at_head_paths_all_at_head_releases_the_run(tmp_path):
+def test_kept_at_head_paths_all_at_head_releases_the_run(tmp_path: Path) -> None:
     h, c, rec, halted = _two_path_run(tmp_path, KEPT)
     assert hr.kept_at_head_paths(tmp_path, rec, halted) == {"a.py", "b.py"}
     assert hr.release_reason(tmp_path, h, c, None) == hr.RELEASE_KEPT_AT_HEAD
 
 
-def test_kept_at_head_paths_nothing_withheld_spawns_nothing(tmp_path, monkeypatch):
+def test_kept_at_head_paths_nothing_withheld_spawns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     h, c = _kept_repo(tmp_path, KEPT, KEPT)
     rec = tmp_path / "state/warp" / h
     halted = json.loads((rec / "halted.json").read_text(encoding="utf-8"))
@@ -422,7 +422,7 @@ def _withhold(root: Path, run_id: str, *paths: str) -> None:
         _write(root / p.removeprefix("./"), "# uncommitted\n")
 
 
-def test_held_paths_is_the_normalized_withheld_set_while_the_run_holds(tmp_path):
+def test_held_paths_is_the_normalized_withheld_set_while_the_run_holds(tmp_path: Path) -> None:
     root = _root(tmp_path)
     h, c = _rid("ask", 300, "aaaaaa"), _rid("ask", 10, "bbbbbb")
     _run(root, h, marker="halted", writes=("a.py", "b.py"))
@@ -433,7 +433,7 @@ def test_held_paths_is_the_normalized_withheld_set_while_the_run_holds(tmp_path)
     assert "b.py" not in held
 
 
-def test_held_paths_empty_when_released_and_when_nothing_withheld(tmp_path):
+def test_held_paths_empty_when_released_and_when_nothing_withheld(tmp_path: Path) -> None:
     root = _root(tmp_path)
     h, c = _rid("ask", 300, "aaaaaa"), _rid("ask", 10, "bbbbbb")
     _run(root, h, marker="halted")
@@ -448,7 +448,7 @@ def test_held_paths_empty_when_released_and_when_nothing_withheld(tmp_path):
     assert hr.held_paths(root, "missing-20260101T000000-abcdef", other, None) == frozenset()
 
 
-def test_held_paths_fails_closed_when_release_or_normalizer_errors(tmp_path, monkeypatch):
+def test_held_paths_fails_closed_when_release_or_normalizer_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import warp_run_deliverable as wrd
 
     root = _root(tmp_path)
@@ -470,7 +470,7 @@ def _corrupt(root: Path, run_id: str) -> None:
     _write(root / "state/warp" / run_id / "halted.json", "{not json")
 
 
-def test_corrupt_marker_held_paths_raises_not_empty(tmp_path):
+def test_corrupt_marker_held_paths_raises_not_empty(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.halted_run import UnreadableHaltRecord
 
     root = _root(tmp_path)
@@ -483,7 +483,7 @@ def test_corrupt_marker_held_paths_raises_not_empty(tmp_path):
     assert err.value.reason == f"unreadable-halt-record:{h}"
 
 
-def test_corrupt_marker_kept_at_head_frees_nothing(tmp_path):
+def test_corrupt_marker_kept_at_head_frees_nothing(tmp_path: Path) -> None:
     root = _root(tmp_path)
     h = _rid("ask", 300, "aaaaaa")
     _run(root, h)
@@ -493,7 +493,7 @@ def test_corrupt_marker_kept_at_head_frees_nothing(tmp_path):
     assert hr._kept_at_head(root, rec, {}) is False
 
 
-def test_corrupt_marker_halted_run_landed_refuses_with_reason(tmp_path):
+def test_corrupt_marker_halted_run_landed_refuses_with_reason(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run_landed
 
     root = _root(tmp_path)
@@ -508,7 +508,7 @@ def test_corrupt_marker_halted_run_landed_refuses_with_reason(tmp_path):
     assert refusal and f"unreadable-halt-record:{h}" in refusal and covers == {}
 
 
-def test_corrupt_marker_halted_record_commit_holds_with_reason(tmp_path):
+def test_corrupt_marker_halted_record_commit_holds_with_reason(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_record_commit as hrc
 
     root = _root(tmp_path)
@@ -532,7 +532,7 @@ def _count(monkeypatch, name: str) -> list:
     return calls
 
 
-def test_scope_evaluates_release_reason_body_once_per_key(tmp_path, monkeypatch):
+def test_scope_evaluates_release_reason_body_once_per_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     h, c = _kept_repo(tmp_path, KEPT, KEPT)
     body = _count(monkeypatch, "_release_reason")
     kept = _count(monkeypatch, "_blob_batch")
@@ -544,7 +544,7 @@ def test_scope_evaluates_release_reason_body_once_per_key(tmp_path, monkeypatch)
     assert len(kept) == 1  # the plan-independent kept-at-head leg ran once for both keys
 
 
-def test_scope_memoises_none_from_the_except_arm(tmp_path, monkeypatch):
+def test_scope_memoises_none_from_the_except_arm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     h, c = _rid("ask", 300, "aaaaaa"), _rid("ask", 10, "bbbbbb")
     _run(root, h, marker="halted")
@@ -557,7 +557,7 @@ def test_scope_memoises_none_from_the_except_arm(tmp_path, monkeypatch):
     assert hr.release_reason(root, h, c, None) == hr.RELEASE_SUPERSEDED
 
 
-def test_scope_corrupt_marker_still_holds(tmp_path):
+def test_scope_corrupt_marker_still_holds(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.halted_run import UnreadableHaltRecord
 
     root = _root(tmp_path)
@@ -570,7 +570,7 @@ def test_scope_corrupt_marker_still_holds(tmp_path):
             hr.held_paths(root, h, c, None)
 
 
-def test_prefetch_is_one_batch_for_every_run_and_kept_at_head_uses_it(tmp_path, monkeypatch):
+def test_prefetch_is_one_batch_for_every_run_and_kept_at_head_uses_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     h, c, rec, halted = _two_path_run(tmp_path, KEPT)
     batches = _count(monkeypatch, "_blob_batch")
     with hr.release_scope():
@@ -581,7 +581,7 @@ def test_prefetch_is_one_batch_for_every_run_and_kept_at_head_uses_it(tmp_path, 
     assert len(batches) == 1
 
 
-def test_failed_prefetch_leaves_every_run_held(tmp_path, monkeypatch):
+def test_failed_prefetch_leaves_every_run_held(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     h, c, rec, halted = _two_path_run(tmp_path, KEPT)
     real = hr._blob_batch
     monkeypatch.setattr(hr, "_blob_batch", lambda *a: None)
@@ -592,7 +592,7 @@ def test_failed_prefetch_leaves_every_run_held(tmp_path, monkeypatch):
         assert hr.release_reason(tmp_path, h, c, None) is None
 
 
-def test_spec_absent_from_prefetch_falls_back_to_own_batch(tmp_path, monkeypatch):
+def test_spec_absent_from_prefetch_falls_back_to_own_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     h, c, rec, halted = _two_path_run(tmp_path, KEPT)
     batches = _count(monkeypatch, "_blob_batch")
     with hr.release_scope():
@@ -601,7 +601,7 @@ def test_spec_absent_from_prefetch_falls_back_to_own_batch(tmp_path, monkeypatch
     assert len(batches) == 1
 
 
-def test_outside_scope_nothing_is_cached(tmp_path, monkeypatch):
+def test_outside_scope_nothing_is_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     h, c = _kept_repo(tmp_path, KEPT, KEPT)
     body = _count(monkeypatch, "_release_reason")
     assert hr._SCOPE.get() is None
@@ -616,7 +616,7 @@ def test_outside_scope_nothing_is_cached(tmp_path, monkeypatch):
         assert inner is outer
 
 
-def test_scope_computes_kept_at_head_paths_once_per_record(tmp_path, monkeypatch):
+def test_scope_computes_kept_at_head_paths_once_per_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     h, c, rec, halted = _two_path_run(tmp_path, KEPT)
     plans = _count(monkeypatch, "_kept_plan")
     with hr.release_scope():
@@ -627,7 +627,7 @@ def test_scope_computes_kept_at_head_paths_once_per_record(tmp_path, monkeypatch
     assert len(plans) == 1
 
 
-def test_hunks_present_diffs_each_pair_once_per_scope(monkeypatch):
+def test_hunks_present_diffs_each_pair_once_per_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import run_hunk_claims
 
     calls = []
@@ -639,7 +639,7 @@ def test_hunks_present_diffs_each_pair_once_per_scope(monkeypatch):
     assert len(calls) == 1
 
 
-def test_hunks_present_still_refuses_missing_and_unbounded_middle():
+def test_hunks_present_still_refuses_missing_and_unbounded_middle() -> None:
     """Fail-closed: a hunk absent from HEAD, or a middle past the diff bound, stays held."""
     assert not hr._hunks_present("a\nb\n", "a\nc\n", "a\nb\n")
     base = "".join(f"x{i}\n" for i in range(600))
@@ -647,7 +647,7 @@ def test_hunks_present_still_refuses_missing_and_unbounded_middle():
     assert not hr._hunks_present(base, kept, base)
 
 
-def _green(root: Path, run_id: str, *, incomplete=None, sidecar=True) -> None:
+def _green(root: Path, run_id: str, *, incomplete=None, sidecar: bool = True) -> None:
     rel = f"docs/reviews/{run_id}.md"
     if sidecar:
         _write(root / rel, "review\n")
@@ -668,7 +668,7 @@ def _sub(base: Path, name: str) -> Path:
     return base / name
 
 
-def _auto_land_fixture(root: Path, *, peer_marker="halted"):
+def _auto_land_fixture(root: Path, *, peer_marker: str = "halted") -> tuple[str, str]:
     me, peer = _rid("ask", 10, "bbbbbb"), _rid("ask", 300, "aaaaaa")
     _run(root, me, sizing="state/sizings/other.yaml", writes=("a.py", "b.py"))
     _green(root, me)
@@ -677,13 +677,13 @@ def _auto_land_fixture(root: Path, *, peer_marker="halted"):
     return me, peer
 
 
-def test_halted_only_withholders_all_halted_and_green(tmp_path):
+def test_halted_only_withholders_all_halted_and_green(tmp_path: Path) -> None:
     root = _root(tmp_path)
     me, peer = _auto_land_fixture(root)
     assert hr.halted_only_withholders(root, me) == [peer]
 
 
-def test_halted_only_withholders_none_for_live_unreadable_or_red(tmp_path):
+def test_halted_only_withholders_none_for_live_unreadable_or_red(tmp_path: Path) -> None:
     root = _root(tmp_path)
     me, peer = _auto_land_fixture(root)
     live = _rid("ask", 200, "cccccc")
@@ -703,7 +703,7 @@ def test_halted_only_withholders_none_for_live_unreadable_or_red(tmp_path):
     assert hr.halted_only_withholders(root3, me3) is None  # no review record
 
 
-def test_halted_only_withholders_none_when_nothing_withholds_or_released(tmp_path):
+def test_halted_only_withholders_none_when_nothing_withholds_or_released(tmp_path: Path) -> None:
     root = _root(tmp_path)
     me, peer = _auto_land_fixture(root)
     _sizing(root, "state/sizings/other.yaml")
@@ -715,7 +715,7 @@ def test_halted_only_withholders_none_when_nothing_withholds_or_released(tmp_pat
     assert hr.halted_only_withholders(root, other) is None
 
 
-def test_residue_paths_excludes_own_paths_and_other_states(tmp_path):
+def test_residue_paths_excludes_own_paths_and_other_states(tmp_path: Path) -> None:
     root = _root(tmp_path)
     me, peer = _auto_land_fixture(root)
     assert hr.residue_paths(root, me) == frozenset({"residue.py"})
@@ -724,7 +724,7 @@ def test_residue_paths_excludes_own_paths_and_other_states(tmp_path):
     assert hr.residue_paths(root, me) == frozenset()
 
 
-def test_residue_paths_scoped_weighs_only_runs_withholding_a_requested_path(tmp_path, monkeypatch):
+def test_residue_paths_scoped_weighs_only_runs_withholding_a_requested_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     me, peer = _auto_land_fixture(root)
     other = _rid("ask", 290, "cccccc")
@@ -740,7 +740,7 @@ def test_residue_paths_scoped_weighs_only_runs_withholding_a_requested_path(tmp_
     assert hr.residue_paths(root, me) == frozenset({"residue.py", "far.py"})
 
 
-def test_residue_paths_retires_a_run_released_for_every_committer_and_keeps_a_holder(tmp_path):
+def test_residue_paths_retires_a_run_released_for_every_committer_and_keeps_a_holder(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
 
     root = _root(tmp_path)
@@ -754,7 +754,7 @@ def test_residue_paths_retires_a_run_released_for_every_committer_and_keeps_a_ho
     assert peer not in idx.entries(root)  # run-independent release: retired
 
 
-def test_residue_paths_never_retires_on_a_release_that_needs_the_committer(tmp_path):
+def test_residue_paths_never_retires_on_a_release_that_needs_the_committer(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
 
     root = _root(tmp_path)
@@ -766,7 +766,7 @@ def test_residue_paths_never_retires_on_a_release_that_needs_the_committer(tmp_p
     assert peer in idx.entries(root)  # frees this committer only
 
 
-def test_residue_paths_propagates_the_land_deadline(tmp_path, monkeypatch):
+def test_residue_paths_propagates_the_land_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import land_deadline
 
     root = _root(tmp_path)
@@ -783,7 +783,7 @@ def test_residue_paths_propagates_the_land_deadline(tmp_path, monkeypatch):
     assert legs == ["land_run._integrity.halted_residue"]
 
 
-def test_a_nested_prefetch_keeps_the_outer_scopes_blobs_and_reads_only_the_new_specs(tmp_path, monkeypatch):
+def test_a_nested_prefetch_keeps_the_outer_scopes_blobs_and_reads_only_the_new_specs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     one, two = _rid("ask", 300, "aaaaaa"), _rid("ask", 290, "bbbbbb")
     plans = {one: (["a.py"], {"a.py": "k1"}), two: (["b.py"], {"b.py": "k2"})}
@@ -807,7 +807,7 @@ def test_a_nested_prefetch_keeps_the_outer_scopes_blobs_and_reads_only_the_new_s
         assert len(fetched) == 2  # nothing new: no read
 
 
-def test_a_per_path_release_drops_that_pair_and_that_path_from_held_paths(tmp_path):
+def test_a_per_path_release_drops_that_pair_and_that_path_from_held_paths(tmp_path: Path) -> None:
     root = _root(tmp_path)
     holder = _rid("ask", 60, "aaaaaa")
     _run(root, holder, marker="halted", plan="docs/plans/other.md")
@@ -825,7 +825,7 @@ def test_a_per_path_release_drops_that_pair_and_that_path_from_held_paths(tmp_pa
     assert "b.py" in hr.held_paths(root, holder, "ask-20261027T000000-bbbbbb")
 
 
-def test_a_run_with_no_release_record_releases_nothing(tmp_path):
+def test_a_run_with_no_release_record_releases_nothing(tmp_path: Path) -> None:
     root = _root(tmp_path)
     holder = _rid("ask", 60, "aaaaaa")
     _run(root, holder, marker="halted", plan="docs/plans/other.md")
@@ -840,7 +840,7 @@ def _interest_run(root: Path, writes) -> tuple:
     return run_id, rec, json.loads((rec / "halted.json").read_text(encoding="utf-8"))
 
 
-def test_irrelevant_needs_a_scope_interest(tmp_path):
+def test_irrelevant_needs_a_scope_interest(tmp_path: Path) -> None:
     root = _root(tmp_path)
     _run_id, rec, marker = _interest_run(root, ("other.py",))
     assert hr.irrelevant(root, rec, marker) is False
@@ -848,7 +848,7 @@ def test_irrelevant_needs_a_scope_interest(tmp_path):
         assert hr.irrelevant(root, rec, marker) is False
 
 
-def test_irrelevant_true_only_when_every_declaration_misses_the_interest(tmp_path):
+def test_irrelevant_true_only_when_every_declaration_misses_the_interest(tmp_path: Path) -> None:
     root = _root(tmp_path)
     _run_id, rec, marker = _interest_run(root, ("other.py",))
     with hr.blob_scope(root, interest={"a.py"}):
@@ -857,7 +857,7 @@ def test_irrelevant_true_only_when_every_declaration_misses_the_interest(tmp_pat
         assert hr.irrelevant(root, rec, marker) is False
 
 
-def test_irrelevant_false_when_the_halt_withholds_an_interest_path(tmp_path):
+def test_irrelevant_false_when_the_halt_withholds_an_interest_path(tmp_path: Path) -> None:
     root = _root(tmp_path)
     run_id, rec, marker = _interest_run(root, ("other.py",))
     marker["run_artifacts"] = {"withheld": {"a.py": "halt-record-only"}}
@@ -865,14 +865,14 @@ def test_irrelevant_false_when_the_halt_withholds_an_interest_path(tmp_path):
         assert hr.irrelevant(root, rec, marker) is False
 
 
-def test_irrelevant_false_for_a_run_with_no_manifest_declaration(tmp_path):
+def test_irrelevant_false_for_a_run_with_no_manifest_declaration(tmp_path: Path) -> None:
     root = _root(tmp_path)
     _run_id, rec, marker = _interest_run(root, ())
     with hr.blob_scope(root, interest={"a.py"}):
         assert hr.irrelevant(root, rec, marker) is False
 
 
-def test_history_walk_reads_versions_in_process_and_refuses_a_span_past_the_cap(tmp_path, monkeypatch):
+def test_history_walk_reads_versions_in_process_and_refuses_a_span_past_the_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _git(tmp_path, "init", "-q")
     for n in range(4):
         _write(tmp_path / "a.py", f"v{n}\n")
@@ -887,7 +887,7 @@ def test_history_walk_reads_versions_in_process_and_refuses_a_span_past_the_cap(
     assert hr._landed_in_history(tmp_path, base, {"a.py": ("v0\n", b"v1\n")}) == set()
 
 
-def test_a_span_known_too_long_starts_no_read_wall_but_a_walkable_span_still_does(tmp_path, monkeypatch):
+def test_a_span_known_too_long_starts_no_read_wall_but_a_walkable_span_still_does(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _git(tmp_path, "init", "-q")
     for n in range(4):
         _write(tmp_path / "a.py", f"v{n}\n")
@@ -913,7 +913,7 @@ def _base_reads(fetches, halted) -> int:
     return sum(1 for _, specs in fetches if f"{halted['run_base_sha']}:b.py" in specs)
 
 
-def test_prefetch_reads_the_run_base_blobs_once_and_the_per_run_check_reuses_them(tmp_path, monkeypatch):
+def test_prefetch_reads_the_run_base_blobs_once_and_the_per_run_check_reuses_them(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     h, c, rec, halted = _two_path_run(tmp_path, "x = 2\n")
     fetches = _count(monkeypatch, "_blob_fetch")
     with hr.blob_scope(tmp_path):
@@ -923,7 +923,7 @@ def test_prefetch_reads_the_run_base_blobs_once_and_the_per_run_check_reuses_the
     assert _base_reads(fetches, halted) == 1
 
 
-def test_partial_base_prefetch_falls_back_to_the_runs_own_fetch(tmp_path, monkeypatch):
+def test_partial_base_prefetch_falls_back_to_the_runs_own_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     h, c, rec, halted = _two_path_run(tmp_path, "x = 2\n")
     fetches = _count(monkeypatch, "_blob_fetch")
     with hr.blob_scope(tmp_path) as state:
@@ -933,7 +933,7 @@ def test_partial_base_prefetch_falls_back_to_the_runs_own_fetch(tmp_path, monkey
     assert _base_reads(fetches, halted) == 2
 
 
-def test_checkin_form_is_converted_once_per_scope_and_kept_spec(tmp_path, monkeypatch):
+def test_checkin_form_is_converted_once_per_scope_and_kept_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import kept_work
 
     calls: list = []
@@ -962,7 +962,7 @@ def _git_root(tmp_path, attrs: str):
     ("*.py filter=lfs\n", b"plain\n", True),
     ("[attr]m text\n", b"plain\n", True),
 ])
-def test_checkin_of_matches_kept_work_for_cr_free_data(tmp_path, attrs, data, refused):
+def test_checkin_of_matches_kept_work_for_cr_free_data(tmp_path: Path, attrs, data, refused) -> None:
     from coordinator_core.ops.dispatch_emit import kept_work
 
     root = _git_root(tmp_path, attrs)
@@ -971,7 +971,7 @@ def test_checkin_of_matches_kept_work_for_cr_free_data(tmp_path, attrs, data, re
     assert (got is None) is refused
 
 
-def test_checkin_of_cr_free_plain_data_never_reaches_the_commit_module(tmp_path, monkeypatch):
+def test_checkin_of_cr_free_plain_data_never_reaches_the_commit_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import kept_work
 
     root = _git_root(tmp_path, "")
@@ -979,14 +979,14 @@ def test_checkin_of_cr_free_plain_data_never_reaches_the_commit_module(tmp_path,
     assert hr._checkin_of(root, "a.py", b"plain\n") == b"plain\n"
 
 
-def _fake_index(monkeypatch, index, head):
+def _fake_index(monkeypatch, index, head) -> None:
     from coordinator_core.git import git_state
 
     monkeypatch.setattr(git_state, "read_index", lambda root: index)
     monkeypatch.setattr(git_state, "head_blobs", lambda root, paths: head)
 
 
-def test_staged_among_sees_mode_only_change_and_clean_path_is_not_staged(tmp_path, monkeypatch):
+def test_staged_among_sees_mode_only_change_and_clean_path_is_not_staged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git.git_state import IndexEntry
 
     index = {
@@ -998,7 +998,7 @@ def test_staged_among_sees_mode_only_change_and_clean_path_is_not_staged(tmp_pat
     assert hr._staged_among(tmp_path, frozenset({"same.py", "chmod.py"})) == frozenset({"chmod.py"})
 
 
-def test_staged_among_unreadable_index_holds_all(tmp_path, monkeypatch):
+def test_staged_among_unreadable_index_holds_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import git_state
 
     def boom(root):

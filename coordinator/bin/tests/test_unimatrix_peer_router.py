@@ -1899,3 +1899,46 @@ def test_send_to_an_unbacked_mirror_row_is_refused_before_any_bridge_write(dirs,
     monkeypatch.setattr(r, "_transport_face", lambda source, destination: asyncio.sleep(0, "transport-x"))
     resp = run(r._dispatch({"op": "send", "as": "cli", "to": "em", "text": "hello"}))
     assert resp["ok"] is False and "em" in resp["error"] and not sent
+
+
+def _two_null_target_rows_on_one_endpoint(tmp_path, sid_a, sid_b):
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (tmp_path / "state").mkdir()
+    for n, sid in enumerate((sid_a, sid_b)):
+        (sessions / f"{n}.json").write_text(json.dumps(
+            {"name": "dup", "pid": os.getpid(), "messagingSocketPath": "/s/one.sock", "sessionId": sid, "target": None}))
+    return pr.Router([], sessions_dir=sessions, state_dir=tmp_path / "state", endpoint_dir=tmp_path / "eps", adapters={})
+
+
+@portable
+def test_two_null_target_rows_for_different_sessions_on_one_endpoint_are_ambiguous_never_resolved(tmp_path):
+    r = _two_null_target_rows_on_one_endpoint(tmp_path, "sid-live", "sid-stale")
+    assert r.resolve_sender("dup") == ""
+    assert r.last_refusal.startswith("ambiguous")
+    out = r.resolve_relay_target("dup")
+    assert out["ok"] is False and "ambiguous" in out["error"] and "endpoint" not in out
+
+
+@portable
+def test_two_null_target_rows_for_one_session_on_one_endpoint_still_resolve(tmp_path):
+    r = _two_null_target_rows_on_one_endpoint(tmp_path, "sid-live", "sid-live")
+    assert r.resolve_sender("dup") == "/s/one.sock"
+
+
+@portable
+def test_owned_alias_colliding_with_another_sessions_exact_name_is_refused_never_resolved(tmp_path):
+    tid = "11111111-2222-3333-4444-555555555555"
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (tmp_path / "state").mkdir()
+    owned = {"name": "box-codex-abc-1", "pid": os.getpid(), "messagingSocketPath": "/s/codex.sock", "vendor": "codex",
+             "target": tid, "sessionId": tid, "session_id": tid, "schema_version": 1, "provider": "codex",
+             "address_version": 1, "box": "box", "aliases": ["shared"]}
+    other = {"name": "shared", "pid": os.getpid(), "messagingSocketPath": "/s/other.sock", "sessionId": "sid-other"}
+    for n, row in enumerate((owned, other)):
+        (sessions / f"{n}.json").write_text(json.dumps(row))
+    r = pr.Router([], sessions_dir=sessions, state_dir=tmp_path / "state", endpoint_dir=tmp_path / "eps", adapters={})
+    assert "shared" in pr._contract().projected_addresses(owned)
+    assert r.resolve_sender("shared") == ""
+    assert r.last_refusal == "ambiguous: owned alias collides with another target"

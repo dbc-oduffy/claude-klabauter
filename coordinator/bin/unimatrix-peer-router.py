@@ -1692,7 +1692,7 @@ class Router:
         name as its address. The router's own faces never match a Claude sender.
         """
         exact, aliases, owners, far_eps = set(), set(), set(), set()
-        rows_by_ep = {}
+        rows_by_ep, ep_owners = {}, {}
         owned_alias = False
         refused_identity = False
         self.last_refusal, self.last_resolved_far, self.last_resolved_row = "", False, None
@@ -1721,7 +1721,9 @@ class Router:
                 refused_identity = True
                 continue
             owned_alias = owned_alias or name in _contract().projected_addresses(e)
-            owners.add((e.get('vendor'), e.get('target') or ep))
+            owner = (e.get('vendor'), e.get('target') or e.get('sessionId') or ep)
+            owners.add(owner)
+            ep_owners.setdefault(ep, set()).add(owner)
             (exact if e.get("name") == name else aliases).add(ep)
             rows_by_ep[ep] = e
             if e.get("unimatrixFarName") or e.get("unimatrixRemote"):
@@ -1732,6 +1734,9 @@ class Router:
         if owned_alias and len(owners) > 1:
             self.last_refusal = "ambiguous: owned alias collides with another target"
             return ''  # A projected alias cannot override another target's exact name.
+        if any(len(o) > 1 for o in ep_owners.values()):
+            self.last_refusal = "ambiguous: one endpoint carries several sessions"
+            return ""  # An endpoint is not an identity: rows with different sessions on it never resolve.
         matches = exact | aliases
         if len(matches) > 1:
             self.last_refusal = f"ambiguous: {len(matches)} live sessions carry this name"

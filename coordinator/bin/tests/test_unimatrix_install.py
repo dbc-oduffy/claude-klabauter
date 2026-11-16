@@ -84,6 +84,14 @@ def _no_real_launchctl_ps_or_pin(monkeypatch):
     monkeypatch.setattr(ui, "_write_pin", lambda interp: pytest.fail("machine-local write outside a pin test"))
 
 
+_REAL_LINK_GROK = ui.link_grok_local_bin
+
+
+@pytest.fixture(autouse=True)
+def _no_real_grok_link(monkeypatch):
+    monkeypatch.setattr(ui, "link_grok_local_bin", lambda *a, **k: "skipped")
+
+
 def _run(argv, text, dest=None, hooks=None):
     buf = io.StringIO()
     rc = ui.main(argv, version_text=text, dest_dir=dest, out=buf, hooks_path=hooks)
@@ -3515,6 +3523,119 @@ def test_install_widens_an_older_run_command_only_entry(monkeypatch, tmp_path):
     assert rc == 0 and "updated" in out
     entry = json.loads(hp.read_text(encoding="utf-8"))[ui.AGY_HOOK_KEY]["PreToolUse"][0]
     assert entry["matcher"] == ui.AGY_TOOL_MATCHER
+
+
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits only")
+
+
+@posix_only
+def test_install_scripts_dest_is_0755_under_umask_077(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    dest = tmp_path / "newhome" / "unimatrix"
+    old = os.umask(0o077)
+    try:
+        ui.install_scripts(tmp_path / "src", dest)
+    finally:
+        os.umask(old)
+    assert oct(dest.stat().st_mode & 0o777) == "0o755"
+    assert oct(dest.parent.stat().st_mode & 0o777) == "0o755"
+
+
+@posix_only
+def test_install_scripts_leaves_an_existing_dest_mode_alone(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    dest = tmp_path / "unimatrix"
+    dest.mkdir()
+    dest.chmod(0o700)
+    ui.install_scripts(tmp_path / "src", dest)
+    assert oct(dest.stat().st_mode & 0o777) == "0o700"
+
+
+@posix_only
+def test_preflight_prints_chmod_remedy_for_untraversable_path_dir(monkeypatch, tmp_path):
+    shut = tmp_path / "shutbin"
+    shut.mkdir()
+    shut.chmod(0o700)
+    ok = tmp_path / "openbin"
+    ok.mkdir()
+    real_access = os.access
+    monkeypatch.setattr(os, "access", lambda p, m, **k: False if str(p) == str(shut) else real_access(p, m, **k))
+    monkeypatch.setenv("PATH", os.pathsep.join([str(shut), str(ok), str(tmp_path / "absent")]))
+    rc, out = _run([], "2.1.316")
+    assert rc == 0
+    assert f"sudo chmod 755 {shut}" in out
+    assert str(ok) not in out and "absent" not in out
+
+
+@posix_only
+def test_traversable_path_dirs_report_nothing(monkeypatch, tmp_path):
+    assert ui.untraversable_path_dirs(str(tmp_path)) == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows branch")
+def test_preflight_is_a_noop_on_windows(tmp_path):
+    assert ui.untraversable_path_dirs(str(tmp_path)) == []
+
+
+def _grok_world(tmp_path, monkeypatch, system_writable):
+    home = tmp_path / "fakehome"
+    home.mkdir()
+    brew = tmp_path / "brew"
+    brew.mkdir()
+    (brew / "grok").write_text("#!/bin/sh\n", encoding="utf-8")
+    (brew / "grok").chmod(0o755)
+    system = tmp_path / "usrlocalbin"
+    system.mkdir()
+    real_access = os.access
+    monkeypatch.setattr(os, "access", lambda p, m, **k: system_writable if str(p) == str(system) else real_access(p, m, **k))
+    monkeypatch.setattr(ui, "GROK_BIN_HINTS", ())
+    return home, brew, system
+
+
+@posix_only
+def test_grok_linked_into_local_bin_when_system_bin_unwritable(monkeypatch, tmp_path):
+    home, brew, system = _grok_world(tmp_path, monkeypatch, system_writable=False)
+    assert _REAL_LINK_GROK(home, str(brew), system) == "linked"
+    link = home / ".local" / "bin" / "grok"
+    assert link.is_symlink() and link.resolve() == (brew / "grok").resolve()
+    assert oct((home / ".local" / "bin").stat().st_mode & 0o777) == "0o755"
+    assert _REAL_LINK_GROK(home, str(brew), system) == "present"
+
+
+@posix_only
+def test_grok_not_linked_when_system_bin_writable(monkeypatch, tmp_path):
+    home, brew, system = _grok_world(tmp_path, monkeypatch, system_writable=True)
+    assert _REAL_LINK_GROK(home, str(brew), system) == "skipped"
+    assert not (home / ".local").exists()
+
+
+@posix_only
+def test_grok_link_absent_without_installed_grok_and_never_clobbers(monkeypatch, tmp_path):
+    home, brew, system = _grok_world(tmp_path, monkeypatch, system_writable=False)
+    assert _REAL_LINK_GROK(home, str(tmp_path / "empty"), system) == "absent"
+    own = home / ".local" / "bin"
+    own.mkdir(parents=True)
+    (own / "grok").write_text("mine", encoding="utf-8")
+    assert _REAL_LINK_GROK(home, str(brew), system) == "present"
+    assert (own / "grok").read_text(encoding="utf-8") == "mine"
+
+
+@posix_only
+def test_grok_link_never_spawns_sudo(monkeypatch, tmp_path):
+    home, brew, system = _grok_world(tmp_path, monkeypatch, system_writable=False)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("subprocess spawned"))
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("subprocess spawned"))
+    assert _REAL_LINK_GROK(home, str(brew), system) == "linked"
+
+
+@posix_only
+def test_install_default_run_links_grok(monkeypatch, tmp_path):
+    home, brew, system = _grok_world(tmp_path, monkeypatch, system_writable=False)
+    monkeypatch.setattr(ui, "link_grok_local_bin", lambda: _REAL_LINK_GROK(home, str(brew), system))
+    rc, out = _run([], "2.1.316")
+    assert rc == 0
+    assert "grok ~/.local/bin link linked" in out
+    assert (home / ".local" / "bin" / "grok").is_symlink()
 
 
 def test_grok_present_survives_an_unreadable_path_entry(tmp_path, monkeypatch):

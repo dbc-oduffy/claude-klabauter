@@ -60,6 +60,9 @@ def test_fifty_writes_commit_exactly_the_differing_paths(big):
     assert len(out.written) == 50 and out.unchanged == (_w(100, "").rel,)
     changed = _git(big, "diff", "--name-only", "HEAD~1", "HEAD").split()
     assert sorted(changed) == sorted(w.rel for w in writes[:50])
+    land_diff(big, [_w(0, "v2 0\n")], [], "again", commit=True)
+    exclude = (big / ".git" / "info" / "exclude").read_text(encoding="utf-8").split()
+    assert exclude.count(".coordinator-local/") == 1
     assert _status(big) == ""
 
 
@@ -103,24 +106,97 @@ def test_a_derived_path_overwrites_its_own_stale_worktree_copy(tmp_path):
     assert out.commit_sha is not None and (root / rel).read_bytes() == b"new\n" and _status(root) == ""
 
 
-def test_failure_mid_write_restores_clean(tmp_path, monkeypatch):
+def _fail_nth_rename_into(monkeypatch, root, n):
+    """Make the n-th `os.rename` whose destination sits directly in `root` raise."""
+    real = os.rename
+    seen = []
+
+    def rename(src, dst, *a, **k):
+        if Path(dst).parent == root:
+            seen.append(Path(dst).name)
+            if len(seen) == n:
+                raise PermissionError(32, "in use")
+        return real(src, dst, *a, **k)
+
+    monkeypatch.setattr(os, "rename", rename)
+    return seen
+
+
+def _leftovers(root):
+    return [p.name for p in root.parent.iterdir() if p.name.startswith(f".{root.name}.")]
+
+
+def test_failure_mid_swap_rolls_back_clean(tmp_path, monkeypatch):
     root = _dest(tmp_path, 5)
-    real = diff_commit._swap
-    calls = []
-
-    def flaky(tmp, path):
-        calls.append(path)
-        if len(calls) == 3:
-            raise OSError("boom")
-        real(tmp, path)
-
-    monkeypatch.setattr(diff_commit, "_swap", flaky)
+    seen = _fail_nth_rename_into(monkeypatch, root, 3)
     writes = [_w(i, "new\n") for i in range(4)] + [DestWrite("fresh/new.txt", b"x", 0o100644)]
     with pytest.raises(OSError):
         land_diff(root, writes, [], "m", commit=True)
-    monkeypatch.setattr(diff_commit, "_swap", real)
+    monkeypatch.undo()
     assert _status(root) == ""
-    assert not [p for p in root.rglob(".*.dc-*")]
+    assert (root / "d0" / "f0.txt").read_bytes() == b"v0 0\n"
+    assert not (root / "fresh").exists()
+    assert _leftovers(root) == [] and not list(root.rglob(".*.dc-*"))
+
+
+def test_no_path_bytes_under_the_live_root_change_before_the_swap(tmp_path, monkeypatch):
+    root = _dest(tmp_path, 5)
+    before = {p: p.read_bytes() for p in root.joinpath("d0").rglob("*") if p.is_file()}
+    real = diff_commit._staged.swap_root
+
+    def swap(staged, dest):
+        assert {p: p.read_bytes() for p in root.joinpath("d0").rglob("*") if p.is_file()} == before
+        assert not (root / "fresh").exists() and staged.parent == root.parent
+        return real(staged, dest)
+
+    monkeypatch.setattr(diff_commit._staged, "swap_root", swap)
+    land_diff(root, [_w(0, "new\n"), DestWrite("fresh/new.txt", b"x", 0o100644)], [], "m", commit=True)
+    assert (root / "d0" / "f0.txt").read_bytes() == b"new\n" and _status(root) == ""
+
+
+def test_hold_is_entered_after_staging_and_exited_before_the_commit(tmp_path, monkeypatch):
+    import contextlib
+
+    root = _dest(tmp_path, 3)
+    events = []
+    staged_mod = diff_commit._staged
+    real_write, real_swap = staged_mod.write_entry, staged_mod.swap_root
+    real_commit = diff_commit._gcommit.commit_paths
+
+    @contextlib.contextmanager
+    def hold():
+        events.append("enter")
+        try:
+            yield
+        finally:
+            events.append("exit")
+
+    monkeypatch.setattr(staged_mod, "write_entry", lambda *a: (events.append("stage"), real_write(*a))[1])
+    monkeypatch.setattr(staged_mod, "swap_root", lambda *a: (events.append("swap"), real_swap(*a))[1])
+    monkeypatch.setattr(diff_commit._gcommit, "commit_paths", lambda *a, **k: (events.append("commit"), real_commit(*a, **k))[1])
+    land_diff(root, [_w(0, "new\n")], [], "m", commit=True, hold=hold)
+    assert events[-4:] == ["enter", "swap", "exit", "commit"] and "stage" not in events[events.index("enter"):]
+    assert "stage" in events[: events.index("enter")]
+
+
+def test_hold_exits_when_the_swap_fails(tmp_path, monkeypatch):
+    import contextlib
+
+    root = _dest(tmp_path, 3)
+    exits = []
+
+    @contextlib.contextmanager
+    def hold():
+        try:
+            yield
+        finally:
+            exits.append(1)
+
+    _fail_nth_rename_into(monkeypatch, root, 1)
+    with pytest.raises(OSError):
+        land_diff(root, [_w(0, "new\n")], [], "m", commit=True, hold=hold)
+    monkeypatch.undo()
+    assert exits == [1] and _status(root) == ""
 
 
 def _engine(tmp_path):
@@ -150,17 +226,24 @@ def _trace(monkeypatch, root):
     from coordinator_core import _engine_landing as landing
 
     events = []
-    real_swap, real_commit = diff_commit._swap, diff_commit._gcommit.commit_paths
+    staged = diff_commit._staged
+    real_write, real_swap = staged.write_entry, staged.swap_root
+    real_commit = diff_commit._gcommit.commit_paths
 
-    def swap(tmp, path):
-        events.append(("swap", path.name, landing.swap_in_progress(root)))
-        real_swap(tmp, path)
+    def write(path, data, mode):
+        events.append(("stage", Path(path).name, landing.swap_in_progress(root)))
+        real_write(path, data, mode)
+
+    def swap(staged_dir, dest):
+        events.append(("swap", None, landing.swap_in_progress(root)))
+        return real_swap(staged_dir, dest)
 
     def commit(*a, **k):
         events.append(("commit", None, landing.swap_in_progress(root)))
         return real_commit(*a, **k)
 
-    monkeypatch.setattr(diff_commit, "_swap", swap)
+    monkeypatch.setattr(staged, "write_entry", write)
+    monkeypatch.setattr(staged, "swap_root", swap)
     monkeypatch.setattr(diff_commit._gcommit, "commit_paths", commit)
     return events
 
@@ -173,12 +256,13 @@ def test_engine_landing_stamp_last_marker_up_for_swap_and_down_for_commit(tmp_pa
     monkeypatch.setattr(diff_commit.time, "sleep", sleeps.append)
     events = _trace(monkeypatch, root)
     land_diff(root, _engine_round(), [], "m", commit=True)
-    assert [e[1] for e in events if e[0] == "swap"] == ["mod_a.py", "mod_b.py", "_engine_stamp"]
-    assert all(e[2] for e in events if e[0] == "swap")
+    assert [e[1] for e in events if e[0] == "stage"] == ["mod_a.py", "mod_b.py", "_engine_stamp"]
+    assert not any(e[2] for e in events if e[0] == "stage")
+    assert [e for e in events if e[0] == "swap"] == [("swap", None, True)]
     assert [e for e in events if e[0] == "commit"] == [("commit", None, False)]
     assert sleeps == [landing.SWAP_GRACE_S]
     assert not landing.swap_in_progress(root) and not (root / ".git" / landing.MARKER_NAME).exists()
-    assert not list(root.rglob(".*.dc-*"))
+    assert not list(root.rglob(".*.dc-*")) and _leftovers(root) == []
 
 
 def test_engine_landing_marker_absent_after_post_write_failure_and_restore_ran_under_it(tmp_path, monkeypatch):
@@ -209,26 +293,24 @@ def test_engine_landing_swap_failure_restores_under_marker_and_clears_it(tmp_pat
 
     root = _engine(tmp_path)
     monkeypatch.setattr(diff_commit.time, "sleep", lambda s: None)
-    real = diff_commit._swap
+    real = os.replace
     seen = []
 
-    def flaky(tmp, path):
-        if path.name == "mod_b.py":
+    def flaky(src, dst):
+        if Path(dst).suffix == ".py":
+            seen.append(landing.swap_in_progress(root))
+        if Path(dst).name == "mod_b.py":
             raise OSError("boom")
-        real(tmp, path)
+        return real(src, dst)
 
-    real_restore = diff_commit._restore
-
-    def restore(*a, **k):
-        seen.append(landing.swap_in_progress(root))
-        real_restore(*a, **k)
-
-    monkeypatch.setattr(diff_commit, "_swap", flaky)
-    monkeypatch.setattr(diff_commit, "_restore", restore)
+    monkeypatch.setattr(os, "replace", flaky)
     with pytest.raises(OSError):
         land_diff(root, _engine_round(), [], "m", commit=True)
-    assert seen == [True] and not landing.swap_in_progress(root) and _status(root) == ""
-    assert not list(root.rglob(".*.dc-*"))
+    monkeypatch.undo()
+    assert seen and all(seen) and not landing.swap_in_progress(root) and _status(root) == ""
+    assert (root / "coordinator_core" / "_engine_stamp").read_bytes() == b"s0\n"
+    assert (root / "mod_a.py").read_bytes() == b"GEN = 1\n"
+    assert not list(root.rglob(".*.dc-*")) and _leftovers(root) == []
 
 
 def test_non_engine_destination_raises_no_marker_and_no_grace(tmp_path, monkeypatch):
@@ -251,12 +333,12 @@ def test_engine_root_without_git_dir_reports_unguarded(tmp_path, monkeypatch, ca
 
 
 def test_winerror_32_fallback_is_still_taken_on_swap(tmp_path, monkeypatch):
-    root = _dest(tmp_path, 3)
+    root = _engine(tmp_path)
     real = os.replace
     fallback = []
 
     def replace(src, dst):
-        if Path(dst).name == "f0.txt" and not fallback:
+        if Path(dst).name == "mod_a.py" and not fallback:
             raise PermissionError(32, "in use")
         real(src, dst)
 
@@ -268,8 +350,8 @@ def test_winerror_32_fallback_is_still_taken_on_swap(tmp_path, monkeypatch):
 
     monkeypatch.setattr(diff_commit.os, "replace", replace)
     monkeypatch.setattr(door, "_replace_possibly_running_image", image)
-    land_diff(root, [_w(0, "new\n")], [], "m", commit=True)
-    assert [p.name for p in fallback] == ["f0.txt"] and _status(root) == ""
+    land_diff(root, [DestWrite("mod_a.py", b"GEN = 2\n", 0o100644)], [], "m", commit=True)
+    assert [p.name for p in fallback] == ["mod_a.py"] and _status(root) == ""
 
 
 def test_lost_cas_race_restores_and_raises(tmp_path, monkeypatch):

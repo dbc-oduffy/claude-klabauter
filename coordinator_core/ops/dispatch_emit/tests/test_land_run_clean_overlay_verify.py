@@ -157,24 +157,58 @@ def test_overlay_runs_pytest_under_the_repo_pinned_interpreter(tmp_path, monkeyp
     assert _pytest_argv_head(monkeypatch, root, head, shim) == str(shim)
 
 
-def test_overlay_falls_back_to_sys_executable_when_no_pin_is_declared(tmp_path, monkeypatch):
+def test_a_pin_held_only_in_a_machine_local_concern_file_reaches_a_verdict(tmp_path, monkeypatch):
     root, head = _repo(tmp_path)
-    assert _pytest_argv_head(monkeypatch, root, head, None) == sys.executable
-    assert cov.mirror_root(root).exists()
-
-
-def test_a_declared_pin_that_does_not_resolve_is_reported_and_pytest_is_not_run(tmp_path, monkeypatch):
-    root, head = _repo(tmp_path)
-    (root / "coordinator.local.md").write_text(
-        f'---\ntargeted_test_python: "{tmp_path / "missing" / "python3.99"}"\n---\n', encoding="utf-8",
+    reg = tmp_path / "machine-local"
+    reg.mkdir()
+    (reg / "registry.toml").write_text('concerns = ["project_rag"]\n', encoding="utf-8")
+    (reg / "example_retrieval_repo.local.toml").write_text(
+        f"[example_retrieval_repo]\npython = '{sys.executable}'\n", encoding="utf-8"
     )
-    ran = []
-    monkeypatch.setattr(cov, "_run", lambda *a, **k: ran.append(a) or pytest.fail("pytest must not run"))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    (root / "coordinator.local.md").write_text(
+        '---\ntargeted_test_python: "machine-local:example_retrieval_repo.python"\n---\n', encoding="utf-8"
+    )
 
     out = cov.verify(root, "run1", head, [READER])
 
-    assert out.verdict == cov.ENV_DEFECT and not ran
-    assert "targeted_test_python" in out.detail and "python3.99" in out.detail and "not an executable file" in out.detail
+    assert out.verdict == "green", out
+    assert "not set on this host" not in out.detail
+
+
+def test_a_machine_local_pin_missing_from_every_layer_stays_an_environment_defect(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    reg = tmp_path / "machine-local"
+    reg.mkdir()
+    (reg / "registry.toml").write_text('concerns = ["project_rag"]\n', encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    (root / "coordinator.local.md").write_text(
+        '---\ntargeted_test_python: "machine-local:example_retrieval_repo.python"\n---\n', encoding="utf-8"
+    )
+
+    out = cov.verify(root, "run1", head, [READER])
+
+    assert out.verdict == cov.ENV_DEFECT and "example_retrieval_repo.python" in out.detail, out
+
+
+def test_overlay_runs_under_sys_executable_when_no_pin_is_declared(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    assert _pytest_argv_head(monkeypatch, root, head, None) == sys.executable
+
+
+def test_an_unresolvable_pin_is_an_environment_defect_naming_the_interpreter_and_runs_no_pytest(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    ghost = tmp_path / "missing" / "python3.99"
+    (root / "coordinator.local.md").write_text(f'---\ntargeted_test_python: "{ghost}"\n---\n', encoding="utf-8")
+    monkeypatch.setattr(cov, "_run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no pytest under a wrong interpreter")))
+
+    out = cov.verify(root, "run1", head, [READER])
+
+    assert out.verdict == cov.ENV_DEFECT and not out.red, out
+    assert str(ghost) in out.detail and "interpreter defect" in out.detail, out
+
+
+_DEP_TEST = "t/test_needs_dep.py"
 
 
 def test_an_absent_machine_local_pin_key_is_reported_naming_the_key(tmp_path, monkeypatch):
@@ -189,51 +223,72 @@ def test_an_absent_machine_local_pin_key_is_reported_naming_the_key(tmp_path, mo
     assert out.verdict == cov.ENV_DEFECT and "no.such.key" in out.detail
 
 
-def _missing_module_repo(tmp_path):
+def _dep_repo(tmp_path, module):
     root, _ = _repo(tmp_path)
-    _write(root, "t/test_needs_pkg.py", "import pkg_that_is_not_installed_xyz\n\n\ndef test_x():\n    pass\n")
-    _git(root, "add", "-A")
-    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "needs")
+    _write(root, _DEP_TEST, f"import {module}\n\n\ndef test_x():\n    assert {module}\n")
+    _git(root, "add", _DEP_TEST)
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "dep")
     return root, _git(root, "rev-parse", "HEAD").strip()
 
 
-def test_a_missing_module_under_an_undeclared_pin_names_the_machine_local_remedy(tmp_path):
-    root, head = _missing_module_repo(tmp_path)
+def test_a_missing_third_party_module_is_an_environment_defect_not_a_red(tmp_path):
+    root, head = _dep_repo(tmp_path, "pyarrow_absent_from_every_interpreter")
 
-    out = cov.verify(root, "run1", head, ["t/test_needs_pkg.py"])
+    out = cov.verify(root, "run1", head, [_DEP_TEST])
 
-    assert out.verdict != "green"
-    assert "targeted_test_python: machine-local:<key>" in out.detail
-    assert str(Path(sys.executable).parent) not in out.detail.split("ModuleNotFoundError")[0]
-
-
-def test_a_missing_module_under_a_declared_pin_adds_no_remedy(tmp_path, monkeypatch):
-    from coordinator_core import machine_resolver
-
-    root, head = _missing_module_repo(tmp_path)
-    (root / "coordinator.local.md").write_text('---\ntargeted_test_python: "machine-local:py.test"\n---\n', encoding="utf-8")
-    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: sys.executable if key == "py.test" else None)
-
-    out = cov.verify(root, "run1", head, ["t/test_needs_pkg.py"])
-
-    assert out.verdict != "green" and "machine-local:<key>" not in out.detail
+    assert out.verdict == cov.ENV_DEFECT and not out.red, out
+    assert "pyarrow_absent_from_every_interpreter" in out.detail and "the undeclared gate interpreter" in out.detail, out
 
 
-def test_land_run_refusal_carries_the_remedy_and_no_absolute_interpreter_path(halted, monkeypatch):  # noqa: F811
+def test_a_real_failure_beside_a_missing_module_stays_red(tmp_path):
+    root, _ = _repo(tmp_path)
+    _write(root, _DEP_TEST, "def test_real():\n    assert 1 == 2\n")
+    _write(root, "t/test_needs_dep2.py", "def test_y():\n    import pyarrow_absent_from_every_interpreter\n")
+    _git(root, "add", _DEP_TEST, "t/test_needs_dep2.py")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "mixed")
+    head = _git(root, "rev-parse", "HEAD").strip()
+
+    out = cov.verify(root, "run1", head, [_DEP_TEST, "t/test_needs_dep2.py"])
+
+    assert out.red and out.verdict != cov.ENV_DEFECT, out
+
+
+def test_missing_dependencies_masks_nothing_when_a_summary_line_is_not_an_import_failure(tmp_path):
+    root, _ = _repo(tmp_path)
+    boom = "ModuleNotFoundError: No module named 'zz_absent'\nFAILED t/a.py::test_x - assert 1 == 2\n"
+    assert cov._missing_dependencies(boom, root) == []
+    only = "ERROR t/a.py - ModuleNotFoundError: No module named 'zz_absent'\n"
+    assert cov._missing_dependencies(only, root) == ["zz_absent"]
+
+
+def test_a_missing_module_the_repo_carries_stays_red(tmp_path):
+    root, base = _repo(tmp_path)
+    _write(root, "t/test_peer.py", "import peer_only_mod\n\n\ndef test_x():\n    assert peer_only_mod\n")
+    _git(root, "add", "t/test_peer.py")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "run")
+    head = _git(root, "rev-parse", "HEAD").strip()
+    _write(root, "t/peer_only_mod.py", "VALUE = 1\n")
+
+    assert cov.verify(root, "run1", head, ["t/test_peer.py"], base_sha=base).red
+
+
+def test_land_run_lands_an_environment_defect_verdict_with_an_advisory_never_verify_overlay_red(halted, monkeypatch):  # noqa: F811
     _no_spawn(monkeypatch)
-    _track_fixture(halted)
-    resume, token = _stage(halted)
-    measured = mr.measured_rev(RUN2, LANDING, repo_root=halted)
-    cov.write_verdict(
-        halted, RUN2, measured,
-        cov.OverlayVerdict("inconclusive", f"ModuleNotFoundError under an undeclared interpreter: {cov.REMEDY}: pytest exit 4", ("t/x.py",)),
-    )
-    _write(halted, FIXTURE, '{"a": 9, "dirty": true}\n')
 
-    result = _terminal_with(halted, token, resume, _VERDICT)
+    _, result = _dirty_land(halted, cov.ENV_DEFECT)
 
-    assert result["refused"] == "verify-overlay-unverified", result
-    assert "targeted_test_python: machine-local:<key>" in result["error"]
+    assert result["committed"] is True, result
+    assert result.get("refused") not in ("verify-overlay-red", "verify-overlay-unverified"), result
+    assert result["clean_overlay_verify"]["verdict"] == cov.ENV_DEFECT
+    assert cov.ENV_DEFECT in result["clean_overlay_verify"]["advisory"]
+
+
+def test_an_environment_defect_verdict_round_trips_through_the_verdict_file(tmp_path):
+    root, _ = _repo(tmp_path)
+    measured = {"blobs": {}, "base_sha": "a" * 40, "sha": "b" * 40}
+    cov.write_verdict(root, "run1", measured, cov.OverlayVerdict(cov.ENV_DEFECT, "interpreter defect: x", ("t/x.py",)))
+
+    assert cov.check_verdict(root, "run1", measured).verdict == cov.ENV_DEFECT
 
 
 def test_the_mirror_fill_runs_under_the_overlay_bound_not_the_2s_plumbing_budget(tmp_path, monkeypatch):
@@ -1322,31 +1377,79 @@ def test_an_importer_shard_timeout_with_green_seeds_is_green_with_a_note(tmp_pat
     assert "importer shard timed out: 1 file(s) unverified" in out.detail, out.detail
 
 
-def test_an_importer_shard_with_no_time_left_is_skipped_with_the_same_note(tmp_path, monkeypatch):
+def test_an_importer_shard_stall_with_green_seeds_is_green_with_a_note_naming_the_stall(tmp_path, monkeypatch):
     root, head = _importer_repo(tmp_path)
-    seen = _pytest_targets(monkeypatch)
-    monkeypatch.setattr(cov, "_SHARD_MIN_S", 10**6)
+    real = cov._run
 
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" in argv and _IMPORTER in argv:
+            raise cov.PytestStalled(argv, kw["stall_s"], 9, "2 test result(s) reported")
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
     out = cov.verify(root, "run1", head, [READER], touched=[_HELPER, READER])
 
-    assert out.verdict == "green" and seen == [[READER]], (out, seen)
-    assert "importer shard timed out: 1 file(s) unverified" in out.detail
+    assert out.verdict == "green" and not out.timed_out, out
+    assert "importer shard stalled: 1 file(s) unverified" in out.detail and "2 test result(s) reported" in out.detail, out.detail
 
 
-def test_the_importer_shard_gets_only_the_deadline_the_seeds_left(tmp_path, monkeypatch):
+def test_every_pytest_run_is_watched_for_a_stall_and_has_no_total_wall(tmp_path, monkeypatch):
     root, head = _importer_repo(tmp_path)
-    budgets = []
+    seen = []
     real = cov._run
 
     def spy(argv, cwd, timeout, **kw):
         if "pytest" in argv:
-            budgets.append(timeout)
+            seen.append((timeout, kw.get("stall_s")))
         return real(argv, cwd, timeout, **kw)
 
     monkeypatch.setattr(cov, "_run", spy)
     assert cov.verify(root, "run1", head, [READER], touched=[_HELPER, READER]).verdict == "green"
 
-    assert budgets[0] == cov.TEST_TIMEOUT_S and 0 < budgets[1] < budgets[0], budgets
+    assert seen == [(None, cov.PYTEST_STALL_S)] * 2, seen
+
+
+_SLOW_SRC = "import time\n" + "".join(f"\n\ndef test_{n}():\n    time.sleep(1.2)\n" for n in "abcdefghij")
+_SLOW = "t/test_slow_but_reporting.py"
+_HANG = "t/test_reports_then_hangs.py"
+
+
+def _commit_files(root, files):
+    for rel, src in files.items():
+        _write(root, rel, src)
+    _git(root, "add", *files)
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "seeds")
+    return _git(root, "rev-parse", "HEAD").strip()
+
+
+def test_a_slow_but_progressing_verify_runs_past_the_stall_interval_and_reaches_a_verdict(tmp_path, monkeypatch):
+    root, _ = _repo(tmp_path)
+    head = _commit_files(root, {_SLOW: _SLOW_SRC})
+    stall = 10
+    monkeypatch.setattr(cov, "PYTEST_STALL_S", stall)
+
+    started = time.monotonic()
+    out = cov.verify(root, "run1", head, [_SLOW])
+    took = time.monotonic() - started
+
+    assert out.verdict == "green" and not out.timed_out, out
+    assert took > stall, f"the run must outlast the stall interval to show progress, not silence, is what is watched: {took}s"
+
+
+def test_a_stalled_verify_is_inconclusive_timed_out_and_names_the_last_progress_point(tmp_path, monkeypatch):
+    root, _ = _repo(tmp_path)
+    head = _commit_files(
+        root, {_HANG: "import time\n\n\ndef test_first():\n    assert True\n\n\ndef test_hangs():\n    time.sleep(600)\n"},
+    )
+    monkeypatch.setattr(cov, "PYTEST_STALL_S", 20)
+
+    started = time.monotonic()
+    out = cov.verify(root, "run1", head, [_HANG])
+
+    assert out.verdict == "inconclusive" and out.timed_out is True, out
+    assert "stalled" in out.detail and "no output for 20s" in out.detail, out.detail
+    assert "1 test result(s) reported" in out.detail and "last output line" in out.detail, out.detail
+    assert time.monotonic() - started < 90
 
 
 def test_a_red_importer_shard_is_red_and_a_seeds_timeout_is_inconclusive_with_timed_out(tmp_path, monkeypatch):
@@ -1449,3 +1552,16 @@ def test_a_path_the_candidate_added_is_absent_when_the_base_is_rerun_and_the_mir
 
     assert cov.verify(root, "run2", head, [READER]).verdict == "red"
     assert (dest / "t" / "extra.txt").exists()
+
+
+def test_repo_module_names_falls_back_to_a_walk_when_git_raises(tmp_path, monkeypatch):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "mod.py").write_text("", encoding="utf-8")
+
+    def boom(*a, **k):
+        raise OSError("no git")
+
+    monkeypatch.setattr(cov, "run_git", boom)
+    names = cov._repo_module_names(tmp_path)
+    assert {"pkg", "mod"} <= names
+    assert "absent_mod" not in names

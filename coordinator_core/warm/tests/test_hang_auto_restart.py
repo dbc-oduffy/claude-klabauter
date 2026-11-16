@@ -6,6 +6,7 @@ import json
 import os
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -18,7 +19,7 @@ def _stamp(epoch: float) -> str:
     return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(epoch))
 
 
-def _dumps(stall_dir, n, *, end=NOW, pid=111):
+def _dumps(stall_dir, n, *, end=NOW, pid: int = 111) -> None:
     stall_dir.mkdir(parents=True, exist_ok=True)
     for i in range(n):
         (stall_dir / f"{_stamp(end - i)}-{pid}-k{i}.txt").write_text("x")
@@ -35,7 +36,7 @@ def _lines(log):
     return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
 
 
-def test_n_dumps_exit_once_and_log_one_line_with_evidence(tmp_path):
+def test_n_dumps_exit_once_and_log_one_line_with_evidence(tmp_path: Path) -> None:
     _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD)
     out, exits, log = _run(tmp_path)
     assert out == "restart" and exits == [777]
@@ -46,19 +47,19 @@ def test_n_dumps_exit_once_and_log_one_line_with_evidence(tmp_path):
     assert "-k0.txt" in line and "+3-more" in line
 
 
-def test_below_threshold_writes_nothing_and_does_not_exit(tmp_path):
+def test_below_threshold_writes_nothing_and_does_not_exit(tmp_path: Path) -> None:
     _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD - 1)
     out, exits, log = _run(tmp_path)
     assert out is None and exits == [] and not log.exists()
 
 
-def test_dumps_outside_the_window_do_not_count(tmp_path):
+def test_dumps_outside_the_window_do_not_count(tmp_path: Path) -> None:
     _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD, end=NOW - 3600)
     out, exits, log = _run(tmp_path)
     assert out is None and exits == []
 
 
-def test_recycle_lines_do_not_count(tmp_path):
+def test_recycle_lines_do_not_count(tmp_path: Path) -> None:
     stall = tmp_path / "stall-dumps"
     stall.mkdir()
     for i in range(hang_restart.HANG_DUMP_THRESHOLD):
@@ -67,20 +68,30 @@ def test_recycle_lines_do_not_count(tmp_path):
     assert out is None and exits == []
 
 
-def test_io_wait_records_do_not_count_but_hung_records_still_restart(tmp_path):
+def test_io_wait_records_do_not_count_but_hung_records_still_restart(tmp_path: Path) -> None:
     stall = tmp_path / "stall-dumps"
     stall.mkdir()
     header = f"pid: 1\nstall-class: {hang_restart.IO_WAIT_STALL_CLASS}\n"
     for i in range(hang_restart.HANG_DUMP_THRESHOLD):
         (stall / f"{_stamp(NOW - i)}-1-io{i}.txt").write_text(header + "body")
     out, exits, log = _run(tmp_path)
-    assert out is None and exits == [] and not log.exists()
+    assert out == "io-stall" and exits == []
     _dumps(stall, hang_restart.HANG_DUMP_THRESHOLD, pid=2)
     out, exits, _ = _run(tmp_path)
     assert out == "restart" and exits == [777]
 
 
-def _trigger(tmp_path, at, pid=1):
+def test_io_wait_records_below_threshold_write_no_io_stall_line(tmp_path: Path) -> None:
+    stall = tmp_path / "stall-dumps"
+    stall.mkdir()
+    header = f"pid: 1\nstall-class: {hang_restart.IO_WAIT_STALL_CLASS}\n"
+    for i in range(hang_restart.HANG_DUMP_THRESHOLD - 1):
+        (stall / f"{_stamp(NOW - i)}-1-io{i}.txt").write_text(header + "body")
+    out, exits, log = _run(tmp_path)
+    assert out is None and exits == [] and not log.exists()
+
+
+def _trigger(tmp_path, at, pid: int = 1):
     stall = tmp_path / "stall-dumps"
     _dumps(stall, hang_restart.HANG_DUMP_THRESHOLD, end=at, pid=pid)
     exits = []
@@ -92,7 +103,7 @@ def _log_lines(tmp_path):
     return _lines(tmp_path / hang_restart.HANG_RESTART_LOG_FILENAME)
 
 
-def test_each_consecutive_restart_waits_twice_as_long_up_to_the_cap(tmp_path):
+def test_each_consecutive_restart_waits_twice_as_long_up_to_the_cap(tmp_path: Path) -> None:
     base = hang_restart.RESTART_MIN_INTERVAL_SECS
     t = NOW
     assert _trigger(tmp_path, t)[0] == "restart"
@@ -108,7 +119,7 @@ def test_each_consecutive_restart_waits_twice_as_long_up_to_the_cap(tmp_path):
     assert [line.split("backoff_s=")[1].split()[0] for line in restarts] == ["0", "90", "180", "360"]
 
 
-def test_the_backoff_is_capped(tmp_path, monkeypatch):
+def test_the_backoff_is_capped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hang_restart, "RESTART_BACKOFF_CAP_SECS", 200.0)
     t = NOW
     for n in range(4):
@@ -118,7 +129,7 @@ def test_the_backoff_is_capped(tmp_path, monkeypatch):
     assert _trigger(tmp_path, t - 1, pid=9)[0] == "suppressed"
 
 
-def test_a_quiet_window_resets_the_chain(tmp_path):
+def test_a_quiet_window_resets_the_chain(tmp_path: Path) -> None:
     t = NOW
     for n in range(3):
         assert _trigger(tmp_path, t, pid=n)[0] == "restart"
@@ -131,7 +142,7 @@ def test_a_quiet_window_resets_the_chain(tmp_path):
     assert "backoff_s=0 " in _log_lines(tmp_path)[-2]
 
 
-def test_every_log_line_carries_backoff_s(tmp_path):
+def test_every_log_line_carries_backoff_s(tmp_path: Path) -> None:
     assert _trigger(tmp_path, NOW)[0] == "restart"
     assert _trigger(tmp_path, NOW + 20, pid=2)[0] == "suppressed"
     lines = _log_lines(tmp_path)
@@ -139,7 +150,7 @@ def test_every_log_line_carries_backoff_s(tmp_path):
     assert "backoff_s=90 " in lines[1]
 
 
-def test_decide_shares_the_log_the_holds_and_the_backoff(tmp_path):
+def test_decide_shares_the_log_the_holds_and_the_backoff(tmp_path: Path) -> None:
     assert hang_restart.decide(tmp_path, server_pid=5, source="client", now=NOW) == "restart"
     assert hang_restart.decide(tmp_path, server_pid=5, source="client", now=NOW + 10) == "suppressed"
     assert hang_restart.decide(tmp_path, server_pid=5, source="client", now=NOW + 91) == "restart"
@@ -152,7 +163,7 @@ def test_decide_shares_the_log_the_holds_and_the_backoff(tmp_path):
     assert "reason=handover-hold" in _log_lines(tmp_path)[-1]
 
 
-def test_note_stall_honours_the_backoff(tmp_path, monkeypatch):
+def test_note_stall_honours_the_backoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fresh_marks(monkeypatch)
     exits = []
     for _ in range(hang_restart.HANG_DUMP_THRESHOLD):
@@ -163,7 +174,7 @@ def test_note_stall_honours_the_backoff(tmp_path, monkeypatch):
     assert "reason=backoff" in _log_lines(tmp_path)[-1]
 
 
-def test_second_trigger_inside_rate_limit_is_suppressed_without_exit(tmp_path):
+def test_second_trigger_inside_rate_limit_is_suppressed_without_exit(tmp_path: Path) -> None:
     _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD)
     _run(tmp_path)
     # Fresh dumps after the restart line, still inside the rate-limit interval.
@@ -180,7 +191,7 @@ def test_second_trigger_inside_rate_limit_is_suppressed_without_exit(tmp_path):
     assert len(_lines(tmp_path / hang_restart.HANG_RESTART_LOG_FILENAME)) == 2
 
 
-def test_a_wedged_replacement_is_restarted_within_a_minute_not_held_for_minutes(tmp_path):
+def test_a_wedged_replacement_is_restarted_within_a_minute_not_held_for_minutes(tmp_path: Path) -> None:
     assert hang_restart.RESTART_MIN_INTERVAL_SECS <= 120.0
     _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD)
     _run(tmp_path)
@@ -191,7 +202,7 @@ def test_a_wedged_replacement_is_restarted_within_a_minute_not_held_for_minutes(
     assert out == "restart" and exits == [44]
 
 
-def test_old_dumps_before_the_last_restart_never_retrigger(tmp_path):
+def test_old_dumps_before_the_last_restart_never_retrigger(tmp_path: Path) -> None:
     _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD)
     _run(tmp_path)
     exits = []
@@ -202,7 +213,7 @@ def test_old_dumps_before_the_last_restart_never_retrigger(tmp_path):
     assert out is None and exits == []
 
 
-def test_restart_allowed_again_after_the_interval(tmp_path):
+def test_restart_allowed_again_after_the_interval(tmp_path: Path) -> None:
     _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD)
     _run(tmp_path)
     later = NOW + hang_restart.RESTART_MIN_INTERVAL_SECS + 5
@@ -212,7 +223,7 @@ def test_restart_allowed_again_after_the_interval(tmp_path):
     assert out == "restart" and exits == [9]
 
 
-def test_publish_marker_suppresses_with_a_publish_hold_line(tmp_path):
+def test_publish_marker_suppresses_with_a_publish_hold_line(tmp_path: Path) -> None:
     _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD)
     (tmp_path / breadcrumb.PUBLISH_MARKER_FILENAME).write_text("not json")
     out, exits, log = _run(tmp_path)
@@ -227,7 +238,7 @@ def test_publish_marker_suppresses_with_a_publish_hold_line(tmp_path):
     assert "action=suppressed reason=publish-hold" in line
 
 
-def test_handover_pending_suppresses_and_expired_does_not(tmp_path):
+def test_handover_pending_suppresses_and_expired_does_not(tmp_path: Path) -> None:
     _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD)
     pending = tmp_path / breadcrumb.HANDOVER_PENDING_FILENAME
     pending.write_text(json.dumps({"expires_at": NOW + 100}))
@@ -241,7 +252,7 @@ def test_handover_pending_suppresses_and_expired_does_not(tmp_path):
     assert out == "restart" and exits == [777]
 
 
-def test_exit_fn_failure_never_raises(tmp_path):
+def test_exit_fn_failure_never_raises(tmp_path: Path) -> None:
     _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD)
 
     def boom(_pid):
@@ -250,7 +261,7 @@ def test_exit_fn_failure_never_raises(tmp_path):
     assert hang_restart.maybe_restart(tmp_path / "stall-dumps", now=NOW, exit_fn=boom) is None
 
 
-def test_write_stall_record_calls_the_trigger_with_its_own_pid(tmp_path, monkeypatch):
+def test_write_stall_record_calls_the_trigger_with_its_own_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = []
     monkeypatch.setattr(hang_restart, "maybe_restart", lambda d, **kw: seen.append((d, kw)))
     monkeypatch.setattr(server, "_WORKER_STALL_DIR", None)
@@ -259,15 +270,31 @@ def test_write_stall_record_calls_the_trigger_with_its_own_pid(tmp_path, monkeyp
     assert seen == [(tmp_path / "stall-dumps", {"server_pid": os.getpid()})]
 
 
-def test_pool_worker_names_its_parent_as_the_server(tmp_path, monkeypatch):
+def test_pool_worker_writes_its_record_and_makes_no_restart_decision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = []
+    exits = []
     monkeypatch.setattr(hang_restart, "maybe_restart", lambda d, **kw: seen.append(kw))
+    monkeypatch.setattr(hang_restart, "note_stall", lambda d, **kw: seen.append(kw))
+    monkeypatch.setattr(hang_restart, "exit_server", exits.append)
     monkeypatch.setattr(server, "_WORKER_STALL_DIR", tmp_path / "stall-dumps")
-    server._write_stall_record(tmp_path / "stall-dumps", None, key="k")
-    assert seen == [{"server_pid": os.getppid()}]
+    record = server._write_stall_record(tmp_path / "stall-dumps", None, key="k")
+    server._note_stall_in_memory(tmp_path / "stall-dumps")
+    assert record is not None and record.exists()
+    assert seen == [] and exits == []
 
 
-def test_exit_server_signals_a_foreign_pid_and_exits_own_pid(monkeypatch):
+def test_the_server_counts_a_workers_records_and_restarts_itself(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stall = tmp_path / "stall-dumps"
+    _dumps(stall, hang_restart.HANG_DUMP_THRESHOLD, end=time.time(), pid=4242)
+    exits = []
+    monkeypatch.setattr(hang_restart, "exit_server", exits.append)
+    monkeypatch.setattr(hang_restart, "_progress_last", None)
+    monkeypatch.setattr(server, "_WORKER_STALL_DIR", None)
+    server._restart_check(stall)
+    assert exits == [os.getpid()]
+
+
+def test_exit_server_signals_a_foreign_pid_and_exits_own_pid(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(os, "kill", lambda pid, sig: calls.append(("kill", pid)))
     monkeypatch.setattr(os, "_exit", lambda code: calls.append(("exit", code)))
@@ -276,11 +303,11 @@ def test_exit_server_signals_a_foreign_pid_and_exits_own_pid(monkeypatch):
     assert calls == [("kill", os.getpid() + 1), ("exit", 0)]
 
 
-def _fresh_marks(monkeypatch):
+def _fresh_marks(monkeypatch) -> None:
     monkeypatch.setattr(hang_restart, "_stall_marks", {})
 
 
-def test_note_stall_below_threshold_never_exits_and_touches_no_disk(tmp_path, monkeypatch):
+def test_note_stall_below_threshold_never_exits_and_touches_no_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fresh_marks(monkeypatch)
     monkeypatch.setattr(hang_restart, "_disk_decision", lambda *a: pytest.fail("disk read below threshold"))
     exits = []
@@ -290,7 +317,7 @@ def test_note_stall_below_threshold_never_exits_and_touches_no_disk(tmp_path, mo
 
 
 @pytest.mark.deliberate_wall_clock(reason="hang bound: the restart must not wait on a disk leg that never returns")
-def test_note_stall_exits_at_threshold_even_when_the_disk_leg_never_returns(tmp_path, monkeypatch):
+def test_note_stall_exits_at_threshold_even_when_the_disk_leg_never_returns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fresh_marks(monkeypatch)
     release = threading.Event()
     monkeypatch.setattr(hang_restart, "_disk_decision", lambda *a: release.wait(30))
@@ -304,7 +331,7 @@ def test_note_stall_exits_at_threshold_even_when_the_disk_leg_never_returns(tmp_
     assert time.monotonic() - t0 < 5
 
 
-def test_note_stall_honours_a_publish_hold_and_logs_it(tmp_path, monkeypatch):
+def test_note_stall_honours_a_publish_hold_and_logs_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fresh_marks(monkeypatch)
     (tmp_path / breadcrumb.PUBLISH_MARKER_FILENAME).write_text("not json")
     exits = []
@@ -315,7 +342,7 @@ def test_note_stall_honours_a_publish_hold_and_logs_it(tmp_path, monkeypatch):
     assert "action=suppressed reason=publish-hold" in _lines(tmp_path / hang_restart.HANG_RESTART_LOG_FILENAME)[0]
 
 
-def test_note_stall_logs_a_restart_line_when_the_disk_answers(tmp_path, monkeypatch):
+def test_note_stall_logs_a_restart_line_when_the_disk_answers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fresh_marks(monkeypatch)
     exits = []
     for _ in range(hang_restart.HANG_DUMP_THRESHOLD):
@@ -324,13 +351,13 @@ def test_note_stall_logs_a_restart_line_when_the_disk_answers(tmp_path, monkeypa
     assert "pid=7 action=restart" in _lines(tmp_path / hang_restart.HANG_RESTART_LOG_FILENAME)[0]
 
 
-def test_accept_stall_watcher_counts_before_it_touches_the_filesystem(tmp_path, monkeypatch):
+def test_accept_stall_watcher_counts_before_it_touches_the_filesystem(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = []
     monkeypatch.setattr(hang_restart, "note_stall", lambda d, **kw: seen.append(d))
     blocked = threading.Event()
 
     class _Claim:
-        def exists(self):
+        def exists(self) -> bool:
             assert seen, "the stall was not counted before the claim stat"
             blocked.set()
             return True
@@ -341,7 +368,7 @@ def test_accept_stall_watcher_counts_before_it_touches_the_filesystem(tmp_path, 
     assert seen == [tmp_path / "stall-dumps"]
 
 
-def test_a_replacement_survives_its_own_cold_start_import_stalls(tmp_path):
+def test_a_replacement_survives_its_own_cold_start_import_stalls(tmp_path: Path) -> None:
     """The 2026-11-11 loop: a fresh server's workers stall importing under the backlog, 8 stalls
     land within ~15s, and a 20s rate limit let it exit before it warmed."""
     assert hang_restart.RESTART_MIN_INTERVAL_SECS >= 60.0
@@ -354,7 +381,7 @@ def test_a_replacement_survives_its_own_cold_start_import_stalls(tmp_path):
     assert out == "suppressed" and exits == []
 
 
-def test_stall_watchers_hold_no_lazy_hang_restart_import():
+def test_stall_watchers_hold_no_lazy_hang_restart_import() -> None:
     """A lazy import in a stall watcher blocks on the importlib module lock when the server is
     imported-from-cold; the watchers must reach hang_restart through a module-level binding."""
     import inspect

@@ -1,6 +1,8 @@
 """``dispatch.close_halted_run_superseded``: closes a halted run whose withheld paths later work overwrote.
 
-Params: ``run_id`` (string, required: the halted run). Fail-closed: the op writes only when the marker
+Params: ``run_id`` (string, required: the halted run). A halted run that withholds no path closes without
+classification when ``superseded_by`` (full commit sha or run id) names its successor: empty evidence and
+dispositions, no git spawn. Fail-closed otherwise: the op writes only when the marker
 is ``halted`` (not resumed, landed or live) and withholds at least one path; the run-stage record is
 ``halted`` with a parseable ``last_activity_at`` that resolves to a commit (the halt anchor); every
 withheld path classifies as exactly one of: ``landed`` (HEAD blob equals the kept blob), ``superseded`` (a commit in
@@ -393,6 +395,32 @@ def _refused_at_stage(root: Path, record: Path, run_id: str) -> Optional[dict]:
     return _land_closure(root, record, run_id, reply, OP_NAME, "superseded")
 
 
+def _close_withholding_nothing(root: Path, record: Path, marker: dict, run_id: str, params: dict) -> dict:
+    """Close a halted run that withholds no path: no git spawn, nothing to classify. ``superseded_by`` (the
+    successor commit sha or run id, required) is recorded on the marker; evidence and dispositions are empty."""
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit import halted_run, halted_withheld_index
+
+    by = params.get("superseded_by")
+    by = by.strip() if isinstance(by, str) else ""
+    if not (_SHA40.fullmatch(by) or (by and safe_id(by))):
+        return _refuse(f"{run_id} withholds no paths; name its successor in superseded_by (a full commit sha or a run id)")
+    if halted_run._read(record) != marker:
+        return _refuse(f"{run_id} halt marker changed under the write; retry")
+    halted_run._write(record, {
+        **marker, "status": halted_run.STATUS_SUPERSEDED, halted_run.SUPERSEDED_EVIDENCE_FIELD: {},
+        halted_run.PATH_DISPOSITIONS_FIELD: {}, "superseded_by": by,
+    })
+    halted_run._live_index_drop(record)
+    halted_run._record_judge(record)
+    halted_withheld_index.remove_run(root, run_id)
+    _end_parent_ask(root, run_id, marker.get("sizing_rel"))
+    return {
+        "ok": True, "run_id": run_id, "evidence": {}, "dispositions": {}, "superseded_by": by,
+        "recorded": (record / halted_run.HALTED_FILE).relative_to(root).as_posix(),
+    }
+
+
 @register_op(OP_NAME)
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.close_halted_run_superseded": verify supersession evidence, then close the run."""
@@ -425,7 +453,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if successor:
         return _refuse(f"{run_id} has a live successor {successor}; wait for it or stop it")
     if not withheld:
-        return _refuse(f"{run_id} withholds no paths; there is nothing to supersede")
+        return _close_withholding_nothing(root, record, marker, run_id, params)
     plan = halted_hold_release._kept_plan(record)
     if plan is None:
         if not any((record / f).exists() for f in (kept_work.KEPT_FILE, WITHHELD_PRINTS_FILE)):

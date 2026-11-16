@@ -111,9 +111,13 @@ from coordinator_core.warm.http_listener import (
 from coordinator_core.warm.server import (
     InFlightCounter,
     _declare_execution_route,
+    _log_priority_boost,
+    _raise_worker_priority,
     _serve_line,
     engine_root_divergence_message,
 )
+
+_POSIX_SUPERVISOR_NICE = -5
 
 __all__ = [
     "record_is_skewed",
@@ -1383,6 +1387,8 @@ def main() -> int:
             file=sys.stderr,
         )
         return 0
+
+    _log_priority_boost("supervisor", _raise_worker_priority(_POSIX_SUPERVISOR_NICE))
 
     # this process's life: `FILE_FLAG_FIRST_PIPE_INSTANCE` exclusion is a
     # property of a LIVE PIPE INSTANCE, not of the electing process, so

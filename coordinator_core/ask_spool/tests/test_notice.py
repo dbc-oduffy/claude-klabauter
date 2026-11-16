@@ -167,6 +167,34 @@ def test_coalesced_and_withdrawn_notices_render_their_lines(tmp_path):
     ]
 
 
+def test_halt_notice_roundtrips_through_consume_and_advisory(tmp_path):
+    assert notice.append_halt_notice(str(tmp_path), "s1", "run-9", "abandoned_at_minted", "stuck at minted >1800s")
+    got = notice.consume_notices(str(tmp_path), "s1")
+    assert [(n["run_id"], n["status"], n["halted"]) for n in got] == [("run-9", "halted", "abandoned_at_minted")]
+    assert "at" in got[0]
+    notice.append_halt_notice(str(tmp_path), "s1", "run-9", "abandoned_at_minted", "stuck at minted >1800s")
+    assert notice.advisory_text(str(tmp_path), "s1") == (
+        "Your run run-9 was halted (abandoned_at_minted): stuck at minted >1800s"
+    )
+    assert notice.advisory_text(str(tmp_path), "s1") == ""
+
+
+def test_halt_notice_refuses_unsafe_or_empty_session_and_writes_nothing(tmp_path):
+    for sid in ("", "../evil", "a/b", "s 1"):
+        assert notice.append_halt_notice(str(tmp_path), sid, "run-9", "x", "y") is False
+    assert not os.path.exists(notice.notices_dir(str(tmp_path)))
+
+
+def test_halt_notice_without_run_id_is_dropped_at_read(tmp_path):
+    import json
+
+    path = notice.notice_path(str(tmp_path), "s1")
+    os.makedirs(os.path.dirname(path))
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"status": "halted", "halted": "x", "reason": "y"}) + "\n")
+    assert notice.consume_notices(str(tmp_path), "s1") == []
+
+
 def test_failed_notice_is_surfaced_not_dropped(tmp_path):
     import json
 

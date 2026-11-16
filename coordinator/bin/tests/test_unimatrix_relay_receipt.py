@@ -46,6 +46,14 @@ def test_an_ok_line_appends_a_receipt_with_the_digest_and_no_text(relay, monkeyp
     assert "secret words" not in relay.receipts_path().read_text(encoding="utf-8")
 
 
+def test_a_receipt_row_names_the_box_that_wrote_it(relay, monkeypatch):
+    monkeypatch.setattr(relay, "local_box", lambda: "machine-a")
+    relay.record_receipt(SID, b"hi\n")
+    (row,) = rows(relay)
+    assert row["box"] == "machine-a"
+    assert relay.receipts(SID, 0.0)["rows"][0]["box"] == "machine-a"
+
+
 def test_a_failed_or_blank_line_leaves_no_receipt(relay, monkeypatch, capsys):
     def write(path, line):
         if b"boom" in line:

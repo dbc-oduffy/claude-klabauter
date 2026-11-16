@@ -284,7 +284,7 @@ def delivery_status(limit=10):
         rows = []
     if not rows:
         return ["no cross-box sends recorded"]
-    return [f"{'delivered' if r['ok'] else 'FAILED   '} {r['ts']} {r['target']}" + ("" if r["ok"] else f": {r['error']}")
+    return [f"{'delivered' if r['ok'] else 'FAILED   '} {r['ts']} {r.get('ref') or r['target']}" + ("" if r["ok"] else f": {r['error']}")
             for r in rows[-limit:]]
 
 
@@ -312,6 +312,10 @@ def _roster_wrote_name(addressed, far_name, remote, entry_box=None):
     short = hashlib.sha256(target.lower().encode()).hexdigest()[:10]
     alias = rf"{re.escape(vendor.lower())}-[A-Za-z0-9_-]+-{short}-on-{re.escape(alias_box)}"
     return re.fullmatch(alias + rf"(\.{re.escape(box)})?", addressed) is not None
+
+
+#: The prefix unimatrix-relay.py puts on every wrong-target refusal; a match unmirrors the mirror.
+TARGET_MISMATCH = "target mismatch"
 
 
 def relay_send(conn):
@@ -342,22 +346,23 @@ def relay_send(conn):
     box = mine.get(BOX_FIELD) or "unknown"
     transport = "none"
     far_name = mine.get("unimatrixFarName")
+    ref = f"{far_name.partition('.')[0]}.{box}" if isinstance(far_name, str) and far_name and box != "unknown" else None
     if not isinstance(far_name, str) or not far_name:
         log.write("relay: mirror lacks far name; re-mirror\n")
         for line in lines:
-            _record_outcome(line, target, ts, 0, "mirror lacks far name; re-mirror", box, transport)
+            _record_outcome(line, target, ts, 0, "mirror lacks far name; re-mirror", box, transport, ref)
         return
     if not isinstance(far_sid, str) or not far_sid:
         log.write("relay: mirror lacks far session id; re-mirror\n")
         for line in lines:
-            _record_outcome(line, target, ts, 0, "mirror lacks far session id; re-mirror", box, transport)
+            _record_outcome(line, target, ts, 0, "mirror lacks far session id; re-mirror", box, transport, ref)
         return
     addressed = mine.get("name")
     if not _roster_wrote_name(addressed, far_name, cfg.remote, mine.get("box")):
-        error = f"addressed {addressed}, endpoint is {far_name}; re-mirror"
+        error = f"addressed {addressed}, endpoint is {far_name} (session {far_sid}); re-mirror"
         log.write(f"relay refused: {error}\n")
         for line in lines:
-            _record_outcome(line, target, ts, 0, error, box, transport)
+            _record_outcome(line, target, ts, 0, error, box, transport, ref)
         _mark_misroute()
         return
     started = time.monotonic()
@@ -368,11 +373,11 @@ def relay_send(conn):
     ms = round((time.monotonic() - started) * 1000)
     transport = getattr(r, "transport", "ssh")
     stderr = r.stderr.decode(errors="replace").strip()
-    if r.returncode and stderr.startswith(("target mismatch", "ambiguous")):
+    if r.returncode and stderr.startswith((TARGET_MISMATCH, "ambiguous")):
         log.write(f"relay refused: {stderr}\n")
         for line in lines:
-            _record_outcome(line, target, ts, ms, stderr[-300:], box, transport)
-        if stderr.startswith("target mismatch"):
+            _record_outcome(line, target, ts, ms, stderr[-300:], box, transport, ref)
+        if stderr.startswith(TARGET_MISMATCH):
             _mark_misroute()
         return
     replies = _batch_replies(r.stdout)
@@ -381,13 +386,14 @@ def relay_send(conn):
         if skew:
             log.write(f"relay: {skew}\n")
             for line in lines:
-                _record_outcome(line, target, ts, ms, skew, box, transport)
+                _record_outcome(line, target, ts, ms, skew, box, transport, ref)
             return
     acks = _caps().ingest_acked(lines, replies)
     # A pre-ack far relay delivers and replies bare {"ok": true} (or nothing); its `receipts` rows still
     # prove the write. A line the far side explicitly refused is never reconciled.
     if any(not ok and not (i < len(replies) and replies[i].get("ok") is False) for i, (ok, _) in enumerate(acks)):
         acks = _reconcile_acks(lines, acks, far_sid, started_wall)
+    marked = False
     for i, (line, (ok, unacked)) in enumerate(zip(lines, acks)):
         error = None
         if not ok:
@@ -398,7 +404,10 @@ def relay_send(conn):
                 error = f"ssh exit {r.returncode}: " + stderr[-300:]
             else:
                 error = "relay: no delivery reply for this message"
-        _record_outcome(line, target, ts, ms, error, box, transport)
+        if error and TARGET_MISMATCH in error and not marked:
+            _mark_misroute()
+            marked = True
+        _record_outcome(line, target, ts, ms, error, box, transport, ref)
 
 
 def _caps():
@@ -493,17 +502,21 @@ def _batch_replies(stdout):
     return replies
 
 
-def _record_outcome(line, target, ts, ms, error, box="unknown", transport="none"):
+def _record_outcome(line, target, ts, ms, error, box="unknown", transport="none", ref=None):
     """Record one line's outcome; `digest` is the sha256 the far relay's receipt row carries for the same line.
 
-    `box` is the mirror row's BOX_FIELD; `transport` is the leg label: `ssh`, `tunnel`, or `none` when refused before any ssh."""
+    `box` is the mirror row's BOX_FIELD; `transport` is the leg label: `ssh`, `tunnel`, or `none` when refused before any ssh.
+    `ref` is the `<bare>.<box>` address the far box resolves; the failure notice leads with it."""
     row = {"ts": ts, "at": time.time(), "target": target, "ok": not error, "ms": ms, "box": box, "transport": transport,
            "digest": hashlib.sha256(line.rstrip(b"\n")).hexdigest()}
+    if ref:
+        row["ref"] = ref
     if error:
         row["error"] = error
     record_delivery(row)
     if error:
-        notify_sender(line, target, error)
+        shown = f"{ref} ({target})" if ref else target
+        notify_sender(line, shown if box in (None, "", "unknown") else f"{shown} on box {box}", error)
 
 
 def pump_local_to_sock(conn, s):

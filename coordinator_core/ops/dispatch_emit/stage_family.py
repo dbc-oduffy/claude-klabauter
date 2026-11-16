@@ -41,6 +41,12 @@ FRESH_INVOKE_LINE = (
     "fresh: invoke the vendor CLI in this run; a receipt this run's invocation did not "
     "produce is reported BLOCKED, never reused"
 )
+# Enforced by `codex_runner.grok._build_env`, not by this prose: every env name the first
+# clause lists must be one that function forwards (pinned by test_stage_family).
+SIGN_IN_LINE = (
+    "sign_in: inherit the parent USERPROFILE, HOME, APPDATA, LOCALAPPDATA and GROK_HOME "
+    "when set; a cleaned env that drops them fails the stage; never pass an API key"
+)
 
 
 def family_scratch_dir(row_id: str, run_id: Optional[str] = None) -> str:
@@ -80,6 +86,7 @@ def runner_brief(
         f"prompt: {prompt_path}",
         f"scratch: {scratch}",
         FRESH_INVOKE_LINE,
+        SIGN_IN_LINE,
     ]
     if stage == "write":
         lines.append("writes:")

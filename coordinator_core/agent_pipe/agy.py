@@ -63,6 +63,18 @@ def _agy() -> str:
     return shutil.which("agy") or "agy"
 
 
+def family_stage_argv(prefix: Sequence[str], *, log_file: Optional[str] = None) -> list[str]:
+    """Stream-json argv for an agy family-stage run, unrestricted per PM ruling: `--dangerously-skip-permissions`, no sandbox, shell and file permission granted.
+
+    Single builder called by `workflow._family_argv` for agy family stages; `AgyAdapter` argv stay bypass-free. The prompt goes on stdin.
+    """
+    argv = [*prefix, "--input-format", "stream-json", "--output-format", "stream-json",
+            "-p=", "--dangerously-skip-permissions"]
+    if log_file:
+        argv += ["--log-file", str(log_file)]
+    return argv
+
+
 class AgyAdapter:
     """Adapter for the Antigravity CLI; argv carries scoped `command(<prefix> *)` allow rules via --settings and never a permission-bypass flag or a bare wildcard.
 

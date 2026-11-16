@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record
 from coordinator_core.ops.tests.test_review_reverify import BASE, PREFIX, SESSION, world  # noqa: F401  (fixture)
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -19,7 +20,7 @@ _LINES = 4000
 _BAR_SECONDS = 0.15  # DR-344 bar is 500ms; process time, never wall clock
 
 
-def _big_pair():
+def _big_pair() -> tuple[list[bytes], list[bytes]]:
     """Repetitive lines (the quadratic case: untrimmed this costs ~280ms) with two nearby edits."""
     old = [f"    v{i % 3}\n".encode() for i in range(_LINES)]
     new = list(old)
@@ -28,7 +29,7 @@ def _big_pair():
     return old, new
 
 
-def test_hunks_of_a_large_file_stays_well_under_the_bar_in_process_time():
+def test_hunks_of_a_large_file_stays_well_under_the_bar_in_process_time() -> None:
     old, new = _big_pair()
     start = time.process_time()
     hunks = own_hunk_stage._hunks_of("big.py", old, new)
@@ -37,7 +38,7 @@ def test_hunks_of_a_large_file_stays_well_under_the_bar_in_process_time():
     assert spent < _BAR_SECONDS, spent
 
 
-def test_delta_spans_of_a_large_file_stays_well_under_the_bar_in_process_time():
+def test_delta_spans_of_a_large_file_stays_well_under_the_bar_in_process_time() -> None:
     old, new = _big_pair()
     start = time.process_time()
     spans = run_hunk_claims._delta_spans(old, new)
@@ -46,14 +47,14 @@ def test_delta_spans_of_a_large_file_stays_well_under_the_bar_in_process_time():
     assert spent < _BAR_SECONDS, spent
 
 
-def _edited_world(root, monkeypatch):
+def _edited_world(root, monkeypatch) -> list[str]:
     from coordinator_core.ops.tests.test_review_reverify import _ledger, _row
 
     (root / "tests/test_plain.py").write_text("def test_p():\n    assert nope\n", encoding="utf-8")
     return _ledger(monkeypatch, _row("F1", "tests/test_plain.py", "    assert True\n", "    assert nope\n"))
 
 
-def test_probe_open_with_an_empty_run_id_still_reads_the_halted_holds(world, monkeypatch):
+def test_probe_open_with_an_empty_run_id_still_reads_the_halted_holds(world, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import review_reverify as rr
 
     root, _orig, _ = world
@@ -73,7 +74,7 @@ def test_probe_open_with_an_empty_run_id_still_reads_the_halted_holds(world, mon
     assert "tests/test_plain.py" in out["error"] and out["probed"] == []
 
 
-def test_revert_keeps_a_path_a_halted_peer_withholds(world, monkeypatch):
+def test_revert_keeps_a_path_a_halted_peer_withholds(world, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import review_reverify as rr
 
     root, _orig, _ = world
@@ -89,7 +90,7 @@ def test_revert_keeps_a_path_a_halted_peer_withholds(world, monkeypatch):
     assert (root / "tests/test_plain.py").read_text(encoding="utf-8") == edited
 
 
-def test_changed_opcodes_match_the_untrimmed_differ_on_a_small_file():
+def test_changed_opcodes_match_the_untrimmed_differ_on_a_small_file() -> None:
     old = [b"a\n", b"b\n", b"c\n", b"d\n", b"e\n"]
     new = [b"a\n", b"B\n", b"c\n", b"d\n", b"e\n", b"f\n"]
     full = [
@@ -99,7 +100,7 @@ def test_changed_opcodes_match_the_untrimmed_differ_on_a_small_file():
     assert run_hunk_claims.changed_opcodes(old, old) == []
 
 
-def _grade_partial(tmp_path, report_text, reverify, held=frozenset(), review_ok=True):
+def _grade_partial(tmp_path, report_text, reverify, held=frozenset(), review_ok: bool = True):
     from types import SimpleNamespace
 
     from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit
@@ -119,12 +120,12 @@ _PASS = {"status_before": "pass", "status_after": "pass", "failing": []}
 _NO_TESTS = "PARTIAL: C1\nNot done: pytest not run; the likeness pytest fence bars the executor from running tests.\n"
 
 
-def test_partial_for_no_tests_is_credited_when_a_passing_reverify_covers_its_paths(tmp_path):
+def test_partial_for_no_tests_is_credited_when_a_passing_reverify_covers_its_paths(tmp_path: Path) -> None:
     out = _grade_partial(tmp_path, _NO_TESTS, _PASS)
     assert out["C1"].startswith("reverify-covered")
 
 
-def test_partial_with_real_unfinished_work_is_still_withheld(tmp_path):
+def test_partial_with_real_unfinished_work_is_still_withheld(tmp_path: Path) -> None:
     work = _NO_TESTS + "Not done: the retry branch of land() is unimplemented.\n"
     assert _grade_partial(tmp_path, work, _PASS) == {}
     assert _grade_partial(tmp_path, "PARTIAL: C1\nNot done: parser rewrite.\n", _PASS) == {}
@@ -132,7 +133,7 @@ def test_partial_with_real_unfinished_work_is_still_withheld(tmp_path):
     assert _grade_partial(tmp_path, mixed, _PASS) == {}
 
 
-def test_no_tests_partial_stays_withheld_without_a_clean_passing_reverify_or_when_held(tmp_path):
+def test_no_tests_partial_stays_withheld_without_a_clean_passing_reverify_or_when_held(tmp_path: Path) -> None:
     assert _grade_partial(tmp_path, _NO_TESTS, {"status_after": "fail", "failing": ["t.py::x"]}) == {}
     assert _grade_partial(tmp_path, _NO_TESTS, {"status_after": "pass", "failing": ["t.py::x"]}) == {}
     assert _grade_partial(tmp_path, _NO_TESTS, {"status_after": "indeterminate"}) == {}
@@ -141,7 +142,7 @@ def test_no_tests_partial_stays_withheld_without_a_clean_passing_reverify_or_whe
     assert _grade_partial(tmp_path, _NO_TESTS, _PASS, held={"C1"}) == {}
 
 
-def test_foreign_halted_withheld_unreadable_record_dir_holds_every_wanted_path(tmp_path, monkeypatch):
+def test_foreign_halted_withheld_unreadable_record_dir_holds_every_wanted_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import sibling_claims
 
     def _boom(*_a, **_k):
@@ -152,7 +153,7 @@ def test_foreign_halted_withheld_unreadable_record_dir_holds_every_wanted_path(t
     assert held == {"x.py": "unreadable-halt-record", "y.py": "unreadable-halt-record"}
 
 
-def test_foreign_halted_withheld_malformed_record_holds_every_wanted_path(tmp_path, monkeypatch):
+def test_foreign_halted_withheld_malformed_record_holds_every_wanted_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import sibling_claims
 
     def _bad(*_a, **_k):
@@ -173,13 +174,13 @@ def _recent_run_dir(root, suffix):
     return path
 
 
-def test_foreign_halted_withheld_corrupt_halt_marker_holds_every_wanted_path(tmp_path):
+def test_foreign_halted_withheld_corrupt_halt_marker_holds_every_wanted_path(tmp_path: Path) -> None:
     (_recent_run_dir(tmp_path, "bbbbbb") / "halted.json").write_text("{not json", encoding="utf-8")
     held = land_run.foreign_halted_withheld(tmp_path, "run-a", None, ["x.py", "y.py"])
     assert held == {"x.py": "unreadable-halt-record", "y.py": "unreadable-halt-record"}
 
 
-def test_foreign_halted_withheld_corrupt_marker_with_clear_index_entry_is_not_opened(tmp_path):
+def test_foreign_halted_withheld_corrupt_marker_with_clear_index_entry_is_not_opened(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_withheld_index
 
     run_dir = _recent_run_dir(tmp_path, "bbbbbb")
@@ -191,17 +192,17 @@ def test_foreign_halted_withheld_corrupt_marker_with_clear_index_entry_is_not_op
     assert land_run.foreign_halted_withheld(tmp_path, "run-a", None, ["x.py"]) == {"x.py": "unreadable-halt-record"}
 
 
-def test_foreign_halted_withheld_non_object_halt_marker_holds(tmp_path):
+def test_foreign_halted_withheld_non_object_halt_marker_holds(tmp_path: Path) -> None:
     (_recent_run_dir(tmp_path, "bbbbbb") / "halted.json").write_text("[1]", encoding="utf-8")
     assert land_run.foreign_halted_withheld(tmp_path, "run-a", None, ["x.py"]) == {"x.py": "unreadable-halt-record"}
 
 
-def test_foreign_halted_withheld_absent_halt_marker_holds_nothing(tmp_path):
+def test_foreign_halted_withheld_absent_halt_marker_holds_nothing(tmp_path: Path) -> None:
     _recent_run_dir(tmp_path, "bbbbbb")
     assert land_run.foreign_halted_withheld(tmp_path, "run-a", None, ["x.py"]) == {}
 
 
-def test_foreign_halted_withheld_no_wanted_paths_holds_nothing_even_on_error(tmp_path, monkeypatch):
+def test_foreign_halted_withheld_no_wanted_paths_holds_nothing_even_on_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import sibling_claims
 
     monkeypatch.setattr(sibling_claims, "_unlanded_run_ids", lambda *_a, **_k: (_ for _ in ()).throw(OSError("x")))
@@ -223,7 +224,7 @@ def _review_edit_halt_commit(repo, monkeypatch, holder):
     return out, "pkg/twin.py" in _landed(repo, out, "--name-only")
 
 
-def test_halted_record_does_not_stage_a_review_edit_another_run_holds(repo, monkeypatch):
+def test_halted_record_does_not_stage_a_review_edit_another_run_holds(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     out, landed = _review_edit_halt_commit(
         repo, monkeypatch, lambda _r, _id, _p, paths: {p: "peer-run" for p in paths if p == "pkg/twin.py"}
     )
@@ -231,7 +232,7 @@ def test_halted_record_does_not_stage_a_review_edit_another_run_holds(repo, monk
     assert "pkg/twin.py" in out["review_edits_unlanded"], out
 
 
-def test_halted_record_keeps_a_review_edit_no_run_holds_in_the_tree(repo, monkeypatch):
+def test_halted_record_keeps_a_review_edit_no_run_holds_in_the_tree(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """A halt commit lands the record only; an unheld review edit stays for the refire (040758b972)."""
     from coordinator_core.ops.dispatch_emit.halted_record_commit import HALT_RUN_REASON
 
@@ -240,7 +241,7 @@ def test_halted_record_keeps_a_review_edit_no_run_holds_in_the_tree(repo, monkey
     assert out["review_edits_unlanded"] == {"pkg/twin.py": HALT_RUN_REASON}, out
 
 
-def test_a_co_declared_hold_on_an_inherited_path_is_recorded_as_provenance_and_lands(product_repo, monkeypatch):
+def test_a_co_declared_hold_on_an_inherited_path_is_recorded_as_provenance_and_lands(product_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """A co-declared peer path is provenance whether or not it is inherited; the landing commits."""
     from coordinator_core.ops.dispatch_emit import peer_hunk_gate
     from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
@@ -294,13 +295,13 @@ def _crlf_repo(tmp_path):
     }
 
 
-def test_crlf_baseline_pre_existing_hunk_is_not_the_runs_own(tmp_path):
+def test_crlf_baseline_pre_existing_hunk_is_not_the_runs_own(tmp_path: Path) -> None:
     seen = _crlf_repo(tmp_path)
 
     assert land_run._peer_dirt_only(tmp_path, _PRE_REL, seen["baseline"])
 
 
-def test_verified_pre_existing_hunk_is_recognised_only_while_the_worktree_matches_the_measure(tmp_path):
+def test_verified_pre_existing_hunk_is_recognised_only_while_the_worktree_matches_the_measure(tmp_path: Path) -> None:
     seen = _crlf_repo(tmp_path)
 
     assert land_run._verified_preexisting(tmp_path, _PRE_REL, seen["measured"], seen["baseline"])
@@ -310,7 +311,7 @@ def test_verified_pre_existing_hunk_is_recognised_only_while_the_worktree_matche
     assert not land_run._verified_preexisting(tmp_path, _PRE_REL, seen["measured"], seen["baseline"])
 
 
-def test_a_run_own_hunk_is_never_taken_for_a_verified_pre_existing_hunk(tmp_path):
+def test_a_run_own_hunk_is_never_taken_for_a_verified_pre_existing_hunk(tmp_path: Path) -> None:
     seen = _crlf_repo(tmp_path)
     own = _PRE_FIX.replace("line10\n", "own-ten\n")
     (tmp_path / _PRE_REL).write_bytes(own.replace("\n", "\r\n").encode())
@@ -322,7 +323,7 @@ def test_a_run_own_hunk_is_never_taken_for_a_verified_pre_existing_hunk(tmp_path
     assert not land_run._verified_preexisting(tmp_path, _PRE_REL, measured, seen["baseline"])
 
 
-def test_mismatch_detail_names_the_differing_line_and_the_cause_specific_remedy(tmp_path):
+def test_mismatch_detail_names_the_differing_line_and_the_cause_specific_remedy(tmp_path: Path) -> None:
     seen = _crlf_repo(tmp_path)
     blobs = {_PRE_REL: seen["measured"]}
 
@@ -335,7 +336,7 @@ def test_mismatch_detail_names_the_differing_line_and_the_cause_specific_remedy(
     assert "re-run dispatch.measured_rev" in drifted and "hand-commit" not in drifted
 
 
-def _declare_two_paths(root, first, second):
+def _declare_two_paths(root, first, second) -> None:
     from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
     from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
 
@@ -345,7 +346,7 @@ def _declare_two_paths(root, first, second):
     prod._write(root, prod.SCRIPT, "// emitted\n" + render_marker(request) + "\n")
 
 
-def test_product_dirty_declared_write_left_after_landing_is_reported_with_its_path(product_repo, monkeypatch):
+def test_product_dirty_declared_write_left_after_landing_is_reported_with_its_path(product_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """A declared product write dirty after the commit and not landed names its path in product_residue and error."""
     from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
 
@@ -365,7 +366,7 @@ def test_product_dirty_declared_write_left_after_landing_is_reported_with_its_pa
     assert "src/late.py" in out["error"]
 
 
-def test_product_dirty_landed_declared_write_reports_no_product_residue(product_repo):
+def test_product_dirty_landed_declared_write_reports_no_product_residue(product_repo) -> None:
     """The other side: every declared write landed, so the reply carries no product_residue and no error."""
     from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
 
@@ -382,7 +383,7 @@ def test_product_dirty_landed_declared_write_reports_no_product_residue(product_
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import repo as ask_run_repo  # noqa: E402,F401
 
 
-def _stage_pre_existing_measured(root, rig):
+def _stage_pre_existing_measured(root, rig) -> None:
     """a.py tracked with a pre-existing dirty hunk the run never touched; its manifest baselines the
     dirty bytes and the measured-rev record carries the dirty blob."""
     import json
@@ -410,7 +411,7 @@ def _stage_pre_existing_measured(root, rig):
     )
 
 
-def test_land_run_lands_a_verified_pre_existing_hunk(ask_run_repo):
+def test_land_run_lands_a_verified_pre_existing_hunk(ask_run_repo) -> None:
     from coordinator_core.ops.dispatch_emit.tests import test_ask_run_product_commit as rig
 
     root = ask_run_repo
@@ -422,7 +423,7 @@ def test_land_run_lands_a_verified_pre_existing_hunk(ask_run_repo):
     assert "a.py" in rig._names(root, landed["sha"])
 
 
-def test_land_run_does_not_refuse_a_peer_drift_on_a_pre_existing_hunk_the_run_never_changed(ask_run_repo):
+def test_land_run_does_not_refuse_a_peer_drift_on_a_pre_existing_hunk_the_run_never_changed(ask_run_repo) -> None:
     from coordinator_core.ops.dispatch_emit.tests import test_ask_run_product_commit as rig
 
     root = ask_run_repo
@@ -438,7 +439,7 @@ def test_land_run_does_not_refuse_a_peer_drift_on_a_pre_existing_hunk_the_run_ne
 # ---- tranche chain hand-off --------------------------------------------------------------------
 
 
-def _tranche_script(root, passes):
+def _tranche_script(root, passes) -> str:
     from coordinator_core.ops.dispatch_emit import tranche_chain
 
     inv = root / "inv-t1.md"
@@ -466,7 +467,7 @@ def _landed(root, monkeypatch, script, reply=None, **params):
     return spawns
 
 
-def test_landing_a_tranche_with_passes_remaining_spawns_exactly_one_chain(tmp_path, monkeypatch):
+def test_landing_a_tranche_with_passes_remaining_spawns_exactly_one_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     spawns = _landed(tmp_path, monkeypatch, _tranche_script(tmp_path, 2))
 
     assert len(spawns) == 1
@@ -474,7 +475,7 @@ def test_landing_a_tranche_with_passes_remaining_spawns_exactly_one_chain(tmp_pa
     assert spawns[0][2]["inventory_path"].endswith("inv.md")
 
 
-def test_landing_the_last_tranche_spawns_nothing(tmp_path, monkeypatch):
+def test_landing_the_last_tranche_spawns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _landed(tmp_path, monkeypatch, _tranche_script(tmp_path, 0)) == []
 
 
@@ -487,11 +488,11 @@ def test_landing_the_last_tranche_spawns_nothing(tmp_path, monkeypatch):
         ({}, {"incomplete_chunks": ["C2"]}),
     ],
 )
-def test_a_halted_partial_or_repeat_land_never_chains(tmp_path, monkeypatch, reply, params):
+def test_a_halted_partial_or_repeat_land_never_chains(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reply, params) -> None:
     assert _landed(tmp_path, monkeypatch, _tranche_script(tmp_path, 2), reply, **params) == []
 
 
-def test_chain_run_records_the_next_run_and_a_failure_in_tranche_chain_json(tmp_path, monkeypatch):
+def test_chain_run_records_the_next_run_and_a_failure_in_tranche_chain_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import json
 
     from coordinator_core.ops.dispatch_emit import ask_contract, tranche_chain
@@ -522,7 +523,7 @@ def _record_for_p(tmp_path, text):
     return {"blobs": {"p.py": commit.checkin_blob_sha(tmp_path, "p.py")}, "removed": []}
 
 
-def test_no_change_drops_only_the_paths_the_run_never_changed(tmp_path):
+def test_no_change_drops_only_the_paths_the_run_never_changed(tmp_path: Path) -> None:
     record = _record_for_p(tmp_path, "x = 1\n")
     (tmp_path / "p.py").write_text("x = 2\n", encoding="utf-8", newline="")
     seen: list = []
@@ -536,7 +537,7 @@ def test_no_change_drops_only_the_paths_the_run_never_changed(tmp_path):
     assert land_run._measured_mismatch(tmp_path, record, ["p.py"], [], {}, no_change=lambda paths: ["p.py"]) == []
 
 
-def test_run_made_no_change_keeps_a_path_out_when_it_cannot_prove_it(tmp_path, monkeypatch):
+def test_run_made_no_change_keeps_a_path_out_when_it_cannot_prove_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = {"p.py": "a" * 40}
     assert land_run._run_made_no_change(tmp_path, "run1", None, None)(["p.py"]) == []
     assert land_run._run_made_no_change(tmp_path, None, base, None)(["p.py"]) == []
@@ -544,7 +545,7 @@ def test_run_made_no_change_keeps_a_path_out_when_it_cannot_prove_it(tmp_path, m
     assert land_run._run_made_no_change(tmp_path, "run1", base, None)(["p.py"]) == []
 
 
-def test_run_made_no_change_separates_an_own_hunk_from_peer_bytes_only(tmp_path, monkeypatch):
+def test_run_made_no_change_separates_an_own_hunk_from_peer_bytes_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import git_dir, git_objects
     from coordinator_core.ops.dispatch_emit import drift_attribution
 
@@ -561,7 +562,7 @@ def test_run_made_no_change_separates_an_own_hunk_from_peer_bytes_only(tmp_path,
     assert written(["own.py", "peer.py"]) == []
 
 
-def test_prior_pass_sessions_walks_the_resumed_chain_only_when_the_run_has_a_ledger(tmp_path, monkeypatch):
+def test_prior_pass_sessions_walks_the_resumed_chain_only_when_the_run_has_a_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import landing_integrity
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 

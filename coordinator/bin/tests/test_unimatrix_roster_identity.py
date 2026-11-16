@@ -5,12 +5,17 @@ import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
 BIN = Path(__file__).resolve().parents[1]
 
 
-def _load(filename, name):
+def _load(filename, name) -> "ModuleType":
     spec = importlib.util.spec_from_file_location(name, BIN / filename)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -24,7 +29,7 @@ send = _load("unimatrix-send.py", "identity_send")
 UUID = "01a1b630-6d3a-7861-ae89-44e2b9b4cfaa"
 
 
-def test_vendor_inference_uses_peer_identity_or_native_version():
+def test_vendor_inference_uses_peer_identity_or_native_version() -> None:
     assert roster.session_identity({"sessionId": "peer-codex-repo-12"})["vendor"] == "codex"
     assert roster.session_identity({"sessionId": "peer-agy-repo-12"})["vendor"] == "agy"
     assert roster.session_identity({"sessionId": UUID, "version": "2.1.319"})["vendor"] == "claude"
@@ -32,7 +37,7 @@ def test_vendor_inference_uses_peer_identity_or_native_version():
     assert roster.session_identity({"vendor": "codex", "sessionId": "peer-repo-12"})["vendor"] == "codex"
 
 
-def test_relay_exports_additive_identity_without_mutating_native_registration(tmp_path, monkeypatch, capsys):
+def test_relay_exports_additive_identity_without_mutating_native_registration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     original = {"pid": 1, "name": "native-claude", "sessionId": UUID, "version": "2.1.319"}
     (tmp_path / "key").write_text("test-token")
     monkeypatch.setattr(relay, "SESS", str(tmp_path))
@@ -47,7 +52,7 @@ def test_relay_exports_additive_identity_without_mutating_native_registration(tm
     assert "vendor" not in original and "box" not in original
 
 
-def test_strict_legacy_peer_name_is_readable_without_retargeting(tmp_path, monkeypatch):
+def test_strict_legacy_peer_name_is_readable_without_retargeting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     legacy = "codex-" + UUID
     entry = {"pid": 812, "name": legacy, "sessionId": "peer-" + legacy + "-812",
              "pidDomain": "darwin", "cwd": "/Users/me/X/claude-klabauter", "messagingSocketPath": "/far.sock"}
@@ -73,7 +78,7 @@ def test_strict_legacy_peer_name_is_readable_without_retargeting(tmp_path, monke
     assert json.loads((tmp_path / "31337.json").read_text()) == first
 
 
-def test_mirror_stamps_box_and_sync_restamps_older_box_none_mirror(tmp_path, monkeypatch):
+def test_mirror_stamps_box_and_sync_restamps_older_box_none_mirror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     entry = {"pid": 9, "name": "group-em-ad", "sessionId": UUID, "version": "2.1.319",
              "box": None, "unimatrixBox": None, "messagingSocketPath": "/far.sock"}
     monkeypatch.setattr(roster, "spawn", lambda command: SimpleNamespace(pid=9569))
@@ -101,26 +106,26 @@ def test_mirror_stamps_box_and_sync_restamps_older_box_none_mirror(tmp_path, mon
     assert roster.remote_mirrors([healed], "me@other") != [healed]
 
 
-def test_explicit_peer_and_native_names_keep_their_stem_and_gain_the_box():
+def test_explicit_peer_and_native_names_keep_their_stem_and_gain_the_box() -> None:
     assert roster.mirror_entry_name({"name": "friendly-codex"}, "macmini", scan=[]) == "friendly-codex.macmini"
     entry = {"name": "codex-" + UUID, "sessionId": UUID, "version": "2.1.319"}
     assert roster.mirror_entry_name(entry, "macmini", scan=[]) == f"{entry['name']}.macmini"
 
 
-def test_far_claude_entry_name_carries_its_box_with_or_without_a_local_namesake(tmp_path, monkeypatch):
+def test_far_claude_entry_name_carries_its_box_with_or_without_a_local_namesake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     entry = {"name": "example-game-repo-em", "sessionId": UUID, "version": "2.1.319"}
     assert roster.mirror_entry_name(entry, "me@machine-a", scan=[]) == "example-game-repo-em.machine-a"
     assert roster.mirror_entry_name(entry, "me@machine-a", scan=[("example-game-repo-em", "/local.sock")]) == "example-game-repo-em.machine-a"
     assert roster.mirror_entry_name(dict(entry, name="example-game-repo-em.machine-a"), "me@machine-a", scan=[]) == "example-game-repo-em.machine-a"
 
 
-def test_legacy_agy_alias_keeps_its_single_on_box_label():
+def test_legacy_agy_alias_keeps_its_single_on_box_label() -> None:
     entry = {"name": "agy-" + UUID, "sessionId": "peer-agy-repo-12", "cwd": "/work/repo"}
     name = roster.mirror_entry_name(entry, "me@Machine-a", scan=[])
     assert name.endswith("-on-machine-a") and name.count("-on-") == 1 and roster.LABEL_SEP not in name
 
 
-def test_two_boxes_with_identical_far_socket_and_name_get_distinct_display_routes(tmp_path, monkeypatch):
+def test_two_boxes_with_identical_far_socket_and_name_get_distinct_display_routes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     far_socket = "/tmp/cc-socks/cc-msg-086bf13a2ac11a310327603bcc2288c5.sock"
     name = "codex-claude-klabauter"
     entry = {"pid": 812, "name": name, "sessionId": "peer-codex-claude-klabauter-812",
@@ -153,7 +158,7 @@ def test_two_boxes_with_identical_far_socket_and_name_get_distinct_display_route
     assert len({key for _, key in roster.live_sessions()}) == 2
 
 
-def test_router_and_cli_list_vendor_box_and_cwd_without_changing_names(tmp_path, monkeypatch, capsys):
+def test_router_and_cli_list_vendor_box_and_cwd_without_changing_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     entries = [
         {"pid": 101, "name": "group-em-09", "version": "2.1.319", "status": "idle", "cwd": "/group"},
         {"pid": 102, "name": "remote-codex", "sessionId": "peer-codex-a-102", "box": "macmini",
@@ -189,13 +194,13 @@ def test_router_and_cli_list_vendor_box_and_cwd_without_changing_names(tmp_path,
     assert local[3:] == ["codex", "ready"]
 
 
-def test_box_key_folds_case_user_and_domain_but_keeps_an_address_whole():
+def test_box_key_folds_case_user_and_domain_but_keeps_an_address_whole() -> None:
     assert roster.box_key("me@Machine-b.local") == roster.box_key("machine-b") == "machine-b"
     assert roster.box_key("me@192.168.0.175") == "192.168.0.175"
     assert roster.labelled("example-game-repo-em", "me@Machine-b") == "example-game-repo-em.Machine-b"
 
 
-def test_only_the_lowest_alias_of_one_box_keeps_a_mirror_of_a_far_socket():
+def test_only_the_lowest_alias_of_one_box_keeps_a_mirror_of_a_far_socket() -> None:
     sock = "/tmp/cc-socks/a.sock"
     held_by = lambda alias: [("example-game-repo-em", roster.mirror_scan_key(alias, sock))]
     assert roster.alias_duplicate("machine-b", sock, held_by("Machine-b.local")) is True
@@ -204,7 +209,7 @@ def test_only_the_lowest_alias_of_one_box_keeps_a_mirror_of_a_far_socket():
     assert roster.alias_duplicate("machine-b", "/tmp/cc-socks/b.sock", held_by("Machine-b.local")) is False
 
 
-def test_every_mirror_row_the_roster_writes_carries_host_box_and_a_labelled_name(tmp_path, monkeypatch):
+def test_every_mirror_row_the_roster_writes_carries_host_box_and_a_labelled_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     entry = {"pid": 9, "name": "group-em-c1", "sessionId": UUID, "version": "2.1.319",
              "messagingSocketPath": r"\\.\pipe\LOCAL\cc-msg-90f66"}
     monkeypatch.setattr(roster, "spawn", lambda command: SimpleNamespace(pid=9570))
@@ -232,7 +237,31 @@ def test_every_mirror_row_the_roster_writes_carries_host_box_and_a_labelled_name
     assert healed["name"] == roster.labelled(healed["name"], cfg.remote) == "group-em-c1.machine-b"
 
 
-def test_session_identity_origin_is_one_box_id_across_hostname_spellings(monkeypatch):
+def test_a_stand_in_records_its_far_session_and_far_name_and_a_changed_far_session_crosses_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sid_x, sid_y = "38d698f0-0000-4000-8000-000000000001", "fc000000-0000-4000-8000-000000000003"
+    entry = {"pid": 100, "name": "group-em-54", "sessionId": sid_x, "version": "2.1.319", "messagingSocketPath": "/far.sock"}
+    monkeypatch.setattr(roster, "spawn", lambda command: SimpleNamespace(pid=9571))
+    monkeypatch.setattr(roster.time, "sleep", lambda _: None)
+    monkeypatch.setattr(roster, "proc_start", lambda pid: "local-start")
+    monkeypatch.setattr(roster, "pid_domain", lambda: "darwin")
+    monkeypatch.setattr(roster, "local_endpoint", lambda far: str(tmp_path / "local.sock"))
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(roster, "write_peer_key", lambda *args: None)
+    monkeypatch.setattr(roster, "local_peer_key", lambda *args: {})
+    cfg = SimpleNamespace(remote="me@machine-a", key="unused", tunnel_remote=None, log=str(tmp_path / "log"))
+    roster.mirror({"entry": entry, "key": "k"}, cfg, lambda _: None, scan=[])
+    path = tmp_path / "9571.json"
+    pinned = json.loads(path.read_text())
+    assert (pinned["name"], pinned["unimatrixFarName"], pinned["sessionId"], pinned["farPid"]) == (
+        "group-em-54.machine-a", "group-em-54", sid_x, 100)
+    other = dict(entry, name="example-game-repo-fc", sessionId=sid_y, pid=200)
+    bridges, rows = {"/far.sock": SimpleNamespace(poll=lambda: None, pid=9571)}, {"/far.sock": {"entry": other}}
+    assert roster.crossed_mirrors(bridges, rows) == [("group-em-54.machine-a", "/far.sock")]
+    rows = {"/far.sock": {"entry": entry}}
+    assert roster.crossed_mirrors(bridges, rows) == []
+
+
+def test_session_identity_origin_is_one_box_id_across_hostname_spellings(monkeypatch: pytest.MonkeyPatch) -> None:
     for host in ("Machine-b.local", "machine-b", "MACHINE-B.Local"):
         monkeypatch.setattr(roster.socket, "gethostname", lambda host=host: host)
         assert roster.session_identity({"name": "x"})["box"] == "machine-b"

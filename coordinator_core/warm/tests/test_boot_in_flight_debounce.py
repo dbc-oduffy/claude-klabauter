@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -35,7 +36,7 @@ from coordinator_core.warm import breadcrumb
 N_CALLERS = 8
 
 
-def test_n_concurrent_callers_with_absent_record_produce_exactly_one_spawn(tmp_path):
+def test_n_concurrent_callers_with_absent_record_produce_exactly_one_spawn(tmp_path: Path) -> None:
     """`N_CALLERS` threads race `try_claim_boot` on the same lock path with no
     discovery/breadcrumb record backing any of them (`record=None`) -- exactly
     one must be told to proceed; every other must be told a boot is already
@@ -68,7 +69,7 @@ def test_n_concurrent_callers_with_absent_record_produce_exactly_one_spawn(tmp_p
     )
 
 
-def test_try_claim_boot_absent_record_matches_should_spawn_decision(tmp_path):
+def test_try_claim_boot_absent_record_matches_should_spawn_decision(tmp_path: Path) -> None:
     """Sanity: `should_spawn_decision(None, ...)` is exactly `try_claim_boot`
     on that lock path -- the fallback this chunk added, not a parallel check.
 
@@ -87,7 +88,7 @@ def test_try_claim_boot_absent_record_matches_should_spawn_decision(tmp_path):
     assert decided is True
 
 
-def test_a_live_holders_claim_expires_after_the_boot_window(tmp_path):
+def test_a_live_holders_claim_expires_after_the_boot_window(tmp_path: Path) -> None:
     """A holder that is STILL ALIVE must stop vouching once its claim ages
     past `BOOT_CLAIM_MAX_SECS` -- the defect measured 2026-09-02.
 
@@ -107,7 +108,8 @@ def test_a_live_holders_claim_expires_after_the_boot_window(tmp_path):
     and the thing under test is the comparison, not the passage of time.
 
     Companion to the crash test below, which pins the OTHER half: a DEAD
-    holder still releases instantly, with no window to wait out.
+    holder's lock is free at the kill, but its stamp keeps vouching until
+    `BOOT_CLAIM_RELEASED_GRACE_SECS` has passed.
     """
     lock_path = tmp_path / "warm-http.json.boot.lock"
     claimed_at = 1_000_000.0
@@ -150,12 +152,15 @@ time.sleep(60)
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_holder_killed_mid_boot_releases_and_the_next_caller_spawns(tmp_path):
+def test_a_holder_killed_mid_boot_releases_and_the_next_caller_spawns(tmp_path: Path) -> None:
     """A process that claims the boot-in-flight lock and is then killed (not
     given the chance to run any cleanup) must release it -- WAIT_ABANDONED /
-    crashed-holder-releases semantics, never a TTL. The next caller must see
-    `should_spawn_decision(None, ...)` return True immediately after the kill,
-    with no wait for any timeout to elapse.
+    crashed-holder-releases semantics, never a TTL. The lock is free at the
+    kill, but the killed claimer's stamp still vouches for its boot until
+    `BOOT_CLAIM_RELEASED_GRACE_SECS` (3.5 s) has passed: a caller inside the
+    grace is told False, and the next caller past it is told
+    `should_spawn_decision(None, ...)` True. The grace boundary is crossed by
+    the injected `now` clock, not by sleeping.
 
     This is the load-bearing property C4's chunk body names: a debounce that
     deadlocks on a dead starter converts a bounded burst into a box-wide
@@ -194,20 +199,19 @@ def test_a_holder_killed_mid_boot_releases_and_the_next_caller_spawns(tmp_path):
         proc.kill()
         proc.wait(timeout=10)
 
-        deadline = time.monotonic() + 5.0
-        released = False
-        last = None
-        while time.monotonic() < deadline:
-            last = breadcrumb.should_spawn_decision(None, lock_path=lock_path)
-            if last is True:
-                released = True
-                break
-            time.sleep(0.05)
+        killed_at = time.time()
+        inside_grace = killed_at + breadcrumb.BOOT_CLAIM_RELEASED_GRACE_SECS / 2
+        assert breadcrumb.should_spawn_decision(None, lock_path=lock_path, now=inside_grace) is False, (
+            "a killed claimer's stamp must still vouch inside the released grace"
+        )
 
-        assert released, (
-            f"the next caller was not told to spawn within 5s of the holder's "
-            f"death (last decision: {last}) -- a TTL'd or non-releasing "
-            f"primitive here converts a bounded burst into a box-wide outage"
+        past_grace = killed_at + breadcrumb.BOOT_CLAIM_RELEASED_GRACE_SECS + 1.0
+        last = breadcrumb.should_spawn_decision(None, lock_path=lock_path, now=past_grace)
+        assert last is True, (
+            f"the next caller was not told to spawn once the holder's stamp aged "
+            f"past the released grace (last decision: {last}) -- a TTL'd or "
+            f"non-releasing primitive here converts a bounded burst into a "
+            f"box-wide outage"
         )
     finally:
         if proc.poll() is None:
@@ -215,7 +219,7 @@ def test_a_holder_killed_mid_boot_releases_and_the_next_caller_spawns(tmp_path):
             proc.wait(timeout=10)
 
 
-def test_posix_primitive_is_flock_release_on_process_death():
+def test_posix_primitive_is_flock_release_on_process_death() -> None:
     """Multi-OS is the live risk (C4's chunk body): assert the POSIX arm of
     `try_claim_boot` is actually `fcntl.flock`, not a Windows-only mutex ported
     thinly. `flock`'s documented semantics (held locks release when the last
@@ -243,7 +247,7 @@ def test_posix_primitive_is_flock_release_on_process_death():
     )
 
 
-def test_windows_primitive_is_msvcrt_locking():
+def test_windows_primitive_is_msvcrt_locking() -> None:
     """Companion pin to the POSIX assertion above, run on every platform since
     it only inspects source: the Windows branch must exist and use
     `msvcrt.locking`, not a bespoke `CreateMutexW` reimplementation."""

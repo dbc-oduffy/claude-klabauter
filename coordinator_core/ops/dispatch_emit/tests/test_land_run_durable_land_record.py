@@ -61,7 +61,7 @@ def _init(root: Path) -> None:
 
 
 @pytest.fixture
-def keyed(tmp_path):
+def keyed(tmp_path: Path):
     """Run inside a keyed dispatch: `(claim_dir, journal_dir)`; released after the test."""
     claim_dir = tmp_path / "svc" / "dispatch-claims"
     claim_dir.mkdir(parents=True)
@@ -72,7 +72,7 @@ def keyed(tmp_path):
 
 
 @pytest.fixture
-def land_repo(tmp_path, monkeypatch):
+def land_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     _init(root)
     _write(root, "README.md", "seed\n")
@@ -99,7 +99,7 @@ def land_repo(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def tc_repo(tmp_path):
+def tc_repo(tmp_path: Path) -> Path:
     root = tmp_path / "tcrepo"
     _init(root)
     (tmp_path / "wave-review.md").write_text("# review\n", encoding="utf-8")
@@ -143,7 +143,7 @@ _PATHS = {
 
 
 @pytest.fixture(params=sorted(_PATHS))
-def path(request):
+def path(request: pytest.FixtureRequest):
     return request.getfixturevalue(_PATHS[request.param][0]), _PATHS[request.param], request.param
 
 
@@ -160,7 +160,7 @@ def _record(journal) -> dict:
     return record
 
 
-def test_a_landed_call_walks_claimed_committing_committed_with_the_sha(path, keyed, monkeypatch):
+def test_a_landed_call_walks_claimed_committing_committed_with_the_sha(path, keyed, monkeypatch: pytest.MonkeyPatch) -> None:
     root, (_f, mint, fire, _mod, run_id, script), kind = path
     _claim, journal = keyed
     seen = _phases(monkeypatch)
@@ -176,12 +176,12 @@ def test_a_landed_call_walks_claimed_committing_committed_with_the_sha(path, key
     assert record["repo_root"] == str(root)
 
 
-def test_a_death_before_the_commit_spawn_resolves_never_ran(path, keyed, monkeypatch):
+def test_a_death_before_the_commit_spawn_resolves_never_ran(path, keyed, monkeypatch: pytest.MonkeyPatch) -> None:
     root, (_f, mint, fire, _mod, _r, _s), _k = path
     _claim, journal = keyed
     real = land_intent.mark
 
-    def _die_at_committing(phase, sha=None, **fields):
+    def _die_at_committing(phase, sha=None, **fields) -> None:
         if phase == land_intent.PHASE_COMMITTING:
             raise _Death()
         real(phase, sha, **fields)
@@ -199,11 +199,11 @@ def test_a_death_before_the_commit_spawn_resolves_never_ran(path, keyed, monkeyp
     assert land_intent.resolve(record) == {"verdict": "never-ran"}
 
 
-def test_a_death_after_the_commit_before_the_receipt_is_spent_resolves_committed(path, keyed, monkeypatch):
+def test_a_death_after_the_commit_before_the_receipt_is_spent_resolves_committed(path, keyed, monkeypatch: pytest.MonkeyPatch) -> None:
     root, (_f, mint, fire, mod, run_id, script), _k = path
     _claim, journal = keyed
 
-    def _die_when_landed(token_state, *, landed, receipt=None):
+    def _die_when_landed(token_state, *, landed, receipt=None) -> None:
         if landed:
             raise _Death()
 
@@ -220,12 +220,12 @@ def test_a_death_after_the_commit_before_the_receipt_is_spent_resolves_committed
     assert land_intent.resolve(record) == {"verdict": "committed", "sha": head}
 
 
-def test_a_death_inside_the_commit_is_unresolved_never_never_ran(path, keyed, monkeypatch):
+def test_a_death_inside_the_commit_is_unresolved_never_never_ran(path, keyed, monkeypatch: pytest.MonkeyPatch) -> None:
     root, (_f, mint, fire, _mod, _r, _s), _k = path
     _claim, journal = keyed
     real = land_intent.mark
 
-    def _die_after_committing(phase, sha=None, **fields):
+    def _die_after_committing(phase, sha=None, **fields) -> None:
         real(phase, sha, **fields)
         if phase == land_intent.PHASE_COMMITTING:
             raise _Death()
@@ -241,7 +241,7 @@ def test_a_death_inside_the_commit_is_unresolved_never_never_ran(path, keyed, mo
     assert land_intent.resolve(record) is None
 
 
-def test_a_call_outside_a_keyed_dispatch_writes_no_record(path, tmp_path):
+def test_a_call_outside_a_keyed_dispatch_writes_no_record(path, tmp_path: Path) -> None:
     root, (_f, mint, fire, _mod, _r, _s), _k = path
     token = mint(root)
 
@@ -251,13 +251,14 @@ def test_a_call_outside_a_keyed_dispatch_writes_no_record(path, tmp_path):
     assert not list(tmp_path.rglob("*.land.json"))
 
 
-def test_a_call_that_lost_the_claim_writes_no_record(path, keyed):
+def test_a_call_that_lost_the_claim_writes_no_record(path, keyed) -> None:
     root, (_f, mint, fire, _mod, _r, _s), _k = path
     _claim, journal = keyed
     token = mint(root)
     first = fire(root, token)
     assert first["committed"] is True, first
-    Path(journal, KEY + ".land.json").unlink()
+    (land_file,) = Path(journal).rglob(KEY + ".land.json")
+    land_file.unlink()
 
     repeat = fire(root, token)
 
@@ -265,12 +266,12 @@ def test_a_call_that_lost_the_claim_writes_no_record(path, keyed):
     assert dispatch_ack.read_land_intent(journal, KEY) is None
 
 
-def test_a_record_with_a_sha_not_on_head_is_unresolved(path, keyed):
+def test_a_record_with_a_sha_not_on_head_is_unresolved(path, keyed) -> None:
     root, _p, _k = path
     record = {"repo_root": str(root), "run_id": "x", "token": "y", "script_path": "z",
               "phase": "committed", "sha": "0" * 40}
     assert land_intent.resolve(record) is None
 
 
-def test_a_record_without_a_repo_root_is_unresolved():
+def test_a_record_without_a_repo_root_is_unresolved() -> None:
     assert land_intent.resolve({"phase": "claimed"}) is None

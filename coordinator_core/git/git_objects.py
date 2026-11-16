@@ -592,6 +592,37 @@ def _read_loose_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]
 
 _PACK_LISTING_CACHE: "dict[str, tuple[Optional[tuple[int, int]], _PackListing]]" = {}
 
+_READ_STORE_REGISTRY = "engine-read-stores"
+_RECORDED_READ_STORES: set[str] = set()
+
+
+def read_store_registry_dir() -> Path:
+    """Directory of one file per store this engine's pack reader has opened, named by the sha1 of
+    the common dir and holding that path on one line. Under `settings_home()`; an unresolvable
+    settings home raises (never a fallback path)."""
+    from coordinator_core._settings_home import settings_home
+
+    return settings_home() / _READ_STORE_REGISTRY
+
+
+def _record_read_store(common_dir: Path) -> None:
+    """Record `common_dir` in the registry once per process; no spawn, never raises. Pool workers
+    read objects, not the server, so the tick finds stores through this file."""
+    key = str(common_dir)
+    if key in _RECORDED_READ_STORES:
+        return
+    _RECORDED_READ_STORES.add(key)
+    try:
+        registry = read_store_registry_dir()
+        registry.mkdir(parents=True, exist_ok=True)
+        entry = registry / hashlib.sha1(key.encode("utf-8", "surrogatepass"), usedforsecurity=False).hexdigest()
+        with open(entry, "x", encoding="utf-8") as fh:
+            fh.write(key + "\n")
+    except FileExistsError:
+        pass
+    except Exception as exc:  # noqa: BLE001 -- a registry failure must not fail a read
+        _log.warning("engine read-store registry not written (settings_home unresolved?): %s", exc)
+
 
 def _pack_dir_generation(pack_dir: Path) -> Optional[tuple[int, int]]:
     try:
@@ -660,6 +691,7 @@ def _pack_listing(common_dir: Path, *, revalidate: bool = True) -> _PackListing:
             return cached[1]
     else:
         generation = _pack_dir_generation(pack_dir)
+        _record_read_store(common_dir)
     kept: list[str] = []
     kept_mtimes: list[int] = []
     if generation is not None:
@@ -1934,6 +1966,7 @@ def cas_ref(
     reflog_committer: Optional[str] = None,
     reflog_message: Optional[str] = None,
     head_gitdir: Optional[Path] = None,
+    report_lock: bool = False,
 ) -> bool:
     """`_cas_ref` (contract there), then drops the per-call HEAD memo whether or
     not the CAS won."""
@@ -1941,7 +1974,7 @@ def cas_ref(
         return _cas_ref(
             gitdir, ref, expected, new,
             reflog_committer=reflog_committer, reflog_message=reflog_message,
-            head_gitdir=head_gitdir,
+            head_gitdir=head_gitdir, report_lock=report_lock,
         )
     finally:
         call_io_scope.invalidate(call_io_scope.HEAD_NAMESPACE)
@@ -1956,30 +1989,40 @@ def _cas_ref(
     reflog_committer: Optional[str] = None,
     reflog_message: Optional[str] = None,
     head_gitdir: Optional[Path] = None,
+    report_lock: bool = False,
 ) -> bool:
+    """Compare-and-swap `ref` from `expected` to `new` under `<ref>.lock`.
+
+    False on a compare mismatch, a lost replace, or an abandoned dispatch. A held lock first
+    tries `ref_lock.recover_stale_ref_lock` and one retake; still held, it raises `RefLockHeld`
+    when `report_lock` is True (fresh and stale alike) and returns False otherwise, so callers
+    that never opted in keep the bool contract.
+    """
+    from coordinator_core import dispatch_abandon
+    from coordinator_core.git import ref_lock
+
+    if dispatch_abandon.is_abandoned():
+        return False
     ref_path = gitdir / ref
     lock_path = gitdir / (ref + ".lock")
     ref_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    except FileExistsError:
-        return False
-    except PermissionError:
-        # WINDOWS SPELLS THE SAME LOSS DIFFERENTLY. `O_CREAT|O_EXCL` against a
-        # lock a peer is holding -- or one being unlinked in their `finally` as
-        # we open -- surfaces as `PermissionError`, not `FileExistsError`, and
-        # only the latter was caught. The raise then escaped `cas_ref`'s
-        # documented bool contract entirely and reached callers as a crash.
-        # Measured at 3/612 attempts under 12-way concurrency.
-        #
-        # Failing to TAKE the lock is a refusal, not an error: nothing has been
-        # written, no ref has moved, and the caller's own retry-or-refuse path
-        # is exactly right. This is deliberately NOT retried here -- the CAS
-        # contract is that a lost race returns False and lets the caller decide,
-        # and swallowing that decision inside the primitive is how a refused
-        # commit turns into a silently reattempted one.
-        return False
+    recovered = False
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            break
+        except (FileExistsError, PermissionError):
+            # Trap: Windows spells a held lock (or one being unlinked as we open) as
+            # PermissionError, not FileExistsError.
+            if not recovered:
+                recovered = True
+                if ref_lock.recover_stale_ref_lock(gitdir, ref) is not None:
+                    continue
+            if report_lock:
+                raise ref_lock.RefLockHeld.from_lock(gitdir, ref) from None
+            return False
+    holder = ref_lock.register_holder(gitdir, ref)
     try:
         os.close(fd)
         current = _read_ref_raw(ref_path)
@@ -2001,11 +2044,15 @@ def _cas_ref(
                 now = read_packed_ref(gitdir, ref)
             return now == expected
 
-        return _replace_with_retry(
-            lock_path, ref_path, still_valid=_expected_still_current
-        )
+        def _still_valid() -> bool:
+            return holder.valid() and _expected_still_current()
+
+        # Trap: os.replace is by path; once abandon released the lock a peer may own the path.
+        if not holder.valid():
+            return False
+        return _replace_with_retry(lock_path, ref_path, still_valid=_still_valid)
     finally:
-        if lock_path.exists():
+        if holder.close() and lock_path.exists():
             try:
                 lock_path.unlink()
             except OSError:

@@ -23,6 +23,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record
     _write_record,
     repo,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -59,18 +60,18 @@ def _manifest(root, *, rows=None, review=None, baseline=None) -> None:
     (root / RECORD_DIR_ROOT / RUN / "manifest.json").write_text(json.dumps(doc), encoding="utf-8")
 
 
-def _dirty(root, paths=FILES) -> None:
+def _dirty(root, paths: list[str] = FILES) -> None:
     for p in paths:
         target = root / p
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(f"{p} reviewed\n", encoding="utf-8")
 
 
-def _blobs(root, paths=FILES) -> dict:
+def _blobs(root, paths: list[str] = FILES) -> dict:
     return {p: kept_work.fingerprint(root, p) for p in paths}
 
 
-def _checkpointed_shape(root, monkeypatch, *, review_source="answers") -> None:
+def _checkpointed_shape(root, monkeypatch, *, review_source: str = "answers") -> None:
     """Rows C2/C3 are checkpointed (absent from the request, which finishes only C4); a review
     agent then wrote their files. The sibling-claim lookup claims them, as in f0f6de."""
     _write_record(root, RUN)
@@ -93,7 +94,7 @@ def _read_record(root, rel) -> dict:
     return json.loads((root / rel).read_text(encoding="utf-8"))
 
 
-def _assert_recorded(root, out, paths=FILES) -> None:
+def _assert_recorded(root, out, paths: list[str] = FILES) -> None:
     assert out["committed"] is True, out
     kept = _read_record(root, KEPT_REL)
     assert kept["post_checkpoint"] == _blobs(root, paths)
@@ -112,7 +113,7 @@ def _assert_recorded(root, out, paths=FILES) -> None:
     assert KEPT_REL not in landed and HALTED_REL not in landed
 
 
-def test_review_hunks_on_checkpointed_rows_are_recorded_withheld_and_named(repo, monkeypatch):
+def test_review_hunks_on_checkpointed_rows_are_recorded_withheld_and_named(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _checkpointed_shape(repo, monkeypatch)
 
     out = _call(repo)
@@ -121,7 +122,7 @@ def test_review_hunks_on_checkpointed_rows_are_recorded_withheld_and_named(repo,
     assert out["review_edits_unlanded"] == {}
 
 
-def test_recorded_blobs_resolve_in_the_object_store(repo, monkeypatch):
+def test_recorded_blobs_resolve_in_the_object_store(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _checkpointed_shape(repo, monkeypatch)
 
     out = _call(repo)
@@ -131,7 +132,7 @@ def test_recorded_blobs_resolve_in_the_object_store(repo, monkeypatch):
         assert _git(["cat-file", "-p", blob], repo) == f"{p} reviewed\n"
 
 
-def test_recorded_blobs_resolve_when_dot_git_is_a_pointer_file(repo, tmp_path, monkeypatch):
+def test_recorded_blobs_resolve_when_dot_git_is_a_pointer_file(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _git(["init", "-q", "--separate-git-dir", str(tmp_path / "gd")], repo)
     assert (repo / ".git").is_file()
     _checkpointed_shape(repo, monkeypatch)
@@ -143,7 +144,7 @@ def test_recorded_blobs_resolve_when_dot_git_is_a_pointer_file(repo, tmp_path, m
         assert _git(["cat-file", "-p", blob], repo) == f"{p} reviewed\n"
 
 
-def test_record_does_not_depend_on_the_review_source_answering(repo, monkeypatch):
+def test_record_does_not_depend_on_the_review_source_answering(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _checkpointed_shape(repo, monkeypatch, review_source="unanswerable")
 
     out = _call(repo)
@@ -151,7 +152,7 @@ def test_record_does_not_depend_on_the_review_source_answering(repo, monkeypatch
     _assert_recorded(repo, out)
 
 
-def test_review_declared_paths_alone_are_recorded(repo, monkeypatch):
+def test_review_declared_paths_alone_are_recorded(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _checkpointed_shape(repo, monkeypatch, review_source="unanswerable")
     _manifest(repo, rows=[], review=FILES)
 
@@ -160,7 +161,7 @@ def test_review_declared_paths_alone_are_recorded(repo, monkeypatch):
     _assert_recorded(repo, out)
 
 
-def test_file_only_a_sibling_declares_is_not_recorded(repo, monkeypatch):
+def test_file_only_a_sibling_declares_is_not_recorded(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _checkpointed_shape(repo, monkeypatch, review_source="unanswerable")
     _manifest(repo, rows=[{"id": "C2", "writes": FILES[:1]}])
     _dirty(repo, ["sibling_only.py"])
@@ -173,7 +174,7 @@ def test_file_only_a_sibling_declares_is_not_recorded(repo, monkeypatch):
     assert "sibling_only.py" not in out["run_artifacts"]["withheld"]
 
 
-def test_declared_file_equal_to_its_write_baseline_is_not_recorded(repo, monkeypatch):
+def test_declared_file_equal_to_its_write_baseline_is_not_recorded(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _checkpointed_shape(repo, monkeypatch, review_source="unanswerable")
     stale = FILES[0]
     _manifest(repo, baseline={stale: kept_work.fingerprint(repo, stale)})
@@ -184,7 +185,7 @@ def test_declared_file_equal_to_its_write_baseline_is_not_recorded(repo, monkeyp
     assert stale not in out["run_artifacts"]["withheld"]
 
 
-def test_dirty_file_of_an_unfinished_row_in_the_request_is_not_recorded(repo, monkeypatch):
+def test_dirty_file_of_an_unfinished_row_in_the_request_is_not_recorded(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _checkpointed_shape(repo, monkeypatch, review_source="unanswerable")
     (repo / "half.py").write_text("h = 1\n", encoding="utf-8")
     _manifest(repo, rows=[{"id": "C4", "writes": ["c4.py"]}, {"id": "C5", "writes": ["half.py"]}])
@@ -236,7 +237,7 @@ def _d0400d_shape(root, monkeypatch, *, coded) -> None:
     monkeypatch.setattr(sibling_claims, "sibling_run_claims", lambda *a, **k: {})
 
 
-def test_post_checkpoint_hunks_of_coded_rows_still_in_the_request_are_recorded(repo, monkeypatch):
+def test_post_checkpoint_hunks_of_coded_rows_still_in_the_request_are_recorded(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _d0400d_shape(repo, monkeypatch, coded=set(COMPOSED))
 
     out = _call(repo, {**_halt(), "plan": PLAN})
@@ -247,7 +248,7 @@ def test_post_checkpoint_hunks_of_coded_rows_still_in_the_request_are_recorded(r
 
 
 @pytest.mark.parametrize("plan_field", [True, False])
-def test_uncoded_rows_in_the_request_are_withheld_not_recorded(repo, monkeypatch, plan_field):
+def test_uncoded_rows_in_the_request_are_withheld_not_recorded(repo, monkeypatch: pytest.MonkeyPatch, plan_field) -> None:
     _d0400d_shape(repo, monkeypatch, coded=set())
 
     out = _call(repo, {**_halt(), "plan": PLAN} if plan_field else None)
@@ -258,7 +259,7 @@ def test_uncoded_rows_in_the_request_are_withheld_not_recorded(repo, monkeypatch
         assert out["run_artifacts"]["withheld"][p] == RUN_DIRT
 
 
-def test_unreadable_plan_is_surfaced_and_credits_no_row(repo, monkeypatch):
+def test_unreadable_plan_is_surfaced_and_credits_no_row(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _d0400d_shape(repo, monkeypatch, coded=set(COMPOSED))
     (repo / PLAN).write_bytes(b"\xff\xfe\x00 not utf-8 \xff")
 
@@ -271,7 +272,7 @@ def test_unreadable_plan_is_surfaced_and_credits_no_row(repo, monkeypatch):
         assert out["run_artifacts"]["withheld"][p] == RUN_DIRT
 
 
-def test_readable_plan_reports_no_coded_rows_error(repo, monkeypatch):
+def test_readable_plan_reports_no_coded_rows_error(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _d0400d_shape(repo, monkeypatch, coded=set(COMPOSED))
 
     out = _call(repo, {**_halt(), "plan": PLAN})
@@ -279,7 +280,7 @@ def test_readable_plan_reports_no_coded_rows_error(repo, monkeypatch):
     assert "coded_rows_unreadable" not in out
 
 
-def test_coded_rows_lets_an_unexpected_error_propagate(tmp_path, monkeypatch):
+def test_coded_rows_lets_an_unexpected_error_propagate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import delivery_credit
 
     def boom(*a, **k):
@@ -290,14 +291,14 @@ def test_coded_rows_lets_an_unexpected_error_propagate(tmp_path, monkeypatch):
         halted_record_commit._coded_rows(tmp_path, {"plan": PLAN})
 
 
-def test_blobs_that_could_not_be_written_are_not_recorded_and_are_reported(repo, monkeypatch):
+def test_blobs_that_could_not_be_written_are_not_recorded_and_are_reported(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import git_objects
 
     _checkpointed_shape(repo, monkeypatch)
 
     real_write_object = git_objects.write_object
 
-    def boom(gitdir, kind, payload, *a, **k):
+    def boom(gitdir, kind, payload, *a, **k) -> str:
         if kind == b"blob" and payload.rstrip().endswith(b" reviewed"):
             raise OSError("disk full")
         return real_write_object(gitdir, kind, payload, *a, **k)
@@ -314,7 +315,16 @@ def test_blobs_that_could_not_be_written_are_not_recorded_and_are_reported(repo,
         assert out["run_artifacts"]["withheld"][p] == RUN_DIRT
 
 
-def test_coded_and_uncoded_request_rows_start_the_same_processes(repo, tmp_path, monkeypatch):
+def _assert_spy_counts_a_spawn(root, calls: list) -> None:
+    """A zero baseline proves a spawn-free halt only if the spy sees a spawn that does happen."""
+    from coordinator_core.git.run import run_git
+
+    run_git(["--version"], cwd=root)
+    assert len(calls) == 1, calls
+    del calls[:]
+
+
+def test_coded_and_uncoded_request_rows_start_the_same_processes(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import shutil
 
     _d0400d_shape(repo, monkeypatch, coded=set(COMPOSED))
@@ -325,11 +335,12 @@ def test_coded_and_uncoded_request_rows_start_the_same_processes(repo, tmp_path,
     calls: list = []
 
     class Spy(real):
-        def __init__(self, *a, **k):
+        def __init__(self, *a, **k) -> None:
             calls.append(a[0] if a else k.get("args"))
             super().__init__(*a, **k)
 
     monkeypatch.setattr(subprocess, "Popen", Spy)
+    _assert_spy_counts_a_spawn(repo, calls)
     _call(control, {**_halt(), "plan": PLAN})
     baseline = len(calls)
     del calls[:]
@@ -337,11 +348,10 @@ def test_coded_and_uncoded_request_rows_start_the_same_processes(repo, tmp_path,
     out = _call(repo, {**_halt(), "plan": PLAN})
 
     assert out["kept"]["post_checkpoint"] == sorted(COMPOSED.values())
-    assert baseline > 0
     assert len(calls) == baseline
 
 
-def test_second_halt_of_a_same_id_refire_carries_the_prior_record_forward(repo, monkeypatch):
+def test_second_halt_of_a_same_id_refire_carries_the_prior_record_forward(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _checkpointed_shape(repo, monkeypatch, review_source="unanswerable")
     first = _call(repo)
     _assert_recorded(repo, first)
@@ -356,7 +366,7 @@ def test_second_halt_of_a_same_id_refire_carries_the_prior_record_forward(repo, 
     assert all(out["run_artifacts"]["withheld"][p] == RUN_DIRT for p in FILES)
 
 
-def test_prior_record_drops_a_path_that_is_no_longer_dirty(repo, monkeypatch):
+def test_prior_record_drops_a_path_that_is_no_longer_dirty(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _checkpointed_shape(repo, monkeypatch, review_source="unanswerable")
     _call(repo)
     _git(["add", FILES[0]], repo)
@@ -371,7 +381,7 @@ def test_prior_record_drops_a_path_that_is_no_longer_dirty(repo, monkeypatch):
     assert sorted(kept["post_checkpoint"]) == sorted(FILES[1:])
 
 
-def test_halt_starts_no_extra_process_for_the_recorded_hunks(repo, tmp_path, monkeypatch):
+def test_halt_starts_no_extra_process_for_the_recorded_hunks(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import shutil
 
     _checkpointed_shape(repo, monkeypatch, review_source="unanswerable")
@@ -381,11 +391,12 @@ def test_halt_starts_no_extra_process_for_the_recorded_hunks(repo, tmp_path, mon
     calls: list = []
 
     class Spy(real):
-        def __init__(self, *a, **k):
+        def __init__(self, *a, **k) -> None:
             calls.append(a[0] if a else k.get("args"))
             super().__init__(*a, **k)
 
     monkeypatch.setattr(subprocess, "Popen", Spy)
+    _assert_spy_counts_a_spawn(repo, calls)
     with monkeypatch.context() as unmodified:
         unmodified.setattr(halted_record_commit, "_post_checkpoint_candidates", lambda *a, **k: [])
         _call(control)
@@ -395,11 +406,10 @@ def test_halt_starts_no_extra_process_for_the_recorded_hunks(repo, tmp_path, mon
     out = _call(repo)
 
     assert out["kept"]["post_checkpoint"] == sorted(FILES)
-    assert baseline > 0
     assert len(calls) == baseline
 
 
-def test_commit_request_written_between_scopes_is_seen_by_the_next_scope(tmp_path):
+def test_commit_request_written_between_scopes_is_seen_by_the_next_scope(tmp_path: Path) -> None:
     """The per-call read cache never outlives its scope: a request written after one scope's absent read
     is declared by the next scope (and by an unscoped read)."""
     from coordinator_core.git import call_io_scope
@@ -416,7 +426,7 @@ def test_commit_request_written_between_scopes_is_seen_by_the_next_scope(tmp_pat
     assert call_io_scope.read_bytes(path) == b"x"
 
 
-def test_invalidate_makes_a_mid_scope_write_visible_to_the_same_scope(tmp_path):
+def test_invalidate_makes_a_mid_scope_write_visible_to_the_same_scope(tmp_path: Path) -> None:
     """Absence is cached per scope; a writer inside the scope drops the entry so its own re-read sees the file."""
     from coordinator_core.git import call_io_scope
 

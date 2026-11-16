@@ -5,6 +5,7 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git import ref_cas_retry as rcr
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -40,7 +41,7 @@ def _peer_commit(repo, rel, text):
     return _git(repo, "rev-parse", "HEAD")
 
 
-def test_predicate_matches_the_real_commit_paths_text(tmp_path, monkeypatch):
+def test_predicate_matches_the_real_commit_paths_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
     monkeypatch.setattr(gcommit, "cas_ref", lambda *a, **k: False)
@@ -50,7 +51,26 @@ def test_predicate_matches_the_real_commit_paths_text(tmp_path, monkeypatch):
     assert rcr.is_ref_moved(caught.value)
 
 
-def test_predicate_rejects_index_markers_and_subclasses():
+def test_predicate_retries_a_fresh_ref_lock_and_never_a_stale_one(tmp_path: Path) -> None:
+    from coordinator_core.git.ref_lock import RefLockHeld
+
+    lock = tmp_path / "x.lock"
+    assert rcr.is_ref_moved(RefLockHeld("refs/heads/x", lock, 0, "", False))
+    assert not rcr.is_ref_moved(RefLockHeld("refs/heads/x", lock, 99, "", True))
+
+
+def test_predicate_follows_ref_lock_refused_stale_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    class RefLockRefused(gcommit.CommitRefused):
+        def __init__(self, stale: bool) -> None:
+            super().__init__("cannot lock ref")
+            self.stale = stale
+
+    monkeypatch.setattr(gcommit, "RefLockRefused", RefLockRefused, raising=False)
+    assert rcr.is_ref_moved(RefLockRefused(False))
+    assert not rcr.is_ref_moved(RefLockRefused(True))
+
+
+def test_predicate_rejects_index_markers_and_subclasses() -> None:
     assert not rcr.is_ref_moved_text("index-stat compare-and-swap failed -- index changed")
     assert not rcr.is_ref_moved_text(None)
     text = "compare-and-swap failed -- refs/heads/x moved since abc was captured."
@@ -63,7 +83,7 @@ def test_predicate_rejects_index_markers_and_subclasses():
     assert not rcr.is_ref_moved(ValueError(text))
 
 
-def test_paths_unchanged_between_disjoint_overlap_and_unreadable(tmp_path):
+def test_paths_unchanged_between_disjoint_overlap_and_unreadable(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD")
     disjoint = _peer_commit(repo, "peer/file.txt", "p\n")
@@ -78,7 +98,7 @@ def test_paths_unchanged_between_disjoint_overlap_and_unreadable(tmp_path):
 def _loop(repo, paths, lose_times, peers):
     calls = []
 
-    def attempt():
+    def attempt() -> bool:
         calls.append(rcr.head_sha(repo))
         n = len(calls)
         if n <= len(peers):
@@ -88,7 +108,7 @@ def _loop(repo, paths, lose_times, peers):
     return calls, attempt
 
 
-def test_lands_on_attempt_two_after_a_disjoint_peer(tmp_path):
+def test_lands_on_attempt_two_after_a_disjoint_peer(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     calls, attempt = _loop(repo, ["d/ours.txt"], 1, [lambda: _peer_commit(repo, "p.txt", "p\n")])
     result, refused = rcr.retry_ref_moved(repo, ["d/ours.txt"], attempt, lambda r: r)
@@ -96,7 +116,7 @@ def test_lands_on_attempt_two_after_a_disjoint_peer(tmp_path):
     assert len(calls) == 2 and calls[0] != calls[1]
 
 
-def test_gives_up_after_the_bound(tmp_path):
+def test_gives_up_after_the_bound(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     peers = [lambda i=i: _peer_commit(repo, f"p{i}.txt", "p\n") for i in range(10)]
     calls, attempt = _loop(repo, ["d/ours.txt"], 99, peers)
@@ -105,7 +125,7 @@ def test_gives_up_after_the_bound(tmp_path):
     assert len(calls) == rcr.REF_CAS_ATTEMPTS == 4
 
 
-def test_overlap_stops_at_the_first_attempt(tmp_path):
+def test_overlap_stops_at_the_first_attempt(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     calls, attempt = _loop(repo, ["d/ours.txt"], 99, [lambda: _peer_commit(repo, "d/ours.txt", "t\n")])
     result, refused = rcr.retry_ref_moved(repo, ["d/ours.txt"], attempt, lambda r: r)
@@ -113,7 +133,7 @@ def test_overlap_stops_at_the_first_attempt(tmp_path):
     assert len(calls) == 1
 
 
-def test_a_won_attempt_and_an_exception_end_the_loop(tmp_path):
+def test_a_won_attempt_and_an_exception_end_the_loop(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     assert rcr.retry_ref_moved(repo, ["seed.txt"], lambda: "ok", lambda r: False) == ("ok", None)
 

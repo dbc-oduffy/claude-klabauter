@@ -330,6 +330,10 @@ ABANDONED_AT_MINTED = "abandoned_at_minted"
 #: A run at stage `staged` with no live session and no activity this long (hours) holds nothing.
 STAGED_STALE_SECONDS = 4 * 3600
 ABANDONED_AT_STAGED = "abandoned_at_staged"
+#: A run alive this long since `started_at`, at any non-terminal stage and whatever its activity, is
+#: halted by the peer-liveness reaper.
+RUN_WALL_TIMEOUT_SECONDS = 3600
+WALL_TIMEOUT = "wall_timeout"
 
 
 def _stamp_epoch(value: object) -> Optional[float]:
@@ -479,23 +483,68 @@ def _stale_at(root: Path, run_id: str, stage_name: str, bound: float, now: Optio
     return child is None or current - child > bound
 
 
-def _halt_abandoned(root: Path, run_id: str, stage_name: str = "minted") -> None:
-    """Record the terminal `halted` outcome of a run stale at `minted` or `staged`, so `_halted` sees
-    it and the firing EM finds a halt record. Best effort: a failed write leaves the run merely
-    released."""
-    from coordinator_core.ops.dispatch_emit import halted_run
+def _past_wall_timeout(root: Path, run_id: str, now: Optional[float] = None) -> Optional[float]:
+    """Seconds since the run's `run-stage.json` `started_at` when that exceeds `RUN_WALL_TIMEOUT_SECONDS`,
+    else None. Activity and stage are ignored, bar a terminal stage; an absent or malformed record or an
+    unparseable stamp is no bound."""
+    import time
 
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+
+    stage = read_run_stage(root, run_id)
+    if not stage or stage.get("stage") in ("halted", "landed"):
+        return None
+    started = _stamp_epoch(stage.get("started_at"))
+    if started is None:
+        return None
+    elapsed = (time.time() if now is None else now) - started
+    return elapsed if elapsed > RUN_WALL_TIMEOUT_SECONDS else None
+
+
+def _halt_abandoned(root: Path, run_id: str, stage_name: str = "minted") -> None:
+    """`_halt_run` for a run stale at `minted` or `staged`."""
     staged = stage_name == "staged"
     bound = STAGED_STALE_SECONDS if staged else MINTED_STALE_SECONDS
+    _halt_run(
+        root, run_id, ABANDONED_AT_STAGED if staged else ABANDONED_AT_MINTED,
+        f"abandoned: stuck at stage {stage_name} for over {bound}s with no activity",
+    )
+
+
+def _halt_wall_timeout(root: Path, run_id: str, elapsed: float) -> None:
+    """`_halt_run` for a run alive `elapsed` seconds, over `RUN_WALL_TIMEOUT_SECONDS`."""
+    _halt_run(
+        root, run_id, WALL_TIMEOUT,
+        f"wall timeout: run alive {int(elapsed)}s, over the {RUN_WALL_TIMEOUT_SECONDS}s run wall timeout; "
+        "Instead: refire for a new run (the clock runs from this run's `started_at`, so resuming it is halted again)",
+    )
+
+
+def _halt_run(root: Path, run_id: str, halted: str, reason: str) -> None:
+    """Record the terminal `halted` outcome `halted` with `reason`, so `_halted` sees it and the firing
+    EM finds a halt record, and append a halt notice for the run's session. Best effort: a failed write
+    leaves the run merely released."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
     try:
         halted_run.write_halt_marker(
             record_dir(root, run_id),
-            halted=ABANDONED_AT_STAGED if staged else ABANDONED_AT_MINTED,
+            halted=halted,
             sizing_rel=record_sizing_rel(root, run_id) or None,
-            reason=f"abandoned: stuck at stage {stage_name} for over {bound}s with no activity",
+            reason=reason,
         )
     except Exception:  # noqa: BLE001 -- the release does not depend on the record
-        logging.getLogger(__name__).warning("run %s: abandoned-at-%s halt record not written", run_id, stage_name)
+        logging.getLogger(__name__).warning("run %s: %s halt record not written", run_id, halted)
+        return
+    try:
+        from coordinator_core.ask_spool import notice
+        from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+
+        sid = (read_run_stage(root, run_id) or {}).get("session_id")
+        if isinstance(sid, str) and sid:
+            notice.append_halt_notice(str(root), sid, run_id, halted, reason)
+    except Exception:  # noqa: BLE001 -- the release does not depend on the notice
+        logging.getLogger(__name__).warning("run %s: %s halt notice not written", run_id, halted)
 
 
 def _live_peer_run(
@@ -504,7 +553,8 @@ def _live_peer_run(
     """True when a held `record` is a live peer's run: fresh (claimed records included), a
     non-empty `session_id` other than `exclude_session` that is `touch_record.session_live`, not
     halted, not landed, not stale at stage `minted` or `staged` (`_stale_at_minted`,
-    `_stale_at_staged`; such a run is halted here),
+    `_stale_at_staged`; such a run is halted here), not past `RUN_WALL_TIMEOUT_SECONDS` of
+    `_past_wall_timeout` (halted here too, whatever its activity),
     not minted with an unproven runner (`warp_live.runner_unproven`; resumable, not held),
     and (when given) strictly senior to `minted_before=(minted_at, run_id)`. Inside a `call_io_scope`
     the record-reading tail is answered once per run and `cwd`: the landing's several claim scans
@@ -532,6 +582,10 @@ def _live_peer_tail(root: Path, run_id: str, sid: str, cwd: Optional[str]) -> bo
         return False
     if _stale_at_staged(root, run_id):
         _halt_abandoned(root, run_id, "staged")
+        return False
+    elapsed = _past_wall_timeout(root, run_id)
+    if elapsed is not None:
+        _halt_wall_timeout(root, run_id, elapsed)
         return False
     from coordinator_core import warp_live
 

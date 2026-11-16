@@ -10,6 +10,7 @@ line for a box, with absolute interpreter and relay paths, is printed by `unimat
 Modes, read from SSH_ORIGINAL_COMMAND:
   roster            print one JSON line per live local session: its registry entry
                     plus key file, so the far box can mirror it and SendMessage it.
+  roster --mirrors  also print each mirror row the export skips, entry only and no key (diagnosis).
   send <pid>        read one message line on stdin and deliver it to that live
                     session's socket.
   send-batch <pid>  deliver every stdin line to that session; prints one JSON result
@@ -124,12 +125,15 @@ def mark_stale(name, state, until, box):
     """Record that the sending box's mirror of `name` is down until epoch `until`.
 
     The far router's agent listing reads this marker, so a sender here sees the name as stale
-    instead of not at all. `inbox` clears it when the mirror registers again."""
+    instead of not at all. `inbox` clears it when the mirror registers again. The marker is filed under
+    the registered name but lists under the sender-box label the live mirror row carries."""
     os.makedirs(SOCKS, mode=0o700, exist_ok=True)
     path = stale_marker_path(name)
     tmp = f"{path}.tmp{os.getpid()}"
+    label = client_box(client_address())[1]
+    shown = f"{name.partition('.')[0]}.{label}" if label else name
     with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump({"name": name, "state": state, "until": until, "box": box}, fh)
+        json.dump({"name": shown, "state": state, "until": until, "box": box}, fh)
     os.replace(tmp, path)
     return {"ok": True}
 
@@ -137,7 +141,7 @@ def mark_stale(name, state, until, box):
 # Every verb parse_mode accepts; a sender probes this list instead of guessing a far mirror's version.
 CAPABILITIES = ["roster", "source", "specs", "capabilities", "send", "send-batch", "send-to", "send-named",
                 "send-session", "receipts", "inbox-mux", "inbox", "reply-inbox", "mirror-stale",
-                "membership", "grant", "revoke", "keypin"]
+                "membership", "grant", "revoke", "keypin", "roster-mirrors"]
 
 
 def parse_mode(original_command):
@@ -147,6 +151,8 @@ def parse_mode(original_command):
         return "capabilities", None
     if cmd == ["roster"]:
         return "roster", None
+    if cmd == ["roster", "--mirrors"]:
+        return "roster", "mirrors"
     if cmd == ["source"]:
         return "source", None
     if cmd == ["specs"]:
@@ -203,6 +209,7 @@ def grant_args(original_command):
 
 # Prefix-only containment: the registry entry is a local file owned by the harness.
 PIPE_PREFIX = "\\\\.\\pipe\\"
+TARGET_MISMATCH = "target mismatch"  # the bridge unmirrors a row on this refusal prefix
 
 
 def endpoint_kind(platform=None):
@@ -289,7 +296,7 @@ def entries():
             # An inbox-mux entry: one process owns many names, so the key is the one for this socket.
             sock = d.get("messagingSocketPath")
             key = key_file_name(pid, sock) if isinstance(sock, str) else ""
-            if tag != name_digest(str(d.get("name"))) or not os.path.isfile(
+            if tag != name_digest(str(d.get(MIRROR_NAME_FIELD) or d.get("name"))) or not os.path.isfile(
                     os.path.join(os.path.expanduser(SESS), key)):
                 continue
             yield pid, d, key
@@ -413,13 +420,18 @@ def relay_sha():
         return None
 
 
-def roster():
+def roster(mirrors=False):
+    """Print one JSON row per exportable local session. `mirrors` (read-only diagnosis) also lists the
+    mirror rows, unmodified, that the export skips."""
     fields = {**engine_fields(), "relay_sha": relay_sha()}
     helpers = load_roster()
     codex_cache = {}
     rows = []
     for pid, d, key in entries():
         reply_inbox = d.get("unimatrixMirror") is True and d.get("unimatrixReplyInbox") is True
+        if mirrors and d.get("unimatrixMirror") and not reply_inbox:
+            print(json.dumps({"entry": d, "key_name": key, **fields}))  # no key body: diagnosis only
+            continue
         if d.get("macSocketPath") or (d.get("unimatrixMirror") and not reply_inbox):
             continue  # never re-export a far session we are only mirroring, whichever OS made the entry
         if codex_export_refused(d, codex_cache):
@@ -446,6 +458,7 @@ def roster():
             print(json.dumps(line))
 
 
+MIRROR_NAME_FIELD = "unimatrixMirrorName"  # the unlabelled name a pushed mirror was registered under
 _BOX_FIELDS = ("unimatrixClient", "unimatrixRemote", "unimatrixBox", "box")
 
 
@@ -529,7 +542,21 @@ def load_roster():
 
 
 def _exported_name(d):
-    return {**d, **load_roster().session_identity(d)}.get("name")
+    """The name a sender addresses `d` by; a pushed mirror keeps its registered (unlabelled) name."""
+    return d.get(MIRROR_NAME_FIELD) or {**d, **load_roster().session_identity(d)}.get("name")
+
+
+def shown_ref(name):
+    """The `<bare>.<own box label>` address a far box shows for local session `name`; None for a non-name."""
+    label = _own_box()
+    return f"{name.partition('.')[0]}.{label}" if isinstance(name, str) and name and label else None
+
+
+def _name_matches(name, digest):
+    """True when `digest` is the name digest of `name` or of its shown `<bare>.<own box label>` address."""
+    if not isinstance(name, str):
+        return name_digest("") == digest
+    return digest in (name_digest(name), name_digest(shown_ref(name) or name))
 
 
 def _router_resolve(name):
@@ -560,31 +587,38 @@ def _session_path(pid, expected_digest=None, expected_name_digest=None, expected
 
     held = [d for p, d, _ in entries() if p == pid]
     if len(held) > 1:  # an inbox-mux process owns many names under one pid: the addressed identity picks the entry
+        if expected_session_id is not None:  # the session is the identity; a name or socket may be shared or stale
+            by_session = [d for d in held if d.get("sessionId") == expected_session_id]
+            if not by_session:
+                found = ",".join(str(d.get("sessionId")) for d in held)
+                refuse(f"{TARGET_MISMATCH}: pid {pid} holds sessions {found}, not addressed session {expected_session_id}")
+            held = by_session
+    if len(held) > 1:
         if expected_digest is not None:
             held = [d for d in held if socket_digest(str(d.get("messagingSocketPath"))) == expected_digest]
         if expected_name_digest is not None:
-            held = [d for d in held if name_digest(str(_exported_name(d))) == expected_name_digest]
+            held = [d for d in held if _name_matches(_exported_name(d), expected_name_digest)]
         if len(held) != 1:
-            refuse(f"target mismatch: pid {pid} holds several sessions, none uniquely the addressed one")
+            refuse(f"{TARGET_MISMATCH}: pid {pid} holds several sessions, none uniquely the addressed one")
     target = held[0] if held else None
     if not target:
         refuse(f"no live session with pid {pid}")
     path = target["messagingSocketPath"]
     if expected_digest is not None and socket_digest(path) != expected_digest:
-        refuse(f"target mismatch: pid {pid} holds {target.get('name')}")
+        refuse(f"{TARGET_MISMATCH}: pid {pid} holds {target.get('name')}")
     if expected_session_id is not None and target.get("sessionId") != expected_session_id:
         found = target.get("sessionId")
-        refuse(f"target mismatch: pid {pid} holds session {found} ({target.get('name')}), "
+        refuse(f"{TARGET_MISMATCH}: pid {pid} holds session {found} ({target.get('name')}), "
                f"not addressed session {expected_session_id}")
     if expected_name_digest is not None:
         name = _exported_name(target)
-        if name_digest(name if isinstance(name, str) else "") != expected_name_digest:
-            refuse(f"target mismatch: pid {pid} holds {name}, not the addressed session")
+        if not _name_matches(name, expected_name_digest):
+            refuse(f"{TARGET_MISMATCH}: pid {pid} holds {name}, not the addressed session")
         same = []
         for p, d, _ in entries():
             n = _exported_name(d)
             if (not (d.get("macSocketPath") or d.get("unimatrixMirror"))
-                    and isinstance(n, str) and name_digest(n) == expected_name_digest):
+                    and _name_matches(n, expected_name_digest)):
                 same.append(p)
         if len(same) > 1:
             refuse(f"ambiguous: {len(same)} live sessions named {name} (pids {','.join(map(str, same))})")
@@ -593,7 +627,7 @@ def _session_path(pid, expected_digest=None, expected_name_digest=None, expected
         if answer is not None and not answer.get("ok"):
             refuse(f"router refused target {name}: {answer.get('error')}")
         if answer is not None and answer.get("endpoint") != path:
-            refuse(f"target mismatch: router resolves {name} to another endpoint")
+            refuse(f"{TARGET_MISMATCH}: router resolves {name} to another endpoint")
     if endpoint_kind() == "pipe":
         if not path.lower().startswith(PIPE_PREFIX.lower()):
             refuse(f"refusing non-session pipe {path}")
@@ -619,6 +653,7 @@ def record_delivery(row, now=None):
     import time
     stamp = time.time() if now is None else now
     entry = {"side": "relay-in", "at": stamp, **row}
+    entry.setdefault("box", _own_box())
     try:
         path = deliveries_path()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -675,6 +710,48 @@ def _cancel_thread_io(thread):
         k32.CloseHandle(ctypes.c_void_p(h))
 
 
+class TargetMismatch(Exception):
+    """The process serving an endpoint is not the pid the registry entry addressed."""
+
+
+def _pipe_server_pid(handle):
+    """The pid serving the pipe behind client `handle`; None when the OS cannot say."""
+    try:
+        import ctypes
+        pid = ctypes.c_ulong(0)
+        if ctypes.windll.kernel32.GetNamedPipeServerProcessId(ctypes.c_void_p(int(handle)), ctypes.byref(pid)):
+            return pid.value
+    except Exception:  # no ctypes.windll, or a handle that is not an OS handle
+        pass
+    return None
+
+
+def _socket_peer_pid(sock):
+    """The pid of the process on the far end of connected unix socket `sock`; None when the OS cannot say."""
+    import struct
+    try:
+        if sys.platform == "darwin":
+            return sock.getsockopt(0, 2)  # SOL_LOCAL, LOCAL_PEERPID
+        return struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))[0]
+    except (OSError, AttributeError, struct.error):
+        return None
+
+
+def _confirm_server(server_pid):
+    """Refuse before any byte is written when the endpoint's server is not the pid `_session_path` resolved.
+
+    The registry entry names a pid; a recycled pipe name or reused socket path can be bound by another
+    process. An unanswerable OS query (None) confirms nothing and refuses nothing."""
+    expected = _REACHED.get("pid")
+    if expected is not None and server_pid is not None and server_pid != expected:
+        served = next((d.get("sessionId") for p, d, _ in entries() if p == server_pid), None)
+        addressed = _REACHED.get("session")
+        raise TargetMismatch(
+            f"{TARGET_MISMATCH}: endpoint is served by pid {server_pid}"
+            + (f" (session {served})" if served else "") + f", not addressed pid {expected}"
+            + (f" (session {addressed})" if addressed else ""))
+
+
 def _write_line(path, line):
     """Deliver one message line to the session endpoint `path` (pipe on Windows, unix socket elsewhere)."""
     line = local_reply_address(line)
@@ -684,6 +761,7 @@ def _write_line(path, line):
         h = win32file.CreateFile(path, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
                                  0, None, win32file.OPEN_EXISTING, 0, None)
         try:
+            _confirm_server(_pipe_server_pid(h))
             win32file.WriteFile(h, line)
             _flush_bounded(lambda: win32file.FlushFileBuffers(h))
         finally:
@@ -692,9 +770,18 @@ def _write_line(path, line):
     s = socket.socket(socket.AF_UNIX)
     try:
         s.connect(path)
+        _confirm_server(_socket_peer_pid(s))
         s.sendall(line)
     finally:
         s.close()
+
+
+def _own_box():
+    """This box's id for receipt rows and replies; None when it cannot be derived."""
+    try:
+        return local_box()
+    except Exception:  # a row without a box is better than a delivery without a row
+        return None
 
 
 def send(pid):
@@ -720,12 +807,15 @@ def send_batch(pid, expected_digest=None, expected_name_digest=None, expected_se
             reply = {"ok": True}
             if expected_session_id:
                 if reached:
-                    reply.update(reached=reached["name"], reached_session=reached["session"], reached_pid=pid)
+                    reply.update(reached=reached["name"], reached_session=reached["session"], reached_pid=pid,
+                                 reached_box=_own_box(), reached_ref=shown_ref(reached["name"]))
                 reply["digest"] = record_receipt(expected_session_id, line)
+        except TargetMismatch as e:
+            reply = {"ok": False, "error": str(e)}
         except Exception as e:  # pywintypes.error is not an OSError subclass
             reply = {"ok": False, "error": f"{type(e).__name__}: {e}"}
         record_delivery({**reply, "pid": pid, "session": reached.get("session") or expected_session_id,
-                         "name": reached.get("name")})
+                         "name": reached.get("name"), "ref": shown_ref(reached.get("name"))})
         print(json.dumps(reply), flush=True)
 
 
@@ -747,7 +837,7 @@ def record_receipt(session_id, line, now=None):
     import time
     stamp = time.time() if now is None else now
     digest = hashlib.sha256(line.rstrip(b"\n")).hexdigest()
-    row = {"session": session_id, "digest": digest, "at": stamp,
+    row = {"session": session_id, "digest": digest, "at": stamp, "box": _own_box(), "ref": shown_ref(_REACHED.get("name")),
            "ts": datetime.fromtimestamp(stamp, timezone.utc).astimezone().isoformat(timespec="seconds")}
     data = (json.dumps(row) + "\n").encode("utf-8")
     path = receipts_path()
@@ -874,7 +964,7 @@ def check_name_free(name, client="", own_pid=None):
     # A second live mirror would duplicate the name, and its bind would orphan the older
     # relay on an unlinked socket; the caller stops the old one first.
     mirrors = [(p, d, k) for p, d, k in live
-               if d.get("name") == name and d.get("unimatrixMirror") and p != own_pid]
+               if (d.get(MIRROR_NAME_FIELD) or d.get("name")) == name and d.get("unimatrixMirror") and p != own_pid]
     freed = [(p, k, False) for p, d, k in mirrors if stale_holder(p, d)]
     freed += [(p, k, True) for p, d, k in mirrors
               if p not in {f[0] for f in freed} and superseded_holder(d, client)]
@@ -901,10 +991,71 @@ def drop_stale(freed):
                 pass
 
 
-def mirror_entry(raw, name):
-    """Registry entry for a mirror: allowlisted remote fields plus the far socket for the `from` swap."""
+def superseded_transports(name, client, own_pid):
+    """Live reply-inbox transports of the same near box under another name: (pid, entry, key file).
+
+    One box has one reply endpoint, so a transport under a newer name supersedes the rest."""
+    if not client:
+        return []
+    return [(p, d, k) for p, d, k in entries()
+            if d.get("unimatrixMirror") is True and d.get("unimatrixReplyInbox") is True and p != own_pid
+            and d.get("unimatrixClient") == client and (d.get(MIRROR_NAME_FIELD) or d.get("name")) != name]
+
+
+def reap_transports(stale):
+    """SIGTERM each superseded transport, then unlink its registry files and only the socket inode it bound."""
+    base = os.path.expanduser(SESS)
+    for pid, d, key in stale:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+        sock = d.get("messagingSocketPath")
+        others = [os.path.join(base, f"{pid}.json"), os.path.join(base, key)]
+        if isinstance(sock, str) and isinstance(d.get("unimatrixSocketIno"), int):
+            release(sock, d["unimatrixSocketIno"], others)
+        else:
+            release("", None, others)
+
+
+def release_on_sigterm():
+    """Turn SIGTERM into a normal exit so the serving loop's `finally` releases the bound socket."""
+    try:
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    except ValueError:
+        pass  # not the main thread
+
+
+def client_box(client):
+    """(box id, label) of the far box the authenticated ssh `client` address belongs to, or (None, None).
+
+    Read from this box's own roster rows that name `client` as their far box; never from the pushed
+    payload, which any client can write. With no such row the label is the sanitized client address
+    (box unknown), so a push never registers under a bare name another box's session could share."""
+    if not client:
+        return None, None
+    for _, d, _ in entries():
+        if d.get("unimatrixMirror") or not _row_is_from(d, client):
+            continue
+        box = d.get("unimatrixBox") or None
+        label = re.sub(r"[^A-Za-z0-9_-]+", "-", str(d.get("unimatrixRemote") or box or "").rpartition("@")[2]).strip("-")
+        if label:
+            return box, label
+    return None, re.sub(r"[^A-Za-z0-9_-]+", "-", client).strip("-") or None
+
+
+def mirror_entry(raw, name, box=None, label=None):
+    """Registry entry for a mirror: allowlisted remote fields plus the far socket for the `from` swap.
+
+    With a sender `label` the row is named `<bare>.<label>` (the roster pull's labelled() form, so a
+    re-mirror never stacks labels), keeps the registered name in MIRROR_NAME_FIELD and carries `box`."""
     entry = {k: v for k, v in raw.items() if k in MIRROR_FIELDS}
     entry["name"] = name
+    if label:
+        entry["name"] = f"{name.partition('.')[0]}.{label}"
+        entry[MIRROR_NAME_FIELD] = name
+        if box:
+            entry["unimatrixBox"] = box
     if isinstance(raw.get("messagingSocketPath"), str):
         entry["unimatrixRemoteSocket"] = raw["messagingSocketPath"]
     return entry
@@ -989,11 +1140,13 @@ def register_name(name, raw, key_body, export_reply=False, mux=False):
     pid = os.getpid()
     client = client_address()
     drop_stale(check_name_free(name, client, own_pid=pid) if mux else check_name_free(name, client))
+    if export_reply and not mux:
+        reap_transports(superseded_transports(name, client, pid))
     try:
         os.unlink(stale_marker_path(name))
     except OSError:
         pass
-    entry = mirror_entry(raw, name)
+    entry = mirror_entry(raw, name, *client_box(client))
     os.makedirs(SOCKS, mode=0o700, exist_ok=True)
     path = f"{SOCKS}/unimatrix-{name}.sock"
     if os.path.exists(path):
@@ -1009,7 +1162,8 @@ def register_name(name, raw, key_body, export_reply=False, mux=False):
         ps = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
                             capture_output=True, text=True, check=True).stdout.strip()
         entry.update(pid=pid, procStart=ps, pidDomain=pid_domain(),
-                     messagingSocketPath=path, unimatrixMirror=True, unimatrixClient=client)
+                     messagingSocketPath=path, unimatrixMirror=True, unimatrixClient=client,
+                     unimatrixSocketIno=our_ino)
         if export_reply:
             # This field is intentionally absent from MIRROR_FIELDS: only explicit mode
             # selection can opt in, never an untrusted registration payload.
@@ -1038,6 +1192,7 @@ def inbox(name, export_reply=False):
     if not valid_inbox_name(name):
         sys.exit("inbox: name must use 1-64 ASCII letters, digits, '_', '-', or interior single dots")
     check_inbox_host("inbox")
+    release_on_sigterm()
     raw = json.loads(sys.stdin.readline())
     key_body = sys.stdin.readline().rstrip("\n")
     m = register_name(name, raw, key_body, export_reply=export_reply)
@@ -1116,6 +1271,7 @@ def serve_mux(stdin_fd, out):
 
 def inbox_mux():
     check_inbox_host("inbox-mux")
+    release_on_sigterm()
     serve_mux(sys.stdin.fileno(), sys.stdout.buffer)
 
 
@@ -1755,7 +1911,7 @@ def main():
     elif mode == "capabilities":
         print(json.dumps({"ok": True, "capabilities": CAPABILITIES, "relay_sha": relay_sha()}))
     elif mode == "roster":
-        roster()
+        roster(mirrors=arg == "mirrors")
     elif mode == "specs":
         print(json.dumps(probe_specs()))
     elif mode == "receipts":

@@ -111,3 +111,124 @@ def test_process_entry_scrubs_test_vars_and_settings_home_resolves(module, monke
     _settings_home.settings_home()
 
 
+class _FakeFh:
+    """A client-end stand-in: records the frame written, answers one scripted line."""
+
+    def __init__(self, reply: bytes, on_read=None):
+        self.reply = reply
+        self.on_read = on_read
+        self.written = b""
+
+    def write(self, data):
+        self.written += data
+
+    def flush(self):
+        pass
+
+    def readline(self):
+        if self.on_read:
+            self.on_read()
+        return self.reply
+
+    def close(self):
+        pass
+
+
+class _Retoken:
+    """Scripts a publish handover: the engine token, the per-pipe open outcomes."""
+
+    def __init__(self, monkeypatch, mutates: bool):
+        self.token = "t1"
+        self.opens: list = []
+        self.script: dict = {}
+        self.drained = 0
+        monkeypatch.setattr(client, "is_warm_enabled", lambda: True)
+        monkeypatch.setattr(client, "process_is_test_marked", lambda: False)
+        monkeypatch.setattr(client, "_await_stage_admission", lambda *a, **k: None)
+        monkeypatch.setattr(client, "_configured_root_is_foreign", lambda: False)
+        monkeypatch.setattr(client, "_clear_unanswered", lambda: None)
+        monkeypatch.setattr(client, "_live_tree_cold", False)
+        monkeypatch.setattr(client, "_op_may_mutate", lambda _m: mutates)
+        monkeypatch.setattr(client, "engine_token", lambda: self.token)
+        monkeypatch.setattr(client, "_endpoint_name", lambda t: f"pipe-{t}")
+        monkeypatch.setattr(client, "_open_pipe", self._open)
+        monkeypatch.setattr(client, "_drain_publish_hold", self._drain)
+
+    def _open(self, pipe):
+        self.opens.append(pipe)
+        outcome = self.script[pipe].pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    def _drain(self, hook_path):
+        self.drained += 1
+        return None
+
+    def flip(self):
+        self.token = "t2"
+
+
+MSG = {"jsonrpc": "2.0", "id": 1, "method": "demo.op", "params": {}}
+OK = b'{"jsonrpc": "2.0", "id": 1, "result": 7}\n'
+
+
+def test_enoent_after_a_token_flip_reopens_under_the_new_token(monkeypatch):
+    r = _Retoken(monkeypatch, mutates=True)
+    fh = _FakeFh(OK)
+    r.script = {"pipe-t1": [FileNotFoundError()], "pipe-t2": [fh]}
+
+    def _open(pipe):
+        if pipe == "pipe-t1":
+            r.flip()
+        return r._open(pipe)
+
+    monkeypatch.setattr(client, "_open_pipe", _open)
+    assert client._try_warm_dispatch_inner(dict(MSG))["result"] == 7
+    assert r.opens == ["pipe-t1", "pipe-t2"]
+    assert b'"_engine_token": "t2"' in fh.written
+    assert r.drained == 0
+
+
+def test_enoent_with_an_unmoved_token_goes_cold_without_a_second_open(monkeypatch):
+    r = _Retoken(monkeypatch, mutates=True)
+    r.script = {"pipe-t1": [FileNotFoundError()]}
+    assert client._try_warm_dispatch_inner(dict(MSG)) is None
+    assert r.opens == ["pipe-t1"]
+    assert r.drained == 1
+
+
+def test_zero_byte_close_after_a_flip_resends_a_compute_only_frame(monkeypatch):
+    r = _Retoken(monkeypatch, mutates=False)
+    second = _FakeFh(OK)
+    r.script = {"pipe-t1": [_FakeFh(b"", on_read=r.flip)], "pipe-t2": [second]}
+    assert client._try_warm_dispatch_inner(dict(MSG))["result"] == 7
+    assert r.opens == ["pipe-t1", "pipe-t2"]
+    assert b'"_engine_token": "t2"' in second.written
+
+
+def test_zero_byte_close_after_a_flip_never_resends_a_mutation(monkeypatch):
+    r = _Retoken(monkeypatch, mutates=True)
+    r.script = {"pipe-t1": [_FakeFh(b"", on_read=r.flip)], "pipe-t2": [_FakeFh(OK)]}
+    assert client._try_warm_dispatch_inner(dict(MSG)) is None
+    assert r.opens == ["pipe-t1"]
+
+
+def test_skew_refusal_after_a_flip_resends_once_even_for_a_mutation(monkeypatch):
+    skew = (
+        b'{"jsonrpc": "2.0", "id": 1, "error": {"code": %d, "message": "skew"}}\n' % client.ENGINE_SKEW
+    )
+    r = _Retoken(monkeypatch, mutates=True)
+    r.script = {"pipe-t1": [_FakeFh(skew, on_read=r.flip)], "pipe-t2": [_FakeFh(OK)]}
+    assert client._try_warm_dispatch_inner(dict(MSG))["result"] == 7
+    assert r.opens == ["pipe-t1", "pipe-t2"]
+
+
+def test_skew_refusal_with_an_unmoved_token_goes_cold(monkeypatch):
+    skew = (
+        b'{"jsonrpc": "2.0", "id": 1, "error": {"code": %d, "message": "skew"}}\n' % client.ENGINE_SKEW
+    )
+    r = _Retoken(monkeypatch, mutates=True)
+    r.script = {"pipe-t1": [_FakeFh(skew)], "pipe-t2": [_FakeFh(OK)]}
+    assert client._try_warm_dispatch_inner(dict(MSG)) is None
+    assert r.opens == ["pipe-t1"]

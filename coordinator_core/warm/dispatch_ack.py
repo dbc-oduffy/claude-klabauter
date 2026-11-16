@@ -10,9 +10,11 @@ isolation.
 
 from __future__ import annotations
 
+import calendar
 import itertools
 import json
 import os
+import shutil
 import threading
 import time
 from collections import OrderedDict, deque
@@ -190,6 +192,16 @@ def _failure_text_of(result: Any) -> Optional[str]:
 JOURNAL_RETAIN_SECS = 24 * 3600.0
 _JOURNAL_SUFFIX = ".outcome.json"
 _LAND_SUFFIX = ".land.json"
+#: Present once the one-off sweep of the pre-bucket flat entries has finished.
+_LEGACY_MARKER = ".legacy-swept"
+_DAY_SECS = 86400.0
+#: Entries one prune pass may handle (bucket drops and legacy moves/deletes); the
+#: retention thread resumes the next pass where this one stopped, paced by the gap.
+PRUNE_ENTRY_BUDGET = 500
+_PASS_GAP_SECS = 0.05
+_prune_lock = threading.Lock()
+_retention_started: dict = {}
+_retention_started_lock = threading.Lock()
 LAND_VERDICT_COMMITTED = "committed"
 LAND_VERDICT_NEVER_RAN = "never-ran"
 LAND_VERDICT_UNRESOLVED = "unresolved"
@@ -213,15 +225,123 @@ def journal_dir_beside(sibling_dir: Any) -> Optional[str]:
     return journal_dir_under(os.path.dirname(os.fspath(sibling_dir).rstrip("/\\")))
 
 
-def _journal_file(journal_dir: Any, key: Any) -> Optional[str]:
-    if not journal_dir or not isinstance(key, str) or not key or not set(key) <= _JOURNAL_SAFE_CHARS:
+def _bucket_name(ts: float) -> str:
+    """The UTC-day bucket dir name (`d20261116`) an entry written at `ts` lives under."""
+    return time.strftime("d%Y%m%d", time.gmtime(ts))
+
+
+def _bucket_end(name: str) -> Optional[float]:
+    """Epoch second a bucket's day ends, or None when `name` is not a bucket name."""
+    if len(name) != 9 or name[0] != "d":
         return None
-    return os.path.join(os.fspath(journal_dir), key + _JOURNAL_SUFFIX)
+    try:
+        return calendar.timegm(time.strptime(name[1:], "%Y%m%d")) + _DAY_SECS
+    except ValueError:
+        return None
 
 
-def _land_file(journal_dir: Any, key: Any) -> Optional[str]:
-    path = _journal_file(journal_dir, key)
-    return None if path is None else path[: -len(_JOURNAL_SUFFIX)] + _LAND_SUFFIX
+def _valid_key(journal_dir: Any, key: Any) -> bool:
+    return bool(journal_dir) and isinstance(key, str) and bool(key) and set(key) <= _JOURNAL_SAFE_CHARS
+
+
+def _write_path(journal_dir: Any, key: Any, suffix: str) -> Optional[str]:
+    """Where `key`'s entry is written now: under today's bucket."""
+    if not _valid_key(journal_dir, key):
+        return None
+    return os.path.join(os.fspath(journal_dir), _bucket_name(time.time()), key + suffix)
+
+
+def _read_paths(journal_dir: Any, key: Any, suffix: str):
+    """Candidate paths for `key`'s entry, newest first: today's bucket, yesterday's
+    (an entry is read within JOURNAL_RETAIN_SECS of its write, one day), then the
+    pre-bucket flat path until the legacy sweep has finished.
+
+    TRAP: the key's tail is a monotonic stamp, not wall time, so the bucket cannot be
+    derived from the key; a read probes the two buckets a live entry can sit in."""
+    if not _valid_key(journal_dir, key):
+        return
+    base = os.fspath(journal_dir)
+    now = time.time()
+    yield os.path.join(base, _bucket_name(now), key + suffix)
+    yield os.path.join(base, _bucket_name(now - _DAY_SECS), key + suffix)
+    if not os.path.exists(os.path.join(base, _LEGACY_MARKER)):
+        yield os.path.join(base, key + suffix)
+
+
+def _read_json(journal_dir: Any, key: Any, suffix: str) -> Any:
+    for path in _read_paths(journal_dir, key, suffix):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except (OSError, ValueError, RecursionError):
+            continue
+    return None
+
+
+def _entry_exists(journal_dir: Any, key: Any, suffix: str) -> bool:
+    return any(os.path.exists(path) for path in _read_paths(journal_dir, key, suffix))
+
+
+def _retention_loop(journal_dir: str) -> None:
+    """Run bounded prune passes, paced, until the legacy sweep has finished."""
+    try:
+        while prune_journal(journal_dir) is False:
+            time.sleep(_PASS_GAP_SECS)
+    except Exception:  # noqa: BLE001 -- retention is best effort
+        pass
+
+
+def _start_retention(journal_dir: str) -> None:
+    """One daemon thread that drops expired buckets and runs the legacy sweep."""
+    threading.Thread(
+        target=_retention_loop, args=(journal_dir,), name="ack-journal-retention", daemon=True
+    ).start()
+
+
+def retain_journal(journal_dir: Any) -> None:
+    """Start retention for `journal_dir` at most once per UTC day in this process.
+
+    TRAP: call only from the accept (server) process. A pool worker is recycled, so
+    a worker-started sweep restarts from zero; workers journal through
+    `record_outcome` / `record_land_intent`, which never start it."""
+    base = os.fspath(journal_dir)
+    day = _bucket_name(time.time())
+    with _retention_started_lock:
+        if _retention_started.get(base) == day:
+            return
+        _retention_started[base] = day
+    try:
+        _start_retention(base)
+    except Exception:  # noqa: BLE001 -- retention is best effort; the entry is already durable
+        pass
+
+
+def _write_json(journal_dir: Any, path: str, payload: dict) -> bool:
+    """Write `payload` to `path` by tmp + `os.replace`, creating its bucket. The write
+    never deletes and never starts retention."""
+    tmp = f"{path}.{os.getpid()}.tmp"
+    bucket = os.path.dirname(path)
+    try:
+        try:
+            os.mkdir(bucket)
+        except FileExistsError:
+            pass
+        except FileNotFoundError:
+            os.makedirs(os.fspath(journal_dir), exist_ok=True)
+            try:
+                os.mkdir(bucket)
+            except FileExistsError:
+                pass
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+        os.replace(tmp, path)
+    except (OSError, TypeError, ValueError, RecursionError):
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+    return True
 
 
 def record_outcome(
@@ -237,9 +357,11 @@ def record_outcome(
     entry is kept (check-then-replace, not atomic: two racing writers record the same outcome). Callable from the pool worker the moment its handler returns, so the
     outcome survives a worker killed, a broken pool or an engine restart before the
     accept process can stamp it. Stdlib-only, never raises; True when an entry now exists."""
-    path = _journal_file(journal_dir, key)
-    if path is None or outcome not in _FINISHED_OUTCOMES or os.path.exists(path):
-        return path is not None and os.path.exists(path)
+    path = _write_path(journal_dir, key, _JOURNAL_SUFFIX)
+    if path is None or outcome not in _FINISHED_OUTCOMES:
+        return False
+    if _entry_exists(journal_dir, key, _JOURNAL_SUFFIX):
+        return True
     entry: dict = {"outcome": outcome, "error_code": error_code}
     if outcome == OUTCOME_ERROR:
         entry["failure_text"] = _clip_text(str(error_message or ""))
@@ -253,31 +375,12 @@ def record_outcome(
             entry["result"] = result
         else:
             entry["result_dropped"] = dropped
-    tmp = f"{path}.{os.getpid()}.tmp"
-    try:
-        os.makedirs(os.fspath(journal_dir), exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(entry, handle, separators=(",", ":"))
-        os.replace(tmp, path)
-    except (OSError, TypeError, ValueError, RecursionError):
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        return False
-    return True
+    return _write_json(journal_dir, path, entry)
 
 
 def read_outcome(journal_dir: Any, key: str) -> Optional[dict]:
     """The `finished` poll payload journaled for `key`, or None. Never raises."""
-    path = _journal_file(journal_dir, key)
-    if path is None:
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            entry = json.load(handle)
-    except (OSError, ValueError, RecursionError):
-        return None
+    entry = _read_json(journal_dir, key, _JOURNAL_SUFFIX)
     if not isinstance(entry, dict) or entry.get("outcome") not in _FINISHED_OUTCOMES:
         return None
     payload: dict = {"state": STATE_FINISHED, "outcome": entry["outcome"], "journaled": True}
@@ -297,50 +400,89 @@ def record_land_intent(journal_dir: Any, key: str, record: dict) -> bool:
     """Durably write `key`'s land record (`<key>.land.json`) by one `os.replace`, so a
     later phase ("claimed", "committing", "committed") overwrites the earlier one whole.
     Callable from the pool worker; stdlib-only, never raises; True when written."""
-    path = _land_file(journal_dir, key)
+    path = _write_path(journal_dir, key, _LAND_SUFFIX)
     if path is None or not isinstance(record, dict):
         return False
-    tmp = f"{path}.{os.getpid()}.tmp"
-    try:
-        os.makedirs(os.fspath(journal_dir), exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(record, handle, separators=(",", ":"))
-        os.replace(tmp, path)
-    except (OSError, TypeError, ValueError, RecursionError):
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        return False
-    return True
+    return _write_json(journal_dir, path, record)
 
 
 def read_land_intent(journal_dir: Any, key: str) -> Optional[dict]:
     """The land record written for `key`, or None. Never raises."""
-    path = _land_file(journal_dir, key)
-    if path is None:
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            record = json.load(handle)
-    except (OSError, ValueError, RecursionError):
-        return None
+    record = _read_json(journal_dir, key, _LAND_SUFFIX)
     return record if isinstance(record, dict) else None
 
 
-def prune_journal(journal_dir: Any, now: Optional[float] = None) -> None:
-    """Delete journal entries older than JOURNAL_RETAIN_SECS. Never raises."""
-    cutoff = (time.time() if now is None else now) - JOURNAL_RETAIN_SECS
+def prune_journal(
+    journal_dir: Any, now: Optional[float] = None, budget: int = PRUNE_ENTRY_BUDGET
+) -> bool:
+    """One bounded pass: drop every age-bucket dir that ended more than
+    JOURNAL_RETAIN_SECS ago, by its name alone (no per-entry stat); until the one-off
+    legacy sweep has finished, also sweep the pre-bucket flat entries (past retention
+    deleted, the rest moved into their bucket), then write the sweep marker. The pass
+    handles at most `budget` entries. Returns False when it stopped on the budget with
+    more to do (call again; the next pass resumes there, the sweep being on-disk state),
+    else True. Never raises; one pass at a time per process.
+
+    TRAP: not for a hook or boot path. `AckStore.stamp` starts the retention thread
+    (`retain_journal`), server process only."""
+    if not _prune_lock.acquire(blocking=False):
+        return True
     try:
-        with os.scandir(os.fspath(journal_dir)) as entries:
-            for entry in entries:
-                try:
-                    if entry.name.endswith((_JOURNAL_SUFFIX, _LAND_SUFFIX, ".tmp")) and entry.stat().st_mtime < cutoff:
-                        os.unlink(entry.path)
-                except OSError:
+        current = time.time() if now is None else now
+        base = os.fspath(journal_dir)
+        legacy = not os.path.exists(os.path.join(base, _LEGACY_MARKER))
+        cutoff = current - JOURNAL_RETAIN_SECS
+        handled = 0
+        try:
+            with os.scandir(base) as entries:
+                for entry in entries:
+                    name = entry.name
+                    end = _bucket_end(name)
+                    try:
+                        if end is not None:
+                            if end <= cutoff:
+                                shutil.rmtree(entry.path, ignore_errors=True)
+                                handled += 1
+                        elif legacy and name.endswith((_JOURNAL_SUFFIX, _LAND_SUFFIX, ".tmp")):
+                            # A fresh `.tmp` stays and costs the budget nothing, so a flat dir
+                            # holding only those still finishes the sweep and writes its marker.
+                            if _sweep_legacy(base, entry, cutoff):
+                                handled += 1
+                    except OSError:
+                        pass
+                    if handled >= budget:
+                        return False
+        except OSError:
+            return True
+        if legacy:
+            try:
+                with open(os.path.join(base, _LEGACY_MARKER), "a"):
                     pass
-    except OSError:
-        pass
+            except OSError:
+                pass
+        return True
+    finally:
+        _prune_lock.release()
+
+
+def _sweep_legacy(base: str, entry: "os.DirEntry[str]", cutoff: float) -> bool:
+    """One pre-bucket flat entry: delete it past `cutoff`, else move it under the
+    bucket of its mtime (kept when the bucket already holds the key). True when the
+    entry left the flat dir, False when a fresh `.tmp` stays."""
+    mtime = entry.stat().st_mtime
+    if mtime < cutoff:
+        os.unlink(entry.path)
+        return True
+    if entry.name.endswith(".tmp"):
+        return False
+    bucket = os.path.join(base, _bucket_name(mtime))
+    os.makedirs(bucket, exist_ok=True)
+    target = os.path.join(bucket, entry.name)
+    if os.path.exists(target):
+        os.unlink(entry.path)
+    else:
+        os.replace(entry.path, target)
+    return True
 
 
 class AckStore:
@@ -363,8 +505,6 @@ class AckStore:
         read `unknowable` (worker killed or lost, engine restarted, record evicted)."""
         self._journal_dir = journal_dir
         self._land_resolver: Optional[Callable[[dict], Optional[dict]]] = None
-        if journal_dir:
-            prune_journal(journal_dir)
         self._clock = clock
         self._executing_bound = executing_bound
         self._capacity = capacity
@@ -435,6 +575,7 @@ class AckStore:
                 self._journal_dir, key, outcome,
                 result=result, error_code=error_code, error_message=error_message,
             )
+            retain_journal(self._journal_dir)
         with self._lock:
             record = self._records.get(key)
             if record is None:

@@ -88,6 +88,7 @@ from coordinator_core.warm.engine_root import current_engine_clone
 __all__ = [
     "SPAWN_DEBOUNCE_SECS",
     "BOOT_CLAIM_MAX_SECS",
+    "BOOT_CLAIM_RELEASED_GRACE_SECS",
     "RUNTIME_BASE_ENV",
     "BREADCRUMB_FILENAME",
     "TRANSPORT_PIPE",
@@ -160,6 +161,14 @@ SPAWN_DEBOUNCE_SECS = 2.0
 #: which the freshly-published record then debounces; too HIGH costs the
 #: 20-hour box-wide outage `try_claim_boot` describes.
 BOOT_CLAIM_MAX_SECS = 30.0
+
+#: How long a claim stamp vouches for its boot after its claimer has EXITED
+#: and released the lock (a hook or CLI process spawns the server, waits for
+#: it, exits). Sized above the measured slowest ready (3.4s, `server-boot.
+#: jsonl`) so a successor publishing its breadcrumb is never raced by a
+#: second claimer; a claimer that crashed before spawning delays the next
+#: spawn by at most this much.
+BOOT_CLAIM_RELEASED_GRACE_SECS = 3.5
 
 #: Byte 0 of a boot-lock file is the LOCK BYTE and never carries data:
 #: `msvcrt.locking` is MANDATORY on Windows, so a denied caller cannot read
@@ -696,6 +705,16 @@ def _write_claim_stamp(fd: int, now: Optional[float]) -> None:
         pass
 
 
+def _read_claim_stamp(fd: int) -> Optional[float]:
+    """The claim instant stamped in this boot-lock fd, or None when the file
+    carries no parseable stamp (a never-claimed lock, or a torn write)."""
+    try:
+        os.lseek(fd, _CLAIM_STAMP_OFFSET, os.SEEK_SET)
+        return float(os.read(fd, 32).decode("ascii").strip())
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+
+
 def _claim_has_expired(fd: int, now: Optional[float]) -> bool:
     """Whether the claim stamped in this boot-lock fd has aged past
     `BOOT_CLAIM_MAX_SECS` -- the question a caller DENIED the lock asks
@@ -793,9 +812,10 @@ def try_claim_boot(lock_path: Path, *, now: Optional[float] = None) -> bool:
     (True) even though the holder still holds the lock. The expiry bound is
     the boot window, not a TTL chosen for this primitive -- a claim exists to
     cover ONE boot, and a boot that has published no record within the window
-    has failed. Crash release keeps its original instant, wait-free behaviour:
-    a dead holder's lock is free, so the next caller wins it outright and
-    never consults a stamp at all.
+    has failed. A dead or exited holder's lock is free, but its stamp still
+    vouches for `BOOT_CLAIM_RELEASED_GRACE_SECS`: a claimer that spawned a
+    server and exited must not hand the next caller a second spawn while
+    that boot publishes. A winner of a free lock with an older stamp proceeds.
 
     A caller that proceeds past an EXPIRED claim re-stamps the file, so the
     window restarts. Without that, every subsequent call past an expired
@@ -832,6 +852,7 @@ def try_claim_boot(lock_path: Path, *, now: Optional[float] = None) -> bool:
         return True
 
     claimed = True
+    locked = False
     try:
         if os.name == "nt":
             import errno
@@ -843,15 +864,32 @@ def try_claim_boot(lock_path: Path, *, now: Optional[float] = None) -> bool:
             except OSError as exc:
                 if exc.errno in (errno.EACCES, errno.EDEADLOCK):
                     claimed = False
+            else:
+                locked = True
         else:
             import fcntl
 
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
             except BlockingIOError:
                 claimed = False
     except Exception:  # noqa: BLE001 -- fail open: an unreadable primitive must not wedge a caller
         claimed = True
+        locked = False
+
+    if claimed and locked:
+        # The lock is free, but a claimer that spawned a server and exited
+        # releases it while its boot is still publishing: a prior stamp inside
+        # the grace still vouches for that boot.
+        prior = _read_claim_stamp(fd)
+        current = time.time() if now is None else now
+        if prior is not None and -BOOT_CLAIM_RELEASED_GRACE_SECS < current - prior < BOOT_CLAIM_RELEASED_GRACE_SECS:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            return False
 
     if claimed:
         _write_claim_stamp(fd, now)
@@ -1518,12 +1556,9 @@ def should_spawn_decision(
     returns True -- a live record fully vouches, no lock is ever touched.
 
     `extra_liveness`, when supplied and the record's `pid` is otherwise
-    alive-and-young, decides the outcome directly rather than falling
-    through to `try_claim_boot`: a record naming a live-but-wedged process
-    (`breadcrumb`'s own pipe-liveness proof, `_pipe_is_alive`) is a DIFFERENT
-    state from "nothing vouches at all" -- it means a fresh spawn is needed
-    NOW, not that a boot-in-flight lock should be consulted for a window this
-    record already proves is over.
+    alive-and-young, vouches directly when it passes. When it fails (a
+    live-but-wedged process, `_pipe_is_alive`), a spawn is needed NOW, and
+    `try_claim_boot` elects the one caller that makes it.
 
     `now` is an injectable clock for tests (`time.time()`-shaped: unix epoch
     seconds), matching `started_at`'s wall-clock provenance -- unlike
@@ -1563,10 +1598,14 @@ def should_spawn_decision(
                             fully_alive = bool(extra_liveness(record))
                         except Exception:
                             fully_alive = False
-                        spawn = not fully_alive
-                        if spawn and publish_marker_blocks_boot(lock_path.parent, now=now):
+                        if fully_alive:
                             return False
-                        return spawn
+                        # A failed probe on a young live record is a spawn
+                        # trigger every concurrent caller sees at once: elect
+                        # one through the claim, never one spawn per caller.
+                        if publish_marker_blocks_boot(lock_path.parent, now=now):
+                            return False
+                        return try_claim_boot(lock_path, now=now)
 
     # No record, or nothing in it currently vouches for an in-flight boot:
     # this is exactly the succession window this chunk closes. Absence used

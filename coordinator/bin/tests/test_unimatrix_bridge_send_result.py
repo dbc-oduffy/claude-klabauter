@@ -22,23 +22,23 @@ def load_bridge():
 
 
 class Conn:
-    def __init__(self, events, deliveries):
+    def __init__(self, events, deliveries) -> None:
         self.chunks = [b'{"from": "uds:/s.sock", "message": "hi"}\n', b""]
         self.events, self.deliveries = events, deliveries
 
     def read(self):
         return self.chunks.pop(0)
 
-    def write(self, data):
+    def write(self, data) -> None:
         self.events.append("write")
 
-    def close(self):
+    def close(self) -> None:
         rows = self.deliveries.read_text().splitlines() if self.deliveries.exists() else []
         self.events.append(("close", len(rows)))
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     bridge = load_bridge()
     sessions = tmp_path / "sessions"
     sessions.mkdir()
@@ -72,8 +72,25 @@ def drive(bridge, deliveries, monkeypatch, returncode):
     return events, rows, argvs
 
 
+def test_a_mirror_whose_name_disagrees_with_its_far_name_is_refused_naming_name_far_name_and_session(env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bridge, deliveries = env
+    row_path = Path(bridge.SESSIONS) / f"{os.getpid()}.json"
+    row = json.loads(row_path.read_text())
+    row.update(name="group-em-54.machine-a", unimatrixFarName="example-game-repo-fc", sessionId="fc000000-0000-4000-8000-000000000003")
+    row_path.write_text(json.dumps(row))
+    ssh = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: ssh.append(argv))
+    bridge.serve_one(Conn([], deliveries))
+    rows = [json.loads(l) for l in deliveries.read_text().splitlines()]
+    assert ssh == [] and [r["ok"] for r in rows] == [False]
+    for part in ("group-em-54.machine-a", "example-game-repo-fc", "fc000000-0000-4000-8000-000000000003"):
+        assert part in rows[0]["error"]
+    assert bridge.notices == [rows[0]["error"]]
+    assert (Path(bridge.SESSIONS) / f"{os.getpid()}.misroute").exists()
+
+
 @pytest.mark.parametrize("returncode, ok", [(0, True), (255, False)])
-def test_every_send_records_its_outcome_and_a_failure_notifies_the_sender(env, monkeypatch, returncode, ok):
+def test_every_send_records_its_outcome_and_a_failure_notifies_the_sender(env, monkeypatch: pytest.MonkeyPatch, returncode, ok) -> None:
     bridge, deliveries = env
     events, rows, _ = drive(bridge, deliveries, monkeypatch, returncode)
     assert events == [("close", 0)]  # no reply bytes, released before any row
@@ -83,7 +100,7 @@ def test_every_send_records_its_outcome_and_a_failure_notifies_the_sender(env, m
     assert bool(bridge.notices) == (not ok)
 
 
-def test_sender_is_released_before_the_ssh_leg_runs(env, monkeypatch):
+def test_sender_is_released_before_the_ssh_leg_runs(env, monkeypatch: pytest.MonkeyPatch) -> None:
     bridge, deliveries = env
     events = []
 
@@ -97,7 +114,7 @@ def test_sender_is_released_before_the_ssh_leg_runs(env, monkeypatch):
     assert events == [("close", 0), "ssh", "ssh"]
 
 
-def test_ssh_argv_multiplexes_off_windows_only(env, monkeypatch):
+def test_ssh_argv_multiplexes_off_windows_only(env, monkeypatch: pytest.MonkeyPatch) -> None:
     bridge, deliveries = env
     mux = bridge._box_mux()
     roster = mux._roster()
@@ -109,7 +126,7 @@ def test_ssh_argv_multiplexes_off_windows_only(env, monkeypatch):
     assert not any("Control" in a for a in argvs[-1])
 
 
-def test_far_relay_lacking_send_session_is_a_failed_outcome_the_sender_can_read(env, monkeypatch):
+def test_far_relay_lacking_send_session_is_a_failed_outcome_the_sender_can_read(env, monkeypatch: pytest.MonkeyPatch) -> None:
     bridge, deliveries = env
 
     def run(argv, **kw):
@@ -128,7 +145,7 @@ def test_far_relay_lacking_send_session_is_a_failed_outcome_the_sender_can_read(
     b'{"ok": true}\n',
     b'{"ok": true, "digest": "deadbeef"}\n',
 ])
-def test_ok_reply_without_the_matching_far_receipt_is_unconfirmed_and_notifies(env, monkeypatch, stdout):
+def test_ok_reply_without_the_matching_far_receipt_is_unconfirmed_and_notifies(env, monkeypatch: pytest.MonkeyPatch, stdout) -> None:
     bridge, deliveries = env
     monkeypatch.setattr(subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout, b""))
     bridge.serve_one(Conn([], deliveries))

@@ -1920,14 +1920,24 @@ def _try_warm_dispatch_inner(
     # returns (cold) without looping.
     drained = False
     retokened = False
+
+    def _retoken(current: str):
+        """Re-read the engine token; on a flip, rebuild (token, pipe, payload), else None."""
+        fresh = engine_token()
+        if fresh == current:
+            return None
+        request["_engine_token"] = fresh
+        return (
+            fresh,
+            _endpoint_name(fresh),
+            json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n",
+        )
+
     for attempt in range(2):
         if attempt:
-            fresh = engine_token()
-            if fresh != token:
-                token = fresh
-                pipe = _endpoint_name(token)
-                request["_engine_token"] = token
-                payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
+            rebuilt = _retoken(token)
+            if rebuilt:
+                token, pipe, payload = rebuilt
         try:
             fh = _open_pipe(pipe)
         except (FileNotFoundError, ConnectionRefusedError):
@@ -1937,12 +1947,9 @@ def _try_warm_dispatch_inner(
             fh = None
             if not retokened and token != "unversioned":
                 retokened = True
-                fresh = engine_token()
-                if fresh != token:
-                    token = fresh
-                    pipe = _endpoint_name(token)
-                    request["_engine_token"] = token
-                    payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
+                rebuilt = _retoken(token)
+                if rebuilt:
+                    token, pipe, payload = rebuilt
                     try:
                         fh = _open_pipe(pipe)
                     except (FileNotFoundError, ConnectionRefusedError):
@@ -2187,7 +2194,11 @@ def _try_warm_dispatch_inner(
             # assumption: `server.py::_serve_one` performs its skew check and
             # returns BEFORE it calls `dispatch(msg)`. A skewed server has
             # provably not executed the op, so re-running it cold cannot
-            # duplicate anything.
+            # duplicate anything. When the token moved while the request was in flight, the
+            # refusing server is the generation a publish handover just retired: the successor
+            # serves the new token, so the request is re-sent there once, ahead of the cold spawn.
+            if attempt == 0 and engine_token() != token:
+                continue
             _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
             return None
         return response

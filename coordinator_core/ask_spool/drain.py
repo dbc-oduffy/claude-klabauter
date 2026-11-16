@@ -14,6 +14,9 @@ Traps:
 - After the ask entries, `run` drains the queued remote-engine failover retries
   (`remote_engine.background.drain_pending`, a bounded batch); they are not part of the counts.
 - The notice is written before `.minted`: a crash between them re-notices, never loses one.
+- Last, `run` sweeps `.minted` entries (`_sweep_minted_without_dispatch`): a run still at stage `minted`
+  `MINTED_DISPATCH_DEADLINE_SECONDS` after its mint, with no activity on it or any chained child, is halted
+  `minted_without_dispatch` and its submitting session noticed. Halts are not part of the counts.
 """
 
 from __future__ import annotations
@@ -36,6 +39,11 @@ _LOOKAHEAD_S = 600.0
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 _ASK_RUN = re.compile(r"\bask-\d{8}T\d{6}-[0-9a-f]{6}\b")
 _FAILURE_NOTICE_EVERY = 10
+#: Also the child-activity bound of the sweep. Deliberately tighter than `warp_run_deliverable.MINTED_STALE_SECONDS`
+#: (the reaper's bound, 1800): the sweep notices the submitter, the reaper only releases peer claims.
+MINTED_DISPATCH_DEADLINE_SECONDS = 600
+MINTED_SWEEP_LOOKBACK_SECONDS = 24 * 3600
+MINTED_WITHOUT_DISPATCH = "minted_without_dispatch"
 
 Evaluate = Callable[[dict], dict]
 
@@ -461,6 +469,98 @@ def _late_duplicates(repo_root: str, seen: set, by_key: dict) -> Iterator[str]:
             return
 
 
+def _chained_child_active(root: Path, run_id: str, now: float, bound: float) -> bool:
+    """True when a live run chained from `run_id` (`run.json` `chain_parent` or `resumed_from`) shows activity within `bound`.
+
+    A launcher parent stays at `minted` by design while its chained child runs, so only a silent chain is stalled.
+    One listing of the record root plus reads for dirs touched within `bound`; stat and read calls only."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    try:
+        with os.scandir(root / RECORD_DIR_ROOT) as it:
+            recent = [e.name for e in it if e.name != run_id and e.is_dir() and now - e.stat().st_mtime <= bound]
+    except OSError:
+        return False
+    for name in recent:
+        link = wrd._run_json(root, name)
+        if run_id not in (link.get("chain_parent"), link.get("resumed_from")):
+            continue
+        if wrd._halted(root, name) or wrd._landed(root, name):
+            continue
+        seen = wrd._own_activity_epoch(root, name)
+        if seen is not None and now - seen <= bound:
+            return True
+    return False
+
+
+def _halt_minted_without_dispatch(root: Path, run_id: str, session: object, age: float) -> bool:
+    """Halt `run_id` as `minted_without_dispatch` and notice `session`; False when the marker could not be written."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir
+
+    script = root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
+    cause = (
+        "no launcher started the run's workflow"
+        if script.is_file()
+        else "its workflow script is absent, so nothing could start it"
+    )
+    reason = (
+        f"never dispatched: minted {int(age)}s ago (bound {int(MINTED_DISPATCH_DEADLINE_SECONDS)}s) and still at stage "
+        f"minted with no activity on the run or any chained child; {cause}. "
+        "Instead: re-fire the ask, or start the run's workflow script."
+    )
+    try:
+        halted_run.write_halt_marker(
+            record_dir(root, run_id),
+            halted=MINTED_WITHOUT_DISPATCH,
+            sizing_rel=halted_run.bound_sizing_rel(root, run_id),
+            reason=reason,
+        )
+    except Exception:  # noqa: BLE001 - a failed write leaves the entry for the next drain
+        return False
+    if isinstance(session, str) and session:
+        notice.append_halt_notice(str(root), session, run_id, MINTED_WITHOUT_DISPATCH, reason)
+    return True
+
+
+def _sweep_minted_without_dispatch(repo_root: str, now: float) -> None:
+    """Halt each `.minted` entry's run still at stage `minted` past `MINTED_DISPATCH_DEADLINE_SECONDS` with nothing active.
+
+    Candidates are entries stamped `minted_at` between the deadline and `MINTED_SWEEP_LOOKBACK_SECONDS` ago (a stat each, a read
+    only inside that window); a run past `minted`, halted, withdrawn or with a live chained child is untouched, so a second
+    drain finds it halted. Never raises: the entries are already settled."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    root = Path(repo_root)
+    try:
+        with os.scandir(record.spool_dir(repo_root)) as it:
+            names = [
+                e.name for e in it
+                if e.name.endswith(record.MINTED_SUFFIX) and MINTED_DISPATCH_DEADLINE_SECONDS <= now - e.stat().st_mtime
+                <= MINTED_SWEEP_LOOKBACK_SECONDS
+            ]
+    except OSError:
+        return
+    for name in names:
+        try:
+            sid = name[: -len(record.MINTED_SUFFIX)]
+            header, _ = record.read_entry(record.entry_path(repo_root, sid, record.MINTED_SUFFIX))
+            run_id = header.get("run_id")
+            age = now - float(header.get("minted_at") or 0)
+            if not (isinstance(run_id, str) and _SAFE_NAME.match(run_id)) or age < MINTED_DISPATCH_DEADLINE_SECONDS:
+                continue
+            if notice.run_disposition(repo_root, run_id, sid) != "minted":
+                continue
+            if not wrd._stale_at(root, run_id, "minted", MINTED_DISPATCH_DEADLINE_SECONDS, now):
+                continue
+            if _chained_child_active(root, run_id, now, MINTED_DISPATCH_DEADLINE_SECONDS):
+                continue
+            _halt_minted_without_dispatch(root, run_id, header.get("session_id"), age)
+        except Exception:  # noqa: BLE001 - one unreadable entry never blocks the rest
+            continue
+
+
 def run(
     repo_root: str,
     *,
@@ -474,7 +574,8 @@ def run(
     `minted` made a new run, `skipped` found its run already minted, `failed` stays pending,
     `coalesced` joined the run another entry of the same sizing or run key holds, `withdrawn`
     was retired as stale (its sizing, plan or run is gone, or the plan's rows all closed) or as
-    superseded (a bare ask whose normalized text a live run token already records, any session or age).
+    superseded (a bare ask whose normalized text a live run token already records, any session or age;
+    or a sizing/run-keyed entry whose key a live run token holds that this drain did not mint).
     A drainer killed mid-entry leaves a claim that `stale_after_s` later returns to pending."""
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 
@@ -513,14 +614,15 @@ def run(
                     run_id, coalesced = _find_run(
                         root, header, parsed.get("tool_use_id"), taken, key, None if key else _raw_ask_text(parsed)
                     )
-                if run_id is None and not key and _raw_ask_text(parsed):
-                    dup = _any_ask_run(root, _raw_ask_text(parsed))
-                    if dup:
-                        superseded = dup
-                        if not record.withdraw(
-                            repo_root, sid, f"superseded by {dup}", by="drain", superseded_by=dup
-                        )["withdrawn"]:
-                            raise RuntimeError("the superseded entry could not be withdrawn")
+                if key and coalesced and key not in by_key:
+                    superseded = _live_token_run(root, key, set())
+                elif run_id is None and not key and _raw_ask_text(parsed):
+                    superseded = _any_ask_run(root, _raw_ask_text(parsed))
+                if superseded:
+                    if not record.withdraw(
+                        repo_root, sid, f"superseded by {superseded}", by="drain", superseded_by=superseded
+                    )["withdrawn"]:
+                        raise RuntimeError("the superseded entry could not be withdrawn")
                 minted_now = run_id is None
                 if run_id is None and superseded is None:
                     run_id = _mint(root, header, parsed, evaluate, taken)
@@ -556,5 +658,6 @@ def run(
             counts["notified"] += 1
         record.mark_minted(repo_root, sid)
         counts["coalesced" if coalesced else "minted" if minted_now else "skipped"] += 1
+    _sweep_minted_without_dispatch(repo_root, time.time() if now is None else now)
     return counts
 

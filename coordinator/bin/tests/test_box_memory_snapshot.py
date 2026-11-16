@@ -289,19 +289,57 @@ def test_counter_failure_degrades_one_field(capsys):
     assert data["available_gib"] == 40.0
 
 
-def test_admit_without_readable_status_exits_1(capsys):
+def test_admit_without_readable_status_exits_error_code(capsys):
     def boom():
         raise OSError("GlobalMemoryStatusEx")
 
-    assert _run(["--admit-peak", "1"], status_fn=boom) == 1
+    assert _run(["--admit-peak", "1"], status_fn=boom) == mod.EXIT_ERROR == 5
     assert "cannot read memory status" in capsys.readouterr().err
+
+
+def test_json_unreadable_status_prints_typed_error(capsys):
+    def boom():
+        raise OSError("GlobalMemoryStatusEx")
+
+    assert _run(["--json", "--admit-peak", "12"], status_fn=boom) == 5
+    out = capsys.readouterr().out
+    admit = json.loads(out)["admit"]
+    assert admit["verdict"] == "ERROR" and "GlobalMemoryStatusEx" in admit["error"] and admit["peak_gib"] == 12.0
+
+
+def test_json_exception_inside_admit_prints_typed_error(capsys, monkeypatch):
+    real_load = mod._load
+
+    def load(name):
+        h = real_load(name)
+        monkeypatch.setattr(h, "admit", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("admit exploded")))
+        return h
+
+    monkeypatch.setattr(mod, "_load", load)
+    assert _run(["--json", "--admit-peak", "12"]) == 5
+    cap = capsys.readouterr()
+    assert json.loads(cap.out) == {"admit": {"verdict": "ERROR", "error": "RuntimeError: admit exploded"}}
+    assert "admit exploded" in cap.err
+
+
+def test_non_json_exception_still_propagates(monkeypatch):
+    monkeypatch.setattr(mod, "_load", lambda name: (_ for _ in ()).throw(RuntimeError("x")))
+    with pytest.raises(RuntimeError):
+        _run(["--admit-peak", "12"])
+
+
+def test_json_hold_and_admit_unchanged(capsys):
+    assert _run(["--json", "--admit-peak", "10"]) == 0
+    assert json.loads(capsys.readouterr().out)["admit"]["verdict"] == "ADMIT"
+    assert _run(["--json", "--admit-peak", "90"]) == 4
+    assert json.loads(capsys.readouterr().out)["admit"]["verdict"] == "HOLD"
 
 
 def test_admit_refusal_names_the_reader_failure(capsys):
     def boom():
         raise OSError("cannot import coordinator_core.telemetry.host_sampler")
 
-    assert _run(["--admit-peak", "1"], status_fn=boom) == 1
+    assert _run(["--admit-peak", "1"], status_fn=boom) == 5
     err = capsys.readouterr().err
     assert "cannot read memory status for admission" in err
     assert "coordinator_core.telemetry.host_sampler" in err

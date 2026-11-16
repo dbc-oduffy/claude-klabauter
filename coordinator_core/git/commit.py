@@ -258,7 +258,7 @@ class BlobDriftRefused(CommitRefused):
     expectation. Nothing was written: no object, no ref move, no index write.
     `drift` lists every failing path, not only the first."""
 
-    def __init__(self, message: str, drift: Tuple[BlobDrift, ...] = ()):
+    def __init__(self, message: str, drift: Tuple[BlobDrift, ...] = ()) -> None:
         super().__init__(message)
         self.drift = tuple(drift)
 
@@ -2158,7 +2158,7 @@ def commit_paths(
         moved = cas_ref(ref_gitdir, ref, old_head, commit_sha,
                         reflog_committer=f"{name} <{email}>",
                         reflog_message=message.splitlines()[0] if message.strip() else "commit",
-                        head_gitdir=gitdir)
+                        head_gitdir=gitdir, report_lock=True)
     except BaseException:
         prepared.abort()
         raise

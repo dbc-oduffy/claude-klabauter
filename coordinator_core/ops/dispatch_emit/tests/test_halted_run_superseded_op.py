@@ -44,7 +44,7 @@ def _blob(repo: Path, text: str) -> str:
 
 
 @pytest.fixture
-def halted(tmp_path):
+def halted(tmp_path: Path) -> tuple[Path, Path, str]:
     """A repo with a halted RUN withholding a.txt and b.txt, base commit recorded, kept blobs stored."""
     _git(tmp_path, "init", "-q")
     base = _commit(tmp_path, {"a.txt": "a0", "b.txt": "b0"}, date="2026-01-01T00:00:00Z")
@@ -88,7 +88,7 @@ def _indexed(root) -> bool:
     return (root / halted_withheld_index.INDEX_DIR / f"{RUN}.json").is_file()
 
 
-def _unchanged(root, record, before):
+def _unchanged(root, record, before) -> None:
     assert (record / halted_run.HALTED_FILE).read_text(encoding="utf-8") == before
     assert _indexed(root)
 
@@ -127,7 +127,7 @@ def test_all_paths_overwritten_closes_superseded_and_releases_index(halted, monk
     assert not _indexed(root)
 
 
-def test_three_withheld_paths_spawn_count_and_process_time(halted, monkeypatch):
+def test_three_withheld_paths_spawn_count_and_process_time(halted, monkeypatch: pytest.MonkeyPatch) -> None:
     """Three withheld paths still cost exactly three git spawns (anchor, log, cat-file), under 500ms."""
     root, record, _ = halted
     halted_run.record_withheld(record, {"a.txt": "kept", "b.txt": "kept", "c.txt": "kept"})
@@ -140,7 +140,7 @@ def test_three_withheld_paths_spawn_count_and_process_time(halted, monkeypatch):
     real_popen = subprocess.Popen
 
     class _Counting(real_popen):
-        def __init__(self, args, *a, **kw):
+        def __init__(self, args, *a, **kw) -> None:
             spawned.append(list(args)[:1])
             super().__init__(args, *a, **kw)
 
@@ -154,7 +154,7 @@ def test_three_withheld_paths_spawn_count_and_process_time(halted, monkeypatch):
     assert elapsed < 0.5
 
 
-def test_path_with_no_post_halt_commit_refuses(halted):
+def test_path_with_no_post_halt_commit_refuses(halted) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later"})
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
@@ -163,7 +163,7 @@ def test_path_with_no_post_halt_commit_refuses(halted):
     _unchanged(root, record, before)
 
 
-def test_head_blob_equal_to_withheld_blob_refuses(halted):
+def test_head_blob_equal_to_withheld_blob_refuses(halted) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-kept", "b.txt": "b-kept"})
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
@@ -172,7 +172,7 @@ def test_head_blob_equal_to_withheld_blob_refuses(halted):
     _unchanged(root, record, before)
 
 
-def test_resumed_marker_refuses(halted):
+def test_resumed_marker_refuses(halted) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
     halted_run.mark_resumed(record)
@@ -181,7 +181,7 @@ def test_resumed_marker_refuses(halted):
     assert halted_run._read(record)["status"] == halted_run.STATUS_RESUMED
 
 
-def test_resume_between_check_and_write_refuses_and_leaves_resumed(halted, monkeypatch):
+def test_resume_between_check_and_write_refuses_and_leaves_resumed(halted, monkeypatch: pytest.MonkeyPatch) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
     real = op._blob_ids
@@ -198,7 +198,7 @@ def test_resume_between_check_and_write_refuses_and_leaves_resumed(halted, monke
     assert halted_run.SUPERSEDED_EVIDENCE_FIELD not in marker
 
 
-def test_only_touch_predates_halt_refuses(halted):
+def test_only_touch_predates_halt_refuses(halted) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later", "b.txt": "b-later"}, date=PRE_HALT)
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
@@ -207,7 +207,7 @@ def test_only_touch_predates_halt_refuses(halted):
     _unchanged(root, record, before)
 
 
-def test_pre_halt_touch_on_one_path_is_not_evidence(halted):
+def test_pre_halt_touch_on_one_path_is_not_evidence(halted) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-pre"}, date=PRE_HALT)
     _commit(root, {"b.txt": "b-later"})
@@ -217,7 +217,7 @@ def test_pre_halt_touch_on_one_path_is_not_evidence(halted):
     _unchanged(root, record, before)
 
 
-def test_no_run_stage_anchors_at_committed_halt_record(legacy):
+def test_no_run_stage_anchors_at_committed_halt_record(legacy) -> None:
     root, record, _ = legacy
     (record / ask_contract.RUN_STAGE_FILE).unlink()
     halt_commit = _commit(
@@ -234,7 +234,7 @@ def test_no_run_stage_anchors_at_committed_halt_record(legacy):
 
 
 @pytest.mark.parametrize("stage", [None, "staged", "landed"])
-def test_unresolvable_halt_anchor_refuses(halted, stage):
+def test_unresolvable_halt_anchor_refuses(halted, stage) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
     stage_file = record / ask_contract.RUN_STAGE_FILE
@@ -248,7 +248,7 @@ def test_unresolvable_halt_anchor_refuses(halted, stage):
     _unchanged(root, record, before)
 
 
-def test_halt_before_any_commit_refuses(halted):
+def test_halt_before_any_commit_refuses(halted) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
     ask_contract.write_run_stage_at(record, "halted", now="2000-01-01T00:00:00Z")
@@ -258,7 +258,7 @@ def test_halt_before_any_commit_refuses(halted):
     _unchanged(root, record, before)
 
 
-def test_live_successor_refuses(halted, monkeypatch):
+def test_live_successor_refuses(halted, monkeypatch: pytest.MonkeyPatch) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
     from coordinator_core.ops.dispatch_emit import halted_run_landed
@@ -270,7 +270,7 @@ def test_live_successor_refuses(halted, monkeypatch):
     _unchanged(root, record, before)
 
 
-def test_withheld_path_without_kept_blob_refuses(halted):
+def test_withheld_path_without_kept_blob_refuses(halted) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
     kept_work.write(record, {"c": {"paths": {"a.txt": _blob(root, "a-kept")}}}, None)
@@ -280,14 +280,14 @@ def test_withheld_path_without_kept_blob_refuses(halted):
     _unchanged(root, record, before)
 
 
-def test_unknown_run_and_unsafe_id_refuse(halted):
+def test_unknown_run_and_unsafe_id_refuse(halted) -> None:
     root, _, _ = halted
     assert _call(root, "warp-nope-20261026T000000-abcdef")["ok"] is False
     assert _call(root, "../x")["ok"] is False
 
 
 @pytest.fixture
-def legacy(tmp_path):
+def legacy(tmp_path: Path) -> tuple[Path, Path, str]:
     """A halted RUN withholding a.txt and b.txt with no kept blobs (a record written before withheld-prints)."""
     _git(tmp_path, "init", "-q")
     base = _commit(tmp_path, {"a.txt": "a0", "b.txt": "b0"}, date="2026-01-01T00:00:00Z")
@@ -302,13 +302,13 @@ def _legacy_call(root, shas, **extra):
     return op._handler({"run_id": RUN, "evidence_shas": shas, **extra}, root)
 
 
-def _commit_halt_record(root, record):
+def _commit_halt_record(root, record) -> None:
     rel = (record / halted_run.HALTED_FILE).relative_to(root).as_posix()
     _git(root, "add", "--", rel)
     _git(root, "commit", "-q", "-m", "halt", date=PRE_HALT)
 
 
-def test_legacy_anchors_at_first_record_commit_when_stage_stamp_postdates_ship(legacy):
+def test_legacy_anchors_at_first_record_commit_when_stage_stamp_postdates_ship(legacy) -> None:
     root, record, _ = legacy
     _commit_halt_record(root, record)
     s1 = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"}, date="2026-01-08T00:00:00Z")
@@ -316,7 +316,7 @@ def test_legacy_anchors_at_first_record_commit_when_stage_stamp_postdates_ship(l
     assert reply["ok"] is True and reply["evidence"] == {"a.txt": s1, "b.txt": s1}
 
 
-def test_legacy_first_record_anchor_still_refuses_untouched_path(legacy):
+def test_legacy_first_record_anchor_still_refuses_untouched_path(legacy) -> None:
     root, record, _ = legacy
     _commit_halt_record(root, record)
     s1 = _commit(root, {"a.txt": "a-later"}, date="2026-01-08T00:00:00Z")
@@ -355,7 +355,7 @@ def test_legacy_record_closes_with_evidence_shas(legacy, monkeypatch):
     assert not _indexed(root)
 
 
-def test_legacy_record_without_evidence_refuses(legacy):
+def test_legacy_record_without_evidence_refuses(legacy) -> None:
     root, record, _ = legacy
     _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
@@ -365,7 +365,7 @@ def test_legacy_record_without_evidence_refuses(legacy):
     _unchanged(root, record, before)
 
 
-def test_legacy_withheld_path_untouched_since_halt_refuses(legacy):
+def test_legacy_withheld_path_untouched_since_halt_refuses(legacy) -> None:
     root, record, _ = legacy
     s1 = _commit(root, {"a.txt": "a-later"})
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
@@ -374,7 +374,7 @@ def test_legacy_withheld_path_untouched_since_halt_refuses(legacy):
     _unchanged(root, record, before)
 
 
-def test_legacy_evidence_not_covering_every_touched_path_refuses(legacy):
+def test_legacy_evidence_not_covering_every_touched_path_refuses(legacy) -> None:
     root, record, _ = legacy
     s1 = _commit(root, {"a.txt": "a-later"})
     _commit(root, {"b.txt": "b-later"})
@@ -384,7 +384,7 @@ def test_legacy_evidence_not_covering_every_touched_path_refuses(legacy):
     _unchanged(root, record, before)
 
 
-def test_legacy_evidence_sha_not_ancestor_of_head_refuses(legacy):
+def test_legacy_evidence_sha_not_ancestor_of_head_refuses(legacy) -> None:
     root, record, _ = legacy
     _git(root, "checkout", "-q", "-b", "side")
     side = _commit(root, {"a.txt": "a-side", "b.txt": "b-side"})
@@ -396,7 +396,7 @@ def test_legacy_evidence_sha_not_ancestor_of_head_refuses(legacy):
     _unchanged(root, record, before)
 
 
-def test_record_with_kept_blobs_ignores_evidence_and_keeps_kept_blob_gate(halted):
+def test_record_with_kept_blobs_ignores_evidence_and_keeps_kept_blob_gate(halted) -> None:
     root, record, _ = halted
     s = _commit(root, {"a.txt": "a-kept", "b.txt": "b-kept"})
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
@@ -406,7 +406,7 @@ def test_record_with_kept_blobs_ignores_evidence_and_keeps_kept_blob_gate(halted
 
 
 @pytest.mark.parametrize("content", ["{not json", "[]", '{"chunks": "x"}', '{"chunks": {"c": {"paths": {}}}}'])
-def test_present_but_unusable_kept_file_refuses_not_legacy(legacy, content):
+def test_present_but_unusable_kept_file_refuses_not_legacy(legacy, content) -> None:
     root, record, _ = legacy
     s = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
     (record / kept_work.KEPT_FILE).write_text(content, encoding="utf-8")
@@ -416,7 +416,7 @@ def test_present_but_unusable_kept_file_refuses_not_legacy(legacy, content):
     _unchanged(root, record, before)
 
 
-def test_legacy_evidence_commit_deleting_withheld_path_refuses(legacy):
+def test_legacy_evidence_commit_deleting_withheld_path_refuses(legacy) -> None:
     root, record, _ = legacy
     s1 = _commit(root, {"a.txt": "a-later"})
     _git(root, "rm", "-q", "b.txt")
@@ -428,7 +428,7 @@ def test_legacy_evidence_commit_deleting_withheld_path_refuses(legacy):
     _unchanged(root, record, before)
 
 
-def test_prints_only_record_with_evidence_shas_refuses_not_legacy(legacy):
+def test_prints_only_record_with_evidence_shas_refuses_not_legacy(legacy) -> None:
     root, record, _ = legacy
     s = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
     (record / "withheld-prints.json").write_text("{}", encoding="utf-8")
@@ -439,7 +439,7 @@ def test_prints_only_record_with_evidence_shas_refuses_not_legacy(legacy):
     _unchanged(root, record, before)
 
 
-def test_legacy_touched_then_reverted_path_refuses(legacy):
+def test_legacy_touched_then_reverted_path_refuses(legacy) -> None:
     root, record, _ = legacy
     _commit(root, {"a.txt": "a-later"})
     s1 = _commit(root, {"a.txt": "a0", "b.txt": "b-later"})
@@ -449,7 +449,7 @@ def test_legacy_touched_then_reverted_path_refuses(legacy):
     _unchanged(root, record, before)
 
 
-def test_legacy_newest_touch_deletion_refuses_even_when_evidence_is_earlier(legacy):
+def test_legacy_newest_touch_deletion_refuses_even_when_evidence_is_earlier(legacy) -> None:
     root, record, _ = legacy
     s1 = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
     _git(root, "rm", "-q", "b.txt")
@@ -460,7 +460,7 @@ def test_legacy_newest_touch_deletion_refuses_even_when_evidence_is_earlier(lega
     _unchanged(root, record, before)
 
 
-def test_legacy_anchor_trap_pre_halt_touch_is_not_evidence(legacy):
+def test_legacy_anchor_trap_pre_halt_touch_is_not_evidence(legacy) -> None:
     root, record, _ = legacy
     pre = _commit(root, {"a.txt": "a-pre", "b.txt": "b-pre"}, date=PRE_HALT)
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
@@ -473,7 +473,7 @@ def test_legacy_anchor_trap_pre_halt_touch_is_not_evidence(legacy):
     _unchanged(root, record, before)
 
 
-def _scratch_halted(root, record, extra):
+def _scratch_halted(root, record, extra) -> None:
     """Withhold `extra` (path -> text) on top of a.txt/b.txt; kept blobs stored for the kept route."""
     withheld = {"a.txt": "kept", "b.txt": "kept", **{p: "kept" for p in extra}}
     halted_run.record_withheld(record, withheld)
@@ -481,7 +481,7 @@ def _scratch_halted(root, record, extra):
     kept_work.write(record, {"c": {"paths": paths}}, None)
 
 
-def test_per_path_mixed_landed_and_superseded_closes_and_records_every_path(halted):
+def test_per_path_mixed_landed_and_superseded_closes_and_records_every_path(halted) -> None:
     root, record, _ = halted
     sha = _commit(root, {"a.txt": "a-later", "b.txt": "b-kept"})
     reply = _call(root)
@@ -499,13 +499,13 @@ def test_per_path_mixed_landed_and_superseded_closes_and_records_every_path(halt
 MISSING_BLOB = "5f1d0587" + "0" * 32
 
 
-def _lose_kept_blob(root, record, path):
+def _lose_kept_blob(root, record, path) -> None:
     """Re-record `path`'s kept blob as an id that was never written to the object store."""
     paths = {"a.txt": _blob(root, "a-kept"), "b.txt": _blob(root, "b-kept"), path: MISSING_BLOB}
     kept_work.write(record, {"c": {"paths": paths}}, None)
 
 
-def test_missing_kept_blob_is_lost_with_reason_and_needs_no_superseding_commit(halted):
+def test_missing_kept_blob_is_lost_with_reason_and_needs_no_superseding_commit(halted) -> None:
     root, record, _ = halted
     _lose_kept_blob(root, record, "a.txt")
     sha = _commit(root, {"b.txt": "b-later"})
@@ -517,7 +517,7 @@ def test_missing_kept_blob_is_lost_with_reason_and_needs_no_superseding_commit(h
     assert not _indexed(root)
 
 
-def test_lost_path_untouched_since_halt_closes_with_landed_rest(halted):
+def test_lost_path_untouched_since_halt_closes_with_landed_rest(halted) -> None:
     root, record, _ = halted
     _lose_kept_blob(root, record, "a.txt")
     _commit(root, {"b.txt": "b-kept"})
@@ -528,14 +528,14 @@ def test_lost_path_untouched_since_halt_closes_with_landed_rest(halted):
     assert halted_run._read(record)["status"] == halted_run.STATUS_SUPERSEDED
 
 
-def test_present_kept_blob_unrelated_to_lost_path_still_refuses_untouched(halted):
+def test_present_kept_blob_unrelated_to_lost_path_still_refuses_untouched(halted) -> None:
     root, record, _ = halted
     reply = _call(root)
     assert reply["ok"] is False and "a.txt" in reply["error"]
     assert _indexed(root)
 
 
-def test_per_path_landed_untouched_after_anchor_still_landed(halted):
+def test_per_path_landed_untouched_after_anchor_still_landed(halted) -> None:
     root, record, _ = halted
     pre = _commit(root, {"b.txt": "b-kept"}, date=PRE_HALT)
     assert pre
@@ -545,7 +545,7 @@ def test_per_path_landed_untouched_after_anchor_still_landed(halted):
     assert reply["dispositions"]["b.txt"]["disposition"] == halted_run.DISPOSITION_LANDED
 
 
-def test_per_path_kept_route_scratch_never_tracked_closes(halted):
+def test_per_path_kept_route_scratch_never_tracked_closes(halted) -> None:
     root, record, _ = halted
     _scratch_halted(root, record, {"scratch/x/diag.log": "log"})
     sha = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
@@ -555,7 +555,7 @@ def test_per_path_kept_route_scratch_never_tracked_closes(halted):
     assert "scratch/x/diag.log" not in reply["evidence"] and reply["evidence"]["a.txt"] == sha
 
 
-def test_per_path_kept_route_spawn_count_unchanged(halted, monkeypatch):
+def test_per_path_kept_route_spawn_count_unchanged(halted, monkeypatch: pytest.MonkeyPatch) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later", "b.txt": "b-kept"})
     _no_close_commit(monkeypatch)
@@ -563,7 +563,7 @@ def test_per_path_kept_route_spawn_count_unchanged(halted, monkeypatch):
     real_popen = subprocess.Popen
 
     class _Counting(real_popen):
-        def __init__(self, args, *a, **kw):
+        def __init__(self, args, *a, **kw) -> None:
             spawned.append(list(args)[:1])
             super().__init__(args, *a, **kw)
 
@@ -575,7 +575,7 @@ def test_per_path_kept_route_spawn_count_unchanged(halted, monkeypatch):
     assert reply["ok"] is True and len(spawned) == 3 and elapsed < 0.5
 
 
-def test_per_path_deleted_at_head_in_mixed_run_refuses_naming_it(halted):
+def test_per_path_deleted_at_head_in_mixed_run_refuses_naming_it(halted) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later"})
     _git(root, "rm", "-q", "b.txt")
@@ -586,7 +586,7 @@ def test_per_path_deleted_at_head_in_mixed_run_refuses_naming_it(halted):
     _unchanged(root, record, before)
 
 
-def test_per_path_two_unclassifiable_paths_are_both_named(halted):
+def test_per_path_two_unclassifiable_paths_are_both_named(halted) -> None:
     root, record, _ = halted
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
     reply = _call(root)
@@ -594,7 +594,7 @@ def test_per_path_two_unclassifiable_paths_are_both_named(halted):
     _unchanged(root, record, before)
 
 
-def test_per_path_tracked_scratch_untouched_after_anchor_refuses(halted):
+def test_per_path_tracked_scratch_untouched_after_anchor_refuses(halted) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later"})
     (root / "scratch").mkdir()
@@ -606,7 +606,7 @@ def test_per_path_tracked_scratch_untouched_after_anchor_refuses(halted):
     assert halted_run._read(record)["status"] == halted_run.STATUS_HALTED
 
 
-def test_per_path_scratch_only_with_landed_rest_refuses_pointing_to_landed_op(halted):
+def test_per_path_scratch_only_with_landed_rest_refuses_pointing_to_landed_op(halted) -> None:
     root, record, _ = halted
     _scratch_halted(root, record, {"scratch/x.log": "log"})
     _commit(root, {"a.txt": "a-kept", "b.txt": "b-kept"})
@@ -615,7 +615,7 @@ def test_per_path_scratch_only_with_landed_rest_refuses_pointing_to_landed_op(ha
     assert halted_run._read(record)["status"] == halted_run.STATUS_HALTED
 
 
-def test_per_path_legacy_scratch_log_plus_evidence_paths_closes(legacy):
+def test_per_path_legacy_scratch_log_plus_evidence_paths_closes(legacy) -> None:
     root, record, _ = legacy
     halted_run.record_withheld(record, {"a.txt": "kept", "b.txt": "kept", "scratch/r/diag.log": "kept"})
     s1 = _commit(root, {"a.txt": "a-later"})
@@ -628,7 +628,7 @@ def test_per_path_legacy_scratch_log_plus_evidence_paths_closes(legacy):
     assert not _indexed(root)
 
 
-def test_per_path_legacy_without_scratch_spawns_one_cat_file(legacy, monkeypatch):
+def test_per_path_legacy_without_scratch_spawns_one_cat_file(legacy, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _, _ = legacy
     s = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
     _no_close_commit(monkeypatch)
@@ -636,7 +636,7 @@ def test_per_path_legacy_without_scratch_spawns_one_cat_file(legacy, monkeypatch
     real_popen = subprocess.Popen
 
     class _Counting(real_popen):
-        def __init__(self, args, *a, **kw):
+        def __init__(self, args, *a, **kw) -> None:
             seen.append(list(args))
             super().__init__(args, *a, **kw)
 
@@ -647,7 +647,7 @@ def test_per_path_legacy_without_scratch_spawns_one_cat_file(legacy, monkeypatch
 
 
 @pytest.mark.parametrize("sneaky", ["scratch/../src/x.py", "scratch//x.log", "scratch/./x.log"])
-def test_per_path_non_normalized_scratch_spelling_is_not_scratch(halted, sneaky):
+def test_per_path_non_normalized_scratch_spelling_is_not_scratch(halted, sneaky) -> None:
     root, record, _ = halted
     _scratch_halted(root, record, {sneaky: "log"})
     _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
@@ -656,7 +656,7 @@ def test_per_path_non_normalized_scratch_spelling_is_not_scratch(halted, sneaky)
     assert halted_run._read(record)["status"] == halted_run.STATUS_HALTED
 
 
-def test_per_path_legacy_tracked_scratch_untouched_refuses(legacy):
+def test_per_path_legacy_tracked_scratch_untouched_refuses(legacy) -> None:
     root, record, _ = legacy
     (root / "scratch").mkdir()
     _commit(root, {"scratch/t.log": "t"}, date=PRE_HALT)
@@ -668,7 +668,7 @@ def test_per_path_legacy_tracked_scratch_untouched_refuses(legacy):
 
 
 @pytest.fixture
-def refused(tmp_path):
+def refused(tmp_path: Path) -> tuple[Path, Path]:
     """The example-stats-repo shape: manifest, run.json, run-stage.json, stage-receipt.json, stage-dirt.json; no halted.json."""
     _git(tmp_path, "init", "-q")
     record = tmp_path / ask_contract.RECORD_DIR_ROOT / RUN
@@ -679,7 +679,7 @@ def refused(tmp_path):
     return tmp_path, record
 
 
-def test_refused_at_nested_chain_start_without_halted_json_closes(refused):
+def test_refused_at_nested_chain_start_without_halted_json_closes(refused) -> None:
     root, record = refused
     reply = _call(root)
     assert reply["ok"] is True and reply["dispositions"] == {}
@@ -700,14 +700,14 @@ def test_refused_at_stage_ok_close_lands_closure_commit(refused):
 
 
 @pytest.mark.parametrize("extra", ["kept.json", "withheld-prints.json", "run-baton.json"])
-def test_refused_shape_with_work_record_still_refuses(refused, extra):
+def test_refused_shape_with_work_record_still_refuses(refused, extra) -> None:
     root, record = refused
     (record / extra).write_text("{}", encoding="utf-8")
     assert _call(root)["ok"] is False
     assert not (record / halted_run.HALTED_FILE).exists()
 
 
-def test_recently_active_unhalted_run_refuses_as_possibly_live(refused):
+def test_recently_active_unhalted_run_refuses_as_possibly_live(refused) -> None:
     root, record = refused
     ask_contract.write_run_stage_at(record, "staged")
     reply = _call(root)
@@ -715,7 +715,7 @@ def test_recently_active_unhalted_run_refuses_as_possibly_live(refused):
     assert not (record / halted_run.HALTED_FILE).exists()
 
 
-def test_unhalted_run_without_stage_receipt_refuses(refused):
+def test_unhalted_run_without_stage_receipt_refuses(refused) -> None:
     root, record = refused
     (record / "stage-receipt.json").unlink()
     assert _call(root)["ok"] is False
@@ -726,7 +726,7 @@ CHILD = "warp-psz-20261026T000000-abcdef"
 PARENT = "ask-20261026T000000-0e64be"
 
 
-def _halt_child(root, run_id, base, path="a.txt"):
+def _halt_child(root, run_id, base, path: str = "a.txt"):
     record = root / ask_contract.RECORD_DIR_ROOT / run_id
     halted_run.write_halt_marker(record, halted=run_id, sizing_rel=SIZING, run_base_sha=base)
     ask_contract.write_run_stage_at(record, "halted", now=HALT_AT)
@@ -758,7 +758,7 @@ def _parent_held(root) -> tuple:
     return run_token.is_live(root, PARENT), isinstance(rows, dict) and PARENT in rows
 
 
-def test_closing_last_child_ends_parent_token_row_and_stage(tmp_path):
+def test_closing_last_child_ends_parent_token_row_and_stage(tmp_path: Path) -> None:
     _git(tmp_path, "init", "-q")
     base = _commit(tmp_path, {"a.txt": "a0"}, date="2026-01-01T00:00:00Z")
     _halt_child(tmp_path, CHILD, base)
@@ -771,7 +771,7 @@ def test_closing_last_child_ends_parent_token_row_and_stage(tmp_path):
     assert parent.is_dir()
 
 
-def test_closing_a_child_while_a_sibling_stays_halted_leaves_parent_live(tmp_path):
+def test_closing_a_child_while_a_sibling_stays_halted_leaves_parent_live(tmp_path: Path) -> None:
     _git(tmp_path, "init", "-q")
     base = _commit(tmp_path, {"a.txt": "a0", "b.txt": "b0"}, date="2026-01-01T00:00:00Z")
     _halt_child(tmp_path, CHILD, base)
@@ -783,7 +783,7 @@ def test_closing_a_child_while_a_sibling_stays_halted_leaves_parent_live(tmp_pat
     assert ask_contract.read_run_stage(tmp_path, PARENT)["stage"] == "staged"
 
 
-def test_parent_of_another_sizing_is_untouched(tmp_path):
+def test_parent_of_another_sizing_is_untouched(tmp_path: Path) -> None:
     import json
 
     _git(tmp_path, "init", "-q")
@@ -794,3 +794,61 @@ def test_parent_of_another_sizing_is_untouched(tmp_path):
     _commit(tmp_path, {"a.txt": "a-later"})
     assert _call(tmp_path, CHILD)["ok"] is True
     assert _parent_held(tmp_path) == (True, True)
+
+
+@pytest.fixture
+def unstarted(tmp_path: Path) -> tuple[Path, Path]:
+    """A repo with a RUN halted dependents_unstarted that withholds nothing."""
+    _git(tmp_path, "init", "-q")
+    base = _commit(tmp_path, {"a.txt": "a0"}, date="2026-01-01T00:00:00Z")
+    record = tmp_path / ask_contract.RECORD_DIR_ROOT / RUN
+    halted_run.write_halt_marker(
+        record, halted=ask_contract.HALT_DEPENDENTS_UNSTARTED, sizing_rel=None, run_base_sha=base, reason="C2 held on C1",
+    )
+    ask_contract.write_run_stage_at(record, "halted", now=HALT_AT)
+    return tmp_path, record
+
+
+def test_zero_withheld_dependents_unstarted_closes_superseded_naming_successor(unstarted) -> None:
+    root, record = unstarted
+    sha = _commit(root, {"a.txt": "a-later"})
+    reply = op._handler({"run_id": RUN, "superseded_by": sha}, root)
+    assert reply["ok"] is True and reply["evidence"] == {} and reply["dispositions"] == {} and reply["superseded_by"] == sha
+    marker = halted_run._read(record)
+    assert marker["status"] == halted_run.STATUS_SUPERSEDED and marker["superseded_by"] == sha
+    assert marker[halted_run.SUPERSEDED_EVIDENCE_FIELD] == {} and marker[halted_run.PATH_DISPOSITIONS_FIELD] == {}
+    assert not _indexed(root)
+
+
+def test_zero_withheld_accepts_a_run_id_successor(unstarted) -> None:
+    root, record = unstarted
+    assert op._handler({"run_id": RUN, "superseded_by": "warp-y-20261116T000000-abcdef"}, root)["ok"] is True
+    assert halted_run._read(record)["status"] == halted_run.STATUS_SUPERSEDED
+
+
+@pytest.mark.parametrize("by", [None, "", "   ", "../x"])
+def test_zero_withheld_without_a_named_successor_refuses(unstarted, by) -> None:
+    root, record = unstarted
+    before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
+    reply = op._handler({"run_id": RUN, "superseded_by": by}, root)
+    assert reply["ok"] is False and "superseded_by" in reply["error"]
+    assert (record / halted_run.HALTED_FILE).read_text(encoding="utf-8") == before
+
+
+def test_zero_withheld_live_successor_refuses(unstarted, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, record = unstarted
+    from coordinator_core.ops.dispatch_emit import halted_run_landed
+
+    monkeypatch.setattr(halted_run_landed, "_live_successor", lambda r, run: "warp-live-1")
+    before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
+    reply = op._handler({"run_id": RUN, "superseded_by": "warp-y-20261116T000000-abcdef"}, root)
+    assert reply["ok"] is False and "warp-live-1" in reply["error"]
+    assert (record / halted_run.HALTED_FILE).read_text(encoding="utf-8") == before
+
+
+def test_zero_withheld_non_halted_run_refuses(unstarted) -> None:
+    root, record = unstarted
+    params = {"run_id": RUN, "superseded_by": "warp-y-20261116T000000-abcdef"}
+    assert op._handler(params, root)["ok"] is True
+    reply = op._handler(params, root)
+    assert reply["ok"] is False and "superseded" in reply["error"]

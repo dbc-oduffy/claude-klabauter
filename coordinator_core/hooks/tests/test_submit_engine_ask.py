@@ -43,7 +43,7 @@ def _payload(root: Path, args, **extra) -> dict:
 class _Emit:
     """Stands in for `dispatch.emit`: records params, writes a script, mints the run token."""
 
-    def __init__(self, fire_args=None, raises=None):
+    def __init__(self, fire_args=None, raises=None) -> None:
         self.calls: list = []
         self.fire_args = fire_args if fire_args is not None else {"repoRoot": "/r"}
         self.raises = raises
@@ -69,19 +69,19 @@ def _hso(env: dict) -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _local_venue(monkeypatch):
+def _local_venue(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
                  "CLAUDE_CODE_ENTRYPOINT"):
         monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)
-def _first_turn(monkeypatch):
+def _first_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unmarked asks default to pm unless a test sets the session past its first turn."""
     monkeypatch.setattr(mod, "_is_first_turn", lambda _payload: True)
 
 
-def test_submit_call_is_what_every_guard_names():
+def test_submit_call_is_what_every_guard_names() -> None:
     call = warp_fire.fire_command()
     assert call.startswith('Workflow({name: "coordinator:engine-ask", args: {"ask": ')
     assert 'args: {"sizing": "state/sizings/x.yaml"}' in warp_fire.fire_command("state/sizings/x.yaml")
@@ -91,7 +91,7 @@ def test_submit_call_is_what_every_guard_names():
     assert not warp_fire.is_submit_name("coordinator:plan-blitz")
 
 
-def test_other_workflow_calls_pass_untouched(tmp_path):
+def test_other_workflow_calls_pass_untouched(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     for tool_input in ({"scriptPath": str(root / "x.mjs")}, {"name": "coordinator:plan-blitz"}, {"script": "x"}):
@@ -101,7 +101,7 @@ def test_other_workflow_calls_pass_untouched(tmp_path):
     assert emit.calls == []
 
 
-def test_raw_ask_becomes_the_fired_run(tmp_path):
+def test_raw_ask_becomes_the_fired_run(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     ask = "Make X do Y.\n  Keep  the spacing — verbatim."
@@ -121,7 +121,7 @@ def test_raw_ask_becomes_the_fired_run(tmp_path):
     assert record["session_id"] == "sess-1" and record["sizing_rel"] is None
 
 
-def test_a_refire_echoes_the_revisions_it_carries(tmp_path):
+def test_a_refire_echoes_the_revisions_it_carries(tmp_path: Path) -> None:
     root = _repo(tmp_path)
 
     def emit(params, root_):
@@ -139,7 +139,7 @@ def test_a_refire_echoes_the_revisions_it_carries(tmp_path):
     assert "Carries revisions" not in plain
 
 
-def test_a_refire_names_carried_notes_as_em_notes(tmp_path):
+def test_a_refire_names_carried_notes_as_em_notes(tmp_path: Path) -> None:
     root = _repo(tmp_path)
 
     def emit(params, root_):
@@ -154,7 +154,7 @@ def test_a_refire_names_carried_notes_as_em_notes(tmp_path):
     assert "Carries revisions: R4 (cover Windows); N1 (EM note: prefer sqlite)." in ctx
 
 
-def test_handler_turns_an_evaluate_crash_into_a_named_deny(monkeypatch):
+def test_handler_turns_an_evaluate_crash_into_a_named_deny(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(payload):
         raise RuntimeError("kaput")
 
@@ -165,7 +165,7 @@ def test_handler_turns_an_evaluate_crash_into_a_named_deny(monkeypatch):
     assert "RuntimeError: kaput" in hso["additionalContext"]
 
 
-def test_the_allow_reason_carries_the_workflow_revise_call_shape(tmp_path):
+def test_the_allow_reason_carries_the_workflow_revise_call_shape(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     ctx = _hso(mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit()))["additionalContext"]
     assert (
@@ -174,7 +174,7 @@ def test_the_allow_reason_carries_the_workflow_revise_call_shape(tmp_path):
     ) in ctx
 
 
-def test_a_research_sizing_takes_the_research_route(tmp_path):
+def test_a_research_sizing_takes_the_research_route(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     sizing = root / "state" / "sizings" / "x.yaml"
     sizing.parent.mkdir(parents=True)
@@ -195,7 +195,7 @@ def test_a_research_sizing_takes_the_research_route(tmp_path):
     assert "research sizing takes no brief" in _hso(refused)["permissionDecisionReason"]
 
 
-def test_an_empty_research_block_or_unreadable_sizing_keeps_the_plan_chain(tmp_path):
+def test_an_empty_research_block_or_unreadable_sizing_keeps_the_plan_chain(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     sizing = root / "state" / "sizings" / "y.yaml"
     sizing.parent.mkdir(parents=True)
@@ -207,14 +207,14 @@ def test_an_empty_research_block_or_unreadable_sizing_keeps_the_plan_chain(tmp_p
         assert params["sizing_path"] == rel and "from_sizing" not in params
 
 
-def test_bare_string_args_is_the_ask(tmp_path):
+def test_bare_string_args_is_the_ask(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     mod.evaluate(_payload(root, "the ask"), emit=emit)
     assert emit.calls[0][0]["ask"] == "the ask"
 
 
-def test_sizing_submission_routes_the_sizing(tmp_path):
+def test_sizing_submission_routes_the_sizing(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit(fire_args={})
     out = mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml"}), emit=emit)
@@ -222,7 +222,7 @@ def test_sizing_submission_routes_the_sizing(tmp_path):
     assert "args" not in _hso(out)["updatedInput"]
 
 
-def test_sizing_submission_carries_its_writes(tmp_path):
+def test_sizing_submission_carries_its_writes(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit(fire_args={})
     mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml", "writes": ["tests/t.py"]}), emit=emit)
@@ -253,7 +253,7 @@ def _agent_write(dispatch, root: Path, tmp_path: Path, agent_id: str, path: str 
                         "tool_input": {"file_path": str(root / path), "old_string": "a", "new_string": "b"}})
 
 
-def test_size_stage_subagent_cannot_write_product_code(tmp_path, monkeypatch):
+def test_size_stage_subagent_cannot_write_product_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import nudge_em_code_dispatch as dispatch
 
     root = _repo(tmp_path)
@@ -273,7 +273,7 @@ def test_size_stage_subagent_cannot_write_product_code(tmp_path, monkeypatch):
     assert write("pkg/mod.py") is None
 
 
-def test_a_second_live_run_is_never_denied_by_the_size_stage_guard(tmp_path, monkeypatch):
+def test_a_second_live_run_is_never_denied_by_the_size_stage_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import nudge_em_code_dispatch as dispatch
 
     root = _repo(tmp_path)
@@ -296,7 +296,7 @@ def test_a_second_live_run_is_never_denied_by_the_size_stage_guard(tmp_path, mon
     assert "Advisory" in write(agent_a)["hookSpecificOutput"]["additionalContext"]
 
 
-def test_remote_venue_carries_the_cross_repo_approval(tmp_path, monkeypatch):
+def test_remote_venue_carries_the_cross_repo_approval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
     root = _repo(tmp_path)
     emit = _Emit()
@@ -304,7 +304,7 @@ def test_remote_venue_carries_the_cross_repo_approval(tmp_path, monkeypatch):
     assert emit.calls[0][0]["cross_repo_approved"] is True
 
 
-def test_local_cross_repo_approval_rides_in_args(tmp_path):
+def test_local_cross_repo_approval_rides_in_args(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     mod.evaluate(_payload(root, {"ask": "a"}), emit=emit)
@@ -313,7 +313,7 @@ def test_local_cross_repo_approval_rides_in_args(tmp_path):
     assert emit.calls[1][0]["cross_repo_approved"] is True
 
 
-def test_repo_arg_selects_the_repo_from_a_non_repo_cwd(tmp_path):
+def test_repo_arg_selects_the_repo_from_a_non_repo_cwd(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -337,7 +337,7 @@ def test_repo_arg_selects_the_repo_from_a_non_repo_cwd(tmp_path):
         ({"ask": "a"}, False, "in no git repo"),
     ],
 )
-def test_malformed_submissions_deny_with_the_shape(tmp_path, args, cwd_inside, needle):
+def test_malformed_submissions_deny_with_the_shape(tmp_path: Path, args, cwd_inside, needle) -> None:
     root = _repo(tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -350,7 +350,7 @@ def test_malformed_submissions_deny_with_the_shape(tmp_path, args, cwd_inside, n
     assert emit.calls == []
 
 
-def test_engine_refusal_is_the_deny_reason(tmp_path):
+def test_engine_refusal_is_the_deny_reason(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     out = mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml"}), emit=_Emit(raises=ValueError("sizing not accepted")))
     hso = _hso(out)
@@ -368,7 +368,7 @@ def _foreign_refusal(root: Path) -> Exception:
     )
 
 
-def test_foreign_emission_refusal_reaches_the_deny_whole(tmp_path):
+def test_foreign_emission_refusal_reaches_the_deny_whole(tmp_path: Path) -> None:
     # Pins hook pass-through only (no hook-side cap exists); the length bound is test_op's.
     root = _repo(tmp_path)
     exc = _foreign_refusal(root)
@@ -379,7 +379,7 @@ def test_foreign_emission_refusal_reaches_the_deny_whole(tmp_path):
     assert hso["permissionDecisionReason"].count("pass force=true deliberately.") == 1
 
 
-def test_the_op_door_returns_the_whole_refusal(tmp_path, monkeypatch):
+def test_the_op_door_returns_the_whole_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import machine_profile
 
     root = _repo(tmp_path)
@@ -390,7 +390,7 @@ def test_the_op_door_returns_the_whole_refusal(tmp_path, monkeypatch):
     assert str(exc) in _hso(out)["permissionDecisionReason"]
 
 
-def test_the_transport_shaping_keeps_the_whole_refusal(tmp_path):
+def test_the_transport_shaping_keeps_the_whole_refusal(tmp_path: Path) -> None:
     from coordinator_core.warm import hook_http
 
     root = _repo(tmp_path)
@@ -400,7 +400,7 @@ def test_the_transport_shaping_keeps_the_whole_refusal(tmp_path):
     assert str(exc) in body["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_a_refusal_longer_than_any_cap_keeps_its_tail_through_every_door(tmp_path, monkeypatch):
+def test_a_refusal_longer_than_any_cap_keeps_its_tail_through_every_door(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import machine_profile
     from coordinator_core.ops.dispatch_emit.op import ForeignEmissionError
     from coordinator_core.warm import hook_http
@@ -417,7 +417,7 @@ def test_a_refusal_longer_than_any_cap_keeps_its_tail_through_every_door(tmp_pat
     assert tail in _hso(handled)["permissionDecisionReason"]
 
 
-def test_a_redirected_emit_leads_the_allow_context_with_the_redirect(tmp_path):
+def test_a_redirected_emit_leads_the_allow_context_with_the_redirect(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
 
     root = _repo(tmp_path)
@@ -442,7 +442,7 @@ def test_a_redirected_emit_leads_the_allow_context_with_the_redirect(tmp_path):
     assert "Halted run" not in _hso(plain)["additionalContext"]
 
 
-def test_a_subagent_cannot_submit(tmp_path):
+def test_a_subagent_cannot_submit(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     out = mod.evaluate(_payload(root, {"ask": "a"}, agent_id="abc"), emit=emit)
@@ -450,7 +450,7 @@ def test_a_subagent_cannot_submit(tmp_path):
     assert emit.calls == []
 
 
-def test_second_submission_of_a_live_sizing_is_denied(tmp_path):
+def test_second_submission_of_a_live_sizing_is_denied(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     first = mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml"}), emit=emit)
@@ -477,7 +477,7 @@ def _halted_run(root: Path, *, token_spent: bool) -> Path:
     return rd
 
 
-def test_a_sizing_submission_retires_the_halted_run_whose_token_is_spent(tmp_path):
+def test_a_sizing_submission_retires_the_halted_run_whose_token_is_spent(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.halted_run import halted_run_for
 
     root = _repo(tmp_path)
@@ -490,7 +490,7 @@ def test_a_sizing_submission_retires_the_halted_run_whose_token_is_spent(tmp_pat
     assert len(emit.calls) == 1
 
 
-def test_a_sizing_submission_leaves_a_halted_run_with_a_live_token_resumable(tmp_path):
+def test_a_sizing_submission_leaves_a_halted_run_with_a_live_token_resumable(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.halted_run import halted_run_for
 
     root = _repo(tmp_path)
@@ -502,7 +502,7 @@ def test_a_sizing_submission_leaves_a_halted_run_with_a_live_token_resumable(tmp
     assert (rd / "halted.json").read_bytes() == before
 
 
-def test_a_sizing_submission_with_no_halted_run_touches_no_run_state(tmp_path):
+def test_a_sizing_submission_with_no_halted_run_touches_no_run_state(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     out = mod.evaluate(_payload(root, {"sizing": _SPENT_SIZING}), emit=_Emit())
     assert _hso(out)["permissionDecision"] == "allow"
@@ -519,7 +519,7 @@ def _result_line(tool_use_id: str) -> str:
     ) + "\n"
 
 
-def test_a_resubmit_after_a_refused_call_emits_anew_and_leaves_one_token(tmp_path):
+def test_a_resubmit_after_a_refused_call_emits_anew_and_leaves_one_token(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     sizing = {"sizing": "state/sizings/a.yaml"}
@@ -531,7 +531,7 @@ def test_a_resubmit_after_a_refused_call_emits_anew_and_leaves_one_token(tmp_pat
     assert _tokens(root) == ["ask-20261013T000000-abcdef"]
 
 
-def test_a_resubmit_while_the_first_call_has_no_result_is_denied(tmp_path):
+def test_a_resubmit_while_the_first_call_has_no_result_is_denied(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     sizing = {"sizing": "state/sizings/a.yaml"}
@@ -543,7 +543,7 @@ def test_a_resubmit_while_the_first_call_has_no_result_is_denied(tmp_path):
     assert _tokens(root) == ["ask-20261013T000000-abcdef"]
 
 
-def test_a_run_with_a_launch_record_is_never_unlaunched_even_after_a_result(tmp_path):
+def test_a_run_with_a_launch_record_is_never_unlaunched_even_after_a_result(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     scratch = tmp_path / "tmp"
     scratch.mkdir()
@@ -556,7 +556,7 @@ def test_a_run_with_a_launch_record_is_never_unlaunched_even_after_a_result(tmp_
     assert warp_live.unlaunched_run_for_sizing(root, "state/sizings/a.yaml", "sess-1", tmpdir=str(scratch)) is None
 
 
-def _scout_payload(root: Path, subagent_type="coordinator:sizing-scout", **extra) -> dict:
+def _scout_payload(root: Path, subagent_type: str | None = "coordinator:sizing-scout", **extra) -> dict:
     tool_input = {"prompt": "size"}
     if subagent_type is not None:
         tool_input["subagent_type"] = subagent_type
@@ -571,7 +571,7 @@ def _scout_payload(root: Path, subagent_type="coordinator:sizing-scout", **extra
     return payload
 
 
-def test_sizing_scout_is_denied_with_no_live_run_rerouting_to_the_sizing_skill_not_workflow(tmp_path):
+def test_sizing_scout_is_denied_with_no_live_run_rerouting_to_the_sizing_skill_not_workflow(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     out = mod.sizing_scout_deny(_scout_payload(root))
     assert _hso(out)["permissionDecision"] == "allow"
@@ -583,7 +583,7 @@ def test_sizing_scout_is_denied_with_no_live_run_rerouting_to_the_sizing_skill_n
     assert _hso(mod.sizing_scout_deny(bare))["permissionDecision"] == "allow"
 
 
-def test_sizing_scout_with_a_live_run_names_the_run(tmp_path):
+def test_sizing_scout_with_a_live_run_names_the_run(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
     out = mod.sizing_scout_deny(_scout_payload(root))
@@ -596,7 +596,7 @@ def test_sizing_scout_with_a_live_run_names_the_run(tmp_path):
     assert "ask-20261013T000000-abcdef" not in _hso(other)["additionalContext"]
 
 
-def test_sizing_scout_deny_names_the_live_runs_actual_stage(tmp_path):
+def test_sizing_scout_deny_names_the_live_runs_actual_stage(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
     stage_dir = root / "state" / "warp" / "ask-20261013T000000-abcdef"
@@ -607,7 +607,7 @@ def test_sizing_scout_deny_names_the_live_runs_actual_stage(tmp_path):
     assert "already sizing" not in reason
 
 
-def test_sizing_scout_deny_without_a_stage_file_claims_no_sizing(tmp_path):
+def test_sizing_scout_deny_without_a_stage_file_claims_no_sizing(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
     reason = _hso(mod.sizing_scout_deny(_scout_payload(root)))["additionalContext"]
@@ -615,7 +615,7 @@ def test_sizing_scout_deny_without_a_stage_file_claims_no_sizing(tmp_path):
     assert "sizing;" not in reason
 
 
-def test_a_readonly_marked_brief_is_admitted_and_an_unmarked_or_embedded_one_is_denied(tmp_path):
+def test_a_readonly_marked_brief_is_admitted_and_an_unmarked_or_embedded_one_is_denied(tmp_path: Path) -> None:
     from coordinator_core.hooks.sizing_scout_deny import READONLY_MARKER
 
     root = _repo(tmp_path)
@@ -632,17 +632,17 @@ def test_a_readonly_marked_brief_is_admitted_and_an_unmarked_or_embedded_one_is_
     assert _hso(mod.sizing_scout_deny(_scout_payload(root)))["permissionDecision"] == "allow"
 
 
-def test_a_scout_payload_with_an_agent_id_is_not_denied_without_a_run(tmp_path):
+def test_a_scout_payload_with_an_agent_id_is_not_denied_without_a_run(tmp_path: Path) -> None:
     assert mod.sizing_scout_deny(_scout_payload(_repo(tmp_path), agent_id="a1")) is None
 
 
-def test_a_scout_payload_with_an_agent_id_is_not_denied_with_a_run_live(tmp_path):
+def test_a_scout_payload_with_an_agent_id_is_not_denied_with_a_run_live(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
     assert mod.sizing_scout_deny(_scout_payload(root, agent_id="a1")) is None
 
 
-def test_a_non_scout_agent_payload_reads_no_launch_records(tmp_path, monkeypatch):
+def test_a_non_scout_agent_payload_reads_no_launch_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
 
@@ -654,7 +654,7 @@ def test_a_non_scout_agent_payload_reads_no_launch_records(tmp_path, monkeypatch
     assert mod.sizing_scout_deny(_scout_payload(root, None)) is None
 
 
-def test_agent_leg_carries_the_sizing_scout_deny(tmp_path):
+def test_agent_leg_carries_the_sizing_scout_deny(tmp_path: Path) -> None:
     from coordinator_core.hooks import block_unenumerated_agent_type
 
     root = _repo(tmp_path)
@@ -664,7 +664,7 @@ def test_agent_leg_carries_the_sizing_scout_deny(tmp_path):
     assert "ask-20261013T000000-abcdef" in _hso(out)["additionalContext"]
 
 
-def test_engine_emitted_no_run_consumes_the_token(tmp_path):
+def test_engine_emitted_no_run_consumes_the_token(tmp_path: Path) -> None:
     root = _repo(tmp_path)
 
     def emit(params, repo_root):
@@ -680,14 +680,14 @@ def test_engine_emitted_no_run_consumes_the_token(tmp_path):
     assert record is None or not record.exists()
 
 
-def test_non_repo_cwd_refusal_shows_the_repo_argument_shape(tmp_path):
+def test_non_repo_cwd_refusal_shows_the_repo_argument_shape(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     out = mod.evaluate(_payload(_repo(tmp_path), {"ask": "a"}, cwd=str(outside)), emit=_Emit())
     assert 'repo: "<abs path>"' in _hso(out)["permissionDecisionReason"]
 
 
-def test_a_bare_registered_repo_name_resolves_and_others_keep_their_behaviour(tmp_path, monkeypatch):
+def test_a_bare_registered_repo_name_resolves_and_others_keep_their_behaviour(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import machine_resolver
 
     root = _repo(tmp_path)
@@ -705,7 +705,7 @@ def test_a_bare_registered_repo_name_resolves_and_others_keep_their_behaviour(tm
     assert emit.calls[0][1] == root
 
 
-def test_a_repo_argument_that_is_not_a_repo_is_refused_naming_it(tmp_path):
+def test_a_repo_argument_that_is_not_a_repo_is_refused_naming_it(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     bad = tmp_path / "not-a-repo"
     bad.mkdir()
@@ -716,7 +716,7 @@ def test_a_repo_argument_that_is_not_a_repo_is_refused_naming_it(tmp_path):
     assert emit.calls == []
 
 
-def test_relayed_source_forwards_ask_source(tmp_path):
+def test_relayed_source_forwards_ask_source(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     mod.evaluate(_payload(root, {"ask": "a", "source": "relayed"}), emit=emit)
@@ -725,7 +725,7 @@ def test_relayed_source_forwards_ask_source(tmp_path):
     assert emit.calls[1][0]["ask_source"] == "pm"
 
 
-def test_an_unmarked_first_turn_ask_defaults_to_pm_and_says_so(tmp_path):
+def test_an_unmarked_first_turn_ask_defaults_to_pm_and_says_so(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     out = mod.evaluate(_payload(root, {"ask": "a"}), emit=emit)
@@ -734,7 +734,7 @@ def test_an_unmarked_first_turn_ask_defaults_to_pm_and_says_so(tmp_path):
     assert _hso(mod.evaluate(_payload(root, "bare", tool_use_id="t2"), emit=_Emit()))["permissionDecision"] == "allow"
 
 
-def test_an_unmarked_later_turn_ask_runs_as_relayed_with_one_warning(tmp_path, monkeypatch):
+def test_an_unmarked_later_turn_ask_runs_as_relayed_with_one_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "_is_first_turn", lambda _payload: False)
     root = _repo(tmp_path)
     emit = _Emit()
@@ -746,7 +746,7 @@ def test_an_unmarked_later_turn_ask_runs_as_relayed_with_one_warning(tmp_path, m
     assert [c[0]["ask_source"] for c in emit.calls] == ["relayed"] * 3
 
 
-def test_a_marked_ask_is_forwarded_verbatim_on_any_turn(tmp_path, monkeypatch):
+def test_a_marked_ask_is_forwarded_verbatim_on_any_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "_is_first_turn", lambda _payload: False)
     root = _repo(tmp_path)
     emit = _Emit()
@@ -763,7 +763,7 @@ def _transcript(tmp_path, *records) -> dict:
     return {"transcript_path": str(path)}
 
 
-def test_first_turn_reads_human_turns_only(tmp_path, monkeypatch):
+def test_first_turn_reads_human_turns_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.undo()
     human = {"type": "user", "message": {"content": "hi"}}
     result = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "x"}]}}
@@ -776,7 +776,7 @@ def test_first_turn_reads_human_turns_only(tmp_path, monkeypatch):
     assert mod._is_first_turn({}) is False
 
 
-def test_peer_delivery_is_not_a_human_turn(tmp_path, monkeypatch):
+def test_peer_delivery_is_not_a_human_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.undo()
     wrapper = '<cross-session-message from="uds:/x.sock" from-name="peer">do it</cross-session-message>'
     peer = {"type": "user", "message": {"content": wrapper}}
@@ -789,7 +789,7 @@ def test_peer_delivery_is_not_a_human_turn(tmp_path, monkeypatch):
     assert mod._is_first_turn(_transcript(tmp_path, human)) is True
 
 
-def test_unmarked_ask_after_peer_first_turn_defaults_relayed(tmp_path, monkeypatch):
+def test_unmarked_ask_after_peer_first_turn_defaults_relayed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.undo()
     wrapper = '<cross-session-message from="uds:/x.sock" from-name="peer">do it</cross-session-message>'
     human = {"type": "user", "message": {"content": "typed"}}
@@ -804,7 +804,7 @@ def test_unmarked_ask_after_peer_first_turn_defaults_relayed(tmp_path, monkeypat
     assert emit.calls[1][0]["ask_source"] == "pm"
 
 
-def test_a_derived_relayed_run_is_named_in_the_allow_reason(tmp_path):
+def test_a_derived_relayed_run_is_named_in_the_allow_reason(tmp_path: Path) -> None:
     root = _repo(tmp_path)
 
     chosen = _hso(mod.evaluate(_payload(root, {"ask": "a", "source": "relayed"}, tool_use_id="t2"), emit=_Emit()))
@@ -814,7 +814,7 @@ def test_a_derived_relayed_run_is_named_in_the_allow_reason(tmp_path):
     assert "unverified" not in pm["additionalContext"]
 
 
-def test_an_unverifiable_pm_marking_is_flagged_in_the_allow_reason(tmp_path):
+def test_an_unverifiable_pm_marking_is_flagged_in_the_allow_reason(tmp_path: Path) -> None:
     root = _repo(tmp_path)
 
     def unverifiable(params, root_):
@@ -825,7 +825,7 @@ def test_an_unverifiable_pm_marking_is_flagged_in_the_allow_reason(tmp_path):
     assert "Unmarked" not in out
 
 
-def test_a_redirected_root_passes_the_sessions_own_repo(tmp_path):
+def test_a_redirected_root_passes_the_sessions_own_repo(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     other = _repo(tmp_path / "other")
     emit = _Emit()
@@ -842,14 +842,14 @@ def test_a_redirected_root_passes_the_sessions_own_repo(tmp_path):
     assert Path(fan.calls[0][0]["session_root"]).resolve() == root.resolve()
 
 
-def test_a_relayed_ask_is_admitted_with_no_pm_turn_check_of_its_own(tmp_path):
+def test_a_relayed_ask_is_admitted_with_no_pm_turn_check_of_its_own(tmp_path: Path) -> None:
     emit = _Emit()
     out = mod.evaluate(_payload(_repo(tmp_path), {"ask": "a", "source": "relayed"}), emit=emit)
     assert _hso(out)["permissionDecision"] == "allow"
     assert emit.calls[0][0]["ask_source"] == "relayed"
 
 
-def test_an_engine_refusal_still_denies_with_its_own_text(tmp_path):
+def test_an_engine_refusal_still_denies_with_its_own_text(tmp_path: Path) -> None:
     out = mod.evaluate(
         _payload(_repo(tmp_path), {"ask": "a"}), emit=_Emit(raises=ValueError("boom")),
     )
@@ -857,7 +857,7 @@ def test_an_engine_refusal_still_denies_with_its_own_text(tmp_path):
     assert "boom" in _hso(out)["permissionDecisionReason"]
 
 
-def test_a_relayed_sender_reaches_the_fanout_and_must_be_a_string(tmp_path):
+def test_a_relayed_sender_reaches_the_fanout_and_must_be_a_string(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
     args = {"asks": [{"ask": "x", "sender": "coordinator-content-repo-dc"}, {"ask": "y"}], "source": "relayed"}
@@ -869,7 +869,7 @@ def test_a_relayed_sender_reaches_the_fanout_and_must_be_a_string(tmp_path):
     assert "asks[0].sender must be a string" in _hso(out)["permissionDecisionReason"]
 
 
-def test_a_single_ask_forwards_its_route_preference_to_the_emit(tmp_path):
+def test_a_single_ask_forwards_its_route_preference_to_the_emit(tmp_path: Path) -> None:
     emit = _Emit()
     args = {"ask": "add a thing", "route_preference": "roadmap", "em_rationale": "spans two workstreams"}
     out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit)
@@ -879,13 +879,13 @@ def test_a_single_ask_forwards_its_route_preference_to_the_emit(tmp_path):
     assert params["em_rationale"] == "spans two workstreams"
 
 
-def test_an_ask_with_no_preference_forwards_neither_key(tmp_path):
+def test_an_ask_with_no_preference_forwards_neither_key(tmp_path: Path) -> None:
     emit = _Emit()
     mod.evaluate(_payload(_repo(tmp_path), {"ask": "a"}), emit=emit)
     assert "route_preference" not in emit.calls[0][0] and "em_rationale" not in emit.calls[0][0]
 
 
-def test_a_one_item_asks_collapse_carries_the_item_preference(tmp_path):
+def test_a_one_item_asks_collapse_carries_the_item_preference(tmp_path: Path) -> None:
     emit = _Emit()
     args = {"asks": [{"ask": "a", "route_preference": "goal", "em_rationale": "why"}]}
     out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit, fanout=_Fanout([]))
@@ -894,7 +894,7 @@ def test_a_one_item_asks_collapse_carries_the_item_preference(tmp_path):
     assert emit.calls[0][0]["em_rationale"] == "why"
 
 
-def test_a_multi_item_asks_forwards_each_items_preference_to_the_fanout(tmp_path):
+def test_a_multi_item_asks_forwards_each_items_preference_to_the_fanout(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
     args = {"asks": [{"ask": "x", "route_preference": "plan", "em_rationale": "why"}, {"ask": "y"}]}
@@ -916,7 +916,7 @@ def test_a_multi_item_asks_forwards_each_items_preference_to_the_fanout(tmp_path
         ({"asks": [{"ask": "x"}, {"ask": "y"}], "route_preference": "plan"}, "each asks item"),
     ],
 )
-def test_an_invalid_or_misplaced_route_preference_is_denied(tmp_path, args, needle):
+def test_an_invalid_or_misplaced_route_preference_is_denied(tmp_path: Path, args, needle) -> None:
     emit, fan = _Emit(), _Fanout([])
     out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit, fanout=fan)
     assert _hso(out)["permissionDecision"] == "deny"
@@ -944,7 +944,7 @@ def test_an_invalid_or_misplaced_route_preference_is_denied(tmp_path, args, need
         ({"asks": [{"ask": "a", "em_rationale": "x" * 5000}]}, None, None),
     ],
 )
-def test_a_well_meant_first_call_is_never_refused_for_its_route_preference(tmp_path, args, want_pref, want_why):
+def test_a_well_meant_first_call_is_never_refused_for_its_route_preference(tmp_path: Path, args, want_pref, want_why) -> None:
     emit = _Emit()
     out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit, fanout=_Fanout([]))
     assert _hso(out)["permissionDecision"] == "allow", _hso(out)
@@ -957,7 +957,7 @@ def test_a_well_meant_first_call_is_never_refused_for_its_route_preference(tmp_p
         assert got == want_why
 
 
-def test_a_multi_item_asks_normalises_each_items_rationale(tmp_path):
+def test_a_multi_item_asks_normalises_each_items_rationale(tmp_path: Path) -> None:
     fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
     args = {"asks": [{"ask": "x", "route_preference": {"route_preference": "plan", "em_rationale": "w"}},
                      {"ask": "y", "em_rationale": "z" * 3000}]}
@@ -968,13 +968,13 @@ def test_a_multi_item_asks_normalises_each_items_rationale(tmp_path):
     assert len(sent[1]["em_rationale"]) <= 2000
 
 
-def test_a_remaining_refusal_shows_a_valid_example_in_its_first_line(tmp_path):
+def test_a_remaining_refusal_shows_a_valid_example_in_its_first_line(tmp_path: Path) -> None:
     out = mod.evaluate(_payload(_repo(tmp_path), {"ask": "a", "route_preference": "shape"}), emit=_Emit())
     first = _hso(out)["permissionDecisionReason"].splitlines()[0]
     assert "route_preference" in first and 'e.g. route_preference: "plan"' in first
 
 
-def test_the_args_shape_names_the_route_preference_keys():
+def test_the_args_shape_names_the_route_preference_keys() -> None:
     assert "route_preference?" in mod._ARGS_SHAPE and "em_rationale?" in mod._ARGS_SHAPE
 
 
@@ -985,7 +985,7 @@ def test_the_args_shape_names_the_route_preference_keys():
         ({"sizing": "state/sizings/a.yaml", "source": "peer"}, "'peer'"),
     ],
 )
-def test_a_bad_source_is_refused(tmp_path, args, needle):
+def test_a_bad_source_is_refused(tmp_path: Path, args, needle) -> None:
     emit = _Emit()
     out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit)
     assert _hso(out)["permissionDecision"] == "deny"
@@ -993,7 +993,7 @@ def test_a_bad_source_is_refused(tmp_path, args, needle):
     assert emit.calls == []
 
 
-def test_a_valid_source_on_a_sizing_submission_is_admitted_and_dropped(tmp_path):
+def test_a_valid_source_on_a_sizing_submission_is_admitted_and_dropped(tmp_path: Path) -> None:
     emit = _Emit()
     out = mod.evaluate(
         _payload(_repo(tmp_path), {"sizing": "state/sizings/a.yaml", "source": "relayed"}), emit=emit
@@ -1002,7 +1002,7 @@ def test_a_valid_source_on_a_sizing_submission_is_admitted_and_dropped(tmp_path)
     assert "ask_source" not in emit.calls[0][0]
 
 
-def test_op_door_answers_the_wrapped_payload(tmp_path, monkeypatch):
+def test_op_door_answers_the_wrapped_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     monkeypatch.setattr(mod, "_default_emit", emit)
@@ -1027,7 +1027,7 @@ def _launch(tmpdir: Path, session: str, task: str, script: str) -> None:
     )
 
 
-def test_live_until_the_task_notification_lands(tmp_path):
+def test_live_until_the_task_notification_lands(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     scratch = tmp_path / "tmp"
     scratch.mkdir()
@@ -1050,7 +1050,7 @@ def test_live_until_the_task_notification_lands(tmp_path):
     assert live() is None
 
 
-def test_an_unlaunched_emit_stops_counting_after_the_grace(tmp_path, monkeypatch):
+def test_an_unlaunched_emit_stops_counting_after_the_grace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     scratch = tmp_path / "tmp"
     scratch.mkdir()
@@ -1061,7 +1061,7 @@ def test_an_unlaunched_emit_stops_counting_after_the_grace(tmp_path, monkeypatch
     assert warp_live.live_run_for_sizing(root, "state/sizings/a.yaml", tmpdir=str(scratch)) is None
 
 
-def test_a_raw_ask_run_owns_no_sizing_but_is_live_for_its_session(tmp_path):
+def test_a_raw_ask_run_owns_no_sizing_but_is_live_for_its_session(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     scratch = tmp_path / "tmp"
     scratch.mkdir()
@@ -1075,7 +1075,7 @@ def test_a_raw_ask_run_owns_no_sizing_but_is_live_for_its_session(tmp_path):
     assert warp_live.live_run_for_session(root, "other", tmpdir=str(scratch)) is None
 
 
-def test_a_redeemed_token_is_not_live(tmp_path):
+def test_a_redeemed_token_is_not_live(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml"}), emit=emit)
@@ -1083,7 +1083,7 @@ def test_a_redeemed_token_is_not_live(tmp_path):
     assert warp_live.live_run_for_sizing(root, "state/sizings/a.yaml", tmpdir=str(tmp_path)) is None
 
 
-def test_an_em_brief_beside_the_ask_reaches_the_emit_params(tmp_path):
+def test_an_em_brief_beside_the_ask_reaches_the_emit_params(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     for name in ("c.md", "d.md"):
@@ -1095,7 +1095,7 @@ def test_an_em_brief_beside_the_ask_reaches_the_emit_params(tmp_path):
     mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml", "context": ["c.md", "d.md"]}), emit=_Emit())
 
 
-def test_prose_context_rides_the_brief_not_ask_context(tmp_path):
+def test_prose_context_rides_the_brief_not_ask_context(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     note = "Sequence B after A.\nA lands first, then B."
@@ -1110,7 +1110,7 @@ def test_prose_context_rides_the_brief_not_ask_context(tmp_path):
     assert emit.calls[0][0]["ask_brief"] == "prefer X\n\ndo it in order"
 
 
-def test_a_path_context_that_exists_reaches_ask_context_unchanged(tmp_path):
+def test_a_path_context_that_exists_reaches_ask_context_unchanged(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (root / "docs").mkdir()
     (root / "docs" / "note.md").write_text("x\n", encoding="utf-8")
@@ -1125,7 +1125,7 @@ def test_a_path_context_that_exists_reaches_ask_context_unchanged(tmp_path):
 
 
 @pytest.mark.parametrize("missing", ["docs/missing.md", "docs\\missing.md"])
-def test_a_missing_path_shaped_context_is_refused_naming_it(tmp_path, missing):
+def test_a_missing_path_shaped_context_is_refused_naming_it(tmp_path: Path, missing) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     out = mod.evaluate(_payload(root, {"ask": "a", "context": missing}), emit=emit)
@@ -1134,7 +1134,7 @@ def test_a_missing_path_shaped_context_is_refused_naming_it(tmp_path, missing):
     assert emit.calls == []
 
 
-def test_a_mixed_context_list_splits_paths_from_prose(tmp_path):
+def test_a_mixed_context_list_splits_paths_from_prose(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (root / "c.md").write_text("x\n", encoding="utf-8")
     emit = _Emit()
@@ -1144,14 +1144,14 @@ def test_a_mixed_context_list_splits_paths_from_prose(tmp_path):
     assert params["ask_brief"] == "run it v2.1 first"
 
 
-def test_a_submission_without_a_brief_adds_no_brief_params(tmp_path):
+def test_a_submission_without_a_brief_adds_no_brief_params(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     mod.evaluate(_payload(root, {"ask": "a", "brief": "  ", "context": []}), emit=emit)
     assert not any(k.startswith("ask_") and k != "ask_source" for k in emit.calls[0][0])
 
 
-def test_a_malformed_brief_is_refused_not_dropped(tmp_path):
+def test_a_malformed_brief_is_refused_not_dropped(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     for bad in ({"brief": 3}, {"context": [1]}):
@@ -1160,14 +1160,14 @@ def test_a_malformed_brief_is_refused_not_dropped(tmp_path):
     assert emit.calls == []
 
 
-def test_a_brief_the_engine_refuses_is_named_in_the_deny(tmp_path):
+def test_a_brief_the_engine_refuses_is_named_in_the_deny(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit(raises=ValueError("--brief-file nope.md: no such file"))
     out = mod.evaluate(_payload(root, {"ask": "a", "brief_file": "nope.md"}), emit=emit)
     assert "nope.md: no such file" in _hso(out)["permissionDecisionReason"]
 
 
-def test_the_deny_shape_names_the_brief_field():
+def test_the_deny_shape_names_the_brief_field() -> None:
     assert "brief:" in mod._ARGS_SHAPE and "brief_file" in mod._ARGS_SHAPE
     assert "asks:" in mod._ARGS_SHAPE
 
@@ -1178,7 +1178,7 @@ PARENT = "ask-parent-20261015T000000-aaaaaa"
 class _Fanout:
     """Stands in for `dispatch.ask_fanout`: writes the slice sizings and the parent record."""
 
-    def __init__(self, runs, raises=None):
+    def __init__(self, runs, raises=None) -> None:
         self.runs = runs  # [(run_id, label, after, status)]
         self.raises = raises
         self.calls: list = []
@@ -1219,16 +1219,16 @@ def _asks(*names, **extra):
 class _Launch:
     """Stands in for `fan_launcher.write_launcher`: records the children, returns a fixed script path."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path) -> None:
         self.calls: list = []
         self.script = root / "scratch" / "warp" / f"{PARENT}.launcher.workflow.mjs"
 
-    def __call__(self, root, parent_id, children, session_id):
+    def __call__(self, root, parent_id, children, session_id) -> Path:
         self.calls.append((root, parent_id, list(children), session_id))
         return self.script
 
 
-def test_asks_launch_every_ready_run(tmp_path):
+def test_asks_launch_every_ready_run(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready"), ("r3", "c", ("r1",), "after")])
     emit, launch = _Emit(), _Launch(root)
@@ -1257,7 +1257,7 @@ def test_asks_launch_every_ready_run(tmp_path):
     assert not warp_live._submission_path(root, "r3").exists()
 
 
-def test_one_ready_run_plus_a_held_run_emits_directly(tmp_path):
+def test_one_ready_run_plus_a_held_run_emits_directly(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "held")])
     emit, launch = _Emit(), _Launch(root)
@@ -1268,7 +1268,7 @@ def test_one_ready_run_plus_a_held_run_emits_directly(tmp_path):
     assert "r2 (held)" in json.dumps(out) and "Fire the listed" not in json.dumps(out)
 
 
-def test_a_launcher_the_engine_refuses_denies_with_its_reason(tmp_path):
+def test_a_launcher_the_engine_refuses_denies_with_its_reason(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
 
@@ -1279,14 +1279,14 @@ def test_a_launcher_the_engine_refuses_denies_with_its_reason(tmp_path):
     assert _hso(out)["permissionDecision"] == "deny" and "launcher exists" in json.dumps(out)
 
 
-def test_a_queued_run_is_not_listed_as_fireable(tmp_path):
+def test_a_queued_run_is_not_listed_as_fireable(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "queued")])
     out = mod.evaluate(_payload(root, _asks("a", "b")), emit=_Emit(), fanout=fan)
     assert "state/sizings/r2.yaml" not in json.dumps(out)
 
 
-def test_a_one_element_asks_array_is_an_ask(tmp_path):
+def test_a_one_element_asks_array_is_an_ask(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     fan = _Fanout([])
     emit = _Emit()
@@ -1299,7 +1299,7 @@ def _sources(fan):
     return [a.get("source") for a in fan.calls[0][0]["asks"]]
 
 
-def test_call_level_relayed_source_reaches_the_fanout_on_every_item(tmp_path):
+def test_call_level_relayed_source_reaches_the_fanout_on_every_item(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
     out = mod.evaluate(_payload(root, _asks("a", "b", source="relayed")), emit=_Emit(), fanout=fan)
@@ -1307,7 +1307,7 @@ def test_call_level_relayed_source_reaches_the_fanout_on_every_item(tmp_path):
     assert _sources(fan) == ["relayed", "relayed"]
 
 
-def test_per_item_source_wins_over_the_call_level_default(tmp_path):
+def test_per_item_source_wins_over_the_call_level_default(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
     args = {"asks": [{"ask": "a", "source": "relayed"}, {"ask": "b"}]}
@@ -1319,7 +1319,7 @@ def test_per_item_source_wins_over_the_call_level_default(tmp_path):
     assert _sources(fan2) == ["pm", "relayed"]
 
 
-def test_a_one_item_relayed_asks_array_collapses_to_a_relayed_ask(tmp_path):
+def test_a_one_item_relayed_asks_array_collapses_to_a_relayed_ask(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     mod.evaluate(_payload(root, {"asks": [{"ask": "a", "source": "relayed"}]}), emit=emit, fanout=_Fanout([]))
@@ -1328,7 +1328,7 @@ def test_a_one_item_relayed_asks_array_collapses_to_a_relayed_ask(tmp_path):
     assert emit.calls[1][0]["ask_source"] == "relayed"
 
 
-def test_a_fanout_refusal_is_the_deny_text_verbatim(tmp_path):
+def test_a_fanout_refusal_is_the_deny_text_verbatim(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     fan = _Fanout([], raises=ValueError("Partition refused; unclaimed rows: R2."))
     emit = _Emit()
@@ -1338,7 +1338,7 @@ def test_a_fanout_refusal_is_the_deny_text_verbatim(tmp_path):
     assert emit.calls == []
 
 
-def test_a_returned_fanout_refusal_is_named_not_reported_as_no_ready_run(tmp_path):
+def test_a_returned_fanout_refusal_is_named_not_reported_as_no_ready_run(tmp_path: Path) -> None:
     root = _repo(tmp_path)
 
     def refusing(params, root):
@@ -1352,7 +1352,7 @@ def test_a_returned_fanout_refusal_is_named_not_reported_as_no_ready_run(tmp_pat
     assert emit.calls == []
 
 
-def test_the_reported_three_ask_relayed_shape_fires_one_and_orders_the_overlap(tmp_path):
+def test_the_reported_three_ask_relayed_shape_fires_one_and_orders_the_overlap(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     args = {
         "source": "relayed",
@@ -1379,7 +1379,7 @@ def test_the_reported_three_ask_relayed_shape_fires_one_and_orders_the_overlap(t
     assert "r2 (after)" in json.dumps(out)
 
 
-def test_the_reported_shape_partitions_into_two_firable_runs_and_one_ordered_after():
+def test_the_reported_shape_partitions_into_two_firable_runs_and_one_ordered_after() -> None:
     from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
 
     slices = [
@@ -1390,7 +1390,7 @@ def test_the_reported_shape_partitions_into_two_firable_runs_and_one_ordered_aft
     assert contract.after_edges(slices) == {0: (), 1: (0,), 2: ()}
 
 
-def _fanned(tmp_path, runs):
+def _fanned(tmp_path, runs) -> Path:
     root = _repo(tmp_path)
     mod.evaluate(_payload(root, _asks(*[r[1] for r in runs])), emit=_Emit(), fanout=_Fanout(runs))
     return root
@@ -1405,7 +1405,7 @@ def _submit_slice(root, run_id, **extra):
     return out, emit
 
 
-def test_a_slice_with_a_landed_predecessor_binds_its_reserved_id(tmp_path):
+def test_a_slice_with_a_landed_predecessor_binds_its_reserved_id(tmp_path: Path) -> None:
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
     _status(root, "r1", "landed")
     out, emit = _submit_slice(root, "r2")
@@ -1413,7 +1413,7 @@ def test_a_slice_with_a_landed_predecessor_binds_its_reserved_id(tmp_path):
     assert emit.calls[0][0]["reserved_run_id"] == "r2"
 
 
-def test_a_slice_is_denied_naming_an_unlanded_predecessor(tmp_path):
+def test_a_slice_is_denied_naming_an_unlanded_predecessor(tmp_path: Path) -> None:
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
     _status(root, "r1", "running")
     out, emit = _submit_slice(root, "r2")
@@ -1422,7 +1422,7 @@ def test_a_slice_is_denied_naming_an_unlanded_predecessor(tmp_path):
     assert emit.calls == []
 
 
-def test_a_slice_behind_a_halted_predecessor_is_told_to_resubmit_fresh(tmp_path):
+def test_a_slice_behind_a_halted_predecessor_is_told_to_resubmit_fresh(tmp_path: Path) -> None:
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
     _status(root, "r1", "halted")
     out, _ = _submit_slice(root, "r2")
@@ -1431,7 +1431,7 @@ def test_a_slice_behind_a_halted_predecessor_is_told_to_resubmit_fresh(tmp_path)
     assert "dispatch.record_halted_run_landed" in reason
 
 
-def test_a_halted_predecessor_whose_declared_writes_landed_releases_the_slice(tmp_path, monkeypatch):
+def test_a_halted_predecessor_whose_declared_writes_landed_releases_the_slice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
     _status(root, "r1", "halted")
     from coordinator_core.ops.dispatch_emit import sibling_hold
@@ -1443,7 +1443,7 @@ def test_a_halted_predecessor_whose_declared_writes_landed_releases_the_slice(tm
     assert emit.calls[0][0]["reserved_run_id"] == "r2"
 
 
-def _halt_record(root, run_id, plan_rel, plan_status):
+def _halt_record(root, run_id, plan_rel, plan_status) -> None:
     plan = root / plan_rel
     plan.parent.mkdir(parents=True, exist_ok=True)
     plan.write_text(f"---\nstatus: {plan_status}\n---\n# p\n", encoding="utf-8")
@@ -1452,7 +1452,7 @@ def _halt_record(root, run_id, plan_rel, plan_status):
     record.write_text(json.dumps({"plan": plan_rel}), encoding="utf-8")
 
 
-def test_a_halted_predecessor_whose_plan_is_implemented_releases_the_slice(tmp_path):
+def test_a_halted_predecessor_whose_plan_is_implemented_releases_the_slice(tmp_path: Path) -> None:
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
     _status(root, "r1", "halted")
     _halt_record(root, "r1", "docs/plans/p.md", "implemented")
@@ -1461,7 +1461,7 @@ def test_a_halted_predecessor_whose_plan_is_implemented_releases_the_slice(tmp_p
     assert emit.calls[0][0]["reserved_run_id"] == "r2"
 
 
-def test_a_halted_predecessor_whose_plan_is_not_implemented_still_holds_the_slice(tmp_path):
+def test_a_halted_predecessor_whose_plan_is_not_implemented_still_holds_the_slice(tmp_path: Path) -> None:
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
     _status(root, "r1", "halted")
     _halt_record(root, "r1", "docs/plans/p.md", "reviewed")
@@ -1469,7 +1469,7 @@ def test_a_halted_predecessor_whose_plan_is_not_implemented_still_holds_the_slic
     assert _hso(out)["permissionDecision"] == "deny" and emit.calls == []
 
 
-def test_a_superseded_slice_is_denied_naming_its_superseding_run(tmp_path):
+def test_a_superseded_slice_is_denied_naming_its_superseding_run(tmp_path: Path) -> None:
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
     _status(root, "r1", "landed")
     marker = root / contract.superseded_rel("r2")
@@ -1480,7 +1480,7 @@ def test_a_superseded_slice_is_denied_naming_its_superseding_run(tmp_path):
     assert "r2 is superseded by r9" in _hso(out)["permissionDecisionReason"] and emit.calls == []
 
 
-def test_supersedes_on_a_held_slice_writes_the_marker_with_the_emitted_run_id(tmp_path):
+def test_supersedes_on_a_held_slice_writes_the_marker_with_the_emitted_run_id(tmp_path: Path) -> None:
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
     _status(root, "r1", "halted")
     emit = _Emit()
@@ -1490,7 +1490,7 @@ def test_supersedes_on_a_held_slice_writes_the_marker_with_the_emitted_run_id(tm
     assert "Marked r2 superseded by ask-20261013T000000-abcdef." in _hso(out)["additionalContext"]
 
 
-def test_supersedes_on_a_sizing_submission_marks_too(tmp_path):
+def test_supersedes_on_a_sizing_submission_marks_too(tmp_path: Path) -> None:
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
     out = mod.evaluate(_payload(root, {"sizing": "state/sizings/new.yaml", "supersedes": "r2"}), emit=_Emit())
     assert _hso(out)["permissionDecision"] == "allow"
@@ -1498,7 +1498,7 @@ def test_supersedes_on_a_sizing_submission_marks_too(tmp_path):
 
 
 @pytest.mark.parametrize("held_status", ["landed", "running"])
-def test_supersedes_naming_a_landed_or_running_run_is_denied_before_emit(tmp_path, held_status):
+def test_supersedes_naming_a_landed_or_running_run_is_denied_before_emit(tmp_path: Path, held_status) -> None:
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
     _status(root, "r2", held_status)
     emit = _Emit()
@@ -1507,7 +1507,7 @@ def test_supersedes_naming_a_landed_or_running_run_is_denied_before_emit(tmp_pat
     assert contract.read_superseded_by(root, "r2") is None
 
 
-def test_supersedes_over_an_existing_mark_is_denied_before_emit(tmp_path):
+def test_supersedes_over_an_existing_mark_is_denied_before_emit(tmp_path: Path) -> None:
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
     marker = root / contract.superseded_rel("r2")
     marker.parent.mkdir(parents=True, exist_ok=True)
@@ -1527,7 +1527,7 @@ def test_supersedes_over_an_existing_mark_is_denied_before_emit(tmp_path):
         {"ask": "x", "supersedes": " "},
     ],
 )
-def test_supersedes_is_refused_on_asks_and_on_a_non_string(tmp_path, args):
+def test_supersedes_is_refused_on_asks_and_on_a_non_string(tmp_path: Path, args) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     out = mod.evaluate(_payload(root, args), emit=emit, fanout=_Fanout([]))
@@ -1535,14 +1535,14 @@ def test_supersedes_is_refused_on_asks_and_on_a_non_string(tmp_path, args):
     assert "supersedes" in _hso(out)["permissionDecisionReason"]
 
 
-def test_a_queued_slice_is_not_held_by_a_running_sibling(tmp_path):
+def test_a_queued_slice_is_not_held_by_a_running_sibling(tmp_path: Path) -> None:
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", (), "queued")])
     _status(root, "r1", "running")
     out, emit = _submit_slice(root, "r2")
     assert _hso(out)["permissionDecision"] == "allow" and emit.calls[0][0]["reserved_run_id"] == "r2"
 
 
-def test_a_slice_is_still_denied_while_its_after_predecessor_runs(tmp_path):
+def test_a_slice_is_still_denied_while_its_after_predecessor_runs(tmp_path: Path) -> None:
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
     _status(root, "r1", "running")
     out, emit = _submit_slice(root, "r2")
@@ -1550,14 +1550,14 @@ def test_a_slice_is_still_denied_while_its_after_predecessor_runs(tmp_path):
     assert emit.calls == []
 
 
-def test_a_sizing_without_a_parent_marker_binds_nothing(tmp_path):
+def test_a_sizing_without_a_parent_marker_binds_nothing(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()
     mod.evaluate(_payload(root, {"sizing": "state/sizings/plain.yaml"}), emit=emit)
     assert "reserved_run_id" not in emit.calls[0][0]
 
 
-def _op_root(tmp_path):
+def _op_root(tmp_path) -> tuple[Path, Path]:
     root = _repo(tmp_path)
     parent = root / contract.parent_record_rel(PARENT)
     parent.parent.mkdir(parents=True)
@@ -1565,7 +1565,7 @@ def _op_root(tmp_path):
     return root, parent
 
 
-def test_reserved_id_bind_copies_the_parent_and_marks_running(tmp_path):
+def test_reserved_id_bind_copies_the_parent_and_marks_running(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import op
 
     root, parent = _op_root(tmp_path)
@@ -1577,7 +1577,7 @@ def test_reserved_id_bind_copies_the_parent_and_marks_running(tmp_path):
     assert json.loads((root / contract.status_rel("r1")).read_text(encoding="utf-8"))["status"] == "running"
 
 
-def test_a_second_bind_of_one_reserved_id_is_refused(tmp_path, monkeypatch):
+def test_a_second_bind_of_one_reserved_id_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import op
 
     root, _ = _op_root(tmp_path)
@@ -1591,7 +1591,7 @@ def test_a_second_bind_of_one_reserved_id_is_refused(tmp_path, monkeypatch):
         op._bind_reserved_run(root, "r1", PARENT)
 
 
-def test_a_reserved_id_the_sizing_does_not_reserve_is_refused(tmp_path):
+def test_a_reserved_id_the_sizing_does_not_reserve_is_refused(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import op
 
     root, _ = _op_root(tmp_path)
@@ -1603,7 +1603,7 @@ def test_a_reserved_id_the_sizing_does_not_reserve_is_refused(tmp_path):
 
 
 
-def test_a_one_item_relayed_ask_with_sender_keeps_the_fanout_arm_and_forwards_it(tmp_path):
+def test_a_one_item_relayed_ask_with_sender_keeps_the_fanout_arm_and_forwards_it(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     fan = _Fanout([("r1", "a", (), "ready")])
     args = {"asks": [{"ask": "a", "source": "relayed", "sender": "coordinator-content-repo-dc", "relayed_text": "the words"}]}
@@ -1613,7 +1613,7 @@ def test_a_one_item_relayed_ask_with_sender_keeps_the_fanout_arm_and_forwards_it
     assert item["sender"] == "coordinator-content-repo-dc" and item["relayed_text"] == "the words"
 
 
-def test_em_context_rides_the_brief_and_leaves_a_pm_ask_untouched(tmp_path):
+def test_em_context_rides_the_brief_and_leaves_a_pm_ask_untouched(tmp_path: Path) -> None:
     emit = _Emit()
     args = {"ask": "the PM's words", "source": "pm", "em_context": "the EM's gloss", "brief": "prefer X"}
     out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit)
@@ -1624,7 +1624,7 @@ def test_em_context_rides_the_brief_and_leaves_a_pm_ask_untouched(tmp_path):
     assert "gloss" not in params["ask"]
 
 
-def test_a_one_item_asks_collapse_carries_the_items_em_context(tmp_path):
+def test_a_one_item_asks_collapse_carries_the_items_em_context(tmp_path: Path) -> None:
     emit = _Emit()
     args = {"asks": [{"ask": "pm words", "source": "pm", "em_context": "ctx"}]}
     out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit, fanout=_Fanout([]))
@@ -1634,7 +1634,7 @@ def test_a_one_item_asks_collapse_carries_the_items_em_context(tmp_path):
     assert params["ask_brief"].endswith("ctx")
 
 
-def test_a_multi_item_asks_forwards_each_items_em_context_to_the_fanout(tmp_path):
+def test_a_multi_item_asks_forwards_each_items_em_context_to_the_fanout(tmp_path: Path) -> None:
     fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
     args = {"asks": [{"ask": "x", "source": "pm", "em_context": "ctx"}, {"ask": "y", "source": "pm"}]}
     out = mod.evaluate(_payload(_repo(tmp_path), args), emit=_Emit(), fanout=fan)
@@ -1650,7 +1650,7 @@ def test_a_multi_item_asks_forwards_each_items_em_context_to_the_fanout(tmp_path
         ({"asks": [{"ask": "x"}, {"ask": "y", "em_context": ["c"]}]}, "asks[1].em_context must be a string."),
     ],
 )
-def test_a_non_string_em_context_is_refused(tmp_path, args, needle):
+def test_a_non_string_em_context_is_refused(tmp_path: Path, args, needle) -> None:
     emit, fan = _Emit(), _Fanout([])
     out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit, fanout=fan)
     assert _hso(out)["permissionDecision"] == "deny"
@@ -1658,7 +1658,7 @@ def test_a_non_string_em_context_is_refused(tmp_path, args, needle):
     assert emit.calls == [] and fan.calls == []
 
 
-def test_the_module_docstring_names_em_context():
+def test_the_module_docstring_names_em_context() -> None:
     assert "em_context" in mod.__doc__
 
 
@@ -1667,7 +1667,7 @@ def _archived(root: Path, dirname: str) -> None:
     (root / "docs" / "research" / dirname).mkdir(parents=True)
 
 
-def test_a_build_ask_with_archived_research_warns_naming_it_and_still_fires(tmp_path):
+def test_a_build_ask_with_archived_research_warns_naming_it_and_still_fires(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _archived(root, "2026-10-19-how-does-the-hook-warn")
     _archived(root, "2026-10-19-how-does-the-hook-warn-more")
@@ -1682,7 +1682,7 @@ def test_a_build_ask_with_archived_research_warns_naming_it_and_still_fires(tmp_
     assert "warn-more" not in hso["additionalContext"]
 
 
-def test_a_build_sizing_with_archived_research_warns(tmp_path):
+def test_a_build_sizing_with_archived_research_warns(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (root / "state" / "sizings").mkdir(parents=True)
     (root / "state" / "sizings" / "2026-10-20-topic-x.yaml").write_text("name: x\n", encoding="utf-8")
@@ -1691,7 +1691,7 @@ def test_a_build_sizing_with_archived_research_warns(tmp_path):
     assert "docs/research/2026-10-19-topic-x/" in _hso(out)["additionalContext"]
 
 
-def test_a_flat_research_file_for_the_ask_warns_naming_it(tmp_path):
+def test_a_flat_research_file_for_the_ask_warns_naming_it(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     research = root / "docs" / "research"
     research.mkdir(parents=True)
@@ -1700,7 +1700,7 @@ def test_a_flat_research_file_for_the_ask_warns_naming_it(tmp_path):
     assert "docs/research/2026-10-19-how-does-the-hook-warn.md" in _hso(out)["additionalContext"]
 
 
-def test_a_differently_worded_ask_for_the_same_subject_warns(tmp_path):
+def test_a_differently_worded_ask_for_the_same_subject_warns(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _archived(root, "2026-10-19-submission-hook-existing-research-warning")
     (root / "docs" / "research" / "2026-10-19-existing-research-warning-hook.md").write_text("x", encoding="utf-8")
@@ -1713,7 +1713,7 @@ def test_a_differently_worded_ask_for_the_same_subject_warns(tmp_path):
     assert "docs/research/2026-10-19-existing-research-warning-hook.md" in ctx
 
 
-def test_an_unrelated_build_ask_gets_no_warning_beside_flat_research(tmp_path):
+def test_an_unrelated_build_ask_gets_no_warning_beside_flat_research(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _archived(root, "2026-10-19-submission-hook-existing-research-warning")
     (root / "docs" / "research" / "2026-10-19-existing-research-warning-hook.md").write_text("x", encoding="utf-8")
@@ -1721,7 +1721,7 @@ def test_an_unrelated_build_ask_gets_no_warning_beside_flat_research(tmp_path):
     assert "Research artifacts" not in _hso(out)["additionalContext"]
 
 
-def test_no_archived_research_means_no_warning(tmp_path):
+def test_no_archived_research_means_no_warning(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _archived(root, "2026-10-19-something-else")
     out = mod.evaluate(_payload(root, {"ask": "Make X do Y.", "source": "pm"}), emit=_Emit())
@@ -1729,7 +1729,7 @@ def test_no_archived_research_means_no_warning(tmp_path):
     assert "Research artifacts" not in _hso(out)["additionalContext"]
 
 
-def test_a_research_sizing_gets_no_existing_research_warning(tmp_path):
+def test_a_research_sizing_gets_no_existing_research_warning(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (root / "state" / "sizings").mkdir(parents=True)
     (root / "state" / "sizings" / "topic-y.yaml").write_text("research:\n  question: q\n", encoding="utf-8")
@@ -1746,7 +1746,7 @@ def _memo(root: Path, name: str, front: str) -> str:
     return rel
 
 
-def test_an_actioned_context_memo_advises_and_never_refuses(tmp_path):
+def test_an_actioned_context_memo_advises_and_never_refuses(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     memo = _memo(root, "m1.md", "status: actioned\nactioned_commit: abcdef1234")
     out = mod.evaluate(_payload(root, {"ask": "Do X.", "context": [memo]}), emit=_Emit())
@@ -1755,7 +1755,7 @@ def test_an_actioned_context_memo_advises_and_never_refuses(tmp_path):
     assert "m1.md is actioned (commit abcdef1234)" in hso["additionalContext"]
 
 
-def test_an_open_context_memo_carries_no_advisory(tmp_path):
+def test_an_open_context_memo_carries_no_advisory(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     memo = _memo(root, "m2.md", "status: open")
     out = mod.evaluate(_payload(root, {"ask": "Do X.", "context": [memo]}), emit=_Emit())
@@ -1764,7 +1764,7 @@ def test_an_open_context_memo_carries_no_advisory(tmp_path):
     assert "may already be done" not in hso["additionalContext"]
 
 
-def test_default_launch_defers_every_child_to_the_launcher_and_never_emits_in_the_hook(tmp_path, monkeypatch):
+def test_default_launch_defers_every_child_to_the_launcher_and_never_emits_in_the_hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
 
     children = [
@@ -1781,7 +1781,7 @@ def test_default_launch_defers_every_child_to_the_launcher_and_never_emits_in_th
     assert len(list((tmp_path / "scratch" / "warp").glob("*.workflow.mjs"))) == 4  # three deferred emits plus the launcher
 
 
-def test_default_launch_names_a_child_whose_deferred_script_cannot_be_written(tmp_path, monkeypatch):
+def test_default_launch_names_a_child_whose_deferred_script_cannot_be_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
 
     children = [
@@ -1791,7 +1791,7 @@ def test_default_launch_names_a_child_whose_deferred_script_cannot_be_written(tm
     ]
     real = mod._write_deferred_script
 
-    def write(root, params):
+    def write(root, params) -> Path:
         if params["sizing_path"].endswith("ask-r1.yaml"):
             raise OSError("disk full")
         return real(root, params)
@@ -1821,7 +1821,7 @@ def _deferred_params(root: Path, em_context: str, monkeypatch) -> dict:
     return json.loads(Path(json.loads(re.search(r"^const PARAMS_FILE = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1))).read_text(encoding="utf-8"))
 
 
-def test_submit_engine_ask_deferred_long_brief_rides_a_repo_file(tmp_path, monkeypatch):
+def test_submit_engine_ask_deferred_long_brief_rides_a_repo_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import ask_brief
 
     root = _repo(tmp_path)
@@ -1831,7 +1831,7 @@ def test_submit_engine_ask_deferred_long_brief_rides_a_repo_file(tmp_path, monke
     assert "context line." in loaded.text
 
 
-def test_submit_engine_ask_deferred_short_brief_stays_inline(tmp_path, monkeypatch):
+def test_submit_engine_ask_deferred_short_brief_stays_inline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     params = _deferred_params(_repo(tmp_path), "short context", monkeypatch)
     assert "short context" in params["ask_brief"]
     assert "ask_brief_file" not in params
@@ -1844,7 +1844,7 @@ def _minted_overrun_refire(root: Path, monkeypatch):
     """A refire of a halted run with an em_context whose launcher emit overruns after minting."""
     rd = _halted_run(root, token_spent=False)
 
-    def overran(emit, params, root_, budget_s=None, scan=True):
+    def overran(emit, params, root_, budget_s=None, scan: bool = True):
         raise mod._EmitOverran("outran after minting", minted=True, run_ids=[_SPENT_RUN])
 
     monkeypatch.setattr(mod, "_emit_within_budget", overran)
@@ -1852,7 +1852,7 @@ def _minted_overrun_refire(root: Path, monkeypatch):
     return out, rd
 
 
-def test_a_refire_hands_its_emit_to_the_launcher_and_persists_em_context(tmp_path, monkeypatch):
+def test_a_refire_hands_its_emit_to_the_launcher_and_persists_em_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The launcher child emits the resumed run (no emit in the hook); the em_context rides that
     deferred emit and is already in the run's notes before any script runs."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
@@ -1870,7 +1870,7 @@ def test_a_refire_hands_its_emit_to_the_launcher_and_persists_em_context(tmp_pat
     assert any(_REFIRE_CONTEXT in n for n in rl.read_notes(rd))
 
 
-def test_a_repeat_refire_does_not_duplicate_the_persisted_em_context(tmp_path, monkeypatch):
+def test_a_repeat_refire_does_not_duplicate_the_persisted_em_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 
     root = _repo(tmp_path)
@@ -1895,25 +1895,25 @@ def _set_budget(monkeypatch, cell: list) -> None:
     monkeypatch.setattr(mod, "_BUDGET_VAR", contextvars.ContextVar("submit_budget", default=cell))
 
 
-def test_launcher_run_token_is_minted_while_hook_budget_remains(tmp_path, monkeypatch):
+def test_launcher_run_token_is_minted_while_hook_budget_remains(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     minted = _count_mints(monkeypatch)
     _set_budget(monkeypatch, [5000.0])
     mod._ensure_launcher_run_token(_repo(tmp_path), "ask-r1", "state/sizings/x.yaml", "sess-1")
     assert len(minted) == 1
 
 
-def test_launcher_run_token_mint_still_lands_once_hook_budget_is_spent(tmp_path, monkeypatch):
+def test_launcher_run_token_mint_still_lands_once_hook_budget_is_spent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     minted = _count_mints(monkeypatch)
     _set_budget(monkeypatch, [0.0])
     mod._ensure_launcher_run_token(_repo(tmp_path), "ask-r1", "state/sizings/x.yaml", "sess-1")
     assert len(minted) == 1
 
 
-def test_spent_budget_mint_joins_only_the_short_window(tmp_path, monkeypatch):
+def test_spent_budget_mint_joins_only_the_short_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     joins: list = []
     real = mod._write_leg
 
-    def spy(label, fn, gated=False, join_s=None):
+    def spy(label, fn, gated: bool = False, join_s=None):
         joins.append(join_s)
         return real(label, fn, gated=gated, join_s=join_s)
 
@@ -1931,7 +1931,7 @@ def _refire_listings(monkeypatch, tmp_path) -> list:
     return calls
 
 
-def test_a_premintable_ask_no_premint_holds_lists_no_run_tokens_before_the_answer(tmp_path, monkeypatch):
+def test_a_premintable_ask_no_premint_holds_lists_no_run_tokens_before_the_answer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     calls = _refire_listings(monkeypatch, tmp_path)
     env = mod.evaluate(_payload(root, {"ask": "build the thing", "source": "relayed"}))
@@ -1940,7 +1940,7 @@ def test_a_premintable_ask_no_premint_holds_lists_no_run_tokens_before_the_answe
     assert mod._ask_holder_pointer(root, "build the thing").read_text(encoding="utf-8").startswith("ask-")
 
 
-def test_a_refire_of_a_premint_held_ask_still_runs_the_refire_join_and_a_stale_pointer_is_dropped(tmp_path, monkeypatch):
+def test_a_refire_of_a_premint_held_ask_still_runs_the_refire_join_and_a_stale_pointer_is_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     calls = _refire_listings(monkeypatch, tmp_path)
     mod.evaluate(_payload(root, {"ask": "build the thing", "source": "relayed"}))
@@ -1951,7 +1951,7 @@ def test_a_refire_of_a_premint_held_ask_still_runs_the_refire_join_and_a_stale_p
     assert pointer.read_text(encoding="utf-8") != first  # no holder was found: the stale pointer went, the new premint wrote its own
 
 
-def test_an_ask_with_a_brief_file_keeps_the_refire_join_listing(tmp_path, monkeypatch):
+def test_an_ask_with_a_brief_file_keeps_the_refire_join_listing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     (root / "brief.md").write_text("B", encoding="utf-8")
     calls = _refire_listings(monkeypatch, tmp_path)
@@ -1986,7 +1986,7 @@ def _halted_with_stored_script(root: Path, *, prompts_present: set[str]) -> None
 
 
 @pytest.mark.parametrize(("present", "launches_stored"), [({"gate.md", "halt-commit.md"}, True), ({"gate.md"}, False)])
-def test_a_refire_launches_the_stored_script_only_when_every_prompt_it_names_exists(tmp_path, monkeypatch, present, launches_stored):
+def test_a_refire_launches_the_stored_script_only_when_every_prompt_it_names_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, present, launches_stored) -> None:
     root = _repo(tmp_path)
     _halted_with_stored_script(root, prompts_present=present)
     spawned: list = []
@@ -1999,7 +1999,7 @@ def test_a_refire_launches_the_stored_script_only_when_every_prompt_it_names_exi
 
 
 @pytest.mark.parametrize("failure", ["oserror", "stalled"])
-def test_a_refire_recomposes_when_the_prompt_check_fails_or_stalls(tmp_path, monkeypatch, failure):
+def test_a_refire_recomposes_when_the_prompt_check_fails_or_stalls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure) -> None:
     from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
 
     root = _repo(tmp_path)
@@ -2031,13 +2031,13 @@ def _direct_start_root(tmp_path: Path, monkeypatch, body: str):
     return rel, fire
 
 
-def test_direct_start_of_a_run_script_holding_its_reader_starts_that_script_with_fire_args(tmp_path, monkeypatch):
+def test_direct_start_of_a_run_script_holding_its_reader_starts_that_script_with_fire_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rel, fire = _direct_start_root(tmp_path, monkeypatch, "const r = await workflow('x');\n")
     out = mod._direct_start(tmp_path, "r1", time.monotonic() + 5)
     assert out["hookSpecificOutput"]["updatedInput"] == {"scriptPath": str(tmp_path / rel), "args": fire}
 
 
-def test_direct_start_of_a_launcher_child_script_goes_through_the_wrapper(tmp_path, monkeypatch):
+def test_direct_start_of_a_launcher_child_script_goes_through_the_wrapper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rel, _ = _direct_start_root(tmp_path, monkeypatch, "export const body = 1;\n")
     out = mod._direct_start(tmp_path, "r1", time.monotonic() + 5)
     updated = out["hookSpecificOutput"]["updatedInput"]

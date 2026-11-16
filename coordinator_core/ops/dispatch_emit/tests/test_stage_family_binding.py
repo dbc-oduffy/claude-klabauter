@@ -1,8 +1,12 @@
 """Pins the binding reader and the per-run opt-in predicate; tmp_path DoE roots only."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from coordinator_core.codex_runner import grok
+from coordinator_core.ops.dispatch_emit import stage_family
 from coordinator_core.ops.dispatch_emit import stage_family_binding as sfb
 from coordinator_core.ops.emit import doe_drift
 
@@ -28,7 +32,7 @@ def test_opted_in_only_on_exact_ref():
         sfb.opted_in({"stage_family_binding": "somewhere/else.yaml"})
 
 
-def test_load_reads_roles(tmp_path):
+def test_load_reads_roles(tmp_path: Path):
     b = sfb.load(_root(tmp_path, _GOOD))
     assert b.runner == "coordinator:family-stage-runner" and b.fallback == "claude"
     assert b.roles == {"scout": "grok", "research": "agy", "review": "codex"}
@@ -44,20 +48,35 @@ def test_load_reads_roles(tmp_path):
         ("  scout: grok", "  scout: gpt", "family"),
     ],
 )
-def test_load_refuses_contract_violations(tmp_path, old, new, match):
+def test_load_refuses_contract_violations(tmp_path: Path, old, new, match):
     with pytest.raises(sfb.BindingError, match=match):
         sfb.load(_root(tmp_path, _GOOD.replace(old, new)))
 
 
-def test_load_missing_file_is_binding_error(tmp_path):
+def test_load_missing_file_is_binding_error(tmp_path: Path):
     with pytest.raises(sfb.BindingError, match="cannot read"):
         sfb.load(tmp_path)
 
 
-def test_unresolved_content_root_names_registry_key(monkeypatch):
+def test_unresolved_content_root_names_registry_key(monkeypatch: pytest.MonkeyPatch):
     def boom():
         raise doe_drift.DoeResolveError("nope")
 
     monkeypatch.setattr(doe_drift, "resolve_doe_clone", boom)
     with pytest.raises(sfb.BindingError, match=r"engine\.working_repos\.content_root"):
         sfb.load()
+
+
+def test_grok_role_brief_carries_sign_in_and_binding_does_not_override_it(tmp_path: Path):
+    """The binding names the family; sign-in locators stay on the stage-family child env."""
+    binding = sfb.load(_root(tmp_path, _GOOD))
+    assert binding.roles["scout"] == "grok"
+    brief = stage_family.runner_brief(binding.roles["scout"], "scout", "p.md", "scratch/x")
+    assert stage_family.SIGN_IN_LINE in brief
+    child = grok._build_env(
+        {"USERPROFILE": r"C:\Users\box", "GROK_HOME": r"C:\Users\box\.grok", "XAI_API_KEY": "secret"},
+        windows=True,
+    )
+    assert child["USERPROFILE"] == r"C:\Users\box"
+    assert child["GROK_HOME"] == r"C:\Users\box\.grok"
+    assert "XAI_API_KEY" not in child

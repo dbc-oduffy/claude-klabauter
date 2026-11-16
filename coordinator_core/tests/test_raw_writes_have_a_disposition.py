@@ -385,6 +385,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/retention_run.py': ('outside-repo', 'retention lock file under the Claude home dir, O_EXCL create and stale unlink: _acquire'),
     'coordinator_core/write_guards/_memory_evict.py': ('outside-repo', 'evicts a body file, rewrites MEMORY.md and appends memory-evictions.jsonl in a Claude-home project memory dir: evict_oldest'),
     'coordinator_core/session/deferred_release.py': ('git-internal', 'deferred claim-release record json via tmp + os.replace under .coordinator-local/coordinator-sessions/deferred-release/<sid-hash>/: record'),
+    'coordinator_core/git/ref_lock.py': ('git-internal', 'ref .lock completion/quarantine, owner records and the recovery log, all under <gitdir> (<gitdir>/refs, <gitdir>/coordinator-ref-locks, <gitdir>/coordinator-stale-ref-locks): register_holder, _append_record, _claim_owner, _restore_owner, _resolve_lock'),
     'coordinator_core/git/store_hygiene.py': ('git-internal', 'daily-tier claim file created exclusively under <git-common-dir>/coordinator/store-hygiene.claim: _claim'),
     'coordinator_core/install/runtime_ignore_apply.py': ('in-repo-non-state', 'runtime-ignore rule block appended to the repo .gitignore, never state/: _append_rules'),
     'coordinator_core/ops/dispatch_emit/ask_stage_receipt.py': ('in-repo-non-state', 'stage claim exclusive-create and stage-receipt.json under the tracked record dir state/warp/<run_id>/: claim, write'),

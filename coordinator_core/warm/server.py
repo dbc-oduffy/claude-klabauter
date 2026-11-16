@@ -197,6 +197,7 @@ from typing import Any, Callable, Mapping, NamedTuple, Optional
 
 from coordinator_core import _engine_landing
 from coordinator_core import ipc as _ipc
+from coordinator_core import tenant_priority
 from coordinator_core.ipc import (
     INTERNAL_ERROR,
     INVALID_REQUEST,
@@ -1180,16 +1181,17 @@ class _AdmissionGate:
     size-1 pool lets hooks hold its only slot); the caller passes the same `hook` flag to
     `acquire` and to the matching `release`."""
 
-    def __init__(self, size: int, reserve: int = 0) -> None:
+    def __init__(self, size: int, reserve: int = 0, hook_cap: Optional[int] = None) -> None:
         """`reserve` extra slots exist beyond `size` that only hook-class and `light` callers
         can take: heavy (mutating or read-only, non-light) holders are capped at `size`, so
-        wedged heavy ops can never occupy the slots light callers need."""
+        wedged heavy ops can never occupy the slots light callers need. `hook_cap` overrides the
+        hook-class holder cap (default `size - 1`); the guard-pool gate passes its whole size."""
         size = max(1, int(size))
         reserve = max(0, int(reserve))
         self._free = size + reserve
         self._heavy_cap = size
         self._heavy_held = 0
-        self._hook_cap = max(1, size - 1)
+        self._hook_cap = max(1, size - 1) if hook_cap is None else max(1, int(hook_cap))
         self._hook_held = 0
         self._lock = threading.Lock()
         self._light: "collections.deque[threading.Event]" = collections.deque()
@@ -1455,6 +1457,40 @@ def _sample_leg(op_ident: int) -> Optional[str]:
         return None
 
 
+#: Leaf frames that mean the op thread is parked in a blocking file read.
+#: Only the pathlib readers: a bare `read`/`readinto` leaf is as often a socket or pipe wait, and
+#: classing that io-wait would exempt a hung op from the restart.
+_BLOCKED_READ_LEAVES = frozenset({"read_bytes", "read_text", "readinto", "readall"})
+#: Leaf frames of a parent waiting on a child process; a `git` child there is a pack/object read.
+_CHILD_WAIT_LEAVES = frozenset({"communicate", "_communicate", "wait", "_wait"})
+
+
+def _leaf_blocked_on_read(leaf) -> bool:
+    """True when `leaf` (the handler thread's innermost frame) sits in a plain file read or waits
+    on a `git` child (a pack read). Never raises."""
+    try:
+        name = leaf.f_code.co_name
+        if name in _BLOCKED_READ_LEAVES:
+            return True
+        if name in _CHILD_WAIT_LEAVES:
+            args = getattr(leaf.f_locals.get("self"), "args", None)
+            argv0 = args if isinstance(args, (str, bytes, os.PathLike)) else (args or [""])[0]
+            return Path(os.fsdecode(argv0)).stem.lower() == "git"
+    except Exception:  # noqa: BLE001 -- diagnostics never stop an op
+        pass
+    return False
+
+
+def _op_blocked_on_read(op_ident: int) -> bool:
+    """`_leaf_blocked_on_read` over the op's handler thread."""
+    try:
+        frames = sys._current_frames()
+        leaf = frames.get(_handler_thread_ident(frames) or op_ident)
+        return leaf is not None and _leaf_blocked_on_read(leaf)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class _LegTrace:
     """Run-length encodes timed leg samples into `[start_ms, elapsed_ms, label]` rows:
     the stall record's per-leg timing, naming the call an op sat in and for how long."""
@@ -1714,12 +1750,30 @@ def _after_first_pool_answer(work: Callable[[], None], name: str) -> None:
     threading.Thread(target=_run, daemon=True, name=name).start()
 
 
-def _await_pool_result(future: "concurrent.futures.Future", wait_left: float, repo_root) -> dict:
+def _note_pool_progress(future: "concurrent.futures.Future") -> None:
+    """Count a settled pool future toward the hang watchdog's progress signal. A broken pool or a
+    cancelled future is a dead lane, not completed work: it must not suppress a restart."""
+    if not future.done() or future.cancelled():
+        return
+    if isinstance(future.exception(), concurrent.futures.BrokenExecutor):
+        return
+    hang_restart.note_progress()
+
+
+def _await_pool_result(
+    future: "concurrent.futures.Future", wait_left: float, repo_root, count_progress: bool = True
+) -> dict:
     """`future.result(timeout=wait_left)`, cut into `_DRIVE_WAIT_SLICE_SECS` slices when `repo_root`
     is known: after each slice the op's drive is checked and a full or stalled one raises
-    `_DriveFault`, so a blocked disk write fails its one op long before the result deadline."""
+    `_DriveFault`, so a blocked disk write fails its one op long before the result deadline.
+    `count_progress` False (a guard-lane op) keeps healthy hook traffic from masking a wedged
+    dispatch pool."""
     if not repo_root:
-        result = future.result(timeout=wait_left)
+        try:
+            result = future.result(timeout=wait_left)
+        finally:
+            if count_progress:
+                _note_pool_progress(future)
         _first_pool_answer.set()
         return result
     end = time.monotonic() + wait_left
@@ -1728,6 +1782,8 @@ def _await_pool_result(future: "concurrent.futures.Future", wait_left: float, re
         step = min(_DRIVE_WAIT_SLICE_SECS, max(left, 0.0))
         done, _pending = concurrent.futures.wait([future], timeout=step)
         if done:
+            if count_progress:
+                _note_pool_progress(future)
             result = future.result()
             _first_pool_answer.set()
             return result
@@ -1931,11 +1987,13 @@ def _write_stall_record(
 
 
 def _restart_check(stall_dir) -> None:
+    """Run the restart decision in the server process. A pool worker (`_WORKER_STALL_DIR` set)
+    writes its record only: the completion counter lives in the server, and a worker-side decision
+    would restart a progressing parent. The server counts the worker's disk records itself."""
+    if _WORKER_STALL_DIR is not None:
+        return
     try:
-        # A pool worker (`_WORKER_STALL_DIR` set) names its parent: the server is what restarts.
-        hang_restart.maybe_restart(
-            stall_dir, server_pid=os.getppid() if _WORKER_STALL_DIR is not None else os.getpid()
-        )
+        hang_restart.maybe_restart(stall_dir, server_pid=os.getpid())
     except Exception:  # noqa: BLE001
         pass
 
@@ -1993,11 +2051,12 @@ def _write_stall_stub(
 
 
 def _note_stall_in_memory(stall_dir) -> None:
-    """Count a detected stall toward the hang restart before any filesystem call. Never raises."""
+    """Count a detected stall toward the hang restart before any filesystem call. A pool worker
+    counts nothing: the decision and the completion counter are the server's. Never raises."""
+    if _WORKER_STALL_DIR is not None:
+        return
     try:
-        hang_restart.note_stall(
-            stall_dir, server_pid=os.getppid() if _WORKER_STALL_DIR is not None else os.getpid()
-        )
+        hang_restart.note_stall(stall_dir, server_pid=os.getpid())
     except Exception:  # noqa: BLE001
         pass
 
@@ -2037,7 +2096,9 @@ def _arm_stall_dump(
         if stall_dir is not None:
             # Fires once, at ~`stall_secs` (< `_IO_WAIT_MAX_SECS`): a wedge on a slow drive is
             # io-wait here by construction and reaches recovery via the pool recycle ceiling only.
-            if _is_io_wait(_holder_drive_probe_ms(repo_root or _engine_clone_root()), time.monotonic() - t0):
+            if _op_blocked_on_read(op_ident) or _is_io_wait(
+                _holder_drive_probe_ms(repo_root or _engine_clone_root()), time.monotonic() - t0
+            ):
                 stall_class = hang_restart.IO_WAIT_STALL_CLASS
             else:
                 _note_stall_in_memory(stall_dir)
@@ -2116,7 +2177,8 @@ def _arm_accept_stall(
     `result`) and this connection thread's stack; the returned callable disarms it.
 
     A request a worker has claimed is the worker's record, so a claimed one writes
-    nothing here. Never raises.
+    nothing here, but a claimed op still running `2 * stall_secs` runs the server's restart
+    decision over the worker records on disk. Never raises.
     """
     if stall_dir is None or stall_secs <= 0:
         return lambda: None
@@ -2132,6 +2194,11 @@ def _arm_accept_stall(
             _note_stall_in_memory(stall_dir)
         try:
             if claim is not None and claim.exists():
+                # The worker's record is the stall evidence; its watcher decides nothing, so the
+                # server counts the worker records on disk once the op is still running a
+                # second `stall_secs` later (the worker's record is written by then).
+                if not done.wait(stall_secs):
+                    _restart_check(stall_dir)
                 return
             if engine_root is not None:
                 telemetry.flush_requests(engine_root)
@@ -2402,6 +2469,11 @@ def _guard_pool_applies(ctx_state: Mapping) -> bool:
         or heavy is None
         or isinstance(heavy, concurrent.futures.ProcessPoolExecutor)
     )
+
+
+def _guard_pool_workers() -> int:
+    """Worker count of the guard pool; also the size of the guard-class admission gate."""
+    return max(1, DISPATCH_PROCESS_POOL_SIZE - 1) + _LIGHT_RESERVE_WORKERS
 
 
 def _is_claimless(method: Any) -> bool:
@@ -3336,6 +3408,15 @@ def _log_priority_boost(role: str, held: bool) -> None:
         pass
 
 
+def _prime_posix_worker() -> bool:
+    """True on a POSIX prime-tenant box, where a pool worker must not drop to nice 19: the unprivileged
+    `_raise_worker_priority` cannot lower nice again (EPERM) and would strand the worker at 19. Never raises."""
+    try:
+        return sys.platform != "win32" and tenant_priority.is_prime_tenant()
+    except Exception:  # noqa: BLE001 -- priority is best-effort
+        return False
+
+
 def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None) -> None:
     global _worker_pristine_environ, _WORKER_STALL_DIR
     _WORKER_STALL_DIR = Path(stall_dir) if stall_dir else None
@@ -3349,7 +3430,8 @@ def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None) ->
         forward_queue.cancel_join_thread()
         atomic_append.set_forwarder(lambda sink, encoded, retain: forward_queue.put_nowait((sink, encoded, retain)))
 
-    polite_io.lower_own_priority()
+    if not _prime_posix_worker():
+        polite_io.lower_own_priority()
     boosted = _raise_worker_priority()  # after the POSIX nice-19 drop, which it supersedes
     _bind_null_std_streams()
     # pythonw worker: without this every git/console child it spawns opens a visible console.
@@ -4129,6 +4211,16 @@ def _close_handle(handle: int) -> None:
         pass
 
 
+def _cancel_pending_io(handle: int) -> None:
+    """Abort a read blocked on `handle` from another thread (Windows `CancelIoEx`); never raises."""
+    try:
+        import ctypes
+
+        ctypes.windll.kernel32.CancelIoEx(ctypes.c_void_p(handle), None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _wrap_handle(handle: int) -> Any:
     import msvcrt
 
@@ -4163,22 +4255,7 @@ def _refuse_while_draining(conn: Any, *, server_sha: Optional[str]) -> None:
     try:
         conn.settimeout(_DRAIN_REFUSAL_READ_SECS)
         io = _wrap_socket(conn)
-        line = io.readline()
-        if not line:
-            return
-        try:
-            msg = _parse_frame(line)
-        except _FrameError as exc:
-            response = exc.response
-        else:
-            request_id = msg.get("id")
-            client_token = msg.get("_engine_token")
-            if client_token is None:
-                response = _untrusted_caller_response(request_id)
-            else:
-                response = skew.build_skew_response(request_id, server_sha, client_token)
-        io.write(_encode(response))
-        io.flush()
+        _refuse_over_io(io, server_sha)
     except Exception:  # noqa: BLE001 -- a late caller must never cost an acceptor thread
         pass
     finally:
@@ -4187,6 +4264,69 @@ def _refuse_while_draining(conn: Any, *, server_sha: Optional[str]) -> None:
             target.close()
         except OSError:
             pass
+
+
+def _refuse_over_io(io: Any, server_sha: Optional[str]) -> None:
+    """Read one request line from `io` and write the determinate ENGINE_SKEW answer (or the frame
+    error / untrusted-caller answer) back, without dispatching."""
+    line = io.readline()
+    if not line:
+        return
+    try:
+        msg = _parse_frame(line)
+    except _FrameError as exc:
+        response = exc.response
+    else:
+        request_id = msg.get("id")
+        client_token = msg.get("_engine_token")
+        if client_token is None:
+            response = _untrusted_caller_response(request_id)
+        else:
+            response = skew.build_skew_response(request_id, server_sha, client_token)
+    io.write(_encode(response))
+    io.flush()
+
+
+def _refuse_pipe_while_draining(handle: int, *, server_sha: Optional[str]) -> None:
+    """Windows counterpart of `_refuse_while_draining`: a client that connected to a pipe instance
+    after `close_listener` is answered ENGINE_SKEW, never closed with zero bytes.
+
+    A zero-byte close after the client delivered its frame reads as 'connection closed or read
+    failed after delivery' at the native door, which fails a hook open; ENGINE_SKEW is the answer
+    the door and `warm.client` treat as provably not executed. Runs on its own thread: the pipe read
+    is synchronous, so a client that never writes must not hold the accept chain. Never raises."""
+
+    def _run() -> None:
+        io = None
+        gate = threading.Lock()
+        closed = [False]
+
+        def _cancel_read() -> None:
+            with gate:
+                if not closed[0]:
+                    _cancel_pending_io(handle)
+
+        timer = threading.Timer(_DRAIN_REFUSAL_READ_SECS, _cancel_read)
+        timer.daemon = True
+        try:
+            io = _wrap_handle(handle)
+            timer.start()
+            _refuse_over_io(io, server_sha)
+        except Exception:  # noqa: BLE001 -- a late caller must never cost a thread
+            pass
+        finally:
+            timer.cancel()
+            with gate:
+                closed[0] = True
+            if io is not None:
+                try:
+                    io.close()
+                except OSError:
+                    pass
+            else:
+                _close_handle(handle)
+
+    threading.Thread(target=_run, daemon=True, name="warm-pipe-drain-refusal").start()
 
 
 _NOT_READY_POLL_SECS = 0.05
@@ -4379,8 +4519,9 @@ class _ServerContext:
         precisely to release the endpoint early, and both said so in their
         own docstrings until 2026-08-26. It does not: while the drain runs,
         the endpoint stays bound, a caller is answered ENGINE_SKEW without
-        dispatch on POSIX (`_refuse_while_draining`) or dropped with zero
-        bytes on Windows (both non-spawning per `warm/client.py`'s table), and a
+        dispatch on both transports (`_refuse_while_draining` on POSIX,
+        `_refuse_pipe_while_draining` on Windows; non-spawning per
+        `warm/client.py`'s table), and a
         SAME-TOKEN successor cannot bind at all. Different-token successors
         are unaffected -- they bind a different endpoint. See
         `docs/research/2026-08-26-repo-warm-succession.md` § 2; moving the
@@ -4397,9 +4538,26 @@ class _ServerContext:
         self.telemetry.record_invocation(warm=warm)
 
     def record_served_repo(self, repo_root: Any) -> None:
+        key = Path(repo_root)
         with self._served_repos_lock:
-            self._served_repos[Path(repo_root)] = None
+            first = key not in self._served_repos
+            self._served_repos[key] = None
+        if first:
+            self._sweep_dead_owner_ref_locks(key)
         self._drain_trigger.maybe_drain(Path(repo_root))
+
+    @staticmethod
+    def _sweep_dead_owner_ref_locks(repo_root: Path) -> None:
+        """Once per repo key per process: finish or move aside ref locks whose owner died. Never raises."""
+        try:
+            from coordinator_core.git import ref_lock
+            from coordinator_core.git.git_dir import resolve_git_common_dir
+
+            ref_lock.sweep_dead_owner_locks(resolve_git_common_dir(repo_root))
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning("dead-owner ref-lock sweep failed", exc_info=True)
 
     def served_repos(self) -> list:
         with self._served_repos_lock:
@@ -4425,15 +4583,6 @@ class _ServerContext:
                     _prune_dispatch_claims(self._claim_dir)
                     if _ack_store._journal_dir is None:
                         _ack_store._journal_dir = dispatch_ack.journal_dir_beside(self._claim_dir)
-                        # Off-thread: prune_journal stats every journal entry (six-figure
-                        # counts take minutes); inline it would hold _dispatch_pool_lock and
-                        # stall all dispatch.
-                        threading.Thread(
-                            target=dispatch_ack.prune_journal,
-                            args=(_ack_store._journal_dir,),
-                            name="ack-journal-prune",
-                            daemon=True,
-                        ).start()
                     old_stop = self.__dict__.get("_telemetry_drain_stop")
                     if old_stop is not None:
                         old_stop.set()
@@ -4464,7 +4613,7 @@ class _ServerContext:
                         old_stop.set()
                     self._guard_telemetry_drain_stop = _start_telemetry_drain(forward_queue)
                     self._guard_pool = concurrent.futures.ProcessPoolExecutor(
-                        max_workers=max(1, DISPATCH_PROCESS_POOL_SIZE - 1) + _LIGHT_RESERVE_WORKERS,
+                        max_workers=_guard_pool_workers(),
                         mp_context=mp_context,
                         initializer=_worker_process_init,
                         initargs=(str(stderr_dir), str(self._stall_dir), forward_queue),
@@ -4526,8 +4675,9 @@ class _ServerContext:
 
     def _boot_prewarm_run(self) -> None:
         try:
-            futures = self._prewarm_pool(True, _BOOT_PREWARM_GUARD_WORKERS) + self._prewarm_pool(False)
-            concurrent.futures.wait(futures, timeout=_HEAL_PREWARM_WAIT_SECS)
+            # Guard workers first: hook-lane worker init must not compete with the dispatch pool's.
+            concurrent.futures.wait(self._prewarm_pool(True, _BOOT_PREWARM_GUARD_WORKERS), timeout=_HEAL_PREWARM_WAIT_SECS)
+            concurrent.futures.wait(self._prewarm_pool(False), timeout=_HEAL_PREWARM_WAIT_SECS)
         except Exception:  # noqa: BLE001 -- the first request builds the pools lazily
             pass
 
@@ -4539,6 +4689,61 @@ class _ServerContext:
                 "_pool_gate", _AdmissionGate(DISPATCH_PROCESS_POOL_SIZE, _LIGHT_RESERVE_WORKERS)
             )
         return gate
+
+    def _guard_gate(self) -> "_AdmissionGate":
+        """Slot gate of the guard pool, sized to its workers with every slot open to hook-class ops.
+
+        TRAP: hooks once queued on the heavy `_admission_gate` under its `size - 1` hook cap, so
+        three hooks parked in cold guard workers took the whole cap and 24 more waited out their
+        deadline. Raising the pool size or accept-thread count only moves that cliff; bounding the
+        hook lane by its own workers, and freeing a slot at the op deadline, removes it."""
+        gate = self.__dict__.get("_guard_pool_gate")
+        if gate is None:
+            workers = _guard_pool_workers()
+            gate = self.__dict__.setdefault("_guard_pool_gate", _AdmissionGate(workers, hook_cap=workers))
+        return gate
+
+    def _note_guard_overdue(self, future: "concurrent.futures.Future") -> None:
+        """Record a guard future whose caller gave up on it while a worker still holds it."""
+        overdue = self.__dict__.setdefault("_guard_overdue", set())
+        overdue.add(future)
+        future.add_done_callback(overdue.discard)
+
+    def _recycle_wedged_guard_pool(self, pool: Any) -> bool:
+        """Swap out and terminate `pool` once every guard worker holds an overdue op, so a wedged hook
+        lane is replaced instead of timing out every later hook. Not a recycle while the retired
+        workers of earlier recycles still live (`_MAX_RETIRED_WORKERS`). True when it recycled."""
+        overdue = self.__dict__.get("_guard_overdue")
+        if not overdue or len(overdue) < _guard_pool_workers():
+            return False
+        if self._retired_workers_alive() >= _MAX_RETIRED_WORKERS:
+            return False
+        with self._guard_pool_lock:
+            if self._guard_pool is not pool:
+                return False
+            self._guard_pool = None
+            overdue.clear()
+        tasks = self.__dict__.setdefault("_pool_tasks", {})
+        guard_futs = self.__dict__.get("_guard_futs", set())
+        keys = []
+        for fut in list(guard_futs):
+            row = tasks.pop(fut, None)
+            if row is not None and row[2] is not None:
+                keys.append(row[2])
+        _ack_store.reconcile_restarted(keys)
+        procs = list((getattr(pool, "_processes", None) or {}).values())
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:  # noqa: BLE001
+            pass
+        for proc in procs:
+            try:
+                proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+        self.__dict__.setdefault("_retired_procs", []).extend(procs)
+        self._write_recycle_line(["guard-pool: every worker held an overdue op"], len(keys))
+        return True
 
     def _track_pool_task(
         self,
@@ -4793,6 +4998,8 @@ class _ServerContext:
                 return _drive_fault_envelope(msg, _fault, started=False)
             if _guard_class:
                 pool = self._ensure_guard_pool()
+                if self._recycle_wedged_guard_pool(pool):
+                    pool = self._ensure_guard_pool()
             else:
                 pool = self._ensure_dispatch_pool()
                 hung, io_wait = self._classify_stalled_holders()
@@ -4824,10 +5031,20 @@ class _ServerContext:
                 _op_repo_root(msg),
                 getattr(self, "engine_root", None),
             )
-            gate = self._admission_gate()
+            gate = self._guard_gate() if _guard_class else self._admission_gate()
             _resolved = _eff
             _hook = _is_hook_lane(_resolved)
             _light = _is_light_mutating(_resolved)
+            _slot_lock = threading.Lock()
+            _slot_held = [True]
+
+            def _release_slot() -> None:
+                with _slot_lock:
+                    if not _slot_held[0]:
+                        return
+                    _slot_held[0] = False
+                gate.release(_hook, _light)
+
             if dispatch_key is not None:
                 _ack_store.mark_queued(dispatch_key)
             _gate_wait = gate.acquire(_op_may_mutate(_resolved), _deadline, _hook, _light)
@@ -4867,9 +5084,9 @@ class _ServerContext:
                         _arm_secs,
                     )
             except BaseException:
-                gate.release(_hook, _light)
+                _release_slot()
                 raise
-            future.add_done_callback(lambda _f: gate.release(_hook, _light))
+            future.add_done_callback(lambda _f: _release_slot())
             if _guard_class:
                 self._track_pool_task(future, msg.get("method"), dispatch_key, guard=True, repo_root=_drive_root)
             else:
@@ -4884,7 +5101,7 @@ class _ServerContext:
                 future.add_done_callback(lambda _f: _stamp_pool_future(dispatch_key, _f))
             _phase[0] = "result"
             try:
-                out = _await_pool_result(future, _wait_left, _drive_root)
+                out = _await_pool_result(future, _wait_left, _drive_root, count_progress=not _guard_class)
                 _release_claim(claim)
                 return out
             except _DriveFault as fault:
@@ -4904,6 +5121,12 @@ class _ServerContext:
                     _drive_fault_envelope(msg, fault.verdict, started=not withdrawn), dispatch_key
                 )
             except concurrent.futures.TimeoutError:
+                if _guard_class:
+                    # A guard op is claimless, so nothing below kills its worker; the caller has
+                    # its answer, so the slot frees now and the worker is tracked as overdue.
+                    _release_slot()
+                    if not future.cancel():
+                        self._note_guard_overdue(future)
                 # NEGATIVE SPEC: CANCEL FIRST. `Future.cancel()` succeeds only
                 # on a task no worker has picked up, so a successful cancel
                 # proves the op never ran. It cannot be trusted alone:
@@ -5790,7 +6013,7 @@ class _ServerContext:
             return
 
         if not self._admit():
-            _close_handle(handle)
+            _refuse_pipe_while_draining(handle, server_sha=self.version_state.server_sha)
             return
 
         if self._is_listening():

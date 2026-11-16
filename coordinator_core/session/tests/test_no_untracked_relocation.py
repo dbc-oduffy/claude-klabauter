@@ -138,6 +138,9 @@ _TMP_FIXTURE_REASON = (
 )
 
 _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
+    ("coordinator_core", "warm/dispatch_ack.py", "_sweep_legacy", "os.replace", "os.replace(entry.path, target)", 1): "moves a legacy flat engine-state journal entry into its day bucket; machinery state under the engine's own journal dir, never a claimable work path",
+    ("coordinator_core", "warm/tests/test_dispatch_ack_land_record.py", "test_prune_sweeps_old_land_records", "Path.replace", "path.replace(expired / path.name)", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "warm/tests/test_minus_32004_after_commit_reports_outcome.py", "test_prune_drops_only_entries_older_than_the_retention", "Path.replace", "stale.replace(expired / stale.name)", 1): _TMP_FIXTURE_REASON,
     # --- C1: relocate_touched_path IS the move; seeded first, per the plan ---
     ("coordinator_core", "session/scope.py", "relocate_touched_path", "shutil.move", "shutil.move(src_abs, dst_abs)", 1):
         "relocate_touched_path's own shutil.move -- this function IS the "

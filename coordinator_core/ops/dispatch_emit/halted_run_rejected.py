@@ -1,8 +1,9 @@
 """``dispatch.close_halted_run_rejected``: closes a halted run whose withheld edits the EM deliberately rejects.
 
 Params: ``run_id`` (string, required), ``rejected_paths`` (non-empty list of withheld paths the EM rejects,
-required), ``reason`` (non-empty string, required, never defaulted). Fail-closed: the marker is ``halted``, no
-live successor holds the run, and every withheld path classifies: a rejected path is ``rejected`` when HEAD's blob
+required unless the run withholds nothing: then it may be omitted and the run closes with empty
+dispositions and no git spawn), ``reason`` (non-empty string, required, never defaulted). Fail-closed: the
+marker is ``halted``, no live successor holds the run, and every withheld path classifies: a rejected path is ``rejected`` when HEAD's blob
 equals its blob at the halt anchor (``landed`` when HEAD already carries the kept blob instead); a path not named
 rejected must already be ``landed``/``lost``/``scratch-abandoned`` as ``close_halted_run_superseded`` classifies
 them. Any other path refuses naming it; marker and index stay unchanged. On success the marker is rewritten
@@ -41,8 +42,10 @@ def _params(params: object) -> tuple:
         return None, None, None, _refuse(f"{OP_NAME} requires a safe string run_id")
     if isinstance(raw, str):
         raw = [raw]
-    if not isinstance(raw, list) or not raw or not all(isinstance(p, str) and p for p in raw):
-        return None, None, None, _refuse(f"{OP_NAME} requires rejected_paths: a non-empty list of withheld paths")
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list) or not all(isinstance(p, str) and p for p in raw):
+        return None, None, None, _refuse(f"{OP_NAME} requires rejected_paths: a list of withheld paths")
     if not isinstance(reason, str) or not reason.strip():
         return None, None, None, _refuse(f"{OP_NAME} requires a non-empty reason")
     return run_id, sorted(set(raw)), reason.strip(), None
@@ -93,9 +96,20 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     successor = _live_successor(root, run_id)
     if successor:
         return _refuse(f"{run_id} has a live successor {successor}; wait for it or stop it")
+    if withheld and not rejected:
+        return _refuse(f"{OP_NAME} requires rejected_paths: a non-empty list of withheld paths")
     stray = sorted(p for p in rejected if p not in withheld)
     if stray:
         return _refuse(f"{stray[0]} is not a withheld path of {run_id}; it cannot be rejected")
+    if not withheld:
+        if not _mark_rejected(record, marker, reason, {}):
+            return _refuse(f"{run_id} halt marker changed under the write; retry")
+        halted_withheld_index.remove_run(root, run_id)
+        _end_parent_ask(root, run_id, marker.get("sizing_rel"))
+        return {
+            "ok": True, "run_id": run_id, "dispositions": {}, "reason": reason,
+            "recorded": (record / halted_run.HALTED_FILE).relative_to(root).as_posix(),
+        }
     plan = halted_hold_release._kept_plan(record)
     kept = plan[1] if plan else {}
     paths = sorted(withheld)

@@ -18,9 +18,11 @@ import posixpath
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import threading
+import time
 import tomllib
 import tempfile
 import types
@@ -286,17 +288,45 @@ def install_scripts(src_dir, dest_dir):
         raise FileNotFoundError(f"vendored scripts missing in {src_dir}: {', '.join(missing)}")
     check_win32_pipe_capability(src_dir, dest_dir)
     dest = Path(dest_dir)
-    dest.mkdir(parents=True, exist_ok=True)
+    _mkdir_0755(dest)
     for name in wanted:
         _copy_if_changed(Path(src_dir) / name, dest / name)
     for name in VENDORED_LIB:
         if (Path(src_dir) / "lib" / name).is_file():
-            (dest / "lib").mkdir(exist_ok=True)
+            _mkdir_0755(dest / "lib")
             _copy_if_changed(Path(src_dir) / "lib" / name, dest / "lib" / name)
     extra = [n for n in OPTIONAL_SCRIPTS if n not in wanted and (Path(src_dir) / n).is_file()]
     for name in extra:
         _copy_if_changed(Path(src_dir) / name, dest / name)
     return wanted + extra
+
+
+def _mkdir_0755(path):
+    """Create `path` and each missing ancestor, forcing 0755 on every directory this call creates so a
+    restrictive umask cannot leave a directory the session user cannot traverse. Existing directories keep their mode."""
+    missing = []
+    for p in (path, *path.parents):
+        if p.exists():
+            break
+        missing.append(p)
+    for p in reversed(missing):
+        try:
+            p.mkdir()
+        except FileExistsError:
+            continue
+        if os.name != "nt":
+            os.chmod(p, 0o755)
+
+
+def untraversable_path_dirs(path_env=None):
+    """PATH entries that exist as directories but the current user cannot list or traverse (POSIX only; [] on Windows)."""
+    if os.name == "nt":
+        return []
+    bad = []
+    for d in (os.environ.get("PATH", "") if path_env is None else path_env).split(os.pathsep):
+        if d and d not in bad and os.path.isdir(d) and not os.access(d, os.R_OK | os.X_OK):
+            bad.append(d)
+    return bad
 
 
 def _copy_if_changed(src, dst):
@@ -1362,6 +1392,47 @@ def grok_present():
     return on_path or _is(grok_config_path().parent.is_dir)
 
 
+GROK_SYSTEM_BIN = Path("/usr/local/bin")
+GROK_BIN_HINTS = (Path("/opt/homebrew/bin"), Path("~/.grok/bin"), Path("~/.npm-global/bin"), Path("~/.bun/bin"))  # literal: user prefixes grok installs land in, none needing root
+
+
+def _grok_source(home, path_env, system_bin):
+    """An installed grok executable the user can read: PATH first, then the user-prefix hints; never the link target itself."""
+    local = home / ".local" / "bin"
+    dirs = [Path(d) for d in path_env.split(os.pathsep) if d]
+    dirs += [Path(str(h).replace("~", str(home), 1)) if str(h).startswith("~") else h for h in GROK_BIN_HINTS]
+    for d in dirs:
+        if d in (local, system_bin):
+            continue
+        cand = d / "grok"
+        if cand.is_file() and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def link_grok_local_bin(home=None, path_env=None, system_bin=None):
+    """Symlink an installed grok into ~/.local/bin (0755, created if absent) when `system_bin` (/usr/local/bin) is not
+    writable. Returns 'linked', 'present', 'skipped' (system_bin writable or non-POSIX) or 'absent' (no grok found).
+    Never invokes sudo; never replaces a non-symlink ~/.local/bin/grok."""
+    if os.name == "nt":
+        return "skipped"
+    home = Path.home() if home is None else Path(home)
+    system_bin = GROK_SYSTEM_BIN if system_bin is None else Path(system_bin)
+    if os.access(system_bin, os.W_OK | os.X_OK):
+        return "skipped"
+    link = home / ".local" / "bin" / "grok"
+    src = _grok_source(home, os.environ.get("PATH", "") if path_env is None else path_env, system_bin)
+    if link.exists():
+        return "present"
+    if src is None:
+        return "absent"
+    _mkdir_0755(link.parent)
+    if link.is_symlink():
+        link.unlink()
+    link.symlink_to(src)
+    return "linked"
+
+
 def grok_hooks_path():
     """Grok's hook registration file: $GROK_HOME/hooks/coordinator.json; grok loads hooks/*.json, never a bare hooks.json."""
     return grok_config_path().parent / "hooks" / GROK_HOOKS_FILE
@@ -1869,7 +1940,7 @@ def _login_agent_text(dest_dir):
         import plistlib
         return plistlib.dumps({"Label": LOGIN_AGENT_LABEL, "ProgramArguments": argv, "RunAtLoad": True,
                                "StartInterval": LOGIN_AGENT_INTERVAL_S, "AbandonProcessGroup": True,
-                               "ProcessType": "Background", "LowPriorityIO": True})
+                               "ProcessType": "Standard", "Nice": 0})
     return ("[Unit]\nDescription=Unimatrix autolink at login\n\n[Service]\nType=oneshot\n"
             f"ExecStart={' '.join(shlex.quote(a) for a in argv)}\n\n[Install]\nWantedBy=default.target\n"
             ).encode("utf-8")
@@ -1977,6 +2048,130 @@ def _reload_login_agent(target, launchctl=None, uid=None):
     run("bootout", f"{domain}/{LOGIN_AGENT_LABEL}")
     boot = run("bootstrap", domain, str(target))
     return "updated and reloaded" if boot is not None and boot.returncode == 0 else "updated, reload FAILED"
+
+
+PS_NICE_ARGV = ["ps", "-axo", "pid,ppid,nice,command"]
+BOUNCE_DRAIN_SECONDS = 20
+
+
+class BounceRefusal(RuntimeError):
+    """The bounce cannot run: names the missing key or platform."""
+
+
+def _tenant_priority():
+    """`coordinator_core.tenant_priority` with the engine on sys.path, or None when no engine resolves."""
+    try:
+        from coordinator_core import tenant_priority
+        return tenant_priority
+    except ImportError:
+        pass
+    try:
+        sys.path.insert(0, str(_BIN_DIR))
+        import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+        from cc_invoke import ensure_engine_on_path
+
+        ensure_engine_on_path(str(_BIN_DIR / "unimatrix-install.py"))
+        from coordinator_core import tenant_priority
+        return tenant_priority
+    except Exception:
+        return None
+
+
+def ps_nice_snapshot(run=subprocess.run):
+    """One `ps` argv exec (no shell); empty text on failure."""
+    try:
+        res = run(PS_NICE_ARGV, capture_output=True, text=True, timeout=10,
+                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return res.stdout if res.returncode == 0 else ""
+
+
+def parse_ps_nice(text):
+    """[(pid, ppid, nice, command)] from `ps -axo pid,ppid,nice,command` text; header and unparseable rows are skipped."""
+    rows = []
+    for line in str(text).splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        try:
+            rows.append((int(parts[0]), int(parts[1]), int(parts[2]), parts[3]))
+        except ValueError:
+            continue
+    return rows
+
+
+def select_bounce_targets(rows, prefix, is_serve, keep_pids=()):
+    """Pids whose command carries the settings-home `prefix` and whose nice is not 0, one `ps` table in.
+
+    A serve-lineage process (`is_serve(command)`) and every descendant of one is never a target, nor is a
+    pid in `keep_pids` (this process and its parent)."""
+    serve = {pid for pid, _, _, cmd in rows if is_serve(cmd)}
+    grew = True
+    while grew:
+        grew = False
+        for pid, ppid, _, _ in rows:
+            if ppid in serve and pid not in serve:
+                serve.add(pid)
+                grew = True
+    return [pid for pid, _, nice, cmd in rows
+            if nice != 0 and prefix in cmd.replace("\\", "/") and pid not in serve and pid not in keep_pids]
+
+
+def _bounce_agent(target, launchctl, uid):
+    """Boot the login agent out and back in whether or not it is loaded; the state string names the outcome."""
+    run = launchctl or run_launchctl
+    domain = f"gui/{uid if uid is not None else os.getuid()}"
+    run("bootout", f"{domain}/{LOGIN_AGENT_LABEL}")
+    boot = run("bootstrap", domain, str(target))
+    return "bounced" if boot is not None and boot.returncode == 0 else "bounce FAILED"
+
+
+def bounce_messaging(roster, ps=None, term=None, kill=None, alive=None, launchctl=None, uid=None,
+                     agent_dir=None, sleep=time.sleep, drain_seconds=BOUNCE_DRAIN_SECONDS):
+    """Relaunch the messaging set at nice 0 under launchd, draining first; no sudo.
+
+    `roster` is the live roster (session names) taken as input and echoed in the result. Targets are every
+    settings-home-prefix process with nice != 0 from one `ps` read, minus the example-retrieval-repo serve lineage. Drain
+    is the supervisors' own SIGTERM stop (`stopped` / `release_on_sigterm`, which log and release the bound
+    sockets); the pids are polled for `drain_seconds` and only a straggler past that is SIGKILLed. Then the
+    autolink agent is booted out and bootstrapped, so autolink relinks each box with nice-0 children.
+    Returns {"roster", "targets", "drained", "killed", "agent"}; raises BounceRefusal when the settings-home
+    key or launchd is unavailable."""
+    if sys.platform != "darwin":
+        raise BounceRefusal(f"bounce relaunches through launchd; platform {sys.platform!r} has none")
+    tp = _tenant_priority()
+    if tp is None:
+        raise BounceRefusal("COORDINATOR_SETTINGS_HOME unresolvable: coordinator_core.tenant_priority not importable")
+    try:
+        prefix = tp.settings_home_prefix()
+    except tp.SettingsHomeKeyMissing as exc:
+        raise BounceRefusal(str(exc)) from None
+    rows = parse_ps_nice((ps or ps_nice_snapshot)())
+    targets = select_bounce_targets(rows, prefix, tp.is_serve_lineage, keep_pids=(os.getpid(), os.getppid()))
+    term = term or (lambda pid: os.kill(pid, signal.SIGTERM))
+    kill = kill or (lambda pid: os.kill(pid, signal.SIGKILL))
+    alive = alive or _pid_alive
+    for pid in targets:
+        try:
+            term(pid)
+        except OSError:
+            pass
+    waited = 0.0
+    while waited < drain_seconds and any(alive(p) for p in targets):
+        sleep(0.5)
+        waited += 0.5
+    stragglers = [p for p in targets if alive(p)]
+    for pid in stragglers:
+        try:
+            kill(pid)
+        except OSError:
+            pass
+    root = Path(agent_dir) if agent_dir else login_agent_dir()
+    target_plist, _ = _login_agent_paths(root)
+    agent = _bounce_agent(target_plist, launchctl, uid)
+    return {"roster": list(roster), "targets": targets,
+            "drained": [p for p in targets if p not in stragglers], "killed": stragglers, "agent": agent}
 
 
 def unregister_login_agent(agent_dir=None, schtasks=None):
@@ -2380,8 +2575,26 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
                     "root (doctrine in DIR.parent or DIR, skills in DIR/skills) instead of this script's own location")
     ap.add_argument("--out", metavar="DIR", help="write the agy plugin tree (translated plugin source) into DIR; "
                     f"default under --install: <settings home>/unimatrix/{AGY_PLUGIN_TREE_DIR}")
+    ap.add_argument("--bounce", action="store_true", help="macOS: drain the live roster, SIGTERM every settings-home "
+                    "process at nice != 0 (example-retrieval-repo serve lineage excluded), then boot the autolink launchd agent out "
+                    "and in so the messaging set relaunches at nice 0; no sudo")
     args = ap.parse_args(argv)
     skills_root = Path(args.plugin_root) / "skills" if args.plugin_root else SKILLS_ROOT
+    if args.bounce:
+        try:
+            names = [n for n, _ in _sibling("unimatrix-roster.py").live_sessions()]
+        except Exception as exc:  # the bounce still runs; the report must not read as an empty roster
+            names = []
+            print(f"WARN: live roster unreadable ({type(exc).__name__}); bounce proceeds with an empty roster", file=out)
+        try:
+            report = bounce_messaging(names, ps=relay_ps, kill=relay_kill, term=relay_kill,
+                                      launchctl=launchctl, agent_dir=agent_dir)
+        except BounceRefusal as exc:
+            print(f"REFUSE: {exc}", file=out)
+            return 6
+        print(f"bounce {report['agent']}: roster {len(report['roster'])} session(s), drained "
+              f"{len(report['drained'])}, killed {len(report['killed'])}, targets {report['targets']}", file=out)
+        return 0 if report["agent"] == "bounced" else 6
     if args.file_key:
         try:
             priv, pub_line, fp = file_key(run=pair_run or subprocess.run, unencrypted=args.unencrypted_key,
@@ -2499,6 +2712,9 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             print(f"{label} {res} in {where}", file=out)
         return 0
 
+    for d in untraversable_path_dirs():
+        print(f"WARN: PATH entry {d} is not traversable by this user, so tools in it (grok) read as absent; "
+              f"remedy: sudo chmod 755 {d}", file=out)
     if version_text is None:
         gate_skipped = hosts is not None and "claude" not in hosts
         if gate_skipped:
@@ -2577,6 +2793,13 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             print(f"REFUSE: {exc}; agy hook not installed", file=out)
             return 4
         print(f"agy hook {res} in {hp}", file=out)
+    if want_grok:
+        try:
+            linked = link_grok_local_bin()
+        except OSError as exc:
+            linked = f"not linked ({exc})"
+        if linked in ("linked", "absent") or linked.startswith("not linked"):
+            print(f"grok ~/.local/bin link {linked}", file=out)
     if want_grok and not grok_present():
         print("grok hook skipped: grok not on PATH and no grok home", file=out)
     elif want_grok:

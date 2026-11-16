@@ -21,7 +21,8 @@
           "client_procs": 2.0,
           "process_ms": 68.9,
           "spawn_count": 2.0,
-          "under_bar": true
+          "under_bar": true,
+          "cold_under_bar": true
         },
         {
           "op": "hooks.taskstop_launch_recorder",
@@ -36,7 +37,8 @@
           "client_procs": 2.0,
           "process_ms": 68.8,
           "spawn_count": 2.0,
-          "under_bar": true
+          "under_bar": true,
+          "cold_under_bar": true
         },
         {
           "op": "hooks.preuse_bash_dispatch",
@@ -51,7 +53,8 @@
           "client_procs": 2.0,
           "process_ms": 88.3,
           "spawn_count": 2.0,
-          "under_bar": true
+          "under_bar": true,
+          "cold_under_bar": false
         }
       ],
       "concurrent": {
@@ -65,6 +68,75 @@
         "spawns": 0,
         "errors": [],
         "wall_context_max_ms": 216.5,
+        "under_bar": true
+      }
+    },
+    {
+      "label": "end",
+      "head": "7167561cac",
+      "n": 15,
+      "bar_ms": 200.0,
+      "single": [
+        {
+          "op": "hooks.guard_editor_python_direct",
+          "cold_ms": 31.2,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0,
+          "server_cpu_ms": 0.13,
+          "spawns": 0,
+          "slow_phase": null,
+          "error": null,
+          "client_ms": 68.8,
+          "client_procs": 2.0,
+          "process_ms": 68.9,
+          "spawn_count": 2.0,
+          "under_bar": true,
+          "cold_under_bar": true
+        },
+        {
+          "op": "hooks.taskstop_launch_recorder",
+          "cold_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0,
+          "server_cpu_ms": 0.006,
+          "spawns": 0,
+          "slow_phase": null,
+          "error": null,
+          "client_ms": 68.8,
+          "client_procs": 2.0,
+          "process_ms": 68.8,
+          "spawn_count": 2.0,
+          "under_bar": true,
+          "cold_under_bar": true
+        },
+        {
+          "op": "hooks.preuse_bash_dispatch",
+          "cold_ms": 281.2,
+          "p50_ms": 31.2,
+          "p95_ms": 31.2,
+          "server_cpu_ms": 29.297,
+          "spawns": 0,
+          "slow_phase": null,
+          "error": null,
+          "client_ms": 68.8,
+          "client_procs": 2.0,
+          "process_ms": 98.1,
+          "spawn_count": 2.0,
+          "under_bar": true,
+          "cold_under_bar": false
+        }
+      ],
+      "concurrent": {
+        "heavy_slots_held": true,
+        "pool_size": 30,
+        "hooks": 12,
+        "answered": 12,
+        "stalled": 0,
+        "stall_free": true,
+        "process_ms_per_call": 32.6,
+        "spawns": 0,
+        "errors": [],
+        "wall_context_max_ms": 374.1,
         "under_bar": true
       }
     }

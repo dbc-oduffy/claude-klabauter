@@ -22,7 +22,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 
 @pytest.fixture(autouse=True)
-def _unpaused(monkeypatch):
+def _unpaused(monkeypatch: pytest.MonkeyPatch) -> None:
     """These tests pin the fold itself; the paused behaviour is pinned in test_pack_deletion_pause."""
     from coordinator_core.git import pack_deletion_pause
 
@@ -165,7 +165,7 @@ def test_read_object_reads_packed_commit_after_gc(tmp_path: Path) -> None:
     assert kind == "commit"
 
 
-def test_loose_object_read_parses_no_pack_index_and_packed_still_reads(tmp_path: Path, monkeypatch) -> None:
+def test_loose_object_read_parses_no_pack_index_and_packed_still_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import git_objects
 
     _init_repo(tmp_path)
@@ -190,7 +190,7 @@ def test_loose_object_read_parses_no_pack_index_and_packed_still_reads(tmp_path:
 
 
 def test_warm_pack_source_is_probed_before_the_loose_object_and_a_loose_only_object_still_reads(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from coordinator_core.git import git_objects
 
@@ -321,6 +321,112 @@ def test_cas_ref_refuses_when_lock_already_held(tmp_path: Path) -> None:
         lock_path.unlink()
 
 
+def _plant_lock(gitdir: Path, content: str = "") -> Path:
+    lock_path = gitdir / "refs" / "heads" / "main.lock"
+    lock_path.write_bytes(content.encode("ascii"))
+    return lock_path
+
+
+def test_cas_ref_report_lock_raises_ref_lock_held_with_path_age_content(tmp_path: Path) -> None:
+    from coordinator_core.git.ref_lock import RefLockHeld
+
+    _init_repo(tmp_path)
+    gitdir = resolve_git_dir(tmp_path)
+    real_sha = _git("rev-parse", "refs/heads/main", cwd=tmp_path).stdout.strip()
+    lock_path = _plant_lock(gitdir, "3" * 40)
+
+    with pytest.raises(RefLockHeld) as caught:
+        cas_ref(gitdir, "refs/heads/main", real_sha, "2" * 40, report_lock=True)
+
+    assert caught.value.stale is False
+    assert str(lock_path) in str(caught.value) and "3" * 40 in str(caught.value)
+    assert " moved since " not in str(caught.value)
+    assert lock_path.exists()
+
+
+def test_cas_ref_report_lock_still_returns_false_on_a_compare_mismatch(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    gitdir = resolve_git_dir(tmp_path)
+
+    assert cas_ref(gitdir, "refs/heads/main", "0" * 40, "1" * 40, report_lock=True) is False
+
+
+def test_cas_ref_recovers_a_dead_owner_lock_then_retakes_once(tmp_path: Path) -> None:
+    from coordinator_core.git import ref_lock
+
+    _init_repo(tmp_path)
+    gitdir = resolve_git_dir(tmp_path)
+    real_sha = _git("rev-parse", "refs/heads/main", cwd=tmp_path).stdout.strip()
+    lock_path = _plant_lock(gitdir, "4" * 40)
+    owner = ref_lock._owner_path(gitdir, "refs/heads/main")
+    owner.parent.mkdir(parents=True, exist_ok=True)
+    owner.write_text('{"pid": 999999, "token": "dead", "started": 0}', encoding="utf-8")
+    old = lock_path.stat().st_mtime - 3600
+    os.utime(lock_path, (old, old))
+
+    ok = cas_ref(gitdir, "refs/heads/main", real_sha, "2" * 40, report_lock=True)
+
+    assert ok is True
+    assert not lock_path.exists()
+    assert (gitdir / ref_lock.RECOVERY_DIR / ref_lock.RECOVERY_LOG).exists()
+
+
+def test_cas_ref_win_unregisters_holder_and_owner_record(tmp_path: Path) -> None:
+    from coordinator_core.git import ref_lock
+
+    _init_repo(tmp_path)
+    gitdir = resolve_git_dir(tmp_path)
+    real_sha = _git("rev-parse", "refs/heads/main", cwd=tmp_path).stdout.strip()
+
+    assert cas_ref(gitdir, "refs/heads/main", real_sha, real_sha) is True
+
+    assert not [h for h in ref_lock._HOLDERS.values() if h.gitdir == gitdir]
+    assert not ref_lock._owner_path(gitdir, "refs/heads/main").exists()
+
+
+def test_cas_ref_released_holder_neither_replaces_nor_unlinks_a_peer_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.git import git_objects, ref_lock
+
+    _init_repo(tmp_path)
+    gitdir = resolve_git_dir(tmp_path)
+    real_sha = _git("rev-parse", "refs/heads/main", cwd=tmp_path).stdout.strip()
+    ref_path = gitdir / "refs" / "heads" / "main"
+    lock_path = ref_path.with_name("main.lock")
+
+    def _release_then_peer_takes_lock(src, dst, **kw) -> bool:
+        for holder in list(ref_lock._HOLDERS.values()):
+            holder.released = True
+        lock_path.write_bytes(b"peer\n")
+        return bool(kw["still_valid"]())
+
+    monkeypatch.setattr(git_objects, "_replace_with_retry", _release_then_peer_takes_lock)
+
+    assert cas_ref(gitdir, "refs/heads/main", real_sha, "2" * 40) is False
+    assert lock_path.read_bytes() == b"peer\n"
+    assert _git("rev-parse", "refs/heads/main", cwd=tmp_path).stdout.strip() == real_sha
+
+
+def test_cas_ref_abandoned_dispatch_refuses_before_taking_the_lock(tmp_path: Path) -> None:
+    import threading
+
+    from coordinator_core import dispatch_abandon
+
+    _init_repo(tmp_path)
+    gitdir = resolve_git_dir(tmp_path)
+    real_sha = _git("rev-parse", "refs/heads/main", cwd=tmp_path).stdout.strip()
+    event = threading.Event()
+    event.set()
+    token = dispatch_abandon.ACTIVE.set(event)
+    try:
+        assert cas_ref(gitdir, "refs/heads/main", real_sha, real_sha) is False
+    finally:
+        dispatch_abandon.ACTIVE.reset(token)
+
+    assert not (gitdir / "refs" / "heads" / "main.lock").exists()
+
+
 def test_cas_ref_new_ref_requires_expected_none(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     gitdir = resolve_git_dir(tmp_path)
@@ -361,7 +467,7 @@ def _packed_repo(path: Path) -> tuple[Path, list[str]]:
     return resolve_git_dir(path), shas
 
 
-def test_n_reads_open_one_pack_once_per_scope(tmp_path: Path, monkeypatch) -> None:
+def test_n_reads_open_one_pack_once_per_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import call_io_scope, git_objects
 
     common_dir, shas = _packed_repo(tmp_path)
@@ -474,7 +580,7 @@ def test_write_object_stalled_peer_in_same_fanout_dir_does_not_fail_this_object(
     release = threading.Event()
     real = git_objects._replace_with_retry
 
-    def _blocking(src, dst, **kw):
+    def _blocking(src, dst, **kw) -> bool:
         if Path(dst).name == _sha(slow)[2:]:
             release.wait(5)
         return real(src, dst, **kw)

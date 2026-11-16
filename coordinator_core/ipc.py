@@ -2206,23 +2206,10 @@ def _lazy_import_and_lookup(method: str, msg: Any = None) -> Optional[Callable]:
          This stage is ordered AHEAD of step 3 so a drifted hooks.* key is
          served by importing only the coordinator_core.hooks package rather
          than escalating to all ~160 op modules.
-      3. SAFE FALLBACK — if the map has no entry for *method*, OR the targeted
-         import in step 1 (and, for hooks.* ops, step 2) didn't actually
-         register it (stale/drifted map entry), force a full import of every
-         op module (coordinator_core.ops._eager_import_all()) — today's eager
-         behavior — and re-check once more. This is the never-worse-than-today
-         guarantee: an incomplete map degrades to today's correctness, not to
-         a broken dispatch.
-
-         Calling _eager_import_all() directly (rather than
-         importlib.import_module("coordinator_core.ops")) is deliberate: lazy
-         registration is unconditional now, so the coordinator_core.ops
-         package is always already in sys.modules with its eager-import
-         skipped — a bare re-import of the package is a cached no-op and would
-         NOT trigger the other op modules. Calling the function directly
-         forces every op module to import regardless of the package's cached
-         init state (each already-imported submodule import is itself a cheap
-         no-op, so this is safe to call unconditionally).
+      3. MISS — an unmapped op, or a map entry that did not register it, is
+         counted as a registry-fallback event and answered None. It never runs
+         coordinator_core.ops._eager_import_all() on the request thread; the
+         map-covers-every-op pin is test_registry_miss_never_eager_imports_on_request.
 
     Returns:
         The registered handler callable if found after import, else None.
@@ -2234,9 +2221,13 @@ def _lazy_import_and_lookup(method: str, msg: Any = None) -> Optional[Callable]:
         try:
             importlib.import_module(module_path)
         except ImportError as exc:
+            # Recorded so the METHOD_NOT_FOUND branch surfaces the real import
+            # failure; the whole-package import that used to record it is gone.
+            from coordinator_core.ops import _POISONED_MODULES
+
+            _POISONED_MODULES[module_path] = exc
             _log().debug(
-                "coordinator_core.ipc: lazy import of %r for op %r failed: %s "
-                "— falling back to full coordinator_core.ops import",
+                "coordinator_core.ipc: lazy import of %r for op %r failed: %s",
                 module_path, method, exc,
             )
         else:
@@ -2245,13 +2236,12 @@ def _lazy_import_and_lookup(method: str, msg: Any = None) -> Optional[Callable]:
                 return handler
             _log().debug(
                 "coordinator_core.ipc: lazy import of %r did not register op %r "
-                "(stale OP_MODULE_MAP entry?) — falling back to full "
-                "coordinator_core.ops import",
+                "(stale OP_MODULE_MAP entry?)",
                 module_path, method,
             )
 
     # HOOKS-SCOPED FALLBACK (drift path): a hooks.* miss escalates to the hooks
-    # package's own full-load routine BEFORE the ops-wide SAFE FALLBACK below,
+    # package's own full-load routine BEFORE the not-found miss below,
     # so it never pays for a 562-module ops import to serve one hook.
     if method.startswith("hooks."):
         from coordinator_core.hooks import _eager_import_all as _hooks_eager_import_all
@@ -2271,15 +2261,14 @@ def _lazy_import_and_lookup(method: str, msg: Any = None) -> Optional[Callable]:
             return handler
         _log().debug(
             "coordinator_core.ipc: hooks-scoped full import did not register "
-            "op %r — falling back to full coordinator_core.ops import",
+            "op %r — answering not-found",
             method,
         )
 
-    # SAFE FALLBACK: unmapped op or a map entry that didn't pan out — force a
-    # full import of every op module (bypasses the lazy-skip, see docstring
-    # above) and retry. Never-worse invariant.
-    from coordinator_core.ops import _eager_import_all
-
+    # A miss that neither the map nor the hooks package served is answered as
+    # not-found: a whole-package import on the request thread stalls every other
+    # op behind it (a cold boot read ~560 modules at 0.5-1s each). Map drift is
+    # counted here and pinned shut in CI by test_registry_miss_never_eager_imports_on_request.
     _caller_cwd = resolve_caller_cwd(msg) if isinstance(msg, dict) else None
     _record_registry_fallback(
         method,
@@ -2287,8 +2276,7 @@ def _lazy_import_and_lookup(method: str, msg: Any = None) -> Optional[Callable]:
         mapped=module_path is not None,
         cwd=str(_caller_cwd) if _caller_cwd is not None else None,
     )
-    _eager_import_all()
-    return _REGISTRY.get(method)
+    return None
 
 
 class _EscapedBaseException(Exception):
@@ -2555,13 +2543,13 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     handler = get_op_handler(method, msg)
     if handler is None:
         # 2026-07-21 break-class fix: a registry MISS that survives both the
-        # targeted lazy import AND the SAFE FALLBACK full eager import (see
+        # targeted lazy import (see
         # _lazy_import_and_lookup) is ambiguous on its face — it could mean
         # "no such op" OR "the op's owning module failed to import". Those
         # are very different failures and must not look the same to a
         # caller. Disambiguate via coordinator_core.ops._POISONED_MODULES
-        # (populated by _eager_import_all(), which the SAFE FALLBACK above
-        # just ran): if *method*'s owning module (per OP_MODULE_MAP) is
+        # (populated by _eager_import_all() and by the targeted import's
+        # ImportError): if *method*'s owning module (per OP_MODULE_MAP) is
         # recorded there, surface the REAL import exception instead of a
         # generic "Method not found" — see coordinator_core/ops/__init__.py's
         # module docstring "Negative-spec" for why silently reporting
@@ -2718,6 +2706,17 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     from coordinator_core import dispatch_abandon
     _abandoned = threading.Event()
     _abandoned_token = dispatch_abandon.ACTIVE.set(_abandoned)
+
+    def _abandon() -> None:
+        """Set the abandon Event and free any ref lock the abandoned handler still holds."""
+        _abandoned.set()
+        try:
+            from coordinator_core.git import ref_lock
+
+            ref_lock.release_abandoned(_abandoned)
+        except Exception:  # noqa: BLE001 -- releasing a lock must never turn a timeout into a crash
+            _log().exception("coordinator_core.ipc: ref-lock release failed for op %r", method)
+
     # A cold (IN_PROCESS) mutating sync op that outlives the backstop is awaited, not
     # abandoned (see the sync branch), so no deadline binds: remaining() reads None
     # there rather than a 0.0 nothing enforces. The wait itself is bounded by
@@ -2742,7 +2741,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     timeout=op_timeout,
                 )
             except asyncio.TimeoutError:
-                _abandoned.set()
+                _abandon()
                 _log().error(
                     "coordinator_core.ipc: op %r timed out after %ss", method, op_timeout
                 )
@@ -2781,7 +2780,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     "coordinator_core.ipc: op %r timed out after %ss", method, op_timeout
                 )
                 if not _await_on_breach:
-                    _abandoned.set()
+                    _abandon()
                     if _late is not None:
                         _late.mark_timed_out(id_)
                     return _timeout_error_envelope(method, op_timeout, id_)
@@ -2805,7 +2804,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     if _fut.done():
                         # The handler itself raised TimeoutError; that is its error, not the ceiling.
                         raise
-                    _abandoned.set()
+                    _abandon()
                     _attempts.append(_cold_attempt("await_ceiling", _t1, _cpu1, "hung"))
                     _log().error(
                         "coordinator_core.ipc: op %r hung past ceiling %ss; attempts %s",

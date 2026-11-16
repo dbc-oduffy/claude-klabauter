@@ -6,7 +6,8 @@ nothing: no timer, no watcher process; a helper thread exists only at the thresh
 respawn-on-next-op path restarts the server; this module only decides, logs one line, and exits.
 
 Every decision appends one line to `<svc>/hang-restarts.log`:
-`<UTC> pid=<server pid> action=restart|suppressed [reason=...] count=.. window_s=.. backoff_s=.. dumps=..`
+`<UTC> pid=<server pid> action=restart|suppressed|io-stall [reason=...] count=.. window_s=.. backoff_s=.. dumps=..`
+(`io-stall`: the window's stalled legs are blocked reads, so restarting would not clear the disk; report only.)
 (`backoff_s` is the wait owed the previous restart at decision time, 0 for a first restart).
 """
 
@@ -75,16 +76,17 @@ def _is_io_wait_record(path: Path) -> bool:
     return any(line.strip() == IO_WAIT_HEADER for line in head)
 
 
-def _recent_dumps(stall_dir: Path, since: float) -> list:
-    """`(epoch, path)` of hung-stall records stamped at or after `since`, oldest first.
+def _recent_dumps(stall_dir: Path, since: float, io_wait: bool = False) -> list:
+    """`(epoch, path)` of hung-stall records (io-wait records when `io_wait`) stamped at or after
+    `since`, oldest first.
 
-    Recycle records and io-wait records are not hang evidence."""
+    Recycle records are neither; io-wait records are not hang evidence."""
     found = []
     for path in stall_dir.glob("*.txt"):
         if path.name.endswith("-recycle.txt"):
             continue
         epoch = _stamp_epoch(path.name)
-        if epoch is not None and epoch >= since and not _is_io_wait_record(path):
+        if epoch is not None and epoch >= since and _is_io_wait_record(path) == io_wait:
             found.append((epoch, path))
     found.sort()
     return found
@@ -196,11 +198,22 @@ def _append(
 
 
 def _record_decision(
-    svc: Path, pid: int, now: float, count: int, window: float, base: float, dumps: list, source: Optional[str], lines: list
+    svc: Path,
+    pid: int,
+    now: float,
+    count: int,
+    window: float,
+    base: float,
+    dumps: list,
+    source: Optional[str],
+    lines: list,
+    progress: bool = False,
 ) -> str:
-    """Apply the hold / backoff gate to `lines` and append the one line it earns; caller holds the lock."""
+    """Apply the progress / hold / backoff gate to `lines` and append the one line it earns; caller holds the lock."""
     log = svc / HANG_RESTART_LOG_FILENAME
     reason, backoff = _gate(svc, lines, now, base)
+    if progress:
+        reason = "progress"
     if reason is not None:
         last_sup, line = _last_line(lines, restart=False)
         if last_sup is None or now - last_sup >= window or f"reason={reason}" not in line:
@@ -227,13 +240,37 @@ _stall_marks: dict = {}
 _stall_marks_lock = threading.Lock()
 
 
-def _disk_decision(stall_dir: Path, pid: int, now: float, count: int, window: float, min_interval: float) -> str:
-    """The hold / backoff / log leg of an in-memory trigger. Reads and appends
+_progress_lock = threading.Lock()
+_progress_last: Optional[float] = None
+
+
+def note_progress() -> None:
+    """Record that a pool worker finished an op. O(1), in memory, no filesystem.
+
+    The stamp is per process: it lives in the server, which alone makes the restart decision
+    (a pool worker, with `_WORKER_STALL_DIR` set, only writes its record)."""
+    global _progress_last
+    mono = time.monotonic()
+    with _progress_lock:
+        _progress_last = mono
+
+
+def progressed_within(window: float) -> bool:
+    """True when an op completed in the last `window` seconds (monotonic)."""
+    with _progress_lock:
+        last = _progress_last
+    return last is not None and time.monotonic() - last < window
+
+
+def _disk_decision(
+    stall_dir: Path, pid: int, now: float, count: int, window: float, min_interval: float, progress: bool = False
+) -> str:
+    """The progress / hold / backoff / log leg of an in-memory trigger. Reads and appends
     files, so the caller bounds it."""
     svc = stall_dir.parent
     with _decision_lock:
         lines = _tail_lines(svc / HANG_RESTART_LOG_FILENAME)
-        return _record_decision(svc, pid, now, count, window, min_interval, [], None, lines)
+        return _record_decision(svc, pid, now, count, window, min_interval, [], None, lines, progress)
 
 
 def note_stall(
@@ -267,22 +304,40 @@ def note_stall(
                 return None
             _stall_marks.pop(str(stall_dir), None)
         verdict: list = []
+        progress = progressed_within(window)
 
         def _leg() -> None:
             try:
-                verdict.append(_disk_decision(stall_dir, pid, time.time(), count, window, min_interval))
+                verdict.append(_disk_decision(stall_dir, pid, time.time(), count, window, min_interval, progress))
             except Exception:  # noqa: BLE001 -- an unreadable hold reads as no hold
                 verdict.append("restart")
 
         helper = threading.Thread(target=_leg, name="hang-restart-decision", daemon=True)
         helper.start()
         helper.join(deadline)
-        if verdict and verdict[0] == "suppressed":
+        if progress or (verdict and verdict[0] == "suppressed"):
             return "suppressed"
         (exit_fn or exit_server)(pid)
         return "restart"
     except Exception:  # noqa: BLE001 -- the dump path never raises
         return None
+
+
+def _report_io_stall(
+    svc: Path, pid: int, now: float, stall_dir: Path, since: float, threshold: int, window: float, lines: list
+) -> Optional[str]:
+    """Log one `action=io-stall` line per window when io-wait records reach `threshold`; never restarts."""
+    io_dumps = _recent_dumps(stall_dir, since, io_wait=True)
+    if len(io_dumps) < threshold:
+        return None
+    for line in reversed(lines):
+        if " action=io-stall " in line + " ":
+            epoch = _line_epoch(line)
+            if epoch is not None and now - epoch < window:
+                return "io-stall"
+            break
+    _append(svc / HANG_RESTART_LOG_FILENAME, now, pid, "io-stall", len(io_dumps), window, io_dumps, 0.0, None)
+    return "io-stall"
 
 
 def maybe_restart(
@@ -298,7 +353,8 @@ def maybe_restart(
     """Count stall records in the last `window` seconds (only those after the previous
     restart line); at `threshold`, log one line and call `exit_fn(server_pid)`.
 
-    Returns `"restart"`, `"suppressed"` or None (below threshold). A publish marker or
+    Returns `"restart"`, `"suppressed"`, `"io-stall"` (io-wait records alone reached `threshold`:
+    logged, no exit) or None (below threshold). A publish marker or
     handover-pending hold, or a restart inside the backoff (`min_interval * 2**(n-1)` after the
     nth consecutive restart, capped), logs a suppressed line (at most one per reason per window)
     and does not exit. Never raises.
@@ -316,8 +372,10 @@ def maybe_restart(
                 since = max(since, last_restart + 1)
             dumps = _recent_dumps(stall_dir, since)
             if len(dumps) < threshold:
-                return None
-            verdict = _record_decision(svc, pid, current, len(dumps), window, min_interval, dumps, None, lines)
+                return _report_io_stall(svc, pid, current, stall_dir, since, threshold, window, lines)
+            verdict = _record_decision(
+                svc, pid, current, len(dumps), window, min_interval, dumps, None, lines, progressed_within(window)
+            )
         if verdict == "suppressed":
             return "suppressed"
         (exit_fn or exit_server)(pid)

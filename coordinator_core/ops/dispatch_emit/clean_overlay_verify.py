@@ -41,8 +41,8 @@ MIRROR_DIRNAME = "clean-mirror"
 MIRROR_SLOTS = 4
 SETUP_TIMEOUT_S = 60
 TEST_TIMEOUT_S = 120
+PYTEST_STALL_S = 120
 IMPORTER_CAP = 25
-_SHARD_MIN_S = 3
 _PYTEST_FAILED = 1
 _PYTEST_INTERRUPTED = 2
 _OUTPUT_TAIL = 2000
@@ -59,8 +59,8 @@ class OverlayVerdict:
     not installed under the interpreter: the tests could not judge the candidate; lands with an advisory) or "inconclusive"
     (no mirror or no test ran: land_run refuses it unless `timed_out`). "missing" (no verdict was produced) is
     built by `check_verdict`: land_run lands it with an advisory. `detail` is the tail of the runner output or
-    the reason. `timed_out` is True only on an "inconclusive" whose seeds pytest hit `TEST_TIMEOUT_S`; every
-    other inconclusive keeps it False."""
+    the reason. `timed_out` is True only on an "inconclusive" whose seeds pytest stalled (no output for
+    `PYTEST_STALL_S`); every other inconclusive keeps it False."""
 
     verdict: str
     detail: str = ""
@@ -72,14 +72,100 @@ class OverlayVerdict:
         return self.verdict == "red"
 
 
+class PytestStalled(subprocess.TimeoutExpired):
+    """A watched run produced no output for its stall interval; `str(exc)` names the silence and the last
+    progress point. A `TimeoutExpired`, so every timeout handler of a bounded run also catches it."""
+
+    def __init__(self, argv, stall_s: float, elapsed_s: float, progress: str):
+        super().__init__(argv, stall_s)
+        self.progress = progress
+        self._text = f"pytest stalled: no output for {stall_s:g}s (after {elapsed_s:.0f}s running); last progress: {progress}"
+
+    def __str__(self) -> str:
+        return self._text
+
+
+_RESULT_LINE_RE = re.compile(r"^[.FEsxX]+(?:\s+\[\s*\d+%\])?$")
+
+
+def _last_progress(raw: bytes) -> str:
+    """Where a pytest `-q` run's output stopped: the count of test results reported (dots, F, E, s, x) and
+    the last output line, or "no output yet" when it never printed."""
+    lines = [ln.strip() for ln in raw.decode("utf-8", errors="replace").splitlines() if ln.strip()]
+    if not lines:
+        return "no output yet (still starting or collecting)"
+    done = sum(len(ln.split("[")[0].strip()) for ln in lines if _RESULT_LINE_RE.match(ln))
+    return f"{done} test result(s) reported, last output line {lines[-1][-200:]!r}"
+
+
+def _watched(proc, close, argv: list, stall_s: float) -> subprocess.CompletedProcess:
+    """Drain `proc`'s stdout and stderr on reader threads until it exits; any new output resets the stall clock.
+    A silence of `stall_s` closes the tree and raises `PytestStalled`. Output is read in whatever chunks the pipe
+    holds (pytest `-q` prints dots with no newline), so a slow test file that keeps reporting never stalls."""
+    import threading
+
+    arrived: list = []
+    streams: tuple = ([], [])
+    clock = [time.monotonic()]
+    started = clock[0]
+
+    def drain(index: int, pipe) -> None:
+        try:
+            while True:
+                chunk = pipe.read1(65536) if hasattr(pipe, "read1") else pipe.read(65536)
+                if not chunk:
+                    return
+                streams[index].append(chunk)
+                arrived.append(chunk)
+                clock[0] = time.monotonic()
+        except (OSError, ValueError):
+            return
+
+    readers = [threading.Thread(target=drain, args=(i, p), daemon=True) for i, p in enumerate((proc.stdout, proc.stderr))]
+    for reader in readers:
+        reader.start()
+    tick = min(0.5, max(stall_s / 4, 0.01))
+    try:
+        while True:
+            try:
+                proc.wait(timeout=tick)
+                break
+            except subprocess.TimeoutExpired:
+                if time.monotonic() - clock[0] >= stall_s:
+                    progress = _last_progress(b"".join(arrived))
+                    close()
+                    proc.wait()
+                    raise PytestStalled(argv, stall_s, time.monotonic() - started, progress)
+    finally:
+        close()
+        for reader in readers:
+            reader.join(timeout=5)
+    out, err = (b"".join(s).decode("utf-8", errors="replace") for s in streams)
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
 def _run(
-    argv: list, cwd: Path, timeout: int, env: Optional[dict] = None, stdin_text: Optional[str] = None,
+    argv: list, cwd: Path, timeout: Optional[int], env: Optional[dict] = None, stdin_text: Optional[str] = None,
+    *, stall_s: Optional[float] = None,
 ) -> subprocess.CompletedProcess:
     """Run `argv` in a capped job (a killpg session off Windows); the tree is closed on every exit, so a
-    timed-out pytest leaves no grandchild. `stdin_text` (NUL-terminated records, no newline) feeds stdin.
-    Raises `subprocess.TimeoutExpired` at the timeout."""
+    stalled or timed-out pytest leaves no grandchild. `stdin_text` (NUL-terminated records, no newline) feeds
+    stdin. With `stall_s` the run has no total wall: it ends when it exits, or raises `PytestStalled` after
+    `stall_s` seconds of silence (stdin is closed and the child runs unbuffered, because a piped pytest holds its
+    dots until exit and would read as silent; `timeout` is ignored). Otherwise raises
+    `subprocess.TimeoutExpired` at `timeout`."""
     from coordinator_core.diagnostics.contained_run import spawn_in_capped_job
 
+    if stall_s is not None:
+        proc, close = spawn_in_capped_job(
+            argv,
+            popen_kwargs=dict(
+                cwd=str(cwd), env={**(os.environ if env is None else env), "PYTHONUNBUFFERED": "1"}, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                **no_console_creationflags(),
+            ),
+            background=True,
+        )
+        return _watched(proc, close, argv, stall_s)
     proc, close = spawn_in_capped_job(
         argv,
         popen_kwargs=dict(
@@ -615,7 +701,7 @@ def _base_failing_body(
             return frozenset()
         run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, f"{run_id}-base")
         ran = _run(
-            _pytest_argv(root, dest, basetemp, ids), dest, TEST_TIMEOUT_S,
+            _pytest_argv(root, dest, basetemp, ids), dest, None, stall_s=PYTEST_STALL_S,
             env=_mirror_env(scoped_pytest.tmp_env(os.environ, tmp), dest),
         )
     except (OSError, subprocess.SubprocessError):
@@ -639,9 +725,10 @@ def verify(
 ) -> OverlayVerdict:
     """Advance `root`'s persistent mirror to `candidate_sha`, run pytest over `seeds` there with `coordinator_core`
     resolved from the mirror, then a second pytest over the test files that mention a `touched` module (the
-    importer shard) in whatever remains of the one `TEST_TIMEOUT_S` deadline, and hold the mirror lock across
-    pytest and the base re-run. An importer shard that times out, is skipped for lack of time or does not
-    complete is a note on the seeds' verdict; a seeds timeout is "inconclusive" with `timed_out`. A red whose
+    importer shard), and hold the mirror lock across pytest and the base re-run. Each pytest run has no total
+    wall: it continues while its output advances and ends after `PYTEST_STALL_S` of silence. An importer shard
+    that stalls or does not complete is a note on the seeds' verdict; a seeds stall is "inconclusive" with
+    `timed_out` and a detail naming the last progress point. A red whose
     every failing node id (both shards) also fails at `base_sha` (re-run in the same mirror, those ids only) is
     "pre_existing": the run did not cause it. A test file that fails to collect is red. Never raises: a setup
     failure, a busy mirror, a timeout or a run that collected nothing is "inconclusive". `leg(name)` is a
@@ -670,21 +757,20 @@ def verify(
             shard_note = ""
             shard: Optional[subprocess.CompletedProcess] = None
             with leg("pytest"):
-                started = time.monotonic()
                 in_seeds = True
-                ran = _run(_pytest_argv(root, dest, basetemp, seeds), dest, TEST_TIMEOUT_S, env=env)
+                ran = _run(_pytest_argv(root, dest, basetemp, seeds), dest, None, env=env, stall_s=PYTEST_STALL_S)
                 in_seeds = False
                 if extras:
-                    left = TEST_TIMEOUT_S - (time.monotonic() - started)
                     shard_note = f"importer shard timed out: {len(extras)} file(s) unverified"
-                    if left >= _SHARD_MIN_S:
-                        try:
-                            shard = _run(_pytest_argv(root, dest, basetemp, extras), dest, left, env=env)
-                            shard_note = ""
-                        except subprocess.TimeoutExpired:
-                            pass
-                        except (OSError, subprocess.SubprocessError) as exc:
-                            shard_note = f"importer shard did not complete ({type(exc).__name__}): {len(extras)} file(s) unverified"
+                    try:
+                        shard = _run(_pytest_argv(root, dest, basetemp, extras), dest, None, env=env, stall_s=PYTEST_STALL_S)
+                        shard_note = ""
+                    except PytestStalled as exc:
+                        shard_note = f"importer shard stalled: {len(extras)} file(s) unverified ({exc})"
+                    except subprocess.TimeoutExpired:
+                        pass
+                    except (OSError, subprocess.SubprocessError) as exc:
+                        shard_note = f"importer shard did not complete ({type(exc).__name__}): {len(extras)} file(s) unverified"
             runs = [ran] if shard is None else [ran, shard]
             full = "".join(r.stdout + r.stderr for r in runs)
             tail = full.strip()[-_OUTPUT_TAIL:]
@@ -720,10 +806,8 @@ def verify(
     except ExportError as exc:
         return OverlayVerdict("inconclusive", str(exc), seeds)
     except subprocess.TimeoutExpired as exc:
-        return OverlayVerdict(
-            "inconclusive", f"overlay verify timed out after {TEST_TIMEOUT_S}s: {type(exc).__name__}: {exc}", seeds,
-            timed_out=in_seeds,
-        )
+        why = str(exc) if isinstance(exc, PytestStalled) else f"overlay verify timed out after {TEST_TIMEOUT_S}s: {type(exc).__name__}: {exc}"
+        return OverlayVerdict("inconclusive", why, seeds, timed_out=in_seeds)
     except (OSError, subprocess.SubprocessError) as exc:
         return OverlayVerdict("inconclusive", f"overlay verify did not complete: {type(exc).__name__}: {exc}", seeds)
     finally:

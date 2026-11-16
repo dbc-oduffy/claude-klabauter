@@ -1,10 +1,11 @@
-"""land_diff writes the engine stamp after every other payload file and deletion.
+"""land_diff stages the engine stamp after every other payload file and swaps its unit last.
 
 The warm pair stays the stamped one for the whole copy only if nothing else lands after the stamp.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -46,35 +47,38 @@ def _writes(**changed):
     return [DestWrite(rel, text.encode(), 0o100644) for rel, text in changed.items()]
 
 
-def test_stamp_swap_is_the_last_destination_write(tmp_path, monkeypatch):
+def test_stamp_is_the_last_staged_write_and_its_unit_the_last_swapped(tmp_path, monkeypatch):
     root = _dest(tmp_path)
-    landed: list = []
-    real_swap = diff_commit._swap
-    real_converge = diff_commit._converge_unchanged
-    real_unlink = Path.unlink
+    staged_order: list = []
+    swapped: list = []
+    staged_mod = diff_commit._staged
+    real_write, real_replace, real_rename = staged_mod.write_entry, os.replace, os.rename
 
-    def _swap(tmp, path):
-        landed.append(Path(path).relative_to(root).as_posix())
-        real_swap(tmp, path)
+    def write(path, data, mode):
+        staged_order.append(Path(path).name)
+        real_write(path, data, mode)
 
-    def _converge(*args, **kwargs):
-        landed.append("<converge-unchanged>")
-        return real_converge(*args, **kwargs)
+    def _note(dst):
+        if Path(dst).parent == root:
+            swapped.append(Path(dst).name)
 
-    def _unlink(self, *args, **kwargs):
-        if self.parent == root and self.name == "gone.txt":
-            landed.append("gone.txt")
-        return real_unlink(self, *args, **kwargs)
+    def replace(src, dst):
+        _note(dst)
+        return real_replace(src, dst)
 
-    monkeypatch.setattr(diff_commit, "_swap", _swap)
-    monkeypatch.setattr(diff_commit, "_converge_unchanged", _converge)
-    monkeypatch.setattr(Path, "unlink", _unlink)
+    def rename(src, dst, *a, **k):
+        _note(dst)
+        return real_rename(src, dst, *a, **k)
+
+    monkeypatch.setattr(staged_mod, "write_entry", write)
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(os, "rename", rename)
 
     writes = _writes(**{_STAMP: "sha:new\n", "a.txt": "v1\n", "b.txt": "v1\n", "same.txt": "v0\n"})
     out = land_diff(root, writes, ["gone.txt"], "m", commit=False)
 
     assert _STAMP in out.written
-    assert landed[-1] == _STAMP, landed
-    assert landed.count(_STAMP) == 1
-    assert {"a.txt", "b.txt", "gone.txt"} <= set(landed[:-1]), landed
-
+    assert staged_order[-1] == "_engine_stamp" and staged_order.count("_engine_stamp") == 1
+    assert {"a.txt", "b.txt"} <= set(staged_order[:-1])
+    assert swapped[-1] == "coordinator_core", swapped
+    assert {"a.txt", "b.txt"} <= set(swapped[:-1]) and not (root / "gone.txt").exists()

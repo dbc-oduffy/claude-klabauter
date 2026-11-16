@@ -133,7 +133,8 @@ def test_the_breadcrumb_is_held_only_inside_stop_and_copy(tmp_path, monkeypatch)
     watch(env.publish_mod, "process_target", "stage")
     watch(env.publish_mod, _q.GATES[3], "gate")
     watch(pair_stop, "probe_pair_terminable", "stop")
-    watch(diff_commit, "land_diff", "land")
+    watch(diff_commit, "land_diff", "land_entry")
+    watch(diff_commit._staged, "swap_root", "land")
 
     rc, err = _q._run(env)
     assert rc == 0, err
@@ -141,6 +142,8 @@ def test_the_breadcrumb_is_held_only_inside_stop_and_copy(tmp_path, monkeypatch)
     assert held_at["fetch"] == [False]
     assert held_at["stage"] == [False]
     assert held_at["gate"] == [False]
+    # land_diff stages the tree unquiesced and enters the caller's `hold` around the swap only.
+    assert held_at["land_entry"] == [False]
     assert held_at["land"] == [True]
     # The old pair is not stopped before the copy; the terminability probe under the marker sits
     # inside `_quiesced_engine_roots`, so it reads the breadcrumb held.

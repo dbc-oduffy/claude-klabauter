@@ -144,6 +144,8 @@ __all__ = [
     "record_worker_pool_depth",
     "REQUEST_TELEMETRY_FILENAME",
     "REQUEST_TELEMETRY_KEEP",
+    "REQUEST_TELEMETRY_MAX_BYTES",
+    "REQUEST_TELEMETRY_GENERATIONS",
     "request_telemetry_path",
     "record_request",
     "request_samples",
@@ -551,6 +553,11 @@ def record_worker_pool_depth(
 
 REQUEST_TELEMETRY_FILENAME = "request-telemetry.jsonl"
 REQUEST_TELEMETRY_KEEP = 512
+# How much request history does diagnosing a pool stall need? One incident window, not weeks:
+# a row is ~0.4 KiB, so 16 MiB holds ~40k requests per generation. Retained bytes are bounded by
+# REQUEST_TELEMETRY_MAX_BYTES * (REQUEST_TELEMETRY_GENERATIONS + 1).
+REQUEST_TELEMETRY_MAX_BYTES = 16 * 1024 * 1024
+REQUEST_TELEMETRY_GENERATIONS = 2
 SLOW_REQUEST_SECS = 8.0
 
 _REQUESTS: "collections.deque" = collections.deque(maxlen=REQUEST_TELEMETRY_KEEP)
@@ -635,7 +642,14 @@ def slow_request_rows(rows, threshold_secs: float = SLOW_REQUEST_SECS) -> list:
 
 def flush_requests(engine_root: Optional[Path] = None) -> None:
     """Drain the ring into `request_telemetry_path` with one locked append.
-    Best-effort: never raises; rows are dropped if the lock or write fails."""
+    Best-effort: never raises; rows are dropped if the lock or write fails.
+
+    Size bound: under the held lock the file rotates (log_rotation cascade) before an append that
+    would pass `REQUEST_TELEMETRY_MAX_BYTES`, and a rotated generation still over the cap (a file
+    that grew unbounded before this bound) is deleted, not retained. One stat per flush.
+
+    Trap: rotation can decline (a peer holds the file open, or the chain overran its join bound);
+    the append then proceeds, so the cap is best-effort for that flush and the next flush retries."""
     rows: list = []
     try:
         while True:
@@ -648,10 +662,31 @@ def flush_requests(engine_root: Optional[Path] = None) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with locked_write.held_lock(path, holder_label="warm.telemetry.requests", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
+            payload = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+            _rotate_requests_before_append(path, len(payload.encode("utf-8")))
             with path.open("a", encoding="utf-8") as fh:
-                fh.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+                fh.write(payload)
     except Exception:
         return
+
+
+def _rotate_requests_before_append(path: Path, incoming_bytes: int) -> None:
+    """Rotate `path` when `incoming_bytes` more would pass the cap; drop an over-cap generation."""
+    from coordinator_core.telemetry import log_rotation
+
+    cap = REQUEST_TELEMETRY_MAX_BYTES
+    if not log_rotation.rotate_if_needed(
+        path,
+        threshold_bytes=max(1, cap - incoming_bytes),
+        max_generations=REQUEST_TELEMETRY_GENERATIONS,
+    ):
+        return
+    rotated = log_rotation._generation_path(path, 1)
+    try:
+        if rotated.stat().st_size > cap:
+            rotated.unlink()
+    except OSError:
+        pass
 
 
 PUSH_SWEEP_FILENAME = "push-sweep.jsonl"

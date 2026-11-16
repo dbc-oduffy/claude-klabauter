@@ -14,6 +14,14 @@ END in admission.jsonl of max(0, declared_peak_mb - tree RSS). Need is peak + mi
 each registered running job's headroom and the total in GiB (an exited job is absent: it adds 0). `--json` emits the same
 fields. Other hosts: exit 6.
 
+Exit codes: ADMIT 0, HOLD 4, ERROR 5 (admission could not be decided: unreadable status or an uncaught
+exception). Under `--json` with `--admit-peak` (or a `--command-key` peak) every such path prints one
+`{"admit": {"verdict": "ERROR", "error": "<reason>"}}` object on stdout and the reason on stderr; a
+reservation-selection refusal prints `verdict` HOLD with `error`, exit 4.
+Usage errors under `--json` with an admit flag also print the ERROR object and keep argparse's exit 2
+(SystemExit propagates); abbreviated flags are refused.
+Not typed: launcher/interpreter/exe-shim failures before this script runs (this script never starts).
+
 With ``--run R``, only the actual invoking session's live grant for R can receive
 credit. ``--session-id`` confirms that identity; it cannot replace it. The explicit
 ``--parent-pool-run P`` selector instead uses native registry lineage and an active,
@@ -31,9 +39,13 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 PROG = "box-memory-snapshot"
+EXIT_ERROR = 5
 _LIB = Path(__file__).resolve().parent / "lib"
 _UNAVAILABLE = "unavailable"
 _READ_FIELDS = ("available_gib", "commit_used_gib", "system_cache_ws_gib", "nonpaged_pool_gib", "top_consumers")
@@ -51,7 +63,7 @@ def _place_engine_on_path() -> None:
     cc_invoke.ensure_engine_on_path(__file__)
 
 
-def _load(name: str):
+def _load(name: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, _LIB / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module  # the host's @dataclass classes resolve annotations through it
@@ -208,7 +220,51 @@ def _admit_line(verdict, peak_gib: float, status, limit: int) -> str:
     return f"HOLD peak={peak_gib}GiB failed {'; '.join(failed)}"
 
 
-def main(
+def _print_admit_error(reason: str, peak_gib: Optional[float] = None, verdict: str = "ERROR") -> None:
+    admit = {"verdict": verdict, "error": reason}
+    if peak_gib is not None:
+        admit["peak_gib"] = peak_gib
+    print(json.dumps({"admit": admit}))
+    _JSON_EMITTED[0] = True
+
+
+_JSON_EMITTED = [False]  # one typed JSON object per run: a late exception never prints a second
+_TYPED_FLAGS = ("--admit-peak", "--command-key")
+
+
+def _wants_typed_admit(argv: list) -> bool:
+    """True for `--json` plus an admit flag, or a prefix of one (argparse would reject the abbreviation)."""
+    def _admit_flag(a: str) -> bool:
+        head = a.split("=", 1)[0]
+        return len(head) >= 4 and head.startswith("--") and any(f.startswith(head) for f in _TYPED_FLAGS)
+
+    return "--json" in argv and any(_admit_flag(a) for a in argv)
+
+
+def main(argv: Optional[list] = None, **kwargs) -> int:
+    """Run the snapshot; under `--json` with `--admit-peak`/`--command-key`, an uncaught exception prints one
+    `{"admit": {"verdict": "ERROR", "error": ...}}` object and exits `EXIT_ERROR`."""
+    raw = list(sys.argv[1:] if argv is None else argv)
+    _JSON_EMITTED[0] = False
+    try:
+        return _main(argv, **kwargs)
+    except SystemExit as exc:  # argparse usage errors exit 2 after printing usage to stderr
+        if exc.code in (0, None) or not _wants_typed_admit(raw):
+            raise
+        if not _JSON_EMITTED[0]:
+            _print_admit_error(f"usage error (exit {exc.code}); see stderr")
+        raise
+    except Exception as exc:
+        if not _wants_typed_admit(raw):
+            raise
+        reason = f"{type(exc).__name__}: {exc}"
+        print(f"{PROG}: {reason}", file=sys.stderr)
+        if not _JSON_EMITTED[0]:
+            _print_admit_error(reason)
+        return EXIT_ERROR
+
+
+def _main(
     argv: Optional[list] = None,
     *,
     platform: Optional[str] = None,
@@ -224,7 +280,7 @@ def main(
     cmdline_fn: Optional[Callable] = None,
     names_fn: Optional[Callable] = None,
 ) -> int:
-    parser = argparse.ArgumentParser(prog=PROG, description="One-screen box memory snapshot.")
+    parser = argparse.ArgumentParser(prog=PROG, description="One-screen box memory snapshot.", allow_abbrev=False)
     parser.add_argument("--top", type=int, default=10, help="top N consumers (default 10)")
     parser.add_argument("--admit-peak", type=float, metavar="GIB", help="check admission of a peak; the default "
                         "mode fits a single heavy job and adds a cushion of min(--cushion-pct of peak, 8 GiB)")
@@ -332,7 +388,9 @@ def main(
         if status is None:
             detail = f": {status_error[0]}" if status_error and status_error[0] else ""
             print(f"{PROG}: cannot read memory status for admission{detail}", file=sys.stderr)
-            return 1
+            if args.json:
+                _print_admit_error(f"cannot read memory status for admission{detail}", args.admit_peak)
+            return EXIT_ERROR
         peak = int(args.admit_peak * host.GIB)
         limit = int(args.commit_limit_gib * host.GIB) if args.commit_limit_gib is not None else status.commit_limit
         if args.run:
@@ -350,6 +408,8 @@ def main(
                 )
             except (OSError, ValueError) as exc:
                 print(f"{PROG}: reservation selection refused: {exc}", file=sys.stderr)
+                if args.json:
+                    _print_admit_error(f"reservation selection refused: {exc}", args.admit_peak, verdict="HOLD")
                 return 4
             snap["reservation_selection"] = {**selection, "credited_gib": _gib(selection["credited_bytes"])}
         elif args.command_key and args.register_pid is not None:
@@ -384,6 +444,7 @@ def main(
 
     if args.json:
         print(json.dumps(snap))
+        _JSON_EMITTED[0] = True
     else:
         print(_render(snap))
         if "reservation" in snap:

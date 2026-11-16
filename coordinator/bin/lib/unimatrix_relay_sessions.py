@@ -70,18 +70,28 @@ def list_relay_sessions(ps_out: str) -> list[RelaySession]:
     return sessions
 
 
-def classify_relay_sessions(sessions, relay_script_mtime, parent_alive) -> dict[str, list[RelaySession]]:
-    """Split sessions into stale (orphaned: ppid 1 or parent gone), mismatched (started before the
-    installed script's timestamp, so it loaded replaced code) and live.
+def classify_relay_sessions(sessions, relay_script_mtime, parent_alive, key=None) -> dict[str, list[RelaySession]]:
+    """Split sessions into stale (orphaned: ppid 1 or parent gone, or superseded), mismatched (started
+    before the installed script's timestamp, so it loaded replaced code) and live.
 
     `relay_script_mtime` is a float, or a mapping of script basename to float; callers pass the script's
     `st_ctime` (the install's copy sets it; copy2 preserves mtime). A script absent from the mapping
     cannot be judged mismatched. `parent_alive(ppid)` is a callable.
+
+    `key(session)`, when given, groups sessions; every session but the newest of a group (latest
+    `started`, highest pid on a tie) is stale: a successor with the same key supersedes it.
     """
     out: dict[str, list[RelaySession]] = {STALE: [], MISMATCHED: [], LIVE: []}
+    newest: dict = {}
+    if key is not None:
+        for s in sessions:
+            k = key(s)
+            if k is not None and (k not in newest or (s.started, s.pid) > (newest[k].started, newest[k].pid)):
+                newest[k] = s
     for s in sessions:
         stamp = relay_script_mtime.get(s.script) if isinstance(relay_script_mtime, dict) else relay_script_mtime
-        if s.ppid <= 1 or not parent_alive(s.ppid):
+        k = key(s) if key is not None else None
+        if s.ppid <= 1 or not parent_alive(s.ppid) or (k is not None and newest[k] is not s):
             out[STALE].append(s)
         elif stamp is not None and s.started < stamp:
             out[MISMATCHED].append(s)
@@ -90,18 +100,28 @@ def classify_relay_sessions(sessions, relay_script_mtime, parent_alive) -> dict[
     return out
 
 
-def reap(sessions, kill=None) -> tuple[list[int], list[int]]:
-    """SIGTERM each session's pid via `kill(pid)`; returns (reaped, failed). An already-gone pid counts reaped."""
+def reap(sessions, kill=None, release=None) -> tuple[list[int], list[int]]:
+    """SIGTERM each session's pid via `kill(pid)`; returns (reaped, failed). An already-gone pid counts reaped.
+
+    `release(session)`, when given, runs for each reaped session so the caller unlinks only the socket
+    inode that session bound; a raising release never fails the reap.
+    """
     kill = kill or (lambda pid: os.kill(pid, signal.SIGTERM))
     reaped, failed = [], []
     for s in sessions:
         try:
             kill(s.pid)
-            reaped.append(s.pid)
         except ProcessLookupError:
-            reaped.append(s.pid)
+            pass
         except OSError:
             failed.append(s.pid)
+            continue
+        reaped.append(s.pid)
+        if release is not None:
+            try:
+                release(s)
+            except OSError:
+                pass
     return reaped, failed
 
 

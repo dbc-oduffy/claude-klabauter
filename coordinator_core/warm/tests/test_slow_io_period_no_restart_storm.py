@@ -27,24 +27,24 @@ HEAVY_METHOD = "review.reverify"
 class _Proc:
     terminated = False
 
-    def terminate(self):
+    def terminate(self) -> None:
         self.terminated = True
 
-    def is_alive(self):
+    def is_alive(self) -> bool:
         return False
 
 
 class _HeldPool:
     """Holders never answer."""
 
-    def __init__(self, *_a, **_k):
+    def __init__(self, *_a, **_k) -> None:
         self.shutdown_args = None
         self._processes = {i: _Proc() for i in range(1, POOL + 1)}
 
     def submit(self, *_a, **_k):
         return concurrent.futures.Future()
 
-    def shutdown(self, wait=True, cancel_futures=False):
+    def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
         self.shutdown_args = (wait, cancel_futures)
 
 
@@ -62,13 +62,13 @@ class _InstantPool(_HeldPool):
 
 
 class _Recorder:
-    def __init__(self):
+    def __init__(self) -> None:
         self.marks = []
         self.exits = []
 
 
 @pytest.fixture
-def rig(tmp_path, monkeypatch):
+def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", POOL)
     monkeypatch.setattr(server, "STALL_DUMP_SECS", 0.05)
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 6.0)
@@ -108,11 +108,11 @@ def _msg(method=HEAVY_METHOD):
     return {"jsonrpc": "2.0", "id": 9, "method": method, "params": {}}
 
 
-def _probe(monkeypatch, ms_by_root):
+def _probe(monkeypatch, ms_by_root) -> None:
     monkeypatch.setattr(server, "_holder_drive_probe_ms", lambda root: ms_by_root[Path(root)])
 
 
-def _hold(ctx, pool, root, count, age=1.0):
+def _hold(ctx, pool, root, count, age: float = 1.0) -> list[str]:
     keys = []
     for _ in range(count):
         key = dispatch_ack.mint_key()
@@ -125,7 +125,7 @@ def _hold(ctx, pool, root, count, age=1.0):
     return keys
 
 
-def _fire_worker_watchers(monkeypatch, tmp_path, stall_dir, root, count, stall_secs=0.1):
+def _fire_worker_watchers(monkeypatch, tmp_path, stall_dir, root, count, stall_secs: float = 0.1) -> None:
     """`count` worker-side stall watchers (as a pool worker arms per op) that have each fired
     and written their record; the watchers are disarmed before return."""
     monkeypatch.setattr(server, "_WORKER_STALL_DIR", stall_dir)
@@ -157,7 +157,7 @@ def _is_recycled(ctx, old, keys):
     )
 
 
-def test_a_io_wait_holders_are_not_recycled_or_counted_across_checks(rig, monkeypatch, tmp_path):
+def test_a_io_wait_holders_are_not_recycled_or_counted_across_checks(rig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ctx, old, rec, stall_dir = rig
     root = tmp_path / "repo-c"
     root.mkdir()
@@ -178,11 +178,11 @@ def test_a_io_wait_holders_are_not_recycled_or_counted_across_checks(rig, monkey
     records = list(stall_dir.glob("*.txt"))
     assert records and all(hang_restart.IO_WAIT_HEADER in p.read_text() for p in records)
     assert rec.marks == []
-    assert hang_restart.maybe_restart(stall_dir) is None
+    assert hang_restart.maybe_restart(stall_dir, exit_fn=rec.exits.append) == "io-stall"
     assert rec.exits == []
 
 
-def test_b_a_holder_flipping_hung_with_three_hung_recycles(rig, monkeypatch, tmp_path):
+def test_b_a_holder_flipping_hung_with_three_hung_recycles(rig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ctx, old, rec, stall_dir = rig
     slow, healthy = tmp_path / "slow", tmp_path / "healthy"
     slow.mkdir()
@@ -208,8 +208,8 @@ def test_b_a_holder_flipping_hung_with_three_hung_recycles(rig, monkeypatch, tmp
 
 
 def test_b2_slow_drive_wedge_past_the_ceiling_recycles_and_workers_still_mark(
-    rig, monkeypatch, tmp_path
-):
+    rig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     ctx, old, rec, stall_dir = rig
     root = tmp_path / "repo-c"
     root.mkdir()
@@ -228,12 +228,48 @@ def test_b2_slow_drive_wedge_past_the_ceiling_recycles_and_workers_still_mark(
     )
     # Reachable only with the ceiling patched below `stall_secs`; at default thresholds a worker
     # stall on a slow drive is io-wait by construction and recovery is the pool recycle above.
-    assert len(rec.marks) == hang_restart.HANG_DUMP_THRESHOLD
-    assert rec.exits, "a wedge during slow I/O still reaches the hang restart"
+    assert rec.marks == [] and rec.exits == [], "a pool worker writes its record and decides nothing"
+    assert len(list(stall_dir.glob("*.txt"))) >= hang_restart.HANG_DUMP_THRESHOLD
+
+    monkeypatch.setattr(server, "_WORKER_STALL_DIR", None)
+    monkeypatch.setattr(hang_restart, "_progress_last", None)
+    _server_watch_claimed_op(tmp_path, stall_dir, rec, lambda: bool(rec.exits))
+    assert rec.exits == [server.os.getpid()], "a wedge during slow I/O still reaches the hang restart"
+
+
+def _server_watch_claimed_op(tmp_path: Path, stall_dir: Path, rec, settled) -> None:
+    """The server's accept watcher over an op a worker has claimed and not finished."""
+    claim = tmp_path / "claims" / "wedged-op"
+    claim.parent.mkdir(exist_ok=True)
+    claim.write_text("1")
+    disarm = server._arm_accept_stall(stall_dir, 0.05, claim, "wedged", ["result"], tmp_path)
+    deadline = time.monotonic() + 10.0
+    while not settled() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    disarm()
+
+
+def test_b2_wedge_with_completing_workers_is_suppressed_not_restarted(
+    rig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx, old, rec, stall_dir = rig
+    root = tmp_path / "repo-c"
+    root.mkdir()
+    monkeypatch.setattr(server, "_IO_WAIT_MAX_SECS", 0.05)
+    _probe(monkeypatch, {root: server._SLOW_DRIVE_PROBE_MS * 20})
+    _fire_worker_watchers(
+        monkeypatch, tmp_path, stall_dir, root, hang_restart.HANG_DUMP_THRESHOLD, stall_secs=0.1
+    )
+    monkeypatch.setattr(server, "_WORKER_STALL_DIR", None)
+    hang_restart.note_progress()
+    log = stall_dir.parent / hang_restart.HANG_RESTART_LOG_FILENAME
+    _server_watch_claimed_op(tmp_path, stall_dir, rec, log.exists)
+    assert log.exists() and "action=suppressed reason=progress" in log.read_text(encoding="utf-8")
+    assert rec.exits == []
 
 
 @pytest.mark.deliberate_wall_clock(reason="a gate wait must outlive the stall arm time to be a stall")
-def test_c_gate_waits_past_arm_time_add_no_stall_count(rig, monkeypatch):
+def test_c_gate_waits_past_arm_time_add_no_stall_count(rig, monkeypatch: pytest.MonkeyPatch) -> None:
     ctx, old, rec, stall_dir = rig
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 0.6)
     gate = ctx._admission_gate()
@@ -242,7 +278,7 @@ def test_c_gate_waits_past_arm_time_add_no_stall_count(rig, monkeypatch):
     replies = []
     lock = threading.Lock()
 
-    def one():
+    def one() -> None:
         out = ctx._pool_dispatch(_msg())
         with lock:
             replies.append(out)
@@ -260,11 +296,11 @@ def test_c_gate_waits_past_arm_time_add_no_stall_count(rig, monkeypatch):
     assert rec.marks == []
     records = list(stall_dir.glob("*.txt"))
     assert records and all(hang_restart.IO_WAIT_HEADER in p.read_text() for p in records)
-    assert hang_restart.maybe_restart(stall_dir, threshold=1) is None
+    assert hang_restart.maybe_restart(stall_dir, threshold=1, exit_fn=rec.exits.append) == "io-stall"
     assert rec.exits == []
 
 
-def test_c_control_a_submit_phase_stall_still_marks(rig, tmp_path):
+def test_c_control_a_submit_phase_stall_still_marks(rig, tmp_path: Path) -> None:
     _ctx, _old, rec, stall_dir = rig
     disarm = server._arm_accept_stall(stall_dir, 0.01, None, None, ["submit"], tmp_path)
     deadline = time.monotonic() + 5.0
@@ -275,7 +311,7 @@ def test_c_control_a_submit_phase_stall_still_marks(rig, tmp_path):
 
 
 @pytest.mark.deliberate_wall_clock(reason="post-recycle admission spacing is the asserted behaviour")
-def test_d_retries_after_a_recycle_are_admitted_with_backoff(rig, monkeypatch, tmp_path):
+def test_d_retries_after_a_recycle_are_admitted_with_backoff(rig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ctx, old, rec, stall_dir = rig
     root = tmp_path / "repo-c"
     root.mkdir()
@@ -289,7 +325,7 @@ def test_d_retries_after_a_recycle_are_admitted_with_backoff(rig, monkeypatch, t
     replies = []
     lock = threading.Lock()
 
-    def retry():
+    def retry() -> None:
         out = ctx._pool_dispatch(_msg())
         with lock:
             replies.append(out)

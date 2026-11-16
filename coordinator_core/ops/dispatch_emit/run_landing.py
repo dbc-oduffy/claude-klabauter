@@ -26,6 +26,8 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Optional
 
+from coordinator_core.git.ref_lock import RefLockHeld
+
 #: Settings-home key `dispatch.terminal_commit` reads to choose the landing path. Defined once: the
 #: cutover switch and the benchmark driver both import it.
 LANDING_IMPL_KEY = "terminal_commit_landing"
@@ -58,6 +60,12 @@ def _error(message: str, **extra: object) -> dict:
     out: dict = {"committed": False, "sha": None, "error": message}
     out.update(extra)
     return out
+
+
+def _ref_lock_error(exc: RefLockHeld) -> dict:
+    """A held ref lock is not a peer's ref move: the reply names the lock, its age and content."""
+    return _error(str(exc), refused="ref-lock-held", lock_path=str(exc.lock_path),
+                  lock_age_secs=exc.age_secs, lock_content=exc.content, lock_stale=exc.stale)
 
 
 def _norm(path: str) -> str:
@@ -1067,6 +1075,8 @@ def _fallback_commit(root: Path, present: list, deleted: list, message: str, sup
         outcome = commit_paths(root, present, message, deleted_paths=deleted, supplied_blobs=supplied or None)
     except CommitRefused as exc:
         return _error(str(exc), refused=type(exc).__name__)
+    except RefLockHeld as exc:
+        return _ref_lock_error(exc)
     return {"committed": True, "sha": outcome.sha, "converged": list(outcome.converged),
             "left_alone": list(outcome.left_alone), "sync_refused": list(getattr(outcome, "sync_refused", ()) or ())}
 
@@ -1214,9 +1224,12 @@ def _commit(root: Path, present: list, deleted: list, scans: dict, spine: dict, 
         subject = message.splitlines()[0] if message else ""
         if not git_objects.cas_ref(ref_gitdir, ref, old_head, commit_sha,
                                    reflog_committer=f"{name} <{email}>", reflog_message=f"commit: {subject}",
-                                   head_gitdir=gitdir):
+                                   head_gitdir=gitdir, report_lock=True):
             prepared.abort()
             return _error("HEAD moved while landing; nothing was overwritten", refused="head-moved")
+    except RefLockHeld as exc:
+        prepared.abort()
+        return _ref_lock_error(exc)
     except BaseException:
         prepared.abort()
         raise

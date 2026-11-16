@@ -17,6 +17,11 @@ from coordinator_core.hooks.tests.test_submit_engine_ask_minted_parent_reuse imp
 )
 from coordinator_core.ops.dispatch_emit import minted_parent
 from coordinator_core.ops.dispatch_emit.fan_launcher import launcher_rel
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from threading import Event
 
 
 def _stall_first_child(monkeypatch) -> list:
@@ -42,7 +47,7 @@ def _sizing_files(root: Path) -> set:
     return {p.name for p in (root / "state" / "sizings").glob("*.yaml")}
 
 
-def test_a_stalled_child_sizing_read_defers_its_emit_and_still_writes_the_launcher(repo, monkeypatch):
+def test_a_stalled_child_sizing_read_defers_its_emit_and_still_writes_the_launcher(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     emitted: list = []
     inner = mod._default_emit
     monkeypatch.setattr(mod, "_default_emit", lambda params, root: emitted.append(params["reserved_run_id"]) or inner(params, root))
@@ -61,14 +66,14 @@ def test_a_stalled_child_sizing_read_defers_its_emit_and_still_writes_the_launch
     assert all((repo / e["path"]).is_file() for e in deferred)
 
 
-def test_a_deferred_child_params_never_carry_the_defer_marker(repo, monkeypatch):
+def test_a_deferred_child_params_never_carry_the_defer_marker(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _stall_first_child(monkeypatch)
     _script(_submit(repo, _asks()))
     for script in (repo / "scratch" / "warp").glob("*.workflow.mjs"):
         assert mod._DEFER_EMIT_KEY not in script.read_text(encoding="utf-8")
 
 
-def test_a_resubmission_after_a_stall_reuses_the_parent_and_mints_no_new_sizing(repo, monkeypatch):
+def test_a_resubmission_after_a_stall_reuses_the_parent_and_mints_no_new_sizing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _stall_first_child(monkeypatch)
     first = _script(_submit(repo, _asks()))
     sizings = _sizing_files(repo)
@@ -81,7 +86,7 @@ def test_a_resubmission_after_a_stall_reuses_the_parent_and_mints_no_new_sizing(
     assert len(_parents(repo)) == 1
 
 
-def test_a_resubmission_over_a_parent_minted_with_no_launcher_writes_one_and_mints_nothing_new(repo):
+def test_a_resubmission_over_a_parent_minted_with_no_launcher_writes_one_and_mints_nothing_new(repo) -> None:
     _submit(repo, _asks())
     parent = _parents(repo)[0]
     (repo / launcher_rel(parent)).unlink()
@@ -97,7 +102,7 @@ def test_a_resubmission_over_a_parent_minted_with_no_launcher_writes_one_and_min
     assert "Re-submission of " + parent in json.dumps(env)
 
 
-def test_a_parent_minted_with_no_launcher_whose_sizing_is_gone_is_not_reused(repo):
+def test_a_parent_minted_with_no_launcher_whose_sizing_is_gone_is_not_reused(repo) -> None:
     _submit(repo, _asks())
     parent = _parents(repo)[0]
     (repo / launcher_rel(parent)).unlink()
@@ -112,7 +117,7 @@ def test_a_parent_minted_with_no_launcher_whose_sizing_is_gone_is_not_reused(rep
     assert len(_parents(repo)) == 2
 
 
-def _one_ready_run_with_a_hung_sizing_read(monkeypatch):
+def _one_ready_run_with_a_hung_sizing_read(monkeypatch) -> Event:
     """The fan-out reports one ready run, and `load_sizing` for its slice sizing blocks until the returned event is set."""
     import dataclasses
     import threading
@@ -143,7 +148,7 @@ def _one_ready_run_with_a_hung_sizing_read(monkeypatch):
     return release
 
 
-def test_a_hung_slice_sizing_read_on_the_asks_path_proceeds_on_the_fan_out_run_id(repo, monkeypatch):
+def test_a_hung_slice_sizing_read_on_the_asks_path_proceeds_on_the_fan_out_run_id(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     release = _one_ready_run_with_a_hung_sizing_read(monkeypatch)
     emitted: list = []
     monkeypatch.setattr(mod, "_default_emit", lambda params, root: emitted.append(params["reserved_run_id"]) or {
@@ -158,7 +163,7 @@ def test_a_hung_slice_sizing_read_on_the_asks_path_proceeds_on_the_fan_out_run_i
     assert emitted == [_runs(repo, _parents(repo)[0])[0]]
 
 
-def test_a_resubmit_over_the_still_in_flight_first_read_is_not_the_dead_end_refusal(repo, monkeypatch):
+def test_a_resubmit_over_the_still_in_flight_first_read_is_not_the_dead_end_refusal(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     release = _one_ready_run_with_a_hung_sizing_read(monkeypatch)
     try:
         first = _submit(repo, _asks())
@@ -171,7 +176,7 @@ def test_a_resubmit_over_the_still_in_flight_first_read_is_not_the_dead_end_refu
         assert "ask_parent marker is unknown" not in json.dumps(env)
 
 
-def test_a_stalled_asks_read_with_no_fan_out_run_id_refuses_naming_the_op_deadline_and_next_step(repo, monkeypatch):
+def test_a_stalled_asks_read_with_no_fan_out_run_id_refuses_naming_the_op_deadline_and_next_step(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     import dataclasses
 
     def stalled(root, rel):

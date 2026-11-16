@@ -16,7 +16,10 @@ Wall clock never gates anything. Trap: process time reads ~0 for a call blocked 
 so the concurrent mode's liveness verdict is `stalled` (a hook that got no answer within `STALL_CAP_SECS`,
 a liveness cap, not an acceptance figure) and its wall columns are context only.
 
-Concurrent mode (the stall falsifier): an in-process `_ServerContext` with every pool worker parked on a
+Concurrent mode (hooks take the production guard-gate path; the committed `base` row reads `stall_free`
+true, so a default run does not reproduce the pre-fix stall, it goes red only when the guard gate is wedged:
+`benchmarks/tests/test_hook_ops_process_time_falsifier.py` holds every guard-gate slot to prove it; the pool-wide
+stall itself is `warm/tests/test_pool_wide_stall_cannot_recur.py`): an in-process `_ServerContext` with every pool worker parked on a
 held heavy op, then `CONCURRENT_HOOKS` hook calls (the three ops round-robin) through the real accept path.
 `stall_free` is true only when every hook answered; `process_ms_per_call` is the whole-process CPU of the
 burst over the calls answered.
@@ -136,6 +139,11 @@ def measure_op(op: str, payload: Dict[str, Any], n: int) -> Dict[str, Any]:
     }
 
 
+def cold_under_bar(row: Dict[str, Any]) -> bool:
+    """False when the op's first (cold) call alone exceeds the one-process bar; `under_bar` reads amortised CPU and hides it."""
+    return row["cold_ms"] < BAR_MS
+
+
 def measure_single(n: int, fx: Dict[str, Any]) -> List[Dict[str, Any]]:
     client = measure_client()
     rows = []
@@ -145,6 +153,7 @@ def measure_single(n: int, fx: Dict[str, Any]) -> List[Dict[str, Any]]:
         row["process_ms"] = round(row["server_cpu_ms"] + client["client_ms"], 1)
         row["spawn_count"] = row["spawns"] + client["client_procs"]
         row["under_bar"] = row["process_ms"] < BAR_MS
+        row["cold_under_bar"] = cold_under_bar(row)
         rows.append(row)
     return rows
 
@@ -188,8 +197,16 @@ def _wait(predicate, secs: float) -> bool:
     return predicate()
 
 
-def measure_concurrent(fx: Dict[str, Any], hooks: int = CONCURRENT_HOOKS) -> Dict[str, Any]:
-    """Every pool worker parked on a held heavy op, then `hooks` hook calls; reports whether any stalled."""
+def measure_concurrent(
+    fx: Dict[str, Any],
+    hooks: int = CONCURRENT_HOOKS,
+    hold_guard_gate: bool = False,
+    stall_cap_secs: float = STALL_CAP_SECS,
+) -> Dict[str, Any]:
+    """Every pool worker parked on a held heavy op, then `hooks` hook calls; reports whether any stalled.
+
+    `hold_guard_gate` takes every slot of the context's guard gate before the hooks arrive, the wedge the
+    falsifier test uses to prove `stall_free` can go red."""
     import concurrent.futures
 
     from coordinator_core.temp_layout import managed_temp_dir
@@ -223,15 +240,23 @@ def measure_concurrent(fx: Dict[str, Any], hooks: int = CONCURRENT_HOOKS) -> Dic
                                         version_state=_VersionState(), engine_root=tmp)
             ctx._claim_dir = tmp / "claims"
             ctx._claim_dir.mkdir()
-            light = getattr(server, "_LIGHT_RESERVE_WORKERS", 2)
-            ctx._dispatch_pool = concurrent.futures.ThreadPoolExecutor(max_workers=server.WORKER_POOL_SIZE + light)
+            ctx._dispatch_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=server.WORKER_POOL_SIZE + server._LIGHT_RESERVE_WORKERS
+            )
+            ctx._guard_pool = concurrent.futures.ThreadPoolExecutor(max_workers=server._guard_pool_workers())
             ctx._start_worker_pool(pool_size=server.WORKER_POOL_SIZE)
             holders = [_FakeIO(HOLD_OP, i, {}) for i in range(server.WORKER_POOL_SIZE)]
             hook_ios = [
                 _FakeIO(HOOK_OPS[i % len(HOOK_OPS)], 1000 + i, payloads[HOOK_OPS[i % len(HOOK_OPS)]])
                 for i in range(hooks)
             ]
+            gate_held = 0
             try:
+                if hold_guard_gate:
+                    guard_gate = ctx._guard_gate()
+                    for _ in range(server._guard_pool_workers()):
+                        if guard_gate.acquire(False, 1.0, hook=True) is not None:
+                            gate_held += 1
                 for io in holders:
                     ctx._enqueue_connection(io, admitted=False)
                 held = _wait(lambda: ctx._busy_workers() == server.WORKER_POOL_SIZE, 10.0)
@@ -239,12 +264,15 @@ def measure_concurrent(fx: Dict[str, Any], hooks: int = CONCURRENT_HOOKS) -> Dic
                 with spawns:
                     for io in hook_ios:
                         ctx._enqueue_connection(io, admitted=False)
-                    _wait(lambda: all(io.written for io in hook_ios), STALL_CAP_SECS)
+                    _wait(lambda: all(io.written for io in hook_ios), stall_cap_secs)
                 cpu_ms = (time.process_time() - cpu0) * 1000.0
+                answered = [io for io in hook_ios if io.written]
             finally:
                 release.set()
-                ctx._dispatch_pool.shutdown(wait=False, cancel_futures=True)
-            answered = [io for io in hook_ios if io.written]
+                for _ in range(gate_held):
+                    ctx._guard_gate().release(True, False)
+                ctx._dispatch_pool.shutdown(wait=True, cancel_futures=True)
+                ctx._guard_pool.shutdown(wait=True, cancel_futures=True)
             rows = [r for r in telemetry.request_samples() if r.get("op") in HOOK_OPS]
             waits = [(r["end_ts"] - r["enqueue_ts"]) * 1000.0 for r in rows if "end_ts" in r and "enqueue_ts" in r]
     finally:
@@ -303,14 +331,15 @@ def format_report(result: Dict[str, Any]) -> str:
     lines = [
         f"head={result['head']} n={result['n']} bar={result['bar_ms']:.0f}ms "
         "(process time = server op CPU + hook client process; never wall)",
-        "%-34s %8s %8s %8s %10s %9s %7s %s"
-        % ("op", "p50_ms", "p95_ms", "cpu_ms", "client_ms", "total_ms", "spawns", "under_bar"),
+        "%-34s %8s %8s %8s %8s %10s %9s %7s %s"
+        % ("op", "cold_ms", "p50_ms", "p95_ms", "cpu_ms", "client_ms", "total_ms", "spawns", "under_bar"),
     ]
     for r in result["single"]:
         lines.append(
-            "%-34s %8.1f %8.1f %8.3f %10.1f %9.1f %7.1f %s%s"
-            % (r["op"], r["p50_ms"], r["p95_ms"], r["server_cpu_ms"], r["client_ms"], r["process_ms"],
-               r["spawn_count"], r["under_bar"], f"  slow_phase={r['slow_phase']}" if r["slow_phase"] else "")
+            "%-34s %8.1f %8.1f %8.1f %8.3f %10.1f %9.1f %7.1f %s%s%s"
+            % (r["op"], r["cold_ms"], r["p50_ms"], r["p95_ms"], r["server_cpu_ms"], r["client_ms"], r["process_ms"],
+               r["spawn_count"], r["under_bar"], "" if cold_under_bar(r) else "  COLD_OVER_BAR",
+               f"  slow_phase={r['slow_phase']}" if r["slow_phase"] else "")
         )
     c = result["concurrent"]
     lines.append(
