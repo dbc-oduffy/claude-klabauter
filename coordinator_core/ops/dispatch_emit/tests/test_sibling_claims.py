@@ -551,3 +551,37 @@ def test_marker_less_run_is_not_halted_but_a_marker_run_still_is(repo):
     assert not wrd._no_marker(repo, "ask-missing-dir")
     assert not wrd._halted(repo, clean) and not wrd._landed(repo, clean)
     assert wrd._halted(repo, marked)
+
+
+def _own_stage(repo: Path, session_id: str) -> None:
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    ask_contract.stamp_run_stage(repo, OWN, "minted", session_id=session_id)
+
+
+def test_same_session_live_run_is_the_submitters_sibling_not_a_claim(repo):
+    live = _aged(90, "ffffff")
+    _declare(repo, live, "p/b.py")
+    run_token.mint(repo, live, "f.mjs", session_id=SELF)
+    _own_stage(repo, SELF)
+    assert sibling_claims.submitting_session(repo, OWN) == SELF
+    assert sibling_claims._unlanded_run_ids(repo, OWN) == []
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/b.py"]) == {}
+
+
+def test_other_session_live_run_still_claims_when_the_submitter_is_recorded(repo):
+    live = _aged(90, "abcdef")
+    _declare(repo, live, "p/b.py")
+    run_token.mint(repo, live, "a.mjs", session_id=SELF)
+    _own_stage(repo, "5e1f0000-0000-4000-8000-0000000000c7")
+    assert sibling_claims._unlanded_run_ids(repo, OWN) == [live]
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/b.py"]) == {"p/b.py": live}
+
+
+def test_unrecorded_submitter_is_empty_and_excludes_nothing(repo):
+    assert sibling_claims.submitting_session(repo, OWN) == ""
+    assert sibling_claims.submitting_session(repo, None) == ""
+    live = _aged(90, "123456")
+    _declare(repo, live, "p/b.py")
+    run_token.mint(repo, live, "g.mjs", session_id=SELF)
+    assert sibling_claims._unlanded_run_ids(repo, OWN) == [live]

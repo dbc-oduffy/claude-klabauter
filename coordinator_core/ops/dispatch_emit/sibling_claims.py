@@ -213,6 +213,20 @@ def released_ask_holder(root: Path, run_id: str, own_run_id: Optional[str]) -> O
     return RELEASED_LANDED_ASK if _ask_successor_landed(root, run_id, sizing) else None
 
 
+def submitting_session(root: Path, own_run_id: Optional[str]) -> str:
+    """The session recorded on `own_run_id`'s stage record, else ``""``: runs minted under it are the
+    run's siblings, never peers. One read; never raises."""
+    if not own_run_id:
+        return ""
+    try:
+        from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+
+        sid = (read_run_stage(root, own_run_id) or {}).get("session_id")
+    except Exception:  # noqa: BLE001 -- an unreadable stage record names no submitter
+        return ""
+    return sid if isinstance(sid, str) else ""
+
+
 def _unlanded_run_ids(
     root: Path, own_run_id: Optional[str], own_plan: Optional[str] = None, minted_before: Optional[tuple] = None,
     covering: Optional[Sequence[str]] = None,
@@ -234,6 +248,7 @@ def _unlanded_run_ids(
     found = []
     clear = index_clear_runs(root, covering)
     home = run_token._record_home(root)
+    submitter = submitting_session(root, own_run_id)
     for run_id, stamp in halted_hold_release.record_stamps(root):
         if run_id == own_run_id or run_id in clear:
             continue
@@ -265,7 +280,7 @@ def _unlanded_run_ids(
                 if minted_before is not None and (record.get("minted_at"), run_id) >= tuple(minted_before):
                     break
                 if (marker is None or not warp_run_deliverable.resumed_run_released(root, run_id, own_run_id)) and (
-                    warp_run_deliverable._live_peer_run(root, record, "", str(root))
+                    warp_run_deliverable._live_peer_run(root, record, submitter, str(root))
                 ):
                     found.append(run_id)
                 break
@@ -547,13 +562,14 @@ def sibling_run_claims(
             halted = warp_run_deliverable.halted_run_write_claims(
                 root, wanted, exclude_run=own_run_id, own_plan=own_plan,
             ) or {}
+            submitter = submitting_session(root, own_run_id)
             live = live_unreleased(
                 root,
                 warp_run_deliverable.live_run_write_claims(
-                    root, wanted, exclude_session="", cwd=str(root), exclude_run=own_run_id,
+                    root, wanted, exclude_session=submitter, cwd=str(root), exclude_run=own_run_id,
                     minted_before=minted_before,
                 ),
-                own_run_id, minted_before,
+                own_run_id, minted_before, submitter,
             ) or {}
             for path, run_ids in sorted(halted.items()):
                 claims.setdefault(path, run_ids[0])
