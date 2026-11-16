@@ -26,7 +26,10 @@ extra ``cat-file --batch-check`` spawn (anchor and HEAD absence); there is no la
 file keeps the gate above and ignores ``evidence_shas``.
 With no run-stage record the anchor is the newest commit touching the run's ``halted.json`` (one extra ``log`` spawn).
 Trap: the anchor is the halt, never ``run_base_sha``; base..HEAD would count the run's own pre-halt commits.
-Reply: ``{ok, run_id, evidence, dispositions, recorded}`` (legacy adds ``legacy: true`` and ``memo_id``) or ``{ok: false, error}``.
+Every ok close (kept, legacy and refused-at-stage) then lands one scoped closure commit of the run's record files with
+``Checkpoint-Run-Closed:`` trailers (``halted_run_close_commit.commit_close_records``): ``add`` and ``commit`` spawns beyond the counts
+above, none on a refusal; a refused commit never fails the close.
+Reply: ``{ok, run_id, evidence, dispositions, recorded, records_commit?, records_commit_error?}`` (legacy adds ``legacy: true`` and ``memo_id``) or ``{ok: false, error}``.
 """
 
 from __future__ import annotations
@@ -153,6 +156,14 @@ def _classify_paths(paths: list, touched: dict, head: dict, keep: dict, base: di
         else:
             bad.append(f"{p} (no commit after the halt ({anchor[:12]}) touched it, and it is neither landed nor untracked scratch)")
     return done, bad
+
+
+def _land_closure(root: Path, record: Path, run_id: str, reply: dict, op_name: str, word: str) -> dict:
+    """*reply* merged with the closure commit's ``records_commit`` or ``records_commit_error``; a failed commit never fails the close."""
+    from coordinator_core.ops.dispatch_emit.halted_run_close_commit import commit_close_records
+
+    reply.update(commit_close_records(root, run_id, record, f"{op_name}: {run_id} closed {word}"))
+    return reply
 
 
 def _refuse_unclassified(bad: list) -> dict:
@@ -285,7 +296,7 @@ def _legacy_close(root: Path, record: Path, marker: dict, run_id: str, paths: li
     memo = params.get("memo_id")
     if isinstance(memo, str) and memo:
         reply["memo_id"] = memo
-    return reply
+    return _land_closure(root, record, run_id, reply, OP_NAME, "superseded")
 
 
 def _sizing_stem(root: Path, ask_id: str, token_sizing: object) -> Optional[str]:
@@ -378,7 +389,8 @@ def _refused_at_stage(root: Path, record: Path, run_id: str) -> Optional[dict]:
         "closed": {"reason": "refused-at-stage: no halt record, nothing written", "at": at},
     })
     halted_run.stamp_run_stage_at(record, "halted")
-    return {"ok": True, "run_id": run_id, "evidence": {}, "dispositions": {}, "recorded": (record / halted_run.HALTED_FILE).relative_to(root).as_posix()}
+    reply = {"ok": True, "run_id": run_id, "evidence": {}, "dispositions": {}, "recorded": (record / halted_run.HALTED_FILE).relative_to(root).as_posix()}
+    return _land_closure(root, record, run_id, reply, OP_NAME, "superseded")
 
 
 @register_op(OP_NAME)
@@ -447,7 +459,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _refuse(f"{run_id} halt marker changed under the write; retry")
     halted_withheld_index.remove_run(root, run_id)
     _end_parent_ask(root, run_id, marker.get("sizing_rel"))
-    return {
+    reply = {
         "ok": True, "run_id": run_id, "evidence": evidence, "dispositions": dispositions,
         "recorded": (record / halted_run.HALTED_FILE).relative_to(root).as_posix(),
     }
+    return _land_closure(root, record, run_id, reply, OP_NAME, "superseded")

@@ -66,6 +66,24 @@ def _call(root, run_id=RUN):
     return op._handler({"run_id": run_id}, root)
 
 
+def _no_close_commit(monkeypatch):
+    """Count and time the classification path alone: the closure commit has its own spawns."""
+    from coordinator_core.ops.dispatch_emit import halted_run_close_commit
+
+    monkeypatch.setattr(halted_run_close_commit, "commit_close_records", lambda *a, **k: {})
+
+
+def _head(root) -> str:
+    return _git(root, "rev-parse", "HEAD")
+
+
+def _assert_closure_commit(root, record, base):
+    """HEAD is a commit touching the run's halted.json and naming *base* as ``Checkpoint-Run-Closed``."""
+    rel = (record / halted_run.HALTED_FILE).relative_to(root).as_posix()
+    assert rel in _git(root, "show", "--name-only", "--format=", "HEAD").splitlines()
+    assert f"Checkpoint-Run-Closed: {base}" in _git(root, "log", "-1", "--format=%B", "HEAD")
+
+
 def _indexed(root) -> bool:
     return (root / halted_withheld_index.INDEX_DIR / f"{RUN}.json").is_file()
 
@@ -75,10 +93,29 @@ def _unchanged(root, record, before):
     assert _indexed(root)
 
 
-def test_all_paths_overwritten_closes_superseded_and_releases_index(halted):
+def test_ok_close_lands_closure_commit_with_run_closed_trailer(halted):
+    root, record, base = halted
+    _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    reply = _call(root)
+    assert reply["ok"] is True and reply["records_commit"] == _head(root)
+    _assert_closure_commit(root, record, base)
+    assert _git(root, "status", "--porcelain", "--", record.relative_to(root).as_posix()) == ""
+
+
+def test_refused_close_leaves_head_unchanged(halted):
+    root, record, _ = halted
+    _commit(root, {"a.txt": "a-later"})
+    head = _head(root)
+    reply = _call(root)
+    assert reply["ok"] is False and "records_commit" not in reply
+    assert _head(root) == head
+
+
+def test_all_paths_overwritten_closes_superseded_and_releases_index(halted, monkeypatch):
     root, record, _ = halted
     assert _indexed(root)
     sha = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    _no_close_commit(monkeypatch)
     start = _cpu()
     reply = _call(root)
     assert _cpu() - start < 0.5
@@ -98,6 +135,7 @@ def test_three_withheld_paths_spawn_count_and_process_time(halted, monkeypatch):
         "a.txt": _blob(root, "a-kept"), "b.txt": _blob(root, "b-kept"), "c.txt": _blob(root, "c-kept"),
     }}}, None)
     sha = _commit(root, {"a.txt": "a-later", "b.txt": "b-later", "c.txt": "c-later"})
+    _no_close_commit(monkeypatch)
     spawned = []
     real_popen = subprocess.Popen
 
@@ -287,10 +325,26 @@ def test_legacy_first_record_anchor_still_refuses_untouched_path(legacy):
     assert halted_run._read(record)["status"] == halted_run.STATUS_HALTED
 
 
-def test_legacy_record_closes_with_evidence_shas(legacy):
+def test_legacy_ok_close_lands_closure_commit(legacy):
+    root, record, base = legacy
+    s1 = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    reply = _legacy_call(root, [s1])
+    assert reply["ok"] is True and reply["records_commit"] == _head(root)
+    _assert_closure_commit(root, record, base)
+
+
+def test_legacy_refused_close_leaves_head_unchanged(legacy):
+    root, record, _ = legacy
+    head = _head(root)
+    assert _legacy_call(root, [])["ok"] is False
+    assert _head(root) == head
+
+
+def test_legacy_record_closes_with_evidence_shas(legacy, monkeypatch):
     root, record, _ = legacy
     s1 = _commit(root, {"a.txt": "a-later"})
     s2 = _commit(root, {"b.txt": "b-later"})
+    _no_close_commit(monkeypatch)
     start = _cpu()
     reply = _legacy_call(root, [s1, s2], memo_id="fed43b74f8")
     assert _cpu() - start < 0.5
@@ -504,6 +558,7 @@ def test_per_path_kept_route_scratch_never_tracked_closes(halted):
 def test_per_path_kept_route_spawn_count_unchanged(halted, monkeypatch):
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later", "b.txt": "b-kept"})
+    _no_close_commit(monkeypatch)
     spawned = []
     real_popen = subprocess.Popen
 
@@ -576,6 +631,7 @@ def test_per_path_legacy_scratch_log_plus_evidence_paths_closes(legacy):
 def test_per_path_legacy_without_scratch_spawns_one_cat_file(legacy, monkeypatch):
     root, _, _ = legacy
     s = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    _no_close_commit(monkeypatch)
     seen = []
     real_popen = subprocess.Popen
 
@@ -630,6 +686,17 @@ def test_refused_at_nested_chain_start_without_halted_json_closes(refused):
     marker = halted_run._read(record)
     assert marker["status"] == halted_run.STATUS_CLOSED
     assert ask_contract.read_run_stage(root, RUN)["stage"] == "halted"
+
+
+def test_refused_at_stage_ok_close_lands_closure_commit(refused):
+    root, record = refused
+    _git(root, "add", "--", record.relative_to(root).as_posix())
+    _git(root, "commit", "-q", "-m", "stage", date=PRE_HALT)
+    reply = _call(root)
+    assert reply["ok"] is True and reply["records_commit"] == _head(root)
+    assert (record / halted_run.HALTED_FILE).relative_to(root).as_posix() in _git(
+        root, "show", "--name-only", "--format=", "HEAD",
+    ).splitlines()
 
 
 @pytest.mark.parametrize("extra", ["kept.json", "withheld-prints.json", "run-baton.json"])

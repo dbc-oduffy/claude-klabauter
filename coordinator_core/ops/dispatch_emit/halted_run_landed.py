@@ -251,32 +251,19 @@ def _queue_close(root: Path, run_id: str, sha: str, marker: Optional[dict], sess
     return {"close": close, "blocking_rows": withheld}
 
 
-def _closed_trailers(root: Path, run_id: str, record_dir: Path) -> str:
-    """A blank line then one ``Checkpoint-Run-Closed:`` line per own checkpoint base; ``""`` when none resolve. In-process reads."""
-    from coordinator_core.ops.dispatch_emit import halted_run
-    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_closed_trailer_lines
-    from coordinator_core.ops.dispatch_emit.landing_integrity import closing_bases
-
-    marker = halted_run._read(record_dir) or {}
-    lines = run_closed_trailer_lines(closing_bases(root, run_id, {"run_base_sha": marker.get("run_base_sha")}))
-    return "\n\n" + "\n".join(lines) if lines else ""
-
-
-def _trailer_tail(closed: str, claims: Optional[dict]) -> str:
-    """*closed* plus one ``Withheld-Dropped:`` / ``Withheld-Foreign:`` line per path in the echo *claims*."""
+def _trailer_tail(claims: Optional[dict]) -> str:
+    """One ``Withheld-Dropped:`` / ``Withheld-Foreign:`` line per path in the echo *claims*, newline-joined; ``""`` when none."""
     owners = (claims or {}).get("foreign_owners") or {}
     lines = [f"Withheld-Dropped: {p}" for p in (claims or {}).get("dropped") or []]
     lines += [f"Withheld-Foreign: {p} {owners.get(p, '?')}" for p in (claims or {}).get("foreign") or []]
-    if not lines:
-        return closed
-    return closed + ("\n" if closed else "\n\n") + "\n".join(lines)
+    return "\n".join(lines)
 
 
 def _commit_records(
     root: Path, run_id: str, record_dir: Path, sha: str, verified: bool = False, allow_empty: bool = False,
     claims: Optional[dict] = None,
 ) -> dict:
-    """Commit the landed flip's record files (halted.json, run-stage.json) plus every other changed or untracked path in the run's record dir (prompts/, resume.json) in one scoped commit naming *run_id*.
+    """Commit the landed flip's record files (halted.json, run-stage.json) plus every other changed or untracked path in the run's record dir (prompts/, resume.json) in one scoped commit naming *run_id*, via ``commit_close_records``.
 
     ``verified`` (the sha was checked an ancestor of HEAD) adds ``Checkpoint-Run-Closed:`` trailers for the run's bases.
     *claims* (a ``_verify`` echo) adds ``Withheld-Dropped:`` / ``Withheld-Foreign:`` trailers for the paths the caller voided.
@@ -285,36 +272,12 @@ def _commit_records(
     Returns ``{"records_commit": sha}``; ``{}`` when nothing changed or the record dir is untracked
     scratch; ``{"records_commit_error": ...}`` on a refusal, which never fails the landed write.
     """
-    from coordinator_core.git.commit import CommitRefused, NothingToCommit, commit_paths
-    from coordinator_core.ops.dispatch_emit import halted_run
-    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_STAGE_FILE
-    from coordinator_core.ops.dispatch_emit.run_artifacts import record_dir_residue
+    from coordinator_core.ops.dispatch_emit.halted_run_close_commit import commit_close_records
 
-    try:
-        fixed = [
-            (record_dir / name).relative_to(root).as_posix()
-            for name in (halted_run.HALTED_FILE, RUN_STAGE_FILE)
-            if (record_dir / name).is_file()
-        ]
-    except ValueError:
-        return {}
-    if allow_empty:
-        fixed.append((record_dir / "manifest.json").relative_to(root).as_posix())
-    elif not fixed or not fixed[0].startswith("state/"):
-        return {}
-    rels = sorted(set(fixed) | set(record_dir_residue(root, run_id)))
-    try:
-        outcome = commit_paths(
-            root, rels,
-            f"dispatch.record_halted_run_landed: {run_id} landed at {sha[:12]}"
-            + _trailer_tail(_closed_trailers(root, run_id, record_dir) if verified else "", claims),
-            allow_empty=allow_empty,
-        )
-    except NothingToCommit:
-        return {}
-    except (CommitRefused, OSError) as exc:
-        return {"records_commit_error": f"{type(exc).__name__}: {exc}"}
-    return {"records_commit": outcome.sha}
+    return commit_close_records(
+        root, run_id, record_dir, f"dispatch.record_halted_run_landed: {run_id} landed at {sha[:12]}",
+        closed=verified, allow_empty=allow_empty, extra_trailers=_trailer_tail(claims),
+    )
 
 
 def _close_landed(

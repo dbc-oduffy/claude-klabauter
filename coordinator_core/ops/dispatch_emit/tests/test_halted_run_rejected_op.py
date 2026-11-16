@@ -80,6 +80,24 @@ def test_rejected_paths_equal_to_anchor_close_run_and_release_index(halted):
     assert not _indexed(root)
 
 
+def test_ok_close_lands_closure_commit_with_run_closed_trailer(halted):
+    root, record = halted
+    base = halted_run._read(record)["run_base_sha"]
+    reply = _call(root, ["a.txt", "b.txt"])
+    assert reply["ok"] is True and reply["records_commit"] == _git(root, "rev-parse", "HEAD")
+    rel = (record / halted_run.HALTED_FILE).relative_to(root).as_posix()
+    assert rel in _git(root, "show", "--name-only", "--format=", "HEAD").splitlines()
+    assert f"Checkpoint-Run-Closed: {base}" in _git(root, "log", "-1", "--format=%B", "HEAD")
+
+
+def test_refused_close_leaves_head_unchanged(halted):
+    root, record = halted
+    head = _git(root, "rev-parse", "HEAD")
+    reply = _call(root, ["a.txt"])
+    assert reply["ok"] is False and "records_commit" not in reply
+    assert _git(root, "rev-parse", "HEAD") == head
+
+
 def test_mixed_rejected_and_landed_closes(halted):
     root, record = halted
     _commit(root, {"b.txt": "b-kept"})

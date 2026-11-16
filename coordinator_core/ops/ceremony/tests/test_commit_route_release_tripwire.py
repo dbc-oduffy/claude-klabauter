@@ -594,7 +594,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "ineligible: advances a remote-tracking ref after a landed push; creates no commit and carries no claim",
         "confirmed": True,
     },
-    "ops/dispatch_emit/halted_run_landed.py::_commit_records": {
+    "ops/dispatch_emit/halted_run_close_commit.py::commit_close_records": {
         "reason": "ineligible: lands the halted run's record files only; the session holds no claim on them",
         "confirmed": True,
     },

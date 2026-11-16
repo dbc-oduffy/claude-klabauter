@@ -9,7 +9,10 @@ them. Any other path refuses naming it; marker and index stay unchanged. On succ
 ``status: closed`` with ``closed: {reason, at, disposition: rejected}`` and ``path_dispositions`` (every path), the
 run leaves the halt-withheld index and its parent ask ends as the superseded close ends it.
 Two git spawns: ``rev-list`` (anchor), ``cat-file --batch-check`` (HEAD, anchor and kept blobs).
-Reply: ``{ok, run_id, dispositions, reason, recorded}`` or ``{ok: false, error}``.
+A successful close then lands one scoped closure commit of the run's record files with ``Checkpoint-Run-Closed:``
+trailers (``halted_run_close_commit.commit_close_records``): ``add`` and ``commit`` spawns beyond the two above, none on a
+refusal; a refused commit never fails the close.
+Reply: ``{ok, run_id, dispositions, reason, recorded, records_commit?, records_commit_error?}`` or ``{ok: false, error}``.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops.dispatch_emit.halted_run_superseded import (
-    _blob_ids, _classify_paths, _end_parent_ask, _halt_anchor, _newest_touch, _refuse,
+    _blob_ids, _classify_paths, _end_parent_ask, _halt_anchor, _land_closure, _newest_touch, _refuse,
 )
 
 OP_NAME = "dispatch.close_halted_run_rejected"
@@ -136,7 +139,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _refuse(f"{run_id} halt marker changed under the write; retry")
     halted_withheld_index.remove_run(root, run_id)
     _end_parent_ask(root, run_id, marker.get("sizing_rel"))
-    return {
+    reply = {
         "ok": True, "run_id": run_id, "dispositions": dispositions, "reason": reason,
         "recorded": (record / halted_run.HALTED_FILE).relative_to(root).as_posix(),
     }
+    return _land_closure(root, record, run_id, reply, OP_NAME, "rejected")
