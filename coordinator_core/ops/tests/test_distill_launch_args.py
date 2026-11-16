@@ -105,6 +105,56 @@ def test_realistic_64kb_curated_payload_inlines_whole(tmp_path):
 
 
 PREPARED_REL = f"state/scratch/artifact-distillation/{RUN_ID}/prepared.json"
+PROMOTED_REL = f"state/scratch/artifact-distillation/{RUN_ID}/promoted.json"
+SPLICE_REL = f"state/scratch/artifact-distillation/{RUN_ID}/splice.json"
+
+
+def _leg2_inputs(tmp_path, promoted=("docs/wiki/foo.md",), splice=None):
+    for rel, data in ((PROMOTED_REL, list(promoted)), (SPLICE_REL, splice or {"dispositions": [], "spliced": []})):
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(data), encoding="utf-8")
+    return {"leg": 2, "run_id": RUN_ID, "repo_root": str(tmp_path),
+            "promoted_path": PROMOTED_REL, "splice_report_path": SPLICE_REL}
+
+
+def test_leg2_reuses_leg1_args_and_adds_promoted_and_splice_report(tmp_path):
+    _write_curated(tmp_path)
+    leg1 = dla._handler(_params(tmp_path))
+    leg1_bytes = Path(leg1["path"]).read_bytes()
+    out = dla._handler(_leg2_inputs(tmp_path))
+    assert out["path"].endswith(dla.LEG2_FILE_NAME)
+    assert Path(leg1["path"]).read_bytes() == leg1_bytes
+    assert hashlib.sha256(Path(out["path"]).read_bytes()).hexdigest() == out["sha256"]
+    args = out["args"]
+    assert args["promoted"] == ["docs/wiki/foo.md"] and args["spliceReport"] == {"dispositions": [], "spliced": []}
+    assert {k: v for k, v in args.items() if k not in ("promoted", "spliceReport")} == leg1["args"]
+
+
+def test_leg2_without_leg1_args_raises_naming_it(tmp_path):
+    with pytest.raises(ValueError, match="launch-args.json"):
+        dla._handler(_leg2_inputs(tmp_path))
+
+
+@pytest.mark.parametrize("drop", ["promoted_path", "splice_report_path", "run_id"])
+def test_leg2_missing_param_raises_naming_it(tmp_path, drop):
+    dla._handler(_params(tmp_path))
+    params = _leg2_inputs(tmp_path)
+    del params[drop]
+    with pytest.raises(ValueError, match=drop):
+        dla._handler(params)
+
+
+def test_leg2_wrong_shapes_and_unknown_leg_are_refused(tmp_path):
+    dla._handler(_params(tmp_path))
+    with pytest.raises(ValueError, match="JSON list"):
+        dla._handler({**_leg2_inputs(tmp_path), "promoted_path": SPLICE_REL})
+    with pytest.raises(ValueError, match="JSON object"):
+        dla._handler({**_leg2_inputs(tmp_path), "splice_report_path": PROMOTED_REL})
+    with pytest.raises(ValueError, match="leg must be 2"):
+        dla._handler({**_leg2_inputs(tmp_path), "leg": 3})
+    with pytest.raises(ValueError, match="state/scratch"):
+        dla._handler({**_leg2_inputs(tmp_path), "promoted_path": "docs/promoted.json"})
 
 
 def test_prepared_path_inlines_prepared_json_as_args_prepared(tmp_path):

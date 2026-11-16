@@ -66,7 +66,7 @@ def stub(path: str, sha256: str) -> dict[str, str]:
     return {"argsFile": path, "argsSha256": sha256}
 
 
-def build(payload: dict[str, Any], *, run_dir: Optional[Path] = None) -> dict[str, Any]:
+def build(payload: dict[str, Any], *, run_dir: Optional[Path] = None, file_name: str = ARGS_FILE_NAME) -> dict[str, Any]:
     """Write ``launch-args.json`` for `payload` (a `distill.workflow_input` result) and return
     ``{"path", "sha256", "args", "args_bytes"}``.
 
@@ -82,6 +82,6 @@ def build(payload: dict[str, Any], *, run_dir: Optional[Path] = None) -> dict[st
     args = chunk_arrays({**payload, INLINED_KEY: True})
     body = json.dumps(args, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     directory.mkdir(parents=True, exist_ok=True)
-    target = directory / ARGS_FILE_NAME
+    target = directory / file_name
     target.write_bytes(body)
     return {"path": str(target), "sha256": hashlib.sha256(body).hexdigest(), "args": args, "args_bytes": len(body)}

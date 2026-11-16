@@ -1042,3 +1042,41 @@ def test_preblitz_scan_inside_its_cap_returns_its_lines(monkeypatch):
     monkeypatch.setattr(ask_compose, "_preblitz_anchor_lines", lambda *_a: ["CONTRADICTED: x -- y"])
     assert ask_compose.preblitz_anchor_lines("/repo", "docs/plans/p.md") == ["CONTRADICTED: x -- y"]
     assert ask_compose.preblitz_anchor_lines("/repo", None) == []
+
+
+_ROOT = "/repo/root"
+
+
+def _shared_root_script(*lines: str) -> str:
+    from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER
+
+    return "\n".join(["// head", ASK_MANIFEST_MARKER + "m.json", *lines, ""])
+
+
+def test_share_repo_root_cuts_quoted_literals_to_one_const_and_wraps_member_access(monkeypatch):
+    from coordinator_core.ops.dispatch_emit import prompt_fragments
+
+    monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
+    script = _shared_root_script(
+        f"const a = 'cd {_ROOT}/x'.trim();",
+        f"const b = '{_ROOT}/y';",
+        f"const c = 'in {_ROOT}/z ' + '{_ROOT}/w';",
+        f"const t = `{_ROOT}/tpl`;",
+        f"const w = 'run {_ROOT}/p --write ' + x;",
+    )
+    out = ask_compose._share_repo_root(script, (_ROOT,))
+    const = next(ln for ln in out.splitlines() if ln.startswith(f"const {ask_compose._ROOT_FN}"))
+    assert const.endswith(f"= '{_ROOT}';")
+    assert "const a = ('cd ' + " + ask_compose._ROOT_FN in out and ").trim();" in out
+    assert out.index(const) < out.index("const a")
+    assert f"`{_ROOT}/tpl`" in out
+    assert f"'run {_ROOT}/p --write '" in out
+    assert out.count(_ROOT) == 3
+
+
+def test_share_repo_root_leaves_a_root_used_under_the_threshold_alone(monkeypatch):
+    from coordinator_core.ops.dispatch_emit import prompt_fragments
+
+    monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
+    script = _shared_root_script(f"const a = '{_ROOT}/a';", f"const b = '{_ROOT}/b';")
+    assert ask_compose._share_repo_root(script, (_ROOT,)) == script

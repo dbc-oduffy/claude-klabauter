@@ -27,6 +27,14 @@ A curated file that is not a JSON object with a ``verdicts`` list raises ValueEr
         that ``distill_mechanical.py prepare`` wrote. Its object is inlined as ``args.prepared``, the input
         distill-harvest reads; a missing file or one that is not a JSON object raises ValueError naming it.
 
+Leg 2 (``leg: 2``, the resume after ``distill_mechanical.py finalize``): params ``run_id`` (REQUIRED),
+``repo_root``, ``promoted_path`` and ``splice_report_path`` (both REQUIRED, confined to ``state/scratch/``:
+finalize-report ``phases.promote.promoted``, a list, and ``phases["synth-splice"]``, an object). Leg 1's
+``launch-args.json`` in that run dir is reused verbatim, with ``promoted`` and ``spliceReport`` added,
+and written as ``launch-args-leg2.json``. Leg 1's file is never rewritten, because rebuilding it from
+params could drift from what leg 1 actually ran on. The reply shape is the same; the Workflow also needs
+``resumeFromRunId``.
+
 Negative-spec: one write (``launch-args.json`` in the run dir); no git, no subprocess, no LLM call.
 """
 
@@ -36,7 +44,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from coordinator_core.distill.launch_args import build
+from coordinator_core.distill.launch_args import ARGS_FILE_NAME, build, unchunk
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.distill_scope import RUN_DIR_REL
 from coordinator_core.ops.distill_workflow_input import _handler as _workflow_input
@@ -45,6 +53,7 @@ __all__ = ["CURATED_TAGS_KEY", "PREPARED_KEY", "curated_default_rel"]
 
 CURATED_TAGS_KEY = "curatedTags"
 PREPARED_KEY = "prepared"
+LEG2_FILE_NAME = "launch-args-leg2.json"
 _PASSTHROUGH_KEYS = (
     "threshold_applied",
     "threshold_auto",
@@ -87,6 +96,8 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
     if not root_param:
         raise ValueError("distill.launch_args requires a non-empty 'repo_root' param")
     root = Path(root_param)
+    if params.get("leg") is not None:
+        return _leg2(params, root)
     payload = _workflow_input(_with_scope_manifest(params, root), None)
 
     curated_rel = params.get("curated_file") or curated_default_rel(payload["runId"])
@@ -99,6 +110,37 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
     if prepared_rel is not None:
         payload = {**payload, PREPARED_KEY: _prepared(root, prepared_rel)}
     return build(payload)
+
+
+def _leg2(params: dict, root: Path) -> dict:
+    if params.get("leg") != 2:
+        raise ValueError("distill.launch_args: leg must be 2 (omit it for leg 1)")
+    run_id = params.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("distill.launch_args: leg 2 requires 'run_id'")
+    run_dir = _scratch_target(root, f"{RUN_DIR_REL}/{run_id}", "run_id")
+    leg1 = run_dir / ARGS_FILE_NAME
+    try:
+        args = json.loads(leg1.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"distill.launch_args: leg 2 needs leg 1's {RUN_DIR_REL}/{run_id}/{ARGS_FILE_NAME}: {exc}") from exc
+    promoted = _scratch_json(root, params.get("promoted_path"), "promoted_path")
+    splice = _scratch_json(root, params.get("splice_report_path"), "splice_report_path")
+    if not isinstance(promoted, list):
+        raise ValueError("distill.launch_args: promoted_path must hold a JSON list (finalize-report phases.promote.promoted)")
+    if not isinstance(splice, dict):
+        raise ValueError('distill.launch_args: splice_report_path must hold a JSON object (finalize-report phases["synth-splice"])')
+    payload = {k: v for k, v in unchunk(args).items() if k != "argsInlined"}
+    return build({**payload, "promoted": promoted, "spliceReport": splice}, run_dir=run_dir, file_name=LEG2_FILE_NAME)
+
+
+def _scratch_json(root: Path, rel: Any, label: str) -> Any:
+    if not isinstance(rel, str) or not rel:
+        raise ValueError(f"distill.launch_args: leg 2 requires '{label}'")
+    try:
+        return json.loads(_scratch_target(root, rel, label).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"distill.launch_args: {label} {rel} is unreadable or not JSON: {exc}") from exc
 
 
 def _prepared(root: Path, rel: Any) -> dict:

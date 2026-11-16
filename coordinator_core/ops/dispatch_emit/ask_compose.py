@@ -6012,6 +6012,7 @@ def compose_ask_script(
                 through_plan=True,
             ),
             chatty=bool((plan_blitz_args or {}).get("chatty")),
+            repo_roots=(repo_root_abs, repo_root),
         )
 
     if (xl_possible or roadmap_in_body) and (blitz_fn or launcher_child):
@@ -7028,6 +7029,7 @@ def compose_ask_script(
             ],
         ),
         chatty=bool((plan_blitz_args or {}).get("chatty")),
+        repo_roots=(repo_root_abs, repo_root),
     )
 
 
@@ -7717,8 +7719,62 @@ def _hoist_invoke(script: str) -> str:
     return body[:at] + f"const {_INVOKE_FN} = '{_INVOKE}';\n" + body[at:]
 
 
+_ROOT_FN = "_PF9002"
+_ROOT_MIN_USES = 4
+
+
+def _share_repo_root(script: str, roots: Sequence[str]) -> str:
+    """Cut each repo-root spelling in ``roots`` that ``_ROOT_MIN_USES`` or more quoted-literal occurrences embed to one const, declared ahead of the manifest marker line.
+
+    Trap: only quoted literals are rewritten; a template literal, a regex, or a literal carrying a `--write` template keeps its own copy so the scout's write path stays one readable string.
+    """
+    if not _prompt_fragments.HOIST_ENABLED:
+        return script
+    spellings = {_lit(r)[1:-1]: r for r in dict.fromkeys(roots) if r}
+    spans = [(s, e) for s, e in _prompt_fragments._scan_literals(script) if any(t in script[s:e] for t in spellings) and "--write" not in script[s:e]]
+    shared = {t: f"{_ROOT_FN}{k}" for k, t in enumerate(sorted(spellings, key=len, reverse=True))
+              if sum(script[s:e].count(t) for s, e in spans) >= _ROOT_MIN_USES}
+    if not shared:
+        return script
+    out: list[str] = []
+    last = 0
+    for s, e in spans:
+        q, text = script[s], script[s + 1 : e - 1]
+        pieces: list[str] = [text]
+        for t, name in shared.items():
+            nxt: list[str] = []
+            for piece in pieces:
+                if piece.startswith("\0"):
+                    nxt.append(piece)
+                    continue
+                for k, part in enumerate(piece.split(t)):
+                    if k:
+                        nxt.append("\0" + name)
+                    if part:
+                        nxt.append(part)
+            pieces = nxt
+        if not any(p.startswith("\0") for p in pieces):
+            continue
+        expr = " + ".join(p[1:] if p.startswith("\0") else q + p + q for p in pieces)
+        if script[e : e + 3].lstrip()[:1] in (".", "[", "(") or script[e : e + 3].lstrip()[:2] == "?.":
+            expr = "(" + expr + ")"
+        out.append(script[last:s])
+        out.append(expr)
+        last = e
+    out.append(script[last:])
+    body = "".join(out)
+    at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
+    decls = "".join(f"const {name} = '{t}';\n" for t, name in shared.items())
+    return body[:at] + decls + body[at:]
+
+
 def _finish_script(
-    b: list[str], manifest_rel: str, description: str, phase_titles: list[str], chatty: bool = False
+    b: list[str],
+    manifest_rel: str,
+    description: str,
+    phase_titles: list[str],
+    chatty: bool = False,
+    repo_roots: Sequence[str] = (),
 ) -> str:
     """The script text from its composed body lines, refused over the Workflow runner's byte cap."""
     meta = with_fanout(_emit._meta_block("warp-ask", description, phase_titles, chatty=chatty), composed_fanout(b))
@@ -7740,6 +7796,7 @@ def _finish_script(
     script = _share_sidecar_dir(script)
     script = _share_chain_params(script)
     script = _share_review_wave_list(script)
+    script = _share_repo_root(script, repo_roots)
     script = _hoist_invoke(script)
     script = _prompt_fragments.hoist_repeated_fragments(script, anchor=ASK_MANIFEST_MARKER)
     script = _agent_body_dedupe.dedupe_agent_payloads(script, anchor=ASK_MANIFEST_MARKER)
