@@ -152,9 +152,18 @@ def _js_runner(repo_root: Path) -> str:
 
 
 def head_for(repo_root: Path, files: Sequence[str]) -> tuple[str, list[str]] | None:
-    """(runner label, head argv) for one same-language file group, or None when no head is admitted."""
+    """(runner label, head argv) for one same-language file group, or None when no head is admitted.
+
+    A Python group runs under the repo's pinned interpreter (`interpreter_pin`), the engine interpreter
+    when none is pinned; a declared pin that does not resolve admits no head.
+    """
     if all(_is_py(f) for f in files):
-        return "pytest", [sys.executable, "-m", "pytest"]
+        from coordinator_core.ops.dispatch_emit.interpreter_pin import resolve_targeted_test_python
+
+        pin = resolve_targeted_test_python(repo_root)
+        if pin.defect:
+            return None
+        return "pytest", [pin.command or sys.executable, "-m", "pytest"]
     if any(_is_py(f) for f in files):
         return None
     runner = _js_runner(repo_root)

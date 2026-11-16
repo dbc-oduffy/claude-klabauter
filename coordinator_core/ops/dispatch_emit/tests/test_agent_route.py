@@ -513,7 +513,7 @@ def _run_only_table():
 
 def _code_row(**kw):
     return _row(
-        writes=("pkg/likeness/extract.py", "pkg/tests/test_extract.py"),
+        writes=("Content/likeness/extract.py", "Content/tests/test_extract.py"),
         body="Blueprint likeness refactor",
         change_kind="code-edit",
         **kw,
@@ -553,3 +553,68 @@ def test_unmarked_class_still_stamps_specialist_on_code_row(env):
     _write(env, _table())
     out, routes, _ = ar.route_rows([_code_row()], env)
     assert out[0].agent_type == UE and routes["C1"].work_class == "ue-editor"
+
+
+# --- routing follows the declared edit footprint -------------------------------------------------
+
+_C7_WRITES = ("docs/trail/a.trail.yaml", "tests/test_x.py")
+_UE_TEXT = dict(title="Blueprint likeness gate", body="Touches the Blueprint pipeline")
+
+
+def test_footprint_outside_class_paths_keeps_derived_row_on_executor(env):
+    _write(env, _table())
+    out, routes, notes = ar.route_rows([_row(writes=_C7_WRITES, **_UE_TEXT)], env)
+    assert out[0].agent_type is None and routes == {} and notes == []
+
+
+def test_footprint_outside_class_paths_redirects_explicit_class_agent_with_note(env):
+    _write(env, _table())
+    out, routes, notes = ar.route_rows([_row(writes=_C7_WRITES, agent_type=UE, agent_model="opus", **_UE_TEXT)], env)
+    assert out[0].agent_type == EXECUTOR and routes == {}
+    assert len(notes) == 1 and "C1" in notes[0] and "outside" in notes[0]
+
+
+def test_footprint_outside_leaves_other_explicit_type_alone(env):
+    _write(env, _table())
+    row = _row(writes=_C7_WRITES, agent_type="game-dev:other", **_UE_TEXT)
+    out, routes, notes = ar.route_rows([row], env)
+    assert out[0] is row and routes == {} and notes == []
+
+
+def test_footprint_inside_class_paths_still_routes_to_ue_agent(env):
+    _write(env, _table())
+    out, routes, _ = ar.route_rows([_row(writes=("Content/A.uasset", "tests/test_x.py"), **_UE_TEXT)], env)
+    assert out[0].agent_type == UE and routes["C1"].work_class == "ue-editor"
+
+
+def test_undeclared_writes_with_keyword_still_routes_to_ue_agent(env):
+    from coordinator_core.ops.dispatch_emit.wave_map import UNDECLARED
+
+    _write(env, _table())
+    for writes in ((), UNDECLARED):
+        row = WaveRow("C1", "t", "s", writes, [], [], body="Blueprint work")
+        out, routes, _ = ar.route_rows([row], env)
+        assert out[0].agent_type == UE and routes["C1"].work_class == "ue-editor"
+
+
+def test_class_without_path_globs_keeps_keyword_routing_for_any_writes(env):
+    cls = {**_table()["work_classes"][0], "match": {"keywords": ["Blueprint"]}}
+    _write(env, _table(work_classes=[cls]))
+    out, routes, _ = ar.route_rows([_row(writes=_C7_WRITES, **_UE_TEXT)], env)
+    assert out[0].agent_type == UE and routes["C1"].work_class == "ue-editor"
+
+
+def test_footprint_backslash_writes_classify_like_posix(env):
+    _write(env, _table())
+    inside = _row(writes=("Content\\A.uasset",), **_UE_TEXT)
+    outside = _row(writes=("docs\\trail\\a.trail.yaml", "tests\\test_x.py"), **_UE_TEXT)
+    assert ar.route_rows([inside], env)[0][0].agent_type == UE
+    assert ar.route_rows([outside], env)[0][0].agent_type is None
+
+
+def test_run_only_fence_follows_the_declared_footprint(env):
+    _write(env, _run_only_table())
+    inside = _code_row()
+    outside = _row(writes=_C7_WRITES, change_kind="code-edit", **_UE_TEXT)
+    assert ar.run_only_fence(inside, env) is not None
+    assert ar.run_only_fence(outside, env) is None

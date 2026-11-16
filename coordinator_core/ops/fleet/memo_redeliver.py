@@ -1,8 +1,8 @@
 """
 coordinator_core.ops.fleet.memo_redeliver -- memo.redeliver MUTATING op handler.
 
-Purpose: deliver an EXISTING memo file (for example one stranded in a non-owning
-clone) into its owner's `cross-repo/inbox/` with the file's bytes untouched --
+Purpose: deliver an EXISTING memo file (for example one stranded in a clone
+that is not the owner's) into its owner's `cross-repo/inbox/` with the file's bytes untouched --
 `from`, `sent_by`, `created` and the basename survive -- as one object-only
 delivery commit through `memo_send._deliver_upstream`, the primitive `memo.send`
 uses. The owner is the file's own `to:`, resolved by `memo_wire.resolve_receiver`

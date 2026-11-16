@@ -945,6 +945,27 @@ def _route_source(
     return "overlay" if (raw_by_id.get(row_id) or {}).get("agent_type") else "default"
 
 
+def _report_interpreter_pin_defect(root: Path, report: dict) -> None:
+    """Advisory: a declared `targeted_test_python` that does not resolve on this host is added to `report`
+    as `interpreter_pin_defect` (defect text plus remedy) and a `warnings` entry. The stage proceeds
+    (recoverable work is never denied); key resolution only, no process. Never raises."""
+    from coordinator_core.ops.dispatch_emit import interpreter_pin
+
+    try:
+        pin = interpreter_pin.resolve_targeted_test_python(root)
+    except Exception:  # noqa: BLE001 -- a preflight advisory must not fail the stage
+        return
+    if not pin.defect:
+        return
+    text = f"{pin.defect}; {interpreter_pin.REMEDY}"
+    report["interpreter_pin_defect"] = text
+    report["warnings"] = [
+        *report.get("warnings", ()),
+        f"{interpreter_pin.DEFECT_PREFIX} targeted_test_python `{pin.command}`: {text}; "
+        "clean-overlay verify cannot run under it",
+    ]
+
+
 def _family_routing_report(sizing_family: str, row_families: Mapping[str, str]) -> dict:
     """`family_routes` (row id -> non-claude family) and, when the sizing names a non-claude family
     that no row took, a `warnings` entry. Empty when nothing is routed and no family is named."""
@@ -1945,6 +1966,7 @@ def stage(
 
     if family_report is not None:
         family_report.update(_family_routing_report(sizing_family, row_families))
+        _report_interpreter_pin_defect(root, family_report)
     manifest_rows, row_groups = _group_rows(manifest_rows, brief_sizes, raw_by_id)
     owed, draft_rows = _memo_draft_steps(root, run_dir, owed, raw_by_id, intent, manifest_rows, classify_receiver)
     manifest_rows.extend(draft_rows)

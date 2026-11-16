@@ -590,13 +590,24 @@ def paths_outside_footprint(
     return [p for p in dict.fromkeys(declared) if p not in files and not any(p.startswith(d + "/") for d in dirs)]
 
 
+_WIDEN_TO = re.compile(r"\bwiden(?:s|ed|ing)?\s+(?:the\s+footprint\s+)?to\s+([^\n;]+)", re.IGNORECASE)
+_FORCE_LOADED_NAMES = frozenset({"claude.md", "agents.md"})
+
+
+def _is_force_loaded(path: str) -> bool:
+    """True for an instruction file the harness force-loads (CLAUDE.md-class, AGENTS.md)."""
+    from coordinator_core.claude_md_budget import is_claude_md_class
+
+    return path.rpartition("/")[2].lower() in _FORCE_LOADED_NAMES or is_claude_md_class(path)
+
+
 def _note_uncovered_paths(root: Path, dir_: Path, run: Mapping, note: str) -> list[str]:
     """Repo-relative paths a staged run's frozen footprint does not cover that `note` asks to change:
     existing repo files named in a clause an edit verb governs (`sizing_xs_mint._EDIT_VERB` over
-    `_CLAUSE_SPLIT`), plus, when the note has such a clause and the run is halted, the uncovered
-    `self_correction.needs_paths` of its halt. On a halted run every existing repo file the whole note
-    names counts, verb or not (a refire reads the note). A note on a live run with no edit-verb clause
-    (provenance, a tool to run, a re-ruling) is never checked. [] when the run has no manifest. Writes nothing."""
+    `_CLAUSE_SPLIT`), plus every path after an explicit "widen to" in the note, plus, when the note has
+    an edit clause and the run is halted, the uncovered `self_correction.needs_paths` of its halt.
+    A file named in passing (no edit verb, no "widen to") is never wanted, and a force-loaded
+    instruction file is wanted only through "widen to". [] when the run has no manifest. Writes nothing."""
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.sizing_xs_mint import _CLAUSE_SPLIT, _EDIT_VERB
 
@@ -606,7 +617,9 @@ def _note_uncovered_paths(root: Path, dir_: Path, run: Mapping, note: str) -> li
     except ValueError:
         marker = None
     is_halted = marker is not None and marker.get("status") == halted_run.STATUS_HALTED
-    wanted = _paths_named(root, [note] if is_halted else clauses)
+    explicit = _paths_named(root, [m.group(1) for m in _WIDEN_TO.finditer(note.replace("\\", "/"))])
+    cited = _paths_named(root, clauses)
+    wanted = list(dict.fromkeys([*[p for p in cited if not _is_force_loaded(p)], *explicit]))
     if is_halted and clauses:
         correction = marker.get("self_correction")
         needs = correction.get("needs_paths") if isinstance(correction, dict) else None

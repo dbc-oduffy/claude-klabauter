@@ -467,6 +467,14 @@ def _authors_code(row: Any) -> bool:
     return bool(_row_writes(row)) and not row.verification_runs
 
 
+def _outside_footprint(cls: WorkClass, writes: Sequence[str]) -> bool:
+    """True when `cls` declares path globs, `writes` is non-empty and none of them matches a glob."""
+    if not cls.paths or not writes:
+        return False
+    norm = [_posix(w) for w in writes]
+    return not any(fnmatch.fnmatchcase(w, pat) for pat in cls.paths for w in norm)
+
+
 def resolve_agent_type(
     row: Any, table: RouteTable, *, _defs: Optional[_Definitions] = None
 ) -> Optional[RouteDecision]:
@@ -482,6 +490,12 @@ def resolve_agent_type(
     work, not authoring: a code-authoring row (`_authors_code`) matching it stays on the executor,
     and an explicit type naming the class's agent (or its triage agent) is redirected to the
     executor with a note. The class still routes rows that do not author code.
+
+    A matched class that declares path globs does not claim a row whose declared writes all fall
+    outside them (`_outside_footprint`): a derived executor row stays on the executor, an explicit
+    row naming the class's agent (or its triage agent) is redirected to the executor with a note,
+    and any other explicit type is left alone. A class with no path globs, or a row with no
+    declared writes, keeps keyword/tool routing.
     """
     from coordinator_core.ops.dispatch_emit import emit
 
@@ -494,7 +508,15 @@ def resolve_agent_type(
         return None
 
     defs = _defs or _Definitions()
-    cls = match_work_class(table, writes=_row_writes(row), title=row.title or "", body=row.body or "")
+    writes = _row_writes(row)
+    cls = match_work_class(table, writes=writes, title=row.title or "", body=row.body or "")
+    if cls is not None and _outside_footprint(cls, writes):
+        executor = emit._EXECUTOR_AGENT_TYPE
+        if explicit and base in (cls.agent_type, cls.triage_agent_type):
+            return RouteDecision(
+                executor, None, None, f"{row.id} redirected to {executor}: writes fall outside class {cls.id} paths"
+            )
+        return None
     if cls is None:
         if explicit or table.default_agent_type == base:
             return None
@@ -542,8 +564,11 @@ def run_only_fence(row: Any, repo_root: "str | os.PathLike[str] | None") -> Opti
             table = _plugin_table(repo_root)[0]
         if table is None:
             return None
-        cls = match_work_class(table, writes=_row_writes(row), title=row.title or "", body=row.body or "")
-        return cls if cls is not None and cls.run_only and _authors_code(row) else None
+        writes = _row_writes(row)
+        cls = match_work_class(table, writes=writes, title=row.title or "", body=row.body or "")
+        if cls is None or _outside_footprint(cls, writes):
+            return None
+        return cls if cls.run_only and _authors_code(row) else None
     except Exception:
         return None
 

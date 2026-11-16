@@ -236,3 +236,158 @@ def test_clean_path_check_is_two_spawns(tmp_path, monkeypatch):
 
     assert apply_mod._refuse_unmerged_tips("feat", True, root) is None
     assert len(calls) == 2
+
+
+def _origin_with_branches(tmp_path: Path, names: list[str]) -> Path:
+    root = _origin_with_branch(tmp_path)
+    for n in names:
+        _git(root, "branch", n, "main")
+    _git(root, "push", "-q", "origin", *names)
+    return root
+
+
+def _run_batched(root: Path, names: list[str]) -> tuple[dict, list[list[str]]]:
+    calls: list[list[str]] = []
+    real = apply_mod._run_git
+    apply_mod._run_git = lambda a, c: (calls.append(a), real(a, c))[1]
+    batch: list = []
+    apply_mod._remote_batch = batch
+    results = {}
+    try:
+        for n in names:
+            try:
+                results[n] = apply_mod._dispatch_delete_only([n, "origin"], root)
+            except RuntimeError as exc:
+                results[n] = str(exc)
+    finally:
+        apply_mod._remote_batch = None
+        summary = apply_mod._flush_remote_batch(batch, root) if batch else None
+        apply_mod._run_git = real
+    return {"results": results, "summary": summary}, calls
+
+
+def test_remote_deletes_of_one_apply_leave_in_one_push(tmp_path, monkeypatch):
+    from coordinator_core.consolidate_assemble import live_holders as lh
+
+    monkeypatch.delenv("COORDINATOR_OVERRIDE_BRANCH", raising=False)
+    monkeypatch.setattr(lh, "_cross_box_holders", lambda run_git, root, branches: {b: [] for b in branches})
+    root = _origin_with_branches(tmp_path, ["b1", "b2", "b3"])
+
+    out, calls = _run_batched(root, ["b1", "b2", "b3"])
+
+    pushes = [c for c in calls if c[:1] == ["push"]]
+    assert len(pushes) == 1
+    assert pushes[0] == ["push", "origin", "--delete", "b1", "b2", "b3"]
+    assert out["summary"]["deleted"] == ["b1", "b2", "b3"]
+    for n in ("b1", "b2", "b3"):
+        assert out["results"][n]["remote_deleted"] == n
+        assert "remote_pending" not in out["results"][n]
+        assert not _git(root, "ls-remote", "origin", n).stdout.strip()
+
+
+def test_a_refused_branch_is_not_in_the_batch_and_stays(tmp_path, monkeypatch):
+    from coordinator_core.consolidate_assemble import live_holders as lh
+
+    monkeypatch.delenv("COORDINATOR_OVERRIDE_BRANCH", raising=False)
+    monkeypatch.setattr(lh, "_cross_box_holders", lambda run_git, root, branches: {b: [] for b in branches})
+    root = _origin_with_branches(tmp_path, ["b1", "b2"])
+    _git(root, "checkout", "-q", "b2")
+    (root / "x.txt").write_text("x", encoding="utf-8", newline="\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "x")
+    _git(root, "push", "-q", "origin", "b2")
+    _git(root, "checkout", "-q", "main")
+
+    out, calls = _run_batched(root, ["b1", "b2"])
+
+    pushes = [c for c in calls if c[:1] == ["push"]]
+    assert pushes == [["push", "origin", "--delete", "b1"]]
+    assert "is not an ancestor of HEAD" in out["results"]["b2"]
+    assert _git(root, "ls-remote", "origin", "b2").stdout.strip()
+    assert not _git(root, "ls-remote", "origin", "b1").stdout.strip()
+
+
+def test_failed_batch_push_reports_which_names_survive(tmp_path, monkeypatch):
+    from coordinator_core.consolidate_assemble import live_holders as lh
+
+    monkeypatch.delenv("COORDINATOR_OVERRIDE_BRANCH", raising=False)
+    monkeypatch.setattr(lh, "_cross_box_holders", lambda run_git, root, branches: {b: [] for b in branches})
+    root = _origin_with_branches(tmp_path, ["b1", "b2"])
+    hooks = tmp_path / "origin.git" / "hooks"
+    (hooks / "pre-receive").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8", newline="\n")
+    (hooks / "pre-receive").chmod(0o755)
+
+    out, _ = _run_batched(root, ["b1", "b2"])
+
+    assert out["summary"]["error"]
+    assert out["summary"]["deleted"] == []
+    assert "remote_deleted" not in out["results"]["b1"]
+    assert _git(root, "ls-remote", "origin", "b1").stdout.strip()
+
+
+def _apply_with_delete_directives(root: Path, names: list[str], monkeypatch) -> tuple[int, dict, list[list[str]]]:
+    from coordinator_core.consolidate_assemble import live_holders as lh
+
+    monkeypatch.delenv("COORDINATOR_OVERRIDE_BRANCH", raising=False)
+    monkeypatch.setattr(lh, "_cross_box_holders", lambda run_git, root, branches: {b: [] for b in branches})
+    directives = [
+        {"id": f"d-delete-{n}", "cli": "delete-only", "args": [n, "origin"],
+         "depends_on": None, "already_satisfied": False}
+        for n in names
+    ]
+    monkeypatch.setattr(
+        apply_mod, "brief", lambda **_kw: {"directives": directives, "judgment_points": []}
+    )
+    monkeypatch.setattr(apply_mod, "flush_composition_record", lambda *a, **k: None)
+    calls: list[list[str]] = []
+    real = apply_mod._run_git
+    monkeypatch.setattr(apply_mod, "_run_git", lambda a, c: (calls.append(a), real(a, c))[1])
+    code, report = apply_mod.apply(session_id="sid-test", repo_root=root)
+    return code, report, calls
+
+
+def test_apply_batches_remote_deletes_into_one_push(tmp_path, monkeypatch):
+    root = _origin_with_branches(tmp_path, ["b1", "b2"])
+
+    code, report, calls = _apply_with_delete_directives(root, ["b1", "b2"], monkeypatch)
+
+    assert code == apply_mod.APPLY_EXIT_OK
+    assert [c for c in calls if c[:1] == ["push"]] == [["push", "origin", "--delete", "b1", "b2"]]
+    assert report["remote_delete"]["deleted"] == ["b1", "b2"]
+    assert apply_mod._remote_batch is None
+    for n in ("b1", "b2"):
+        assert not _git(root, "ls-remote", "origin", n).stdout.strip()
+
+
+def test_apply_failed_batch_push_exits_partial_mutation(tmp_path, monkeypatch):
+    root = _origin_with_branches(tmp_path, ["b1", "b2"])
+    hook = tmp_path / "origin.git" / "hooks" / "pre-receive"
+    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8", newline="\n")
+    hook.chmod(0o755)
+
+    code, report, _ = _apply_with_delete_directives(root, ["b1", "b2"], monkeypatch)
+
+    assert code == apply_mod.APPLY_EXIT_PARTIAL_MUTATION
+    assert report["remote_delete"]["error"]
+    assert report["error"] == report["remote_delete"]["error"]
+    assert apply_mod._remote_batch is None
+    assert _git(root, "ls-remote", "origin", "b1").stdout.strip()
+
+
+def test_judged_recent_waives_only_the_recent_push_hold(tmp_path, monkeypatch):
+    from coordinator_core.consolidate_assemble import live_holders as lh
+
+    monkeypatch.delenv("COORDINATOR_OVERRIDE_BRANCH", raising=False)
+    monkeypatch.setattr(
+        lh, "_cross_box_holders", lambda run_git, root, branches: {b: [f"recent push to origin/{b}"] for b in branches}
+    )
+    root = _origin_with_branches(tmp_path, ["r1", "r2"])
+    with pytest.raises(RuntimeError, match="held by recent push"):
+        apply_mod._dispatch_delete_only(["r1", "origin"], root)
+    detail = apply_mod._dispatch_delete_only(["r2", "origin", "judged-recent"], root)
+    assert detail["remote_deleted"] == "r2"
+    monkeypatch.setattr(
+        lh, "_cross_box_holders", lambda run_git, root, branches: {b: [f"worktree /elsewhere/{b}"] for b in branches}
+    )
+    with pytest.raises(RuntimeError, match="held by worktree"):
+        apply_mod._dispatch_delete_only(["r1", "origin", "judged-recent"], root)

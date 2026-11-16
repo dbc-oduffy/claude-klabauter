@@ -167,6 +167,28 @@ class TestMismatch:
         assert candidate["resolved"] is True
         assert candidate["self_repo"] == str(self_repo)
         assert candidate["to_repo"] == str(other_repo)
+        assert "not self" in candidate["note"]
+
+    def test_absent_dry_run_defaults_to_read_only_verdict(self, tmp_path, monkeypatch):
+        self_repo = tmp_path / "claude-klabauter"
+        other_repo = tmp_path / "project-rag"
+        self_repo.mkdir()
+        other_repo.mkdir()
+        claude_home = _make_claude_home(
+            tmp_path,
+            {"claude_klabauter": str(self_repo), "project_rag": str(other_repo)},
+        )
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        result = _run(
+            _memo_check_addressee(
+                {"to": "example-retrieval-repo-em"}, repo_root=_git_common_dir(self_repo)
+            )
+        )
+
+        assert result["exit_code"] == 0
+        assert result["dry_run"] is True
+        assert result["candidates"][0]["verdict"] == "MISMATCH"
 
 
 # ===========================================================================

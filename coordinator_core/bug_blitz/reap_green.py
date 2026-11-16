@@ -16,6 +16,7 @@ import re
 import shutil
 import sys
 import time
+from collections import Counter
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -91,7 +92,7 @@ def _run_chunk(
         timeout = min(timeout, left)
     head = targeted_run.head_for(repo_root, files)
     if head is None:
-        reason = "no pytest head admitted"
+        reason = _no_head_reason(repo_root, files)
     else:
         argv = [*head[1], *_PYTEST_FLAGS, *files]
         reason = targeted_run._pytest_spawn_refusal(argv, repo_root)
@@ -113,6 +114,25 @@ def _run_chunk(
     verdicts[files[0]] = {"unrun": reason}
 
 
+def _no_head_reason(repo_root: Path, files: list[str]) -> str:
+    """Why no pytest head was admitted: the unresolved pin's defect when the repo declares one."""
+    from coordinator_core.ops.dispatch_emit.interpreter_pin import resolve_targeted_test_python
+
+    defect = resolve_targeted_test_python(repo_root).defect if all(targeted_run._is_py(f) for f in files) else None
+    return f"pinned interpreter unresolved: {defect}" if defect else "no pytest head admitted"
+
+
+_ERROR_LINE_RE = re.compile(r"^(?:ERROR\b|E\s+\S|\S*(?:Error|Exception)\b|.*No module named)")
+_ERROR_LINE_MAX = 200
+
+
+def _error_line(text: str) -> str:
+    """One bounded line of pytest's own error output: the first error-shaped line, else the last non-empty one."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    line = next((ln for ln in lines if _ERROR_LINE_RE.match(ln)), lines[-1] if lines else "")
+    return line[:_ERROR_LINE_MAX]
+
+
 def _record_run(files: list[str], rc: int, out: str, verdicts: dict[str, dict]) -> None:
     text = strip_ansi(out)
     failed = [i.replace("\\", "/") for i in targeted_run._failing_ids(text)]
@@ -127,7 +147,8 @@ def _record_run(files: list[str], rc: int, out: str, verdicts: dict[str, dict]) 
     elif rc == 1 and (ids or collection_errors):
         reason = None
     else:
-        reason = f"pytest exit {rc} with no parsed failure"
+        line = _error_line(text)
+        reason = f"pytest exit {rc}: {line}" if line else f"pytest exit {rc} with no parsed failure"
     for file in files:
         if reason is not None:
             verdicts[file] = {"unrun": reason}
@@ -299,7 +320,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--budget", type=float, default=DEFAULT_BUDGET_S)
     ns = parser.parse_args(sys.argv[1:] if argv is None else argv)
     record = reap(Path(ns.repo) if ns.repo else Path.cwd(), budget=ns.budget)
-    print(f"closed {len(record.green)}, red {len(record.red)}, unrun {len(record.unrun or {})}, {reap_record_rel()}")
+    unrun = record.unrun or {}
+    print(f"closed {len(record.green)}, red {len(record.red)}, unrun {len(unrun)}, {reap_record_rel()}")
+    if unrun and not record.green and not record.red:
+        reason, count = Counter(unrun.values()).most_common(1)[0]
+        print(f"nothing ran: all {len(unrun)} rows unrun; dominant reason ({count} rows): {reason}")
     return 0
 
 

@@ -10,8 +10,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
-from coordinator_core.ops.fleet import _memo_owning_box as mob
-from coordinator_core.ops.fleet import _memo_push_pending, memo_wire
+from coordinator_core.ops.fleet import _memo_push_pending
 from coordinator_core.ops.fleet._memo_anchor import anchor_names
 from coordinator_core.ops.fleet.memo_redeliver import _MODE, _memo_redeliver
 from coordinator_core.ops.fleet.tests.test_memo_send import (
@@ -101,6 +100,27 @@ class TestPreservedDelivery:
         assert len(_memo_push_pending.list_pending(sender)) == 1
         assert len(anchor_names(resolve_git_common_dir(receiver))) == 1
 
+    def test_owner_live_on_another_box_still_gets_the_local_delivery(self, tmp_path, monkeypatch, world):
+        sender, receiver = world
+        home = tmp_path / "fake-home"
+        sessions = home / ".claude" / "sessions"
+        sessions.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        entry = {
+            "sessionId": "rag-em-far", "name": "rag-em-far", "pid": os.getpid(), "cwd": str(receiver),
+            "unimatrixBox": "otherbox", "unimatrixRemote": "otherbox",
+            "unimatrixFarSeen": int(time.time() * 1000),
+        }
+        (sessions / "rag-em-far.json").write_text(json.dumps(entry), encoding="utf-8")
+        source = _write_stranded(tmp_path)
+
+        result = _memo_redeliver({"dry_run": False, "path": str(source)}, repo_root=sender)
+
+        assert result["exit_code"] == 0, result
+        assert _delivered_text(receiver) == source.read_text(encoding="utf-8")
+        assert len(_memo_push_pending.list_pending(sender)) == 1
+
     def test_dry_run_previews_and_writes_nothing(self, tmp_path, world):
         sender, receiver = world
         source = _write_stranded(tmp_path)
@@ -128,29 +148,6 @@ class TestRefusals:
         assert result.get("acted", []) == []
         assert _repo_state(receiver) == before
         assert _memo_push_pending.list_pending(sender) == []
-
-    def test_owner_live_on_another_box_is_refused_by_class(self, tmp_path, monkeypatch, world):
-        sender, receiver = world
-        sessions = tmp_path / "sessions"
-        sessions.mkdir()
-        entry = {
-            "sessionId": "rag-em-far", "name": "rag-em-far", "pid": os.getpid(), "cwd": str(receiver),
-            "unimatrixBox": "otherbox", "unimatrixRemote": "otherbox",
-            "unimatrixFarSeen": int(time.time() * 1000),
-        }
-        (sessions / "rag-em-far.json").write_text(json.dumps(entry), encoding="utf-8")
-        monkeypatch.setattr(mob._contract(), "local_box", lambda: "thisbox")
-        real = mob.resolve_owning_box
-        monkeypatch.setattr(memo_wire, "resolve_owning_box", lambda repo: real(repo, sessions_dir=str(sessions)))
-        source = _write_stranded(tmp_path)
-        before = _repo_state(receiver)
-
-        result = _memo_redeliver({"dry_run": False, "path": str(source)}, repo_root=sender)
-
-        assert result["exit_code"] == 1, result
-        assert result["rejection_class"] == "owner_unreachable"
-        assert "NOT THE OWNING BOX" in result["reason"]
-        assert _repo_state(receiver) == before
 
     def test_memo_without_a_sender_is_invalid(self, tmp_path, world):
         sender, receiver = world

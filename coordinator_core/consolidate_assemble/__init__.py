@@ -657,8 +657,10 @@ def brief(
                 {
                     "id": delete_directive_id,
                     "cli": "delete-only",
-                    "args": [name] + (["origin"] if entry["is_remote"] else []),
-                    "depends_on": delete_jp_id if is_cloud else None,
+                    "args": [name]
+                    + (["origin"] if entry["is_remote"] else [])
+                    + (["judged-recent"] if recent and entry["is_remote"] else []),
+                    "depends_on": delete_jp_id if needs_judgment else None,
                     "already_satisfied": False,
                 }
             )

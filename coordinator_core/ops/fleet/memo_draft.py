@@ -2,7 +2,7 @@
 coordinator_core.ops.fleet.memo_draft — memo.draft native UDS op handler.
 
 Purpose: Stage a NEW schema-valid outbox draft memo (status: draft) into the
-CALLING repo's own state/memo-outbox/ tree — a local, non-cross-tree write.
+CALLING repo's own .coordinator-local/memo-outbox/ tree — a local, non-cross-tree write.
 Ported from the DoE cross-repo-memo CLI's `draft` verb per the 2026-07-17
 DR-210 Option-A boundary move (claude-klabauter owns receiver-resolution + compose/
 draft/list, not just send). UDS-only (no HTTP surface). Registered as
@@ -20,7 +20,7 @@ Spec backlink:
 Negative-spec:
   - Does NOT write into a receiver's cross-repo/inbox/ tree — memo.send
     (mutating, cross-tree) owns that surface exclusively. memo.draft writes
-    ONLY the CALLING repo's own state/memo-outbox/ (a local-tree write, not
+    ONLY the CALLING repo's own .coordinator-local/memo-outbox/ (a local-tree write, not
     a cross-tree one — see C7's COMPUTE_ONLY classification rationale).
   - Does NOT grow a fleet-wide memo index — one file per draft topic, no
     aggregate manifest (DR-210 Open-Q §2 store-less-ness; mirrors AC8/
@@ -674,7 +674,7 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'memo.draft' UDS op handler.
 
     Stage a NEW schema-valid draft memo into the CALLING repo's own
-    state/memo-outbox/<topic>.md. Local-tree write (not cross-tree) — the
+    .coordinator-local/memo-outbox/<topic>.md. Local-tree write (not cross-tree) — the
     calling repo is both the writer and the target, unlike memo.send.
 
     repo_root arg: git common dir from _OP_KEY_SCOPE = "common_dir" (wired

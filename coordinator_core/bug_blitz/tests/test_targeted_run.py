@@ -350,3 +350,18 @@ def test_committed_head_never_falls_back_to_live_tree(git_repo, monkeypatch):
     monkeypatch.setattr(targeted_run, "head_tree", boom)
     rec = targeted_run.run(git_repo, _ext_row(git_repo), ["pkg/dep.py"], committed_head=True)
     assert rec.outcome == "no-runner"
+
+
+def test_head_for_uses_the_repo_pin_admitted_by_the_classifier_and_refuses_an_unresolved_pin(repo, tmp_path):
+    assert targeted_run.head_for(repo, ["tests/test_good.py"]) == ("pytest", [sys.executable, "-m", "pytest"])
+    pin = tmp_path / "bin" / "python3.13"
+    pin.parent.mkdir(exist_ok=True)
+    pin.write_text("")
+    pin.chmod(0o755)
+    local = repo / "coordinator.local.md"
+    local.write_text(f'---\ntargeted_test_python: "{pin}"\n---\n', encoding="utf-8")
+    _, head = targeted_run.head_for(repo, ["tests/test_good.py"])
+    assert head == [str(pin), "-m", "pytest"]
+    assert targeted_run.admit([*head, "tests/test_good.py"], repo)
+    local.write_text('---\ntargeted_test_python: "/no/such/python-xyz"\n---\n', encoding="utf-8")
+    assert targeted_run.head_for(repo, ["tests/test_good.py"]) is None

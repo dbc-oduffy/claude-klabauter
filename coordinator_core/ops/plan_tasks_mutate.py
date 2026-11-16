@@ -236,11 +236,12 @@ Verb contracts:
     (9-value project-tier subset -> coordinator-queue-append
     --schema improvement-queue; {doctrine-edit, snippet-sync-update} ->
     coordinator-lesson-promote) and its `(plan_id, row id)` idempotency key
-    verbatim. The `disposition_ref` param supplied by the caller is IGNORED
-    for `backlogged` — it is fully computed from the harvest dispatch's own
-    result (the located queue/lesson entry's path) so the two writes (spine
-    row + harvest entry) can never disagree about which file the row
-    resolved to. One `resolve --backlogged` call is one operation from the
+    verbatim, pinned to the plan's own worktree (never the process cwd). A
+    single repo-relative `disposition_ref` supplied by the caller is kept
+    verbatim for `backlogged` when it names an existing file in the plan's
+    repo; otherwise (absent, absolute, or no such file) it is computed
+    from the harvest dispatch's own result (the located queue/lesson entry's
+    path). One `resolve --backlogged` call is one operation from the
     caller's point of view: the disposition write and the queue/lesson
     write both land, or neither does (MutateAbort on any harvest-dispatch
     failure aborts before the disposition write). See `_dispatch_backlogged`.
@@ -324,6 +325,7 @@ Negative-spec:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import fnmatch
 import glob
@@ -354,6 +356,7 @@ from coordinator_core.frontmatter.schema_validate import (
     _PLAN_TASKS_GROUPING_ORDER,
     _PLAN_TASKS_SCHEMA_DICT,
     _PLAN_TASKS_SCHEMA_GOVERNED_DICT,
+    _is_single_repo_relative_path,
     _plan_tasks_row_disposition,
     check_plan_tasks_ordering,
     compute_grouping_digest,
@@ -2002,9 +2005,34 @@ def _dispatch_spun_off(task_id: str, disposition_ref: Optional[str], worktree: P
     return _to_repo_relative(str(resolved), worktree)
 
 
-def _dispatch_backlogged(row: dict, task_id: str, plan_text: str, worktree: Path) -> str:
-    harvest = _load_harvest_module()
+def _dispatch_backlogged(
+    row: dict,
+    task_id: str,
+    plan_text: str,
+    worktree: Path,
+    caller_ref: Optional[str] = None,
+) -> str:
+    """Route a backlogged row under `worktree`'s repo and return its ref.
 
+    The harvest module is pinned to `worktree` for the call (a warm engine's
+    cwd is the daemon's, not the plan's). A caller-supplied single
+    repo-relative `caller_ref` naming an existing file under `worktree` is
+    returned verbatim; anything else is replaced by the located entry's
+    repo-relative path.
+    """
+    harvest = _load_harvest_module()
+    scope = getattr(harvest, "scoped_repo_root", None)
+    with scope(worktree) if scope else contextlib.nullcontext():
+        found_ref = _dispatch_backlogged_in_scope(harvest, row, task_id, plan_text, worktree)
+    kept = caller_ref.strip() if isinstance(caller_ref, str) else ""
+    if kept and _is_single_repo_relative_path(kept) and (worktree / kept).is_file():
+        return kept
+    return found_ref
+
+
+def _dispatch_backlogged_in_scope(
+    harvest: ModuleType, row: dict, task_id: str, plan_text: str, worktree: Path
+) -> str:
     plan_id = harvest._parse_plan_id(plan_text)
     if not plan_id:
         raise MutateAbort(
@@ -2769,7 +2797,9 @@ def _resolve(
             # `_dispatch_spun_off` VERIFIES the caller-supplied
             effective_ref = disposition_ref
             if disposition == "backlogged":
-                effective_ref = _dispatch_backlogged(row, task_id, old_text, worktree)
+                effective_ref = _dispatch_backlogged(
+                    row, task_id, old_text, worktree, disposition_ref
+                )
             elif disposition == "spun_off":
                 effective_ref = _dispatch_spun_off(task_id, disposition_ref, worktree)
 

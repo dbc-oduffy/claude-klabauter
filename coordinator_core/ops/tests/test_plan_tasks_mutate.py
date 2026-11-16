@@ -1929,8 +1929,9 @@ def test_resolve_backlogged_delegates_to_harvest_row_routing(tmp_path, monkeypat
 
 
 def test_resolve_backlogged_ignores_caller_supplied_disposition_ref(tmp_path, monkeypatch):
-    """A caller-supplied `disposition_ref` for a `backlogged` disposition is
-    NOT a pass-through — it is silently overridden by the path
+    """A caller-supplied NON-repo-relative (absolute) `disposition_ref` for a
+    `backlogged` disposition is NOT a pass-through (a repo-relative one is kept;
+    see test_plan_tasks_mutate_backlogged_repo) — it is silently overridden by the path
     `_dispatch_backlogged` derives from the harvest CLI's own row-routing
     (see `_dispatch_backlogged` docstring and the `effective_ref` comment
     directly above the write in `_resolve`). This test exists because that
@@ -1957,7 +1958,7 @@ def test_resolve_backlogged_ignores_caller_supplied_disposition_ref(tmp_path, mo
             "id": "C1",
             "disposition": "backlogged",
             "disposition_detail": "deferred to backlog",
-            "disposition_ref": "state/some-other-queue/BOGUS-CALLER-SUPPLIED-REF.yaml",
+            "disposition_ref": "/elsewhere/BOGUS-CALLER-SUPPLIED-REF.yaml",
             "case_against": "waiting costs little; nothing depends on this landing now",
         },
         repo_root=repo / ".git",

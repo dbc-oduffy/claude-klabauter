@@ -74,6 +74,21 @@ def test_recent_zero_commit_branch_gets_no_delete() -> None:
     assert "delete-only" not in _clis(obj)
     stale = next(b for b in obj["gates"]["branches"] if b["name"] == "work/stale")
     assert stale["recent"] is True
+    directive = next(d for d in obj["directives"] if d["id"] == "d-delete-work/stale")
+    assert directive["cli"] == "delete-only"
+    assert directive["depends_on"] == "j-delete-work/stale"
+    assert "judged-recent" not in directive["args"]  # local-only branch: no remote hold to waive
+    jp = next(j for j in obj["judgment_points"] if j["id"] == "j-delete-work/stale")
+    by_value = {d["value"]: d["resolves"] for d in jp["dispositions"]}
+    assert by_value == {"delete": ["d-delete-work/stale"], "keep": []}
+
+
+def test_old_zero_commit_branch_delete_needs_no_judgment() -> None:
+    obj = _brief(OLD, "")
+    directive = next(d for d in obj["directives"] if d["id"] == "d-delete-work/stale")
+    assert directive["depends_on"] is None
+    assert "judged-recent" not in directive["args"]
+    assert not [j for j in obj["judgment_points"] if j["id"] == "j-delete-work/stale"]
 
 
 def test_recent_branch_with_commits_absorbs_without_deleting() -> None:

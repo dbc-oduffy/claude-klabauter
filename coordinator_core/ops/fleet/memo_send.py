@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.fleet.memo_send — memo.send MUTATING op handler.
 
-Purpose: deliver an already-staged `state/memo-outbox/<topic>.md` draft
+Purpose: deliver an already-staged `.coordinator-local/memo-outbox/<topic>.md` draft
 (`memo.draft` / `memo.compose`) into a registry-enumerated receiver's
 `cross-repo/inbox/` tree, then land the sender-side receipt — the rebuild
 following the 2026-08-23 kill (kill-ledger K-050, 30,015.7ms max / 7,133.5ms
@@ -20,7 +20,7 @@ three-write requirement:
      HEAD, branch refs, index and worktree are never written. The warm
      engine's push-pending sweep pushes the commit (never inline) and retries
      a failed push from the record.
-  2. Sender: move `state/memo-outbox/<topic>.md` -> `sent/`, deriving the
+  2. Sender: move `.coordinator-local/memo-outbox/<topic>.md` -> `sent/`, deriving the
      sent-copy's `status: sent` / `sent_at:` / `delivered_to:` stamp from
      the draft's OWN frontmatter (never re-authored).
   3. Sender commit: one `git.commit.commit_paths` call over the three
@@ -48,7 +48,7 @@ Spec backlink:
 Negative-spec:
   - Does NOT accept `title`/`body`/`kind`/`summary` as wire params — every
     field comes from the CALLER's own already-staged
-    `state/memo-outbox/<topic>.md` draft (`memo.draft`/`memo.compose`).
+    `.coordinator-local/memo-outbox/<topic>.md` draft (`memo.draft`/`memo.compose`).
     Params are `dry_run` + `topic` only; nothing else is declared or read.
   - Does NOT fan out to multiple receivers, generate a `campaign_id`, write
     a self-receipt, or accept any transport-gating param — all retired with
@@ -349,7 +349,7 @@ def _validate_send_params(params: dict):
 
     Only `dry_run` (bool, required) and `topic` (slug, required) are
     declared — every other field this send needs comes off the caller's own
-    already-staged `state/memo-outbox/<topic>.md` draft, never off the wire.
+    already-staged `.coordinator-local/memo-outbox/<topic>.md` draft, never off the wire.
     """
     dry_run = params.get("dry_run", False)
     if not isinstance(dry_run, bool):
@@ -1861,15 +1861,29 @@ def _discharge_prompt(plan_name: str, row_id: str, in_reply_to: str) -> str:
 def _memo_send(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'memo.send' MUTATING op handler.
 
-    Delivers the caller's already-staged `state/memo-outbox/<topic>.md`
-    draft into a registry-enumerated receiver's `cross-repo/inbox/`, then
-    lands the sender-side receipt. See module docstring for the three-write
-    shape and its ordering guarantee.
+    Delivers the caller's already-staged
+    `.coordinator-local/memo-outbox/<topic>.md` draft (legacy
+    `state/memo-outbox/` read as a fallback) into a registry-enumerated
+    receiver's `cross-repo/inbox/`, then lands the sender-side receipt. See
+    module docstring for the three-write shape and its ordering guarantee.
 
     Params:
         dry_run (bool, required): preview (true) vs. act (false).
         topic   (str, required):  the staged draft's topic slug — identifies
-                                   `state/memo-outbox/<topic>.md`.
+                                   `.coordinator-local/memo-outbox/<topic>.md`.
+
+    Refusals (each returns the exit_code:1 envelope with the cause in
+    `reason`; nothing is written): the `cross_repo_memos` feature is off;
+    no repo_root; draft missing, unreadable or lacking `to`; invalid `cc:` or
+    an unresolvable `cc:` name; a body that opens a second frontmatter block;
+    a body `discharges:` line with no `discharges` block; a body
+    byte-identical to another staged draft for the same receiver; a composed
+    memo failing validation; an unreadable registry, an ambiguous central
+    receiver, an UNKNOWN RECEIVER, a publish-mirror receiver or an
+    undeliverable checkout for `to:`; a `from:` that cannot name the file; a
+    warn-once gate not yet acknowledged (resend to send); a filename already
+    in the receiver's inbox or archive (no clobber); a failed delivery commit
+    or write.
 
     repo_root: git common dir (`_OP_KEY_SCOPE = "common_dir"`) — the SENDER's
     own worktree is derived via `main_worktree_root(repo_root)`. The

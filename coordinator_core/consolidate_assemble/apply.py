@@ -108,9 +108,13 @@ def _refuse_unmerged_tips(name: str, remote: bool, repo_root: Path) -> Optional[
     return f"{name}: refusing delete: " + "; ".join(parts) if parts else None
 
 
-def _refuse_held_or_protected(name: str, repo_root: Path, force: bool = False) -> Optional[str]:
+def _refuse_held_or_protected(
+    name: str, repo_root: Path, force: bool = False, judged_recent: bool = False
+) -> Optional[str]:
     """A refusal when `name` is under refs/preserve/ or a live session may hold
-    it (a holder, or None = unknown; `force` waives only unknown); else None."""
+    it (a holder, or None = unknown; `force` waives only unknown); else None.
+    `judged_recent` waives only the recent-tip signal, for a zero-commit branch
+    whose delete was answered at its judgment point; worktree holders still refuse."""
     if name.removeprefix("refs/").startswith("preserve/"):
         return f"{name}: refusing delete: refs/preserve/* is never touched"
     from coordinator_core.consolidate_assemble.live_holders import live_holders
@@ -120,39 +124,83 @@ def _refuse_held_or_protected(name: str, repo_root: Path, force: bool = False) -
         if force:
             return None
         return f"{name}: refusing delete: refused-unknown, no live-holder answer for this branch"
+    if judged_recent:
+        holders = [h for h in holders if not h.startswith("recent push to ")]
     if holders:
         return f"{name}: refusing delete: held by {'; '.join(holders)}"
     return None
 
 
-def _delete_branch(name: str, remote: bool, repo_root: Path) -> dict[str, Any]:
+def _delete_branch(
+    name: str, remote: bool, repo_root: Path, cli: Optional[str] = None, judged_recent: bool = False
+) -> dict[str, Any]:
     import os
 
     force = os.environ.get("COORDINATOR_OVERRIDE_BRANCH", "") == name
-    refusal = _refuse_held_or_protected(name, repo_root, force)
+    refusal = _refuse_held_or_protected(name, repo_root, force, judged_recent)
     if refusal is None and not force:
         refusal = _refuse_unmerged_tips(name, remote, repo_root)
     if refusal is not None:
         raise RuntimeError(refusal)
     # `-D`: `-d` tests ancestry against the branch's upstream, not HEAD.
     flag = "-D"
-    detail: dict[str, Any] = {"local_deleted": None, "forced": force}
+    detail: dict[str, Any] = {"cli": cli} if cli else {}
+    detail.update({"local_deleted": None, "forced": force})
     if _branch_exists_locally(name, repo_root):
         local_proc = _run_git(["branch", flag, name], repo_root)
         _fail("branch-delete", local_proc)
         detail["local_deleted"] = name
     if remote:
-        remote_proc = _run_git(["push", "origin", "--delete", name], repo_root)
-        _fail("push-delete", remote_proc)
-        detail["remote_deleted"] = name
+        if _remote_batch is not None:
+            _remote_batch.append((name, detail))
+            detail["remote_pending"] = name
+        else:
+            remote_proc = _run_git(["push", "origin", "--delete", name], repo_root)
+            _fail("push-delete", remote_proc)
+            detail["remote_deleted"] = name
     return detail
+
+
+#: Inside `apply()`, remote deletes that passed their per-branch gates queue
+#: here as (name, directive detail) and leave in one push; None = push at once.
+_remote_batch: Optional[list[tuple[str, dict[str, Any]]]] = None
+
+
+def _flush_remote_batch(
+    batch: list[tuple[str, dict[str, Any]]], repo_root: Path
+) -> dict[str, Any]:
+    """One `git push origin --delete <names...>` for every queued name; stamps
+    each directive detail `remote_deleted`. On failure one `ls-remote` says which
+    names survive, so the outcome is knowable."""
+    names = [n for n, _ in batch]
+    summary: dict[str, Any] = {"names": names, "deleted": [], "error": None, "unknown": False}
+    proc = _run_git(["push", "origin", "--delete", *names], repo_root)
+    if proc.returncode == 0:
+        gone = set(names)
+    else:
+        summary["error"] = (
+            f"push-delete: exited {proc.returncode}: "
+            f"{proc.stderr.strip() or proc.stdout.strip() or '<no output>'}"
+        )
+        probe = _run_git(["ls-remote", "--heads", "origin", *[f"refs/heads/{n}" for n in names]], repo_root)
+        if probe.returncode != 0:
+            summary["unknown"] = True
+            gone = set()
+        else:
+            alive = {line.split("\t", 1)[1].removeprefix("refs/heads/") for line in probe.stdout.splitlines() if "\t" in line}
+            gone = set(names) - alive
+    for name, detail in batch:
+        detail.pop("remote_pending", None)
+        if name in gone:
+            detail["remote_deleted"] = name
+    summary["deleted"] = [n for n in names if n in gone]
+    return summary
 
 
 def _dispatch_delete_only(args: list[str], repo_root: Path) -> dict[str, Any]:
     name = args[0]
     remote = len(args) > 1 and args[1] == "origin"
-    detail = _delete_branch(name, remote, repo_root)
-    return {"cli": "delete-only", **detail}
+    return _delete_branch(name, remote, repo_root, cli="delete-only", judged_recent="judged-recent" in args[2:])
 
 
 def _refuse_machine_local_additions(ref: str, repo_root: Path) -> None:
@@ -204,8 +252,7 @@ def _dispatch_merge_and_delete(args: list[str], repo_root: Path) -> dict[str, An
     name, ref = args[0], args[1]
     remote = len(args) > 2 and args[2] == "origin"
     _merge_ref(ref, repo_root)
-    delete_detail = _delete_branch(name, remote, repo_root)
-    return {"cli": "merge-and-delete", **delete_detail}
+    return _delete_branch(name, remote, repo_root, cli="merge-and-delete")
 
 
 def _dispatch_merge_only(args: list[str], repo_root: Path) -> dict[str, Any]:
@@ -298,15 +345,27 @@ def apply(
 
         outcome = "directive_failed"
         exit_label = None
+        global _remote_batch
+        batch: list[tuple[str, dict[str, Any]]] = []
+        _remote_batch = batch
         try:
-            exit_code, report = apply_base.execute_directives(
-                directives,
-                judgment_points,
-                root,
-                _CLI_DISPATCH,
-                decisions=effective_decisions,
-                composition_budget=composition_budget,
-            )
+            try:
+                exit_code, report = apply_base.execute_directives(
+                    directives,
+                    judgment_points,
+                    root,
+                    _CLI_DISPATCH,
+                    decisions=effective_decisions,
+                    composition_budget=composition_budget,
+                )
+            finally:
+                _remote_batch = None
+                flushed = _flush_remote_batch(batch, root) if batch else None
+            if flushed is not None:
+                report["remote_delete"] = flushed
+                if flushed["error"] is not None and exit_code == apply_base.APPLY_EXIT_OK:
+                    exit_code = apply_base.APPLY_EXIT_PARTIAL_MUTATION
+                    report["error"] = flushed["error"]
             exit_label = apply_base.exit_code_label(exit_code, report)
             if exit_code == apply_base.APPLY_EXIT_OK:
                 outcome = "success"

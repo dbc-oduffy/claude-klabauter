@@ -33,7 +33,8 @@ Negative-spec:
   - Does NOT write any file, create any directory, or run any git command —
     provably side-effect-free, same posture as memo_list.py.
   - Does NOT accept `dry_run: false` — memo.check_addressee has no act mode;
-    a caller that passes `dry_run: false` gets a setup-error envelope.
+    a caller that passes `dry_run: false` gets a setup-error envelope. An
+    absent `dry_run` is the read-only default (true).
   - Does NOT fall back to a folder scan on registry-read failure — propagates
     `_memo_resolver.RegistryReadError`/`AmbiguousReceiverError` as a fail-loud
     setup-error envelope, identical posture to memo_send.py/memo_list.py.
@@ -68,7 +69,7 @@ _MODE = "check_addressee"
 
 
 def _validate_check_addressee_params(params: dict):
-    dry_run = params.get("dry_run")
+    dry_run = params["dry_run"] if "dry_run" in params else True
     if not isinstance(dry_run, bool):
         return build_setup_error_result(
             _MODE, dry_run,
@@ -181,6 +182,10 @@ def compute_check_addressee_candidate(self_root: Path, to: str) -> dict:
         verdict = "MATCH"
     else:
         verdict = "MISMATCH"
+        note = (
+            f"receiver {to!r} resolves to {to_root}, which is not self "
+            f"({self_root}): the memo is addressed to another repo."
+        )
 
     return {
         "id": to,
@@ -238,7 +243,8 @@ def _memo_check_addressee(params: dict, repo_root: Optional[Path] = None) -> dic
     params.repo_root directly (Key Decision 5 precedent, memo_send.py:1100-1103).
 
     Params:
-        dry_run (bool, required): must be True — memo.check_addressee has no act mode.
+        dry_run (bool, optional): defaults to True; `false` is refused —
+            memo.check_addressee has no act mode.
         to      (str, required):  the memo's `to:` value to check against self.
 
     Returns:

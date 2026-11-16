@@ -1,4 +1,4 @@
-"""memo.send refuses a target repo whose live EM runs on another box, before any write."""
+"""memo.send delivers into this box's clone of the receiver repo, whatever box its EM was last live on."""
 
 from __future__ import annotations
 
@@ -11,10 +11,9 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
-from coordinator_core.ops.fleet import _memo_owning_box as mob
-from coordinator_core.ops.fleet import _memo_push_pending, memo_wire
+from coordinator_core.ops.fleet import _memo_push_pending
 from coordinator_core.ops.fleet._memo_anchor import anchor_names
-from coordinator_core.ops.fleet.memo_send import _MODE, _memo_send
+from coordinator_core.ops.fleet.memo_send import _memo_send
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -97,83 +96,62 @@ def _write_draft(sender_repo: Path, topic: str, *, to: str = "example-retrieval-
     return draft_path
 
 
-def _session(sessions: Path, name: str, cwd: Path, **fields) -> None:
-    entry = {"sessionId": name, "name": name, "pid": os.getpid(), "cwd": str(cwd)}
-    entry.update(fields)
+def _live_on_another_box(home: Path, name: str, cwd: Path) -> None:
+    """A Unimatrix session entry for `cwd`'s EM on `otherbox`, where a per-EM box lookup would read it."""
+    sessions = home / ".claude" / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "sessionId": name, "name": name, "pid": os.getpid(), "cwd": str(cwd),
+        "unimatrixBox": "otherbox", "unimatrixRemote": "otherbox",
+        "unimatrixFarSeen": int(time.time() * 1000),
+    }
     (sessions / f"{name}.json").write_text(json.dumps(entry), encoding="utf-8")
 
 
-def _other_box_session(sessions: Path, name: str, cwd: Path) -> None:
-    _session(
-        sessions, name, cwd, unimatrixBox="otherbox", unimatrixRemote="otherbox",
-        unimatrixFarSeen=int(time.time() * 1000),
-    )
-
-
 @pytest.fixture()
-def sessions(tmp_path, monkeypatch) -> Path:
-    """An isolated sessions dir the real resolver reads, with this box named `thisbox`."""
-    d = tmp_path / "sessions"
-    d.mkdir()
-    monkeypatch.setattr(mob._contract(), "local_box", lambda: "thisbox")
-    real = mob.resolve_owning_box
-    monkeypatch.setattr(
-        memo_wire, "resolve_owning_box", lambda repo: real(repo, sessions_dir=str(d))
-    )
-    return d
+def home(tmp_path, monkeypatch) -> Path:
+    h = tmp_path / "fake-home"
+    h.mkdir()
+    monkeypatch.setenv("HOME", str(h))
+    monkeypatch.setenv("USERPROFILE", str(h))
+    return h
 
 
-def _pending_records(sender: Path) -> list:
-    return _memo_push_pending.list_pending(sender)
+def _delivered(receiver: Path) -> list:
+    """Delivered memo names, read from the anchors: a delivery never writes the receiver's worktree."""
+    return sorted(name for name, _commit, _blob in anchor_names(resolve_git_common_dir(receiver)))
 
 
-def _repo_state(repo: Path) -> tuple:
-    common = resolve_git_common_dir(repo)
-    refs = _git(repo, "for-each-ref").stdout
-    return refs, anchor_names(common)
-
-
-def _assert_untouched(sender: Path, receiver: Path, before: tuple, topic: str) -> None:
-    assert _repo_state(receiver) == before
-    assert _pending_records(sender) == []
-    assert (sender / "state" / "memo-outbox" / f"{topic}.md").exists()
-    assert "status: draft" in (sender / "state" / "memo-outbox" / f"{topic}.md").read_text(
-        encoding="utf-8"
-    )
-    assert not (sender / ".coordinator-local" / "memo-outbox" / "sent").exists()
-
-
-class TestNonOwningBoxRefused:
-    def test_to_on_another_box_is_refused_and_writes_nothing(self, tmp_path, monkeypatch, sessions):
+class TestSendDeliversLocallyWhateverBoxTheEmIsOn:
+    def test_to_whose_em_is_on_another_box_commits_into_this_clone(self, tmp_path, monkeypatch, home):
         sender = _make_sender_git_repo(tmp_path)
         receiver = _make_receiver_git_repo(tmp_path)
         monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver})))
-        _other_box_session(sessions, "rag-em-far", receiver)
+        _live_on_another_box(home, "rag-em-far", receiver)
         _write_draft(sender, "far-topic")
-        before = _repo_state(receiver)
 
         result = _memo_send({"dry_run": False, "topic": "far-topic"}, repo_root=sender)
 
-        assert result["exit_code"] == 1, result
-        assert result["mode"] == _MODE
-        assert result["reason"].startswith("memo.send: NOT THE OWNING BOX")
-        assert "otherbox" in result["reason"] and "rag-em-far" in result["reason"]
-        assert result.get("acted", []) == []
-        _assert_untouched(sender, receiver, before, "far-topic")
+        assert result["exit_code"] == 0, result
+        assert result["acted"][0]["committed"] is True
+        assert len(_delivered(receiver)) == 1
+        assert len(anchor_names(resolve_git_common_dir(receiver))) == 1
+        assert len(_memo_push_pending.list_pending(sender)) == 1
 
-    def test_dry_run_surfaces_the_same_refusal(self, tmp_path, monkeypatch, sessions):
+    def test_dry_run_previews_without_refusing(self, tmp_path, monkeypatch, home):
         sender = _make_sender_git_repo(tmp_path)
         receiver = _make_receiver_git_repo(tmp_path)
         monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver})))
-        _other_box_session(sessions, "rag-em-far", receiver)
+        _live_on_another_box(home, "rag-em-far", receiver)
         _write_draft(sender, "far-dry")
 
         result = _memo_send({"dry_run": True, "topic": "far-dry"}, repo_root=sender)
 
-        assert result["exit_code"] == 1, result
-        assert result["reason"].startswith("memo.send: NOT THE OWNING BOX")
+        assert result["exit_code"] == 0, result
+        assert _delivered(receiver) == []
+        assert _memo_push_pending.list_pending(sender) == []
 
-    def test_cc_on_another_box_refuses_the_whole_send(self, tmp_path, monkeypatch, sessions):
+    def test_cc_leg_to_a_repo_whose_em_is_on_another_box_delivers_too(self, tmp_path, monkeypatch, home):
         sender = _make_sender_git_repo(tmp_path)
         to_repo = _make_receiver_git_repo(tmp_path, name="to-repo")
         cc_repo = _make_receiver_git_repo(tmp_path, name="cc-repo")
@@ -181,68 +159,18 @@ class TestNonOwningBoxRefused:
             "CLAUDE_HOME",
             str(_make_claude_home(tmp_path, {"project_rag": to_repo, "example_cockpit_repo": cc_repo})),
         )
-        _other_box_session(sessions, "cockpit-em-far", cc_repo)
+        _live_on_another_box(home, "cockpit-em-far", cc_repo)
+        _live_on_another_box(home, "rag-em-far", to_repo)
         _write_draft(sender, "far-cc", to="example-retrieval-repo-em", cc="example-cockpit-repo-em")
-        to_before, cc_before = _repo_state(to_repo), _repo_state(cc_repo)
 
         result = _memo_send({"dry_run": False, "topic": "far-cc"}, repo_root=sender)
 
-        assert result["exit_code"] == 1, result
-        assert "NOT THE OWNING BOX" in result["reason"]
-        assert "otherbox" in result["reason"]
-        assert _repo_state(to_repo) == to_before
-        assert _repo_state(cc_repo) == cc_before
-        _assert_untouched(sender, to_repo, to_before, "far-cc")
-
-
-class TestOlderPeerContractRow:
-    def test_row_lacking_this_box_still_refuses_an_other_box_em(self, tmp_path, monkeypatch, sessions):
-        contract = mob._contract()
-        real_row = contract.agent_row
-        monkeypatch.setattr(
-            contract, "agent_row",
-            lambda entry, local: {k: v for k, v in real_row(entry, local).items() if k != "this_box"},
-        )
-        sender = _make_sender_git_repo(tmp_path)
-        receiver = _make_receiver_git_repo(tmp_path)
-        monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver})))
-        _other_box_session(sessions, "rag-em-far", receiver)
-        _write_draft(sender, "old-contract")
-
-        result = _memo_send({"dry_run": False, "topic": "old-contract"}, repo_root=sender)
-
-        assert result["exit_code"] == 1, result
-        assert result["reason"].startswith("memo.send: NOT THE OWNING BOX")
-
-    def test_row_lacking_this_box_and_box_delivers_without_raising(self, tmp_path, monkeypatch, sessions):
-        monkeypatch.setattr(mob._contract(), "agent_row", lambda entry, local: {"name": "x"})
-        sender = _make_sender_git_repo(tmp_path)
-        receiver = _make_receiver_git_repo(tmp_path)
-        monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver})))
-        _other_box_session(sessions, "rag-em-far", receiver)
-        _write_draft(sender, "bad-row")
-
-        assert mob.resolve_owning_box(receiver, sessions_dir=str(sessions)).state == "unknown"
-        result = _memo_send({"dry_run": False, "topic": "bad-row"}, repo_root=sender)
-
         assert result["exit_code"] == 0, result
+        assert len(_delivered(to_repo)) == 1
+        assert len(_delivered(cc_repo)) == 1
+        assert len(_memo_push_pending.list_pending(sender)) >= 1
 
-
-class TestOwnedHereOrUnknownStillDelivers:
-    def test_live_em_on_this_box_delivers(self, tmp_path, monkeypatch, sessions):
-        sender = _make_sender_git_repo(tmp_path)
-        receiver = _make_receiver_git_repo(tmp_path)
-        monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver})))
-        _session(sessions, "rag-em-here", receiver)
-        _other_box_session(sessions, "rag-em-far", receiver)
-        _write_draft(sender, "here-topic")
-
-        result = _memo_send({"dry_run": False, "topic": "here-topic"}, repo_root=sender)
-
-        assert result["exit_code"] == 0, result
-        assert result["acted"][0]["committed"] is True
-
-    def test_no_live_em_anywhere_delivers(self, tmp_path, monkeypatch, sessions):
+    def test_no_live_em_anywhere_delivers(self, tmp_path, monkeypatch, home):
         sender = _make_sender_git_repo(tmp_path)
         receiver = _make_receiver_git_repo(tmp_path)
         monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver})))
@@ -251,3 +179,18 @@ class TestOwnedHereOrUnknownStillDelivers:
         result = _memo_send({"dry_run": False, "topic": "unknown-topic"}, repo_root=sender)
 
         assert result["exit_code"] == 0, result
+
+
+class TestUnregisteredReceiverStillRefused:
+    def test_no_clone_on_this_box_is_refused_and_writes_nothing(self, tmp_path, monkeypatch, home):
+        sender = _make_sender_git_repo(tmp_path)
+        receiver = _make_receiver_git_repo(tmp_path)
+        monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver})))
+        _write_draft(sender, "nowhere", to="example-cockpit-repo-em")
+
+        result = _memo_send({"dry_run": False, "topic": "nowhere"}, repo_root=sender)
+
+        assert result["exit_code"] == 1, result
+        assert "UNKNOWN RECEIVER" in result["reason"]
+        assert _delivered(receiver) == []
+        assert _memo_push_pending.list_pending(sender) == []

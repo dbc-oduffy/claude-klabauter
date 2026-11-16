@@ -261,6 +261,20 @@ def _missing_dependencies(output: str, root: Path) -> list:
     return [] if names & carried else sorted(names)
 
 
+_TEST_OUTCOME_RE = re.compile(
+    r"\b\d+ (?:passed|failed|errors?|skipped|deselected|xfailed|xpassed)\b|\bno tests ran\b|\bcollected \d+ items?\b"
+)
+
+
+def guard_exit(returncode: int, output: str) -> bool:
+    """True when a non-zero pytest exit never ran a test: no failing node id, no outcome count, no
+    collection error and no teardown-only error, i.e. a repo conftest or plugin guard (an interpreter or
+    dependency check) ended the process before any test was collected."""
+    if returncode == 0 or failing_ids(output) or _TEST_OUTCOME_RE.search(output):
+        return False
+    return not (collection_error(returncode, output) or teardown_only_error(returncode, output))
+
+
 def engine_python_command(root: Path) -> str:
     """`_gate_python(root)` as a token safe to paste into a Bash command: an absolute path is posix-slashed
     and double-quoted when it holds whitespace; a pinned bare name or launcher clause is returned as declared.
@@ -809,6 +823,13 @@ def verify(
                         ENV_DEFECT,
                         f"interpreter defect: {pin.command or 'the undeclared gate interpreter'} lacks module(s) {', '.join(absent)}"
                         f"{' (the repo declares no resolvable pin)' if not pin.command else ''}: {tail}",
+                        seeds,
+                    )
+                if pin.source != SOURCE_KEY and any(guard_exit(r.returncode, r.stdout + r.stderr) for r in bad):
+                    return OverlayVerdict(
+                        ENV_DEFECT,
+                        f"verify could not run: a repo guard ended pytest (exit {bad[0].returncode}) before any test ran under "
+                        f"{pin.command or 'the undeclared gate interpreter'}; {REMEDY}: {tail}",
                         seeds,
                     )
             if failed and ids and isinstance(base_sha, str) and base_sha and base_sha != sha:

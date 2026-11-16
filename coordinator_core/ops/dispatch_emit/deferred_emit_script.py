@@ -217,7 +217,8 @@ const _fromRunJson = _carryFile !== '' && chainParams.ask === true && typeof cha
   && typeof _askId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_askId) && (chainParams.chain_parent === undefined || chainParams.chain_parent === _askId);
 const { ask: _xa, sizing_path: _xs, session_id: _xi, target_root: _xt, chain_parent: _xc, launcher_child: _xl, ...chainExtras } = chainParams;
 const _chainJson = JSON.stringify(_fromRunJson ? chainExtras : (_carryFile !== '' ? chainParams : { ...chainParams, __LAUNCHER_PARAM__: true }));
-const _mergePy = "import json,sys; d=json.load(sys.stdin); d.update(json.load(open(sys.argv[1], encoding='utf-8'))); print(json.dumps(d))";
+// Trap: warp_home in the carry file serves only the run.json join; a hand-off with no ask/sizing_path (a research sizing) takes this merge, and dispatch.emit refuses the key.
+const _mergePy = "import json,sys; d=json.load(sys.stdin); c=json.load(open(sys.argv[1], encoding='utf-8')); c.pop('warp_home', None); d.update(c); print(json.dumps(d))";
 const _runJsonPy = "import json,os,sys; c=json.load(open(sys.argv[1], encoding='utf-8')); d=json.load(sys.stdin); r=json.load(open(os.path.join(c.pop('warp_home'), sys.argv[2], 'run.json'), encoding='utf-8')); d.update(ask=True, sizing_path=r['sizing_rel'], chain_parent=sys.argv[2]); d.update(c); print(json.dumps(d))";
 const _emitTail = ' <<\'' + _chainTag + '\' | ' + INVOKE + ' ' + EMIT_OP + ' --params-file -\n';
 const _emitCmd = _fromRunJson

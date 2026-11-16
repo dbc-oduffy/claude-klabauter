@@ -1,15 +1,16 @@
 """``dispatch.close_halted_run_superseded``: closes a halted run whose withheld paths later work overwrote.
 
-Params: ``run_id`` (string, required: the halted run). A halted run that withholds no path closes without
+Params: ``run_id`` (string, required: the halted or resumed run). A halted or resumed run that withholds no path closes without
 classification when ``superseded_by`` (full commit sha or run id) names its successor: empty evidence and
 dispositions, no git spawn. Fail-closed otherwise: the op writes only when the marker
-is ``halted`` (not resumed, landed or live) and withholds at least one path; the run-stage record is
+is ``halted`` or ``resumed`` (not landed, closed, superseded or with a live successor) and withholds at least one path; the run-stage record is
 ``halted`` with a parseable ``last_activity_at`` that resolves to a commit (the halt anchor); every
 withheld path classifies as exactly one of: ``landed`` (HEAD blob equals the kept blob), ``superseded`` (a commit in
 ``<halt_anchor>..HEAD`` touched it and a HEAD blob exists that differs from the kept blob) or ``scratch-abandoned``
-(under ``scratch/``, untouched since the halt, absent from both the anchor tree and HEAD) or ``lost`` (the kept blob
+(under ``scratch/``, untouched since the halt, absent from both the anchor tree and HEAD), ``lost`` (the kept blob
 is absent from the object store: recorded with a reason, no superseding commit needed, and a run with a lost path
-closes even with no superseded path). Any path that classifies
+closes even with no superseded path) or ``unkept`` (the kept file has no entry for the path while another withheld
+path has one: recorded with a reason, same closing weight as ``lost``). Any path that classifies
 as none refuses naming every such path; so does a run with no superseded path (all landed, or landed plus scratch:
 ``dispatch.record_halted_run_landed`` records those). Any gap leaves marker and index unchanged.
 On success the marker is rewritten ``status: superseded`` with ``superseded_evidence: {path: sha}``
@@ -124,6 +125,8 @@ def _blob_ids(root: Path, specs: list) -> Optional[list]:
 
 
 _LOST_REASON = "kept blob absent from the object store; no content left to protect"
+DISPOSITION_UNKEPT = "unkept"
+_UNKEPT_REASON = "no kept entry recorded for the path; no kept content left to protect"
 _SCRATCH_PREFIX = "scratch/"
 _SCRATCH_REASON = "under scratch/, never tracked at halt or HEAD"
 
@@ -134,17 +137,20 @@ def _is_scratch_path(p: str) -> bool:
     return p.startswith(_SCRATCH_PREFIX) and "\\" not in p and posixpath.normpath(p) == p
 
 
-def _classify_paths(paths: list, touched: dict, head: dict, keep: dict, base: dict, anchor: str) -> tuple:
+def _classify_paths(paths: list, touched: dict, head: dict, keep: dict, base: dict, anchor: str, unkept: frozenset = frozenset()) -> tuple:
     """``(dispositions, unclassified)``: ``{path: {disposition, blob|sha|reason}}`` for the classified paths and
     ``["path (reason)", ...]`` for the rest. ``head``/``base`` map a path to its blob id at HEAD / the halt anchor
     (None when absent); a path missing from ``head`` was not read (legacy touched path: never landed or scratch).
-    ``keep`` maps a path to its withheld blob (empty on the legacy route, which has no landed class)."""
+    ``keep`` maps a path to its withheld blob (empty on the legacy route, which has no landed class); ``unkept``
+    names the paths the kept file has no entry for (``unkept`` class, never ``lost``: no blob was ever recorded)."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
     done, bad = {}, []
     for p in paths:
         h, k = head.get(p), keep.get(p)
-        if h is not None and h == k:
+        if p in unkept:
+            done[p] = {"disposition": DISPOSITION_UNKEPT, "reason": _UNKEPT_REASON}
+        elif h is not None and h == k:
             done[p] = {"disposition": halted_run.DISPOSITION_LANDED, "blob": h}
         elif keep and k is None:
             done[p] = {"disposition": halted_run.DISPOSITION_LOST, "reason": _LOST_REASON}
@@ -176,7 +182,7 @@ def _refuse_without_supersession(done: dict) -> Optional[dict]:
     """None when some path is superseded or lost; else the refusal (a superseded close claims a later commit replaced work)."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
-    if any(d["disposition"] in (halted_run.DISPOSITION_SUPERSEDED, halted_run.DISPOSITION_LOST) for d in done.values()):
+    if any(d["disposition"] in (halted_run.DISPOSITION_SUPERSEDED, halted_run.DISPOSITION_LOST, DISPOSITION_UNKEPT) for d in done.values()):
         return None
     scratch = sorted(p for p, d in done.items() if d["disposition"] == halted_run.DISPOSITION_SCRATCH)
     if not scratch:
@@ -230,6 +236,25 @@ def _first_record_anchor(root: Path, run_id: str) -> tuple:
     if shas and _SHA40.fullmatch(shas[-1]):
         return shas[-1], None
     return None, f"{run_id} has no commit that added its halt record; the halt is unanchored"
+
+
+def _mark_superseded(record: Path, expected: dict, evidence: dict, dispositions: dict) -> bool:
+    """``halted_run.mark_superseded`` for a halted marker; a resumed marker is rewritten the same way when it
+    still equals *expected*. False and no write when the marker changed under the write."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    if expected.get("status") != halted_run.STATUS_RESUMED:
+        return halted_run.mark_superseded(record, expected, evidence, dispositions)
+    marker = halted_run._read(record)
+    if marker is None or marker != expected:
+        return False
+    halted_run._write(record, {
+        **marker, "status": halted_run.STATUS_SUPERSEDED, halted_run.SUPERSEDED_EVIDENCE_FIELD: evidence,
+        halted_run.PATH_DISPOSITIONS_FIELD: dispositions,
+    })
+    halted_run._live_index_drop(record)
+    halted_run._record_judge(record)
+    return True
 
 
 def _legacy_close(root: Path, record: Path, marker: dict, run_id: str, paths: list, params: dict) -> dict:
@@ -287,7 +312,7 @@ def _legacy_close(root: Path, record: Path, marker: dict, run_id: str, paths: li
     unused = sorted(given - {s for p in paths for s, _ in touching.get(p, ())})
     if unused:
         return _refuse(f"evidence sha {unused[0][:12]} touches no withheld path in {anchor[:12]}..HEAD")
-    if not halted_run.mark_superseded(record, marker, evidence, dispositions):
+    if not _mark_superseded(record, marker, evidence, dispositions):
         return _refuse(f"{run_id} halt marker changed under the write; retry")
     halted_withheld_index.remove_run(root, run_id)
     _end_parent_ask(root, run_id, marker.get("sizing_rel"))
@@ -447,8 +472,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if marker is None:
         return _refused_at_stage(root, record, run_id)
     status = marker.get("status")
-    if status != halted_run.STATUS_HALTED:
-        return _refuse(f"{run_id} is {status}; only a halted run closes superseded")
+    if status not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
+        return _refuse(f"{run_id} is {status}; only a halted or resumed run closes superseded")
     successor = _live_successor(root, run_id)
     if successor:
         return _refuse(f"{run_id} has a live successor {successor}; wait for it or stop it")
@@ -460,10 +485,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             return _legacy_close(root, record, marker, run_id, sorted(withheld), params)
         return _refuse(f"{run_id} kept or withheld-prints file is present but yields no kept blob for a withheld path; supersession cannot be verified")
     kept = plan[1]
-    missing = sorted(p for p in withheld if p not in kept)
-    if missing:
-        return _refuse(f"{run_id} has no kept blob for withheld {missing[0]}; supersession cannot be verified")
     paths = sorted(withheld)
+    kept_paths = [p for p in paths if p in kept]
+    unkept = frozenset(paths) - set(kept_paths)
     anchor, why = _halt_anchor(root, run_id)
     if anchor is None:
         return _refuse(why)
@@ -471,11 +495,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if touched is None:
         return _refuse(f"git log over {anchor[:12]}..HEAD failed; retry")
     n = len(paths)
-    ids = _blob_ids(root, [f"HEAD:{p}" for p in paths] + [kept[p] for p in paths] + [f"{anchor}:{p}" for p in paths])
+    m = len(kept_paths)
+    ids = _blob_ids(root, [f"HEAD:{p}" for p in paths] + [kept[p] for p in kept_paths] + [f"{anchor}:{p}" for p in paths])
     if ids is None:
         return _refuse("git cat-file failed; retry")
     dispositions, bad = _classify_paths(
-        paths, touched, dict(zip(paths, ids[:n])), dict(zip(paths, ids[n:2 * n])), dict(zip(paths, ids[2 * n:])), anchor,
+        paths, touched, dict(zip(paths, ids[:n])), dict(zip(kept_paths, ids[n:n + m])), dict(zip(paths, ids[n + m:])), anchor, unkept,
     )
     if bad:
         return _refuse_unclassified(bad)
@@ -483,7 +508,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if why:
         return why
     evidence = {p: d["sha"] for p, d in dispositions.items() if d["disposition"] == halted_run.DISPOSITION_SUPERSEDED}
-    if not halted_run.mark_superseded(record, marker, evidence, dispositions):
+    if not _mark_superseded(record, marker, evidence, dispositions):
         return _refuse(f"{run_id} halt marker changed under the write; retry")
     halted_withheld_index.remove_run(root, run_id)
     _end_parent_ask(root, run_id, marker.get("sizing_rel"))

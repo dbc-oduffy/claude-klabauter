@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -367,3 +368,70 @@ def test_a_chunk_timeout_is_capped_at_the_budget_left(tmp_path, monkeypatch):
     monkeypatch.setattr(targeted_run, "_spawn_pytest_capped", lambda argv, root, timeout: seen.append(timeout) or (0, ""))
     reap_green._run_chunk(["t/test_a.py"], tmp_path, 300, {}, _time.monotonic() + 30)
     assert seen and seen[0] <= 30
+
+
+def _pin(repo: Path, tmp_path: Path) -> str:
+    fake = tmp_path / "bin" / "python3.13"
+    fake.parent.mkdir(exist_ok=True)
+    fake.write_text("#!/bin/sh\n")
+    fake.chmod(0o755)
+    (repo / "coordinator.local.md").write_text(f'---\ntargeted_test_python: "{fake}"\n---\n', encoding="utf-8")
+    return str(fake)
+
+
+def test_reap_spawns_pytest_under_the_repo_pin_and_unpinned_keeps_the_engine_interpreter(
+    repo, tmp_path, monkeypatch
+):
+    argv0 = []
+    monkeypatch.setattr(
+        targeted_run, "_spawn_pytest_capped", lambda resolved, cwd, timeout: argv0.append(resolved[0]) or (0, "")
+    )
+    _row(repo, "good", "Failing tests:\n- tests/test_good.py::test_ok")
+    reap_green.reap(repo)
+    assert argv0 == [sys.executable]
+
+    (repo / "state" / "scratch").mkdir(parents=True, exist_ok=True)
+    (repo / reap_record_rel()).unlink(missing_ok=True)
+    pin = _pin(repo, tmp_path)
+    _row(repo, "good2", "Failing tests:\n- tests/test_good.py::test_ok")
+    reap_green.reap(repo)
+    assert argv0[-1] == pin != sys.executable
+
+
+def test_unresolved_pin_is_unrun_naming_the_pin_never_the_engine_interpreter(repo, monkeypatch):
+    (repo / "coordinator.local.md").write_text(
+        '---\ntargeted_test_python: "/no/such/python-xyz"\n---\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(targeted_run, "_spawn_pytest_capped", lambda *a, **k: pytest.fail("no spawn"))
+    row = _row(repo, "good", "Failing tests:\n- tests/test_good.py::test_ok")
+    record = reap_green.reap(repo)
+    assert record.unrun[row].startswith("pinned interpreter unresolved: /no/such/python-xyz")
+
+
+def test_unparsed_failure_records_pytests_own_error_line_bounded_to_one_line():
+    verdicts: dict = {}
+    out = "collecting ...\nERROR: file or directory not found: tests/x.py\n" + "tail\n" * 3
+    reap_green._record_run(["a.py"], 4, out, verdicts)
+    assert verdicts["a.py"] == {"unrun": "pytest exit 4: ERROR: file or directory not found: tests/x.py"}
+    reap_green._record_run(["a.py"], 2, "/x/python: No module named pytest\n", verdicts)
+    assert verdicts["a.py"] == {"unrun": "pytest exit 2: /x/python: No module named pytest"}
+    reap_green._record_run(["a.py"], 3, "E" * 500, verdicts)
+    assert "\n" not in verdicts["a.py"]["unrun"] and len(verdicts["a.py"]["unrun"]) < 230
+    reap_green._record_run(["a.py"], 3, "", verdicts)
+    assert verdicts["a.py"] == {"unrun": "pytest exit 3 with no parsed failure"}
+
+
+def test_main_says_nothing_ran_and_names_the_dominant_reason_when_all_unrun(monkeypatch, capsys):
+    unrun = {"a": "pytest exit 1: boom", "b": "pytest exit 1: boom", "c": "budget"}
+    record = ReapRecord(head_sha=SHA, ran_at="t", unrun=unrun)
+    monkeypatch.setattr(reap_green, "reap", lambda root, *, budget: record)
+    reap_green.main(["R"])
+    out = capsys.readouterr().out
+    assert "nothing ran: all 3 rows unrun" in out and "(2 rows): pytest exit 1: boom" in out
+
+
+def test_main_prints_no_nothing_ran_line_when_a_row_settled(monkeypatch, capsys):
+    record = ReapRecord(head_sha=SHA, ran_at="t", green=("g",), unrun={"a": "budget"})
+    monkeypatch.setattr(reap_green, "reap", lambda root, *, budget: record)
+    reap_green.main(["R"])
+    assert "nothing ran" not in capsys.readouterr().out

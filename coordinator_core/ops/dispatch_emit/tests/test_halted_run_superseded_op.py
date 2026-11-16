@@ -172,13 +172,52 @@ def test_head_blob_equal_to_withheld_blob_refuses(halted) -> None:
     _unchanged(root, record, before)
 
 
-def test_resumed_marker_refuses(halted) -> None:
+def test_resumed_marker_without_live_successor_closes_superseded(halted) -> None:
+    root, record, base = halted
+    sha = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    halted_run.mark_resumed(record)
+    reply = _call(root)
+    assert reply["ok"] is True and reply["evidence"] == {"a.txt": sha, "b.txt": sha}
+    marker = halted_run._read(record)
+    assert marker["status"] == halted_run.STATUS_SUPERSEDED
+    assert marker[halted_run.SUPERSEDED_EVIDENCE_FIELD] == {"a.txt": sha, "b.txt": sha}
+    assert reply["records_commit"] == _head(root)
+    _assert_closure_commit(root, record, base)
+    assert not _indexed(root)
+
+
+def test_resumed_marker_with_live_successor_refuses_naming_it(halted, monkeypatch: pytest.MonkeyPatch) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
     halted_run.mark_resumed(record)
+    from coordinator_core.ops.dispatch_emit import halted_run_landed
+
+    monkeypatch.setattr(halted_run_landed, "_live_successor", lambda r, run: "warp-live-1")
+    before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
+    head = _head(root)
     reply = _call(root)
-    assert reply["ok"] is False and "resumed" in reply["error"]
+    assert reply["ok"] is False and "warp-live-1" in reply["error"]
+    assert (record / halted_run.HALTED_FILE).read_text(encoding="utf-8") == before
+    assert _head(root) == head
+
+
+def test_resumed_marker_with_unsuperseded_path_still_refuses(halted) -> None:
+    root, record, _ = halted
+    _commit(root, {"a.txt": "a-later"})
+    halted_run.mark_resumed(record)
+    reply = _call(root)
+    assert reply["ok"] is False and "b.txt" in reply["error"]
     assert halted_run._read(record)["status"] == halted_run.STATUS_RESUMED
+
+
+@pytest.mark.parametrize("status", [halted_run.STATUS_LANDED, halted_run.STATUS_SUPERSEDED, halted_run.STATUS_CLOSED])
+def test_terminal_marker_status_refuses(halted, status) -> None:
+    root, record, _ = halted
+    _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    halted_run._write(record, {**halted_run._read(record), "status": status})
+    reply = _call(root)
+    assert reply["ok"] is False and status in reply["error"]
+    assert halted_run._read(record)["status"] == status
 
 
 def test_resume_between_check_and_write_refuses_and_leaves_resumed(halted, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -270,14 +309,49 @@ def test_live_successor_refuses(halted, monkeypatch: pytest.MonkeyPatch) -> None
     _unchanged(root, record, before)
 
 
-def test_withheld_path_without_kept_blob_refuses(halted) -> None:
+def test_withheld_path_without_kept_entry_closes_as_unkept_with_reason(halted) -> None:
+    root, record, base = halted
+    sha = _commit(root, {"a.txt": "a-later"})
+    kept_work.write(record, {"c": {"paths": {"a.txt": _blob(root, "a-kept")}}}, None)
+    reply = _call(root)
+    assert reply["ok"] is True
+    assert reply["dispositions"]["b.txt"] == {"disposition": op.DISPOSITION_UNKEPT, "reason": op._UNKEPT_REASON}
+    assert reply["dispositions"]["a.txt"] == {"disposition": halted_run.DISPOSITION_SUPERSEDED, "sha": sha}
+    assert reply["evidence"] == {"a.txt": sha}
+    marker = halted_run._read(record)
+    assert marker["status"] == halted_run.STATUS_SUPERSEDED
+    assert marker[halted_run.PATH_DISPOSITIONS_FIELD]["b.txt"]["disposition"] == op.DISPOSITION_UNKEPT
+    assert reply["records_commit"] == _head(root)
+    _assert_closure_commit(root, record, base)
+    assert not _indexed(root)
+
+
+def test_unkept_path_closes_even_when_untouched_and_no_other_path_superseded(halted) -> None:
+    root, record, _ = halted
+    kept_work.write(record, {"c": {"paths": {"a.txt": _blob(root, "a-kept")}}}, None)
+    _commit(root, {"a.txt": "a-kept"})
+    reply = _call(root)
+    assert reply["ok"] is True and reply["evidence"] == {}
+    assert reply["dispositions"]["a.txt"]["disposition"] == halted_run.DISPOSITION_LANDED
+    assert reply["dispositions"]["b.txt"]["disposition"] == op.DISPOSITION_UNKEPT
+
+
+def test_kept_file_with_no_entry_for_any_withheld_path_still_refuses(halted) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
-    kept_work.write(record, {"c": {"paths": {"a.txt": _blob(root, "a-kept")}}}, None)
+    kept_work.write(record, {"c": {"paths": {"other.txt": _blob(root, "o")}}}, None)
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
     reply = _call(root)
-    assert reply["ok"] is False and "b.txt" in reply["error"]
+    assert reply["ok"] is False and "yields no kept blob" in reply["error"]
     _unchanged(root, record, before)
+
+
+def test_unkept_sibling_does_not_excuse_an_untouched_kept_path(halted) -> None:
+    root, record, _ = halted
+    kept_work.write(record, {"c": {"paths": {"a.txt": _blob(root, "a-kept")}}}, None)
+    reply = _call(root)
+    assert reply["ok"] is False and "a.txt" in reply["error"]
+    assert _indexed(root)
 
 
 def test_unknown_run_and_unsafe_id_refuse(halted) -> None:
