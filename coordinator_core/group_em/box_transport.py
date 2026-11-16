@@ -61,6 +61,8 @@ ALLOWED_OPS: frozenset = frozenset(
         "groupem.box_key_pin",
         "groupem.suite_grant_revoke_receive",
         "groupem.box_key_pin_from_peer",
+        # Issued by coordinator_core.percolate.fleet_adoption.
+        "fleet.klabauter_freshness",
     }
 )
 RATE_MAX_CALLS = 12

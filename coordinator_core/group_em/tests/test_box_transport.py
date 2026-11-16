@@ -280,7 +280,11 @@ def test_relay_revoke_and_keypin_refuse_unrestatable_payloads(monkeypatch):
 
 
 def test_new_ops_are_on_the_allowlist():
-    assert {"groupem.suite_grant_revoke_receive", "groupem.box_key_pin_from_peer"} <= box_transport.ALLOWED_OPS
+    assert {
+        "groupem.suite_grant_revoke_receive",
+        "groupem.box_key_pin_from_peer",
+        "fleet.klabauter_freshness",
+    } <= box_transport.ALLOWED_OPS
 
 
 def test_invoke_remote_error_envelope_is_unknown_not_a_reply():

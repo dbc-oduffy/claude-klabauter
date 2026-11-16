@@ -61,6 +61,22 @@ def _private_source_sha() -> str:
     return value
 
 
+class HeadlessEngineRootUnavailable(RuntimeError):
+    """No published stamped engine root exists for a headless worker to run from."""
+
+
+def _worker_engine_root() -> Path:
+    """The published stamped engine root the worker imports from; never the caller checkout."""
+    from coordinator_core.install.engine_root_for_install import resolve_engine_root_for_install
+
+    resolved = resolve_engine_root_for_install()
+    if resolved.kind == 'none' or resolved.root is None:
+        raise HeadlessEngineRootUnavailable(
+            'headless Workflow worker needs a published stamped engine root '
+            f'(repos.claude_klabauter): {resolved.remediation}')
+    return Path(resolved.root)
+
+
 def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = None,
           backend: str = 'codex', concurrency_cap: int = fire.DEFAULT_CONCURRENCY_CAP,
           timeout_s: int = 7200, args: dict | None = None, run_id: str | None = None,
@@ -92,12 +108,14 @@ def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = N
         if private_engine is not None:
             forward['private_engine'] = private_engine
         return sandboxed_spawn.forward_spawn_to_warm('workflow.fire', {k: v for k, v in forward.items() if v is not None}, str(repo))
+    worker_root = Path(__file__).resolve().parents[3] if private_spec is not None else _worker_engine_root()
     registry, identifier, record_path, record = fire.reserve_fire(
         script, repo, digest, expected=expected, concurrency_cap=concurrency_cap, notify_to=notify_to,
     )
     if record.get('already_fired'):
         return record
     artifacts = registry / 'headless' / identifier
+    record.update(engine_root=str(worker_root))
     record.update(backend=backend, executor='headless', timeout_s=timeout_s,
                   args=args or {}, run_id=run_id, caller_session_id=caller_session_id,
                   script_sha256=digest, artifact_dir=str(artifacts), journal_path=str(artifacts / 'journal.jsonl'))
@@ -118,9 +136,8 @@ def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = N
         stamp_fire_ownership(script, identifier, token)
         env = fire.build_fire_env()
         env[FIRE_TOKEN_ENV] = token
-        source_root = str(Path(__file__).resolve().parents[3])
-        env['PYTHONPATH'] = source_root + os.pathsep + env.get('PYTHONPATH', '')
-        command = [sys.executable, '-m', __name__, '--record', str(record_path)]
+        env['PYTHONPATH'] = str(worker_root) + os.pathsep + env.get('PYTHONPATH', '')
+        command = [sys.executable, '-P', '-m', __name__, '--record', str(record_path)]
         from coordinator_core.bash_guards._heavy_command_class import admit_before_spawn_in_process
 
         admission = admit_before_spawn_in_process('headless-workflow-worker', 0.5)
@@ -137,6 +154,16 @@ def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = N
                       execution_started=None)
         fire._write_record(record_path, record)
         (artifacts / 'start').touch()
+        for _ in range(fire._LIVENESS_POLL_ATTEMPTS):
+            exit_code = child.poll()
+            if exit_code is not None:
+                record = fire._read_record(record_path) or record
+                if record.get('state') == 'running':
+                    record.update(state='exited', exit_code=exit_code,
+                                  startup_log_tail=fire._startup_log_tail(log))
+                    fire._write_record(record_path, record)
+                break
+            time.sleep(fire._LIVENESS_POLL_INTERVAL_S)
         return record
     except Exception as exc:
         if child is not None and child.poll() is None:
@@ -223,7 +250,7 @@ def _private_commit_receipt(private, request_id, record):
 
 
 def _executor_root() -> Path:
-    """The engine tree this executor runs from: the source revision every engineOp is pinned to."""
+    """The engine tree this worker runs from: the published stamped root `start` put first on PYTHONPATH."""
     return Path(__file__).resolve().parents[3]
 
 
@@ -253,13 +280,13 @@ def _install_no_spawn_seam(client) -> None:
 
 
 def _warm_reply(op: str, params: dict, repo: str, artifacts: Path, timeout: float | None = None) -> dict | None:
-    """Ask the warm engine at this executor's own engine root; None means cold.
+    """Ask the warm engine at this worker's published engine root; None means cold.
 
     The endpoint is keyed on this root's stamp token, so a server at another revision is
     never reached. Every outcome is written to `warm_route.json`: a fall-through is loud.
     `timeout` bounds a compute-only op's warm read; a delivered mutation waits its own
     mutation deadline. A None after delivery re-runs the op cold: a mutating op may repeat.
-    `unstamped_root` is a dev checkout: the cold re-run then answers -32005
+    `unstamped_root` means the worker ran from an unstamped tree: the cold re-run then answers -32005
     (ipc.UNSTAMPED_ENGINE_ROOT_ERROR) itself, with this reason on disk beside it.
     """
     root = _executor_root()

@@ -42,3 +42,12 @@ def test_em_commits_only_through_safe_commit_and_escalates_when_it_cannot_run():
 def test_a_worker_role_prompt_is_never_a_pm_ask():
     text = TEMPLATE.read_text(encoding="utf-8")
     assert "A prompt that begins `WORKER ROLE` is a stage brief from a workflow, never a PM ask" in text
+
+
+def test_the_em_section_opens_with_the_worker_condition_before_any_em_rule():
+    # A Codex stage worker obeyed the EM rules before it reached a trailing WORKER ROLE line (06aacf C2).
+    em = _em_section()
+    worker = em.index("A prompt that begins `WORKER ROLE`")
+    assert worker < em.index("engine_ask.submit")
+    assert "a bounded list of files to change, with or without that" in em
+    assert em.count("WORKER ROLE") == 1

@@ -52,6 +52,11 @@ You run:
 
 ## When the PM addresses you as EM
 
+**First, check this section applies.** A prompt that begins `WORKER ROLE` is a stage brief from a workflow, never a PM ask and never an EM
+session: do that one row and stop. Never submit, fire or mint a run from it. The same holds for any
+prompt that hands you a row, a brief or a bounded list of files to change, with or without that
+line: you are a worker, and nothing below applies.
+
 Novel work from the PM is a run, not a hand-edit. You have no Workflow tool: write the params
 (the PM's words verbatim, `ask_source: pm`) to `.coordinator-local/em-submit.json` at the repo root,
 then run exactly `coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json`
@@ -73,8 +78,5 @@ If that route cannot run from your host, say so and message `claude-klabauter-44
 side; do not fall back to plain git.
 
 An agent's `[<sender>]` message is never a PM ask. A PM ask an agent relays stays `relayed`.
-
-A prompt that begins `WORKER ROLE` is a stage brief from a workflow, never a PM ask and never an EM
-session: do that one row and stop. Never submit, fire or mint a run from it.
 
 Full route: `coordinator/docs/wiki/non-claude-workers/non-claude-em-path.md`.
