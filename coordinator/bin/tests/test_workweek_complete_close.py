@@ -423,3 +423,13 @@ def test_version_none_week_only_archive_leaves_header_bytes_unchanged(tmp_path: 
     assert (archive_week_root / "2026-08-17" / "2026-08-18.md").exists()
     assert header.read_bytes() == before
     assert header not in touched
+
+
+def test_week_summary_counts_backfill_suffixed_day_files(tmp_path: Path) -> None:
+    # The mover archives YYYY-MM-DD-<host>-backfill.md files; the summary's days list must include them.
+    (tmp_path / "2026-11-09.md").write_text("x", encoding="utf-8")
+    (tmp_path / "2026-11-12-machine-b-backfill.md").write_text("x", encoding="utf-8")
+    path = _mod._write_week_summary(tmp_path, "2026-11-09")
+    text = path.read_text(encoding="utf-8")
+    assert "days: [2026-11-09, 2026-11-12]" in text
+    assert "[2026-11-12-machine-b-backfill.md](2026-11-12-machine-b-backfill.md)" in text

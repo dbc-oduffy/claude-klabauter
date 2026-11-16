@@ -506,8 +506,14 @@ def _check_point6(manifest: dict, failures: _Failures) -> None:
         has_default = _truthy(loc, "default")
         override = loc.get("override")
         override = override if isinstance(override, dict) else {}
-        has_override = _truthy(override, "flag") or _truthy(override, "env")
         is_dep_root = _truthy(loc, "dependency_id")
+        # `override.none` (a stated reason) declares a location with deliberately no
+        # override; a dependency root can never use it (its flag+env check below).
+        has_override = (
+            _truthy(override, "flag")
+            or _truthy(override, "env")
+            or (_truthy(override, "none") and not is_dep_root)
+        )
 
         if not has_candidates:
             failures.add(

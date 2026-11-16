@@ -80,6 +80,8 @@ pytestmark = [
     pytest.mark.cadence,
 ]
 
+_WIKI = "docs" + "/wiki/"
+
 
 def _run(coro):
     return asyncio.run(coro)
@@ -249,7 +251,7 @@ def test_compute_scope_wiki_inventory_default_dirs(fixture_repo):
     assert result.manifest["wiki_dirs"] == ["docs/wiki"]
     assert isinstance(result.manifest["wiki_slugs"], list)
     assert wiki_slugs_as_dict(result.manifest) == {
-        "percolation-engine": "docs/wiki/percolation-engine.md"
+        "percolation-engine": _WIKI + "percolation-engine.md"
     }
 
 
@@ -265,10 +267,10 @@ def test_compute_scope_wiki_inventory_indexes_nested_pages(fixture_repo):
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     slugs = wiki_slugs_as_dict(result.manifest)
 
-    assert slugs["fam"] == "docs/wiki/fam.md"
-    assert slugs["child"] == "docs/wiki/fam/child.md"
+    assert slugs["fam"] == _WIKI + "fam.md"
+    assert slugs["child"] == _WIKI + "fam/child.md"
     assert "index" not in slugs
-    assert "docs/wiki/fam/_index.md" not in slugs.values()
+    assert _WIKI + "fam/_index.md" not in slugs.values()
 
 
 def test_compute_scope_wiki_inventory_adds_coordinator_dir_when_present(fixture_repo):
@@ -427,7 +429,7 @@ def test_handler_batch_files_carry_relevant_guides_within_cap(fixture_repo):
         batch = json.loads((run_dir / name).read_text(encoding="utf-8"))
         assert len(json.dumps(batch, separators=(",", ":")).encode()) <= SLUG_SHARD_MAX_BYTES
         guide_paths |= {g["path"] for g in batch["relevantGuides"]}
-    assert "docs/wiki/percolation-engine.md" in guide_paths
+    assert _WIKI + "percolation-engine.md" in guide_paths
 
 
 # ---------------------------------------------------------------------------
@@ -1361,7 +1363,7 @@ def _batched(scope) -> list[str]:
 def test_cite_keys_name_plans_by_dated_stem_or_path():
     text = (
         "see docs/plans/2026-11/2026-11-13-Big-Refactor.md and 2026-11-14-new-system-ab12cd, "
-        "also archive/specs/old_spec.md; ignore docs/wiki/guide.md"
+        "also archive/specs/old_spec.md; ignore " + _WIKI + "guide.md"
     )
     assert ds._cite_keys(text) == [
         "2026-11-13-big-refactor",

@@ -758,6 +758,101 @@ def _exit_code_for_response(response: dict, structural_pin_error_code: int) -> i
 
 
 # ---------------------------------------------------------------------------
+# workflow.fire_wait — the blocking loop lives in this cold client only
+# ---------------------------------------------------------------------------
+
+_FIRE_WAIT_OP = "workflow.fire_wait"
+_FIRE_WAIT_POLL_DEFAULT_S = 5.0
+_FIRE_WAIT_POLL_MIN_S = 1.0
+_FIRE_WAIT_POLL_MAX_S = 60.0
+
+
+class FireWaitNotWarmServedError(RuntimeError):
+    """Raised on the warm server's `invoke.from_argv` leg for `workflow.fire_wait`.
+
+    `entrypoint_not_warm_loadable` makes `ipc._handler_exception_error` answer -32007,
+    which the native door reads as provably undispatched and re-runs this CLI cold in
+    the caller's own process, where sleeping holds no engine worker.
+    """
+
+    entrypoint_not_warm_loadable = True
+
+
+def _fire_wait_poll_interval(params: dict) -> float:
+    raw = params.get("poll_interval_s")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return _FIRE_WAIT_POLL_DEFAULT_S
+    return float(min(max(raw, _FIRE_WAIT_POLL_MIN_S), _FIRE_WAIT_POLL_MAX_S))
+
+
+def _wait_for_fire(
+    msg: dict,
+    *,
+    dispatch_tick=None,
+    sleep=None,
+    monotonic=None,
+) -> Tuple[dict, Optional[int]]:
+    """Re-dispatch the non-blocking `workflow.fire_wait` read until the fire exits.
+
+    Returns ``(response, exit_code)``: exit 0 on ``exited``, 1 on ``timed_out`` or
+    ``found: false``; ``exit_code`` is None when the response is an error envelope
+    (the caller's usual exit-code mapping applies). Each tick is one in-process
+    dispatch; the client deadline is ``timeout_s`` of ``time.monotonic()`` from the
+    first tick, a backstop for a record with no start stamp.
+    """
+    import time as _time
+
+    sleep = sleep or _time.sleep
+    monotonic = monotonic or _time.monotonic
+    interval = _fire_wait_poll_interval(msg.get("params") or {})
+    loop = None
+    if dispatch_tick is None:
+        import asyncio
+
+        from coordinator_core.invoke.dispatch import dispatch_message
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        def dispatch_tick(tick_msg: dict) -> dict:
+            relay = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(relay):
+                    return loop.run_until_complete(dispatch_message(tick_msg, caller=_CALLER))
+            finally:
+                captured = relay.getvalue()
+                if captured:
+                    try:
+                        sys.stderr.write(captured)
+                    except OSError:
+                        pass
+
+    started = monotonic()
+    try:
+        while True:
+            response = dispatch_tick(msg)
+            result = response.get("result") if isinstance(response, dict) else None
+            if not isinstance(result, dict):
+                return response, None
+            if result.get("found") is False:
+                return response, 1
+            if result.get("state") == "exited":
+                return response, 0
+            timeout_s = result.get("timeout_s")
+            remaining = None
+            if isinstance(timeout_s, (int, float)) and not isinstance(timeout_s, bool):
+                remaining = timeout_s - (monotonic() - started)
+            if result.get("timed_out") or (remaining is not None and remaining <= 0):
+                result["timed_out"] = True
+                return response, 1
+            sleep(interval if remaining is None else max(0.0, min(interval, remaining)))
+    finally:
+        if loop is not None:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+
+# ---------------------------------------------------------------------------
 # Reusable core — argv in, (stdout, stderr, exit_code) out
 # ---------------------------------------------------------------------------
 
@@ -1223,7 +1318,14 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     response = None
     warm_missed = False
     remote_handle: Optional[str] = None
-    if allow_warm:
+    wait_exit_code: Optional[int] = None
+    if args.op == _FIRE_WAIT_OP:
+        if not allow_warm:
+            raise FireWaitNotWarmServedError(
+                f"{_FIRE_WAIT_OP} blocks client-side: not dispatched, run it cold."
+            )
+        response, wait_exit_code = _wait_for_fire(msg)
+    if allow_warm and response is None:
         from coordinator_core.warm.settings import is_warm_enabled
 
         if is_warm_enabled():
@@ -1483,7 +1585,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     # distinguish success/error via exit code (and stderr), never by
     # inspecting stdout shape after a nonzero exit — so bare-vs-full only
     # needs to differ where the caller actually reads stdout.
-    is_bare_success = args.bare and "error" not in response
+    is_bare_success = (args.bare or args.op == _FIRE_WAIT_OP) and "error" not in response
     try:
         if is_bare_success:
             output = json.dumps(response["result"], ensure_ascii=False)
@@ -1499,6 +1601,8 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     #    Explicit flush before SystemExit is mandatory — the real process boundary
     #    (main(), below) uses os._exit(), which does not flush stdio on its own.
     sys.stdout.flush()
+    if wait_exit_code is not None and "error" not in response:
+        raise SystemExit(wait_exit_code)
     raise SystemExit(_exit_code_for_response(response, STRUCTURAL_PIN_ERROR))
 
 

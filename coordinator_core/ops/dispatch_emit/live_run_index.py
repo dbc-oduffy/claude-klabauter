@@ -165,25 +165,26 @@ def _epoch(stamp: object) -> Optional[float]:
 
 def run_is_stale(root: Union[str, Path], run_id: str, now: Optional[float] = None) -> bool:
     """True when the run's owner session has exited (`warp_live._owner_exited`) and its last activity
-    (`run-stage.json` `last_activity_at`, else the token's or index entry's `minted_at`) is more than
-    `STALE_RUN_SECONDS` old. An unknown owner or an unknown activity time answers False; never raises."""
+    (`run-stage.json` `last_activity_at`, else the token's or index entry's `minted_at`, else the stage's
+    `started_at`/`staged_at`) is more than `STALE_RUN_SECONDS` old. The owner is the submission's, else the
+    token's, else `run-stage.json`'s `session_id`. An unknown owner or an unknown activity time answers False; never raises."""
     try:
         from coordinator_core.ops.dispatch_emit import run_token
 
         root = Path(root)
         record = run_token._read_rec(root, run_id) or {}
         submission = warp_live._read_json(warp_live._submission_path(root, run_id)) or {}
-        owner = submission.get("session_id") or record.get("session_id")
+        stage = warp_live._read_json(warp_live._ask_record_dir(root, run_id) / "run-stage.json") or {}
+        owner = submission.get("session_id") or record.get("session_id") or stage.get("session_id")
         if not (isinstance(owner, str) and owner):
             return False
-        stage = warp_live._read_json(warp_live._ask_record_dir(root, run_id) / "run-stage.json") or {}
         minted = record.get("minted_at")
         if not isinstance(minted, (int, float)):
             path = index_path(root)
             entry = _load(root, path).get(run_id) if path is not None else None
             minted = entry.get("minted_at") if isinstance(entry, dict) else None
         if not isinstance(minted, (int, float)):
-            minted = None
+            minted = _epoch(stage.get("started_at")) or _epoch(stage.get("staged_at"))
         active = _epoch(stage.get("last_activity_at"))
         if active is None:
             active = minted
@@ -197,7 +198,7 @@ def run_is_stale(root: Union[str, Path], run_id: str, now: Optional[float] = Non
 
 def run_is_abandoned(root: Union[str, Path], run_id: str) -> bool:
     """True when the run's `run-stage.json` stage is `staged`, it holds no `halted.json` marker, and its
-    owner session (submission, else token record) has exited (`warp_live._owner_exited`); no age
+    owner session (submission, else token record, else `run-stage.json` `session_id`) has exited (`warp_live._owner_exited`); no age
     requirement. An unknown owner, a live owner, a halted or unstaged run answers False; never raises.
     Reads only this run's records, so call it for overlap hits, never across the index."""
     try:
@@ -210,12 +211,12 @@ def run_is_abandoned(root: Union[str, Path], run_id: str) -> bool:
             return False
         record = run_token._read_rec(root, run_id) or {}
         submission = warp_live._read_json(warp_live._submission_path(root, run_id)) or {}
-        owner = submission.get("session_id") or record.get("session_id")
+        owner = submission.get("session_id") or record.get("session_id") or stage.get("session_id")
         if not (isinstance(owner, str) and owner):
             return False
         minted = record.get("minted_at")
         if not isinstance(minted, (int, float)):
-            minted = _epoch(stage.get("staged_at")) or time.time()
+            minted = _epoch(stage.get("staged_at")) or _epoch(stage.get("started_at")) or time.time()
         return warp_live._owner_exited(owner, float(minted))
     except Exception:  # noqa: BLE001
         return False

@@ -110,6 +110,9 @@ def fixture(tmp_path, monkeypatch):
     _git(tmp_path, "init", "--bare", "-b", _BRANCH, str(origin))
     _git(repo, "init", "-b", _BRANCH)
     _install_hook(repo)
+    # The commit route writes its lock under .coordinator-local/, which consumer repos gitignore.
+    with (repo / ".git" / "info" / "exclude").open("a", encoding="utf-8") as fh:
+        fh.write(".coordinator-local/\n")
     _seed(repo, _TRACKED)
     _git(repo, "add", "--", ".")
     _git(repo, "commit", "-m", "seed")

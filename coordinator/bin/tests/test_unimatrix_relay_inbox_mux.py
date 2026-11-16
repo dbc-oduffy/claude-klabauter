@@ -108,7 +108,7 @@ def test_one_process_registers_six_names_and_releases_all_on_stdin_eof(host):
     assert wait(lambda: len(list(sess.glob("*.json"))) == 6)
     entries = [json.loads(p.read_text()) for p in sess.glob("*.json")]
     assert {e["pid"] for e in entries} == {os.getpid()}
-    assert sorted(e["name"] for e in entries) == sorted(NAMES)
+    assert sorted(e["name"] for e in entries) == sorted(f"{n}.10-0-0-9" for n in NAMES)
     assert len(list(socks.glob("*.sock"))) == 6 and len(list(sess.glob("*.key"))) == 6
     os.close(w)
     t.join(5)
@@ -140,12 +140,12 @@ def test_drop_releases_only_that_name_and_readd_replaces_it(host):
     assert wait(lambda: len(list(sess.glob("*.json"))) == 2)
     send(w, op="drop", name="face-0")
     assert wait(lambda: len(list(sess.glob("*.json"))) == 1)
-    assert [e["name"] for e in map(lambda p: json.loads(p.read_text()), sess.glob("*.json"))] == ["face-1"]
+    assert [e["name"] for e in map(lambda p: json.loads(p.read_text()), sess.glob("*.json"))] == ["face-1.10-0-0-9"]
     send(w, op="add", name="face-1", entry={}, key="K")
     send(w, op="data", name="face-1", line="ignored")
     send(w, op="add", name="face-2", entry={}, key="K")
     assert wait(lambda: len(list(sess.glob("*.json"))) == 2)
-    assert sorted(e["name"] for e in map(lambda p: json.loads(p.read_text()), sess.glob("*.json"))) == ["face-1", "face-2"]
+    assert sorted(e["name"] for e in map(lambda p: json.loads(p.read_text()), sess.glob("*.json"))) == ["face-1.10-0-0-9", "face-2.10-0-0-9"]
     os.close(w)
     t.join(5)
 

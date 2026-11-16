@@ -19,7 +19,7 @@ def test_workdir_has_base_plant_and_plan(tmp_path):
     c = b.load_cases({"lesson-backup-window"})[0]
     b.build_workdir(c, tmp_path / "w")
     assert (tmp_path / "w" / "state/lessons/2026-10-02-compaction-collided-with-snapshot.yaml").is_file()
-    assert (tmp_path / "w" / "docs/wiki/naming-conventions.md").is_file()
+    assert (tmp_path / "w" / "docs" / "wiki/naming-conventions.md").is_file()
     assert (tmp_path / "w" / "plan.md").is_file()
 
 

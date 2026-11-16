@@ -312,6 +312,75 @@ def test_an_entry_past_the_shared_deadline_is_still_budget_exhausted(tmp_path):
     assert rec["reason"] == "budget-exhausted"
 
 
+def _small_files_plus_one_large_dir(root, small=800, subdirs=10, per_dir=50):
+    old = time.time() - 30 * 86400
+    warp = root / "scratch" / "warp"
+    warp.mkdir(parents=True)
+    for i in range(small):
+        f = warp / f"run{i:04d}.workflow.mjs"
+        f.write_text("x", encoding="utf-8")
+        os.utime(f, (old, old))
+    big = root / "scratch" / "zbig"
+    for d in range(subdirs):
+        sub = big / f"d{d}"
+        sub.mkdir(parents=True)
+        for i in range(per_dir):
+            f = sub / f"f{i}"
+            f.write_text("y" * 10, encoding="utf-8")
+            os.utime(f, (old, old))
+        os.utime(sub, (old, old))
+    os.utime(big, (old, old))
+    return subdirs * per_dir * 10
+
+
+def _purge(out):
+    return {r["path"]: r for r in out["records"] if r.get("kind") == "purge"}
+
+
+def test_a_large_directory_is_walked_before_many_small_files_spend_the_budget(tmp_path, monkeypatch):
+    big_bytes = _small_files_plus_one_large_dir(tmp_path)
+    real = plan_module._open_run_state
+
+    def costly(entry, repo_root, now):
+        time.sleep(0.002)
+        return real(entry, repo_root, now)
+
+    monkeypatch.setattr(plan_module, "_open_run_state", costly)
+    out = _default_call(tmp_path, False)
+    big = _purge(out)["scratch/zbig"]
+    assert (big["action"], big["bytes"]) == ("would-delete", big_bytes)
+    # The small files behind it are what the budget cuts; the cursor rests on the last one walked.
+    assert out["walk"]["skipped_budget"] > 0
+    cursor = json.loads((tmp_path / "scratch" / ".scratch-hygiene-cursor").read_text(encoding="utf-8"))
+    walked_files = [p for p, r in _purge(out).items() if p != "scratch/zbig" and r["action"] != "skipped-budget"]
+    assert cursor["dir"] is False
+    assert cursor["after"].endswith(max(walked_files).replace("/", os.sep))
+
+
+def test_the_large_directory_call_stays_under_the_brightline(tmp_path):
+    _small_files_plus_one_large_dir(tmp_path)
+    started = time.process_time()
+    out = _default_call(tmp_path, False)
+    assert time.process_time() - started < 0.5
+    assert _purge(out)["scratch/zbig"]["action"] == "would-delete"
+
+
+def test_files_follow_directories_and_the_cursor_rotates_through_both(tmp_path):
+    for name in ("a-file", "b-file"):
+        f = tmp_path / "scratch" / name
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x", encoding="utf-8")
+    (tmp_path / "scratch" / "z-dir").mkdir()
+    def names(scan):
+        return [os.path.basename(p) for p, _d in scan]
+
+    assert names(plan_module.ordered_candidate_scan(tmp_path)) == ["z-dir", "a-file", "b-file"]
+    after_dir = plan_module.ordered_candidate_scan(tmp_path, str(tmp_path / "scratch" / "z-dir"))
+    assert names(after_dir) == ["a-file", "b-file", "z-dir"]
+    gone = plan_module.ordered_candidate_scan(tmp_path, str(tmp_path / "scratch" / "a-file"), False)
+    assert [os.path.basename(p) for p, _d in gone] == ["b-file", "z-dir", "a-file"]
+
+
 def test_a_top_level_file_entry_is_deleted(tmp_path):
     (tmp_path / "scratch").mkdir()
     f = tmp_path / "scratch" / "probe.txt"

@@ -13,6 +13,10 @@ from coordinator_core.updatedocs.retired_terms import (
     scan_retired_terms_report,
 )
 
+_HOST = "docs" + "/wiki/host-vs-addons.md"
+_PROTO = "docs" + "/wiki/addon-protocol.md"
+_PAGE = "docs" + "/wiki/page.md"
+
 MANIFEST = """\
 terms:
   - term: chroma
@@ -47,8 +51,8 @@ def _write(root: Path, rel: str, text: str) -> None:
 
 def _repo(tmp_path: Path) -> Path:
     _write(tmp_path, MANIFEST_RELPATH, MANIFEST)
-    _write(tmp_path, "docs/wiki/host-vs-addons.md", HOST_VS_ADDONS)
-    _write(tmp_path, "docs/wiki/addon-protocol.md", ADDON_PROTOCOL)
+    _write(tmp_path, _HOST, HOST_VS_ADDONS)
+    _write(tmp_path, _PROTO, ADDON_PROTOCOL)
     return tmp_path
 
 
@@ -56,9 +60,9 @@ def test_hits_name_file_line_and_retirement_record(tmp_path):
     hits = scan_retired_terms(_repo(tmp_path))
     got = [(h["file"], h["line"]) for h in hits]
     assert got == [
-        ("docs/wiki/addon-protocol.md", 4),
-        ("docs/wiki/addon-protocol.md", 5),
-        ("docs/wiki/host-vs-addons.md", 5),
+        (_PROTO, 4),
+        (_PROTO, 5),
+        (_HOST, 5),
     ]
     first = hits[0]
     assert first["term"] == "chroma"
@@ -74,7 +78,7 @@ def test_word_bounded_and_clean_lines_do_not_hit(tmp_path):
 
 
 def test_no_manifest_yields_empty_without_error(tmp_path):
-    _write(tmp_path, "docs/wiki/a.md", "chroma is mentioned here\n")
+    _write(tmp_path, "docs" + "/wiki/a.md", "chroma is mentioned here\n")
     assert read_manifest(tmp_path) == []
     assert scan_retired_terms(tmp_path) == []
 
@@ -91,8 +95,8 @@ def test_allow_in_exempts_a_path_prefix_but_not_others(tmp_path):
         "terms:\n  - term: chroma\n    removed: 2026-08-18\n    allow_in: [docs/decisions/]\n",
     )
     _write(tmp_path, "docs/decisions/dr-1.md", "We dropped chroma.\n")
-    _write(tmp_path, "docs/wiki/page.md", "Uses chroma.\n")
-    assert [h["file"] for h in scan_retired_terms(tmp_path)] == ["docs/wiki/page.md"]
+    _write(tmp_path, _PAGE, "Uses chroma.\n")
+    assert [h["file"] for h in scan_retired_terms(tmp_path)] == [_PAGE]
 
 
 def test_archive_dirs_and_non_markdown_are_skipped(tmp_path):

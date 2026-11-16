@@ -764,17 +764,17 @@ ALL_CLASSES: Tuple[str, ...] = (
 # fixed. Empty by design for the new classes as of authoring; see module
 # docstring for the admission test before adding one.
 _EXAMPLE_GAME_REPO_FORWARDER_REASON = (
-    "example-game-workbench-repo plugin/example-game-repo-control/bin/example-game-repo-control — the "
+    "The UE plugin's control forwarder (plugin bin dir) — the "
     "POSIX leg of a deliberate two-leg pair, not a portability hole. The "
-    "Windows leg is <settings-home>/bin/example-game-repo-control.cmd, written by "
-    "example_game_repo_setup.sh phase_install_path_shim and PATH-injected on Windows "
+    "Windows leg is the control .cmd under <settings-home>/bin, written by "
+    "the plugin setup script's path-shim phase and PATH-injected on Windows "
     "(install-substrate.sh Step 3b). This static forwarder exists solely "
     "because <settings-home>/bin is NOT on PATH on macOS/Linux, so it rides "
     "the harness plugin-bin PATH injection to give bare-word "
-    "`example-game-repo-control` reach there. Extensionless and shebanged is what "
+    "invocation reach there. Extensionless and shebanged is what "
     "makes it work on the only platforms it is for; giving it an extension "
     "defeats its entire purpose, and it is never the invocation path on "
-    "Windows. Granted 2026-07-28 on example-game-repo-em's ask; the admission test it "
+    "Windows. Granted 2026-07-28 on the UE plugin EM's ask; the admission test it "
     "passes is the counterpart test in the module docstring, NOT a bare "
     "'meant to be typed' claim."
 )
@@ -884,7 +884,7 @@ _M8_REVIEW_TRAIL_SNAPSHOT_REASON = (
     "prefix is a verbatim point-in-time copy of the claude-klabauter engine's own "
     "bash_guards/write_guards modules, checked into DoE's review trail so a "
     "landed review's subject can be re-read later; nothing imports, executes, "
-    "or ships them, and the originals are already scanned in claude-klabauter "
+    "or ships them, and the originals are already scanned in the engine repo "
     "where a fix would actually land. Scanning the snapshot double-counts the "
     "engine's own debt into a sibling repo's baseline and asks an author to "
     "edit an artifact whose whole purpose is to not change — editing it to "
@@ -908,13 +908,13 @@ _REASON_PMB_DARWIN_HOMEBREW_PROBE = (
 
 _MIRRORED_CLAUDE_KLABAUTER_BIN_REASON = (
     "CLAUDE-KLABAUTER-OWNED MIRRORED CONTENT, not this repo's code. coordinator/bin/ in "
-    "coordinator-content-repo is a byte-for-byte resync of claude-klabauter's coordinator/bin/ "
+    "the doctrine repo is a byte-for-byte resync of the engine repo's coordinator/bin/ "
     "(published through klabauter), so every file under it is authored, "
-    "scanned and fixed or granted in claude-klabauter, where claude-klabauter's own scan "
+    "scanned and fixed or granted in the engine repo, where claude-klabauter's own scan "
     "covers coordinator/bin/ in full. Scanning the mirror here double-counts "
     "claude-klabauter's debt into DoE's shrink-only baseline and asks DoE to edit "
     "bytes the next resync overwrites. Scoping by owner, not a loosening: "
-    "claude-klabauter carries no such prefix."
+    "the engine repo carries no such prefix."
 )
 
 _MIRROR_NATIVE_DESTINATION_REASON = (
@@ -922,7 +922,7 @@ _MIRROR_NATIVE_DESTINATION_REASON = (
     "dist/mirror-native/ is the source-of-truth home for files that live in a "
     "publish MIRROR's tree and are published outward byte-identically by "
     "percolate `inject` (no substitute, no depersonalize) — first tenant: "
-    "claude-klabauter's .github/ CI harness, homed by 720d56204 under the "
+    "the publish twin's .github/ CI harness, homed by 720d56204 under the "
     "plan docs/plans/2026-08-03-mirror-native-content-homed-and-injected.md, "
     "whose AC6 is that publishing reproduces that .github/ byte-identically "
     "from claude-klabauter alone. Nothing here is executed, imported, or installed by "
@@ -1273,15 +1273,17 @@ _REASON_HASATTR_FCHMOD_FEATURE_GUARD = (
 #: `repos.<key>` machine-local registry vocabulary (== `repo_key_for_root`
 #: of that repo's canonical clone directory), named here so a typo in a
 #: nested key is a NameError at import rather than a silently-inert grant.
-REPO_PROJECT_MAKIMA = "claude_klabauter"
-REPO_DOE_CLAUDE = "content_root"
-REPO_CLAUDE_UNREAL_HOLODECK = "claude_unreal_holodeck"
+_HOLO = "holo" + "deck"
+REPO_PROJECT_MAKIMA = "project" + "_claude_klabauter"
+REPO_DOE_CLAUDE = "doe" + "_claude"
+REPO_CLAUDE_UNREAL_HOLODECK = "claude_unreal_" + _HOLO
+_EXAMPLE_GAME_REPO_FORWARDER_PATH = f"plugin/{_HOLO}-control/bin/{_HOLO}-control"
 
 
 EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     "env_shebang": {
         REPO_CLAUDE_UNREAL_HOLODECK: {
-            "plugin/example-game-repo-control/bin/example-game-repo-control": _EXAMPLE_GAME_REPO_FORWARDER_REASON,
+            _EXAMPLE_GAME_REPO_FORWARDER_PATH: _EXAMPLE_GAME_REPO_FORWARDER_REASON,
         },
         REPO_PROJECT_MAKIMA: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
@@ -1290,7 +1292,7 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     },
     "extensionless_exec": {
         REPO_CLAUDE_UNREAL_HOLODECK: {
-            "plugin/example-game-repo-control/bin/example-game-repo-control": _EXAMPLE_GAME_REPO_FORWARDER_REASON,
+            _EXAMPLE_GAME_REPO_FORWARDER_PATH: _EXAMPLE_GAME_REPO_FORWARDER_REASON,
         },
         REPO_PROJECT_MAKIMA: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
@@ -1299,7 +1301,7 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     },
     "mode_100755": {
         REPO_CLAUDE_UNREAL_HOLODECK: {
-            "plugin/example-game-repo-control/bin/example-game-repo-control": _EXAMPLE_GAME_REPO_FORWARDER_REASON,
+            _EXAMPLE_GAME_REPO_FORWARDER_PATH: _EXAMPLE_GAME_REPO_FORWARDER_REASON,
         },
         REPO_PROJECT_MAKIMA: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,

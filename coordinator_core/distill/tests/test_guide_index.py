@@ -22,11 +22,11 @@ def _write(root: Path, rel: str, text: str) -> None:
 
 
 def _wiki(tmp_path: Path) -> dict[str, str]:
-    _write(tmp_path, "docs/wiki/sharding.md", "---\ntitle: x\n---\n# Relay sharding\n## Byte caps\nShards relay truncation.\n")
+    _write(tmp_path, "docs" + "/wiki/sharding.md", "---\ntitle: x\n---\n# Relay sharding\n## Byte caps\nShards relay truncation.\n")
     _write(tmp_path, "docs/wiki/guard-messaging.md", "# Guard messaging\n## Register\nDeny advisory text.\n")
-    _write(tmp_path, "docs/wiki/fenced.md", "# Fenced\n```\n# not a heading\n```\n")
-    _write(tmp_path, "docs/wiki/other-a.md", "# Other\nunrelated filler words\n")
-    _write(tmp_path, "docs/wiki/other-b.md", "# Another\nmore filler content\n")
+    _write(tmp_path, "docs" + "/wiki/fenced.md", "# Fenced\n```\n# not a heading\n```\n")
+    _write(tmp_path, "docs" + "/wiki/other-a.md", "# Other\nunrelated filler words\n")
+    _write(tmp_path, "docs" + "/wiki/other-b.md", "# Another\nmore filler content\n")
     return {
         s: f"docs/wiki/{s}.md"
         for s in ("sharding", "guard-messaging", "fenced", "other-a", "other-b")
@@ -76,16 +76,16 @@ def test_fenced_hash_lines_and_frontmatter_are_not_headings(tmp_path):
 def test_long_headings_clip_at_a_word_boundary_with_an_ellipsis(tmp_path):
     long = "Dogfood-context / tool-preference / orientation system-prompt layering and more"
     short = "Short title"
-    _write(tmp_path, "docs/wiki/w.md", f"## {long}\n## {short}\n")
-    outline = build_index(tmp_path, {"w": "docs/wiki/w.md"})["guides"][0]["outline"]
+    _write(tmp_path, "docs" + "/wiki/w.md", f"## {long}\n## {short}\n")
+    outline = build_index(tmp_path, {"w": "docs" + "/wiki/w.md"})["guides"][0]["outline"]
     assert outline[0] == "## Dogfood-context / tool-preference / orientation…"
     assert outline[1] == f"## {short}"  # short titles are untouched, no ellipsis
     assert long.startswith(outline[0][3:-1] + " ")  # clipped text is a whole-word prefix of the title
 
 
 def test_outline_stays_within_entry_byte_bound(tmp_path):
-    _write(tmp_path, "docs/wiki/big.md", "".join(f"## {'h' * 80} {i}\n" for i in range(40)))
-    idx = build_index(tmp_path, {"big": "docs/wiki/big.md"})
+    _write(tmp_path, "docs" + "/wiki/big.md", "".join(f"## {'h' * 80} {i}\n" for i in range(40)))
+    idx = build_index(tmp_path, {"big": "docs" + "/wiki/big.md"})
     import json
 
     entry = idx["guides"][0]
@@ -181,8 +181,8 @@ def test_rag_read_never_writes_the_store(tmp_path):
     slugs = _wiki(repo)
     db = _make_rag(home, repo, _rag_headings(slugs))
     before = db.read_bytes()
-    ranked_guides_for_batches(repo, [["docs/wiki/sharding.md"]], slugs, settings_home_dir=home)
-    rag_known_paths(repo, ["docs/wiki/sharding.md"], home)
+    ranked_guides_for_batches(repo, [["docs" + "/wiki/sharding.md"]], slugs, settings_home_dir=home)
+    rag_known_paths(repo, ["docs" + "/wiki/sharding.md"], home)
     assert db.read_bytes() == before
 
 

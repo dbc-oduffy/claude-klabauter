@@ -105,7 +105,7 @@ UPDATE_DOCS_PHASE_IDS = (
     "11g", "11c", "11d", "12", "11f", "11h", "11h2", "11i", "11j", "11k", "11m", "11n", "11o",
     "11p", "13", "14", "15",
 )
-"""The /update-docs phase table (coordinator-content-repo coordinator/commands/update-docs.md, 33 rows), one
+"""The /update-docs phase table (the coordinator plane's update-docs command, 33 rows), one
 id per row in table order, `1-2b` ASCII-hyphenated, owner suffixes dropped."""
 
 RETIRED_TERM_KIND = "retired_term_hit"

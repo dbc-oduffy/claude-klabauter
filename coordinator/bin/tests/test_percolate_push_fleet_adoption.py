@@ -59,12 +59,19 @@ def wired(monkeypatch):
     monkeypatch.setattr(_mod, "_resolve_dest", lambda t, r: "dest")
     state["code"] = 0
     monkeypatch.setattr(_mod, "_push_under_slot", lambda *a, **k: state["code"])
-    state["head"] = f"candidate\n{_SHA}\n"
-    monkeypatch.setattr(
-        _mod,
-        "_run",
-        lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout=state["head"], stderr=""),
-    )
+    state["branch"] = "candidate"
+
+    def rev_parse(cmd, **_k):
+        # git rev-parse semantics: --abbrev-ref names every HEAD after it; a HEAD before it is the sha.
+        out, abbrev = [], False
+        for arg in cmd[cmd.index("rev-parse") + 1 :]:
+            if arg == "--abbrev-ref":
+                abbrev = True
+            elif arg == "HEAD":
+                out.append(state["branch"] if abbrev else _SHA)
+        return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(out) + "\n", stderr="")
+
+    monkeypatch.setattr(_mod, "_run", rev_parse)
     state["rows"] = [
         fleet_adoption.BoxAdoption("machine-a", True, _SHA, ""),
         fleet_adoption.BoxAdoption("machine-b", False, "b" * 40, "diverged"),
@@ -135,7 +142,7 @@ def test_other_target_skips_fan_out(wired, capsys):
 
 
 def test_non_candidate_branch_skips_fan_out(wired, capsys):
-    wired["head"] = f"main\n{_SHA}\n"
+    wired["branch"] = "main"
     _mod._cmd_push(_args())
     assert wired["calls"] == []
     assert "FLEET ADOPTION" not in capsys.readouterr().out

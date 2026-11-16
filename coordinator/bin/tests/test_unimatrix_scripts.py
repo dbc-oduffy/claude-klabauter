@@ -154,8 +154,10 @@ def test_bridge_relay_send_reaches_the_far_relay_on_either_platform(monkeypatch,
     monkeypatch.setattr(bridge, "pick_remote", lambda lan, tun: lan)
     bridge.relay_send(_Conn())
     bridge.log.close()
-    assert len(mux.calls) == 1
-    remote, key, command = mux.calls[0]
+    # A bare-ok fake reply makes the bridge follow up with a `receipts` read; only the send is pinned here.
+    sends = [c for c in mux.calls if c[2].startswith("send-session ")]
+    assert len(sends) == 1
+    remote, key, command = sends[0]
     assert remote == "lan" and key == "k"
     assert re.fullmatch(r"send-session 77 [0-9a-f]{16} [0-9a-f]{16} sid-far", command)
 

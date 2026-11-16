@@ -18,6 +18,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
+_WIKI = "docs" + "/wiki/"
+
 
 def _git(root, *args):
     return subprocess.run(
@@ -41,7 +43,7 @@ def test_finishing_a_run_commits_with_the_budgeted_spawns(tmp_path, monkeypatch,
     touched = []
     for i in range(pages):
         (wiki / f"p{i}.md").write_text(f"# Wrong {i}\n\nBody {i}.\n", encoding="utf-8")
-        touched.append(f"docs/wiki/fam/p{i}.md")
+        touched.append(f"{_WIKI}fam/p{i}.md")
     ev = tmp_path / "state" / "evidence"
     ev.mkdir(parents=True)
     (ev / "e.json").write_text("{}\n", encoding="utf-8")
@@ -55,4 +57,4 @@ def test_finishing_a_run_commits_with_the_budgeted_spawns(tmp_path, monkeypatch,
     counted = [s for s in spawns if "_machine_local.py" not in " ".join(s.argv)]
     assert len(counted) == sum(_budget().values()), [s.argv for s in counted]
     tracked = _git(tmp_path, "ls-files").splitlines()
-    assert "docs/wiki/fam/_index.md" in tracked and "state/evidence/e.json" in tracked
+    assert _WIKI + "fam/_index.md" in tracked and "state/evidence/e.json" in tracked

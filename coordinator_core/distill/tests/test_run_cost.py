@@ -8,6 +8,9 @@ from coordinator_core.benchmarks.distill_run_cost import build_fates, disposal_m
 from coordinator_core.distill import manifest_schema as schema
 from coordinator_core.distill.run_cost import project_run_cost, scoped_files_sha256
 
+_G1 = "docs" + "/wiki/g1.md"
+_G2 = "docs" + "/wiki/g2.md"
+
 
 def _write(root: Path, rel: str, size: int) -> None:
     p = root / rel
@@ -35,9 +38,9 @@ def _payload(batches: list[list[str]], guides: dict[str, str], batch_extra: dict
 def test_dispatches_and_bytes_default_lists_every_guide_to_every_agent(tmp_path):
     for name, size in (("a.md", 100), ("b.md", 200), ("c.md", 300)):
         _write(tmp_path, name, size)
-    _write(tmp_path, "docs/wiki/g1.md", 1000)
-    _write(tmp_path, "docs/wiki/g2.md", 2000)
-    payload = _payload([["a.md", "b.md"], ["c.md"]], {"g1": "docs/wiki/g1.md", "g2": "docs/wiki/g2.md"})
+    _write(tmp_path, _G1, 1000)
+    _write(tmp_path, _G2, 2000)
+    payload = _payload([["a.md", "b.md"], ["c.md"]], {"g1": _G1, "g2": _G2})
 
     cost = project_run_cost(payload, tmp_path)
 
@@ -53,12 +56,12 @@ def test_dispatches_and_bytes_default_lists_every_guide_to_every_agent(tmp_path)
 def test_digests_and_relevant_guides_shrink_scan_bytes_but_not_the_scoped_set(tmp_path):
     _write(tmp_path, "a.md", 5000)
     _write(tmp_path, "d/a.digest", 50)
-    _write(tmp_path, "docs/wiki/g1.md", 1000)
-    _write(tmp_path, "docs/wiki/g2.md", 2000)
-    guides = {"g1": "docs/wiki/g1.md", "g2": "docs/wiki/g2.md"}
+    _write(tmp_path, _G1, 1000)
+    _write(tmp_path, _G2, 2000)
+    guides = {"g1": _G1, "g2": _G2}
     before = project_run_cost(_payload([["a.md"]], guides), tmp_path)
     after = project_run_cost(
-        _payload([["a.md"]], guides, {1: {"digests": {"a.md": "d/a.digest"}, "relevantGuides": ["docs/wiki/g1.md"]}}),
+        _payload([["a.md"]], guides, {1: {"digests": {"a.md": "d/a.digest"}, "relevantGuides": [_G1]}}),
         tmp_path,
     )
 
@@ -69,9 +72,9 @@ def test_digests_and_relevant_guides_shrink_scan_bytes_but_not_the_scoped_set(tm
 
 def test_relevant_guides_as_emitted_entry_dicts_are_costed_by_path(tmp_path):
     _write(tmp_path, "a.md", 10)
-    _write(tmp_path, "docs/wiki/g1.md", 1000)
-    guides = {"g1": "docs/wiki/g1.md"}
-    entry = {"slug": "g1", "path": "docs/wiki/g1.md", "outline": ["# G"]}
+    _write(tmp_path, _G1, 1000)
+    guides = {"g1": _G1}
+    entry = {"slug": "g1", "path": _G1, "outline": ["# G"]}
     cost = project_run_cost(_payload([["a.md"]], guides, {1: {"relevantGuides": [entry]}}), tmp_path)
     assert cost["scan_bytes_split"]["guides"] == 1000
 
@@ -79,8 +82,8 @@ def test_relevant_guides_as_emitted_entry_dicts_are_costed_by_path(tmp_path):
 def test_scan_prompt_tokens_are_per_batch_files_plus_guides(tmp_path):
     _write(tmp_path, "a.md", 40_000)
     _write(tmp_path, "b.md", 80_000)
-    _write(tmp_path, "docs/wiki/g1.md", 4_000)
-    payload = _payload([["a.md"], ["b.md"]], {"g1": "docs/wiki/g1.md"})
+    _write(tmp_path, _G1, 4_000)
+    payload = _payload([["a.md"], ["b.md"]], {"g1": _G1})
 
     cost = project_run_cost(payload, tmp_path)
 
@@ -125,10 +128,10 @@ def test_synthesis_phase_is_priced_from_topics(tmp_path):
 def test_projection_is_the_shared_scope_projection_over_the_measured_shape(tmp_path):
     from coordinator_core.ops.distill_scope import projected_cost, projected_topics, run_fixed_cost
 
-    guides = {"g1": "docs/wiki/g1.md"}
+    guides = {"g1": _G1}
     _write(tmp_path, "a.md", 4_000)
     _write(tmp_path, "b.md", 8_000)
-    _write(tmp_path, "docs/wiki/g1.md", 2_000)
+    _write(tmp_path, _G1, 2_000)
     cost = project_run_cost(_payload([["a.md"], ["b.md"]], guides), tmp_path)
 
     shared = projected_cost(
@@ -220,8 +223,8 @@ def test_inlined_args_need_no_load_relay_and_shard_mode_still_counts_them(tmp_pa
 
     for name in ("a.md", "b.md"):
         _write(tmp_path, name, 100)
-    _write(tmp_path, "docs/wiki/g1.md", 1000)
-    payload = _payload([["a.md"], ["b.md"]], {"g1": "docs/wiki/g1.md"})
+    _write(tmp_path, _G1, 1000)
+    payload = _payload([["a.md"], ["b.md"]], {"g1": _G1})
 
     shard_mode = project_run_cost(payload, tmp_path)
     inlined = project_run_cost(launch_args.build(payload, run_dir=tmp_path / "run")["args"], tmp_path)

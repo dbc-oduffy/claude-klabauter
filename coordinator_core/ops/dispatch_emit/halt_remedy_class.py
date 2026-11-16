@@ -119,7 +119,7 @@ IRREVERSIBLE_KINDS: dict[str, str] = {
     "out-of-worktree": "writes outside the worktree",
     "halt-on-run-owned-merge": "resolves a merge over run-owned history unasked: history rewrite",
     # Unverifiable claims: continuing ships docs whose citations were never checked against the corpus.
-    "rag_corpus_down": "example-retrieval-repo corpus down: the docs-check cannot back citations; continuing ships them unchecked",
+    "rag_corpus_down": "code-index corpus down: the docs-check cannot back citations; continuing ships them unchecked",
     "citation_unbacked": "docs-check found citations the corpus does not back: continuing ships unbacked claims",
 }
 

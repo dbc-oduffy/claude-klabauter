@@ -58,9 +58,16 @@ def _build(scratch: Path) -> Tuple[Path, Dict[str, str]]:
         (repo / f"f{i}.py").write_bytes(_body(i))
     _git(repo, "add", "--", ".")
     _git(repo, "commit", "-q", "-m", "seed")
-    blobs: Dict[str, str] = {}
-    for i in range(PATHS):
-        blobs[f"f{i}.py"] = _git(repo, "hash-object", "-w", "--stdin", data=_body(i, " LANDED"))
+    landed = scratch / "landed"
+    landed.mkdir()
+    names = [f"f{i}.py" for i in range(PATHS)]
+    for i, name in enumerate(names):
+        (landed / name).write_bytes(_body(i, " LANDED"))
+    shas = _git(
+        repo, "hash-object", "-w", "--no-filters", "--stdin-paths",
+        data="".join(f"{landed / name}\n" for name in names).encode(),
+    ).split()
+    blobs: Dict[str, str] = dict(zip(names, shas))
     for i in range(PEER_DIRTY):
         (repo / f"f{i}.py").write_bytes(_body(i).replace(b"line 30\n", b"PEER 30\n"))
     return repo, blobs
@@ -107,10 +114,13 @@ def measure_once() -> dict:
         except ImportError:
             sync_landed_paths = None
         if sync_landed_paths is not None:
-            plan = {}
-            for p, sha in blobs.items():
-                parent = _git(repo, "ls-tree", head, "--", p).split()
-                plan[p] = ((int(parent[0], 8), parent[2]), (0o100644, sha))
+            parents = {}
+            for row in _git(repo, "ls-tree", head, "--", *blobs).splitlines():
+                meta, _, path = row.partition("\t")
+                parents[path] = meta.split()
+            plan = {
+                p: ((int(parents[p][0], 8), parents[p][2]), (0o100644, sha)) for p, sha in blobs.items()
+            }
             with _SpawnCount() as spawns:
                 t0 = time.process_time()
                 sync_landed_paths(repo, plan)

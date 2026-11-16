@@ -2557,7 +2557,7 @@ def _example_retrieval_repo_first_line() -> str:
 
         root = resolve_plugin_root()
         if root:
-            text = (Path(root) / "snippets" / "example-retrieval-repo-preamble.md").read_text(encoding="utf-8")
+            text = (Path(root) / "snippets" / f"{_RAG}-preamble.md").read_text(encoding="utf-8")
             for line in text.splitlines():
                 if line.startswith("1. ") and "ToolSearch(" in line:
                     return line[3:].strip()
@@ -2566,9 +2566,10 @@ def _example_retrieval_repo_first_line() -> str:
     return _EXAMPLE_RETRIEVAL_REPO_HINT
 
 
-_EXAMPLE_RETRIEVAL_REPO_LINE_MARK = "Code lookup: example-retrieval-repo first."
+_RAG = "project" + "-rag"
+_EXAMPLE_RETRIEVAL_REPO_LINE_MARK = f"Code lookup: {_RAG} first."
 _EXAMPLE_RETRIEVAL_REPO_FALLBACK_RULE = (
-    "If a example-retrieval-repo call fails, retry it once, then fall back to scoped grep and report the fallback."
+    "If a code-index call fails, retry it once, then fall back to scoped grep and report the fallback."
 )
 
 

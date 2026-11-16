@@ -589,6 +589,7 @@ def main(argv=None):
             say(f"stopped by signal {signum}; mirrors drop until relaunched")
             sys.exit(128 + signum)
         signal.signal(signal.SIGTERM, stopped)
+    _roster().stamp_supervisor(cfg.remote)
     clients = {}
     try:
         boot_prune(os.path.dirname(os.path.abspath(cfg.log)), live_sessions(skip), say)

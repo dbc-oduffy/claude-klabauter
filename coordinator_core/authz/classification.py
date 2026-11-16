@@ -4579,6 +4579,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # A read-shaped NAME is not a read-only handler — the refresh is the point.
     # Spec: docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-emits.md § C4
     "workflow.fire_status": OpClass.MUTATING,
+    # workflow.fire_wait — MUTATING: one fire_status refresh (the same _write_record /
+    # notify_terminal side effects as workflow.fire_status above) plus a read-only git log.
+    # DR-208: writes the registry record YES; no rag store; no sentinel of its own; shared
+    # common-dir record YES; refreshed state observable across processes YES.
+    "workflow.fire_wait": OpClass.MUTATING,
     # gate.validate_invocable — MUTATING: merge-gate DoD checker
     # (ops/gate_validate_invocable.py). DR-208 five-question affirmation:
     #   1. Does the handler open any file for write (including append)?          YES.

@@ -165,7 +165,17 @@ def main(argv: Optional[list] = None) -> int:
     args = ap.parse_args(argv)
     root = args.root.resolve()
     inputs = default_inputs(root)
-    res = measure(root, inputs["literals"], inputs["run_id"], inputs["sizing_rel"])
+    import shutil
+    from coordinator_core.benchmarks import fixture_settings_home
+    from coordinator_core.temp_layout import mkdtemp_in
+    scratch = _REPO / "scratch"
+    scratch.mkdir(exist_ok=True)
+    home_parent = mkdtemp_in("legs-pre-integrity-home-", scratch)
+    try:
+        with fixture_settings_home(home_parent):
+            res = measure(root, inputs["literals"], inputs["run_id"], inputs["sizing_rel"])
+    finally:
+        shutil.rmtree(home_parent, ignore_errors=True)
     res.update(root=str(root), literals_source=inputs["source"])
     print(json.dumps(res, sort_keys=True))
     return 0

@@ -1080,3 +1080,24 @@ def test_share_repo_root_leaves_a_root_used_under_the_threshold_alone(monkeypatc
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
     script = _shared_root_script(f"const a = '{_ROOT}/a';", f"const b = '{_ROOT}/b';")
     assert ask_compose._share_repo_root(script, (_ROOT,)) == script
+
+
+def _precedence_script(uses: int) -> str:
+    literal = ask_compose._lit(ask_compose._emit._BRIEF_PRECEDENCE_CLAUSE)
+    body = "".join(f"const p{i} = {literal} + x;\n" for i in range(uses))
+    return f"{body}{ASK_MANIFEST_MARKER}{{}}\n"
+
+
+def test_share_brief_precedence_shares_tail_for_repeated_clause():
+    clause = ask_compose._lit(ask_compose._emit._BRIEF_PRECEDENCE_CLAUSE)[1:-1]
+    out = ask_compose._share_brief_precedence(_precedence_script(3))
+    head, tail = clause[: ask_compose._PRECEDENCE_HEAD_LEN], clause[ask_compose._PRECEDENCE_HEAD_LEN :]
+    assert out.count(f"const {ask_compose._PRECEDENCE_TAIL_FN} = `{tail}`;") == 1
+    assert out.count(head + "' + " + ask_compose._PRECEDENCE_TAIL_FN) == 3
+    assert out.count(tail) == 1
+    assert out.index(f"const {ask_compose._PRECEDENCE_TAIL_FN}") < out.index(ASK_MANIFEST_MARKER)
+
+
+def test_share_brief_precedence_leaves_single_use_untouched():
+    script = _precedence_script(1)
+    assert ask_compose._share_brief_precedence(script) == script

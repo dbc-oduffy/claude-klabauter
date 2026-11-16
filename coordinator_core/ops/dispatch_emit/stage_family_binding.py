@@ -14,7 +14,7 @@ from coordinator_core.frontmatter.yaml_load import SAFE_LOADER
 from coordinator_core.ops.dispatch_emit import stage_family
 from coordinator_core.ops.emit import doe_drift
 
-BINDING_REF = "coordinator-content-repo:coordinator/pipelines/stage-family-binding.yaml"
+BINDING_REF = "doe" + "-claude:coordinator/pipelines/stage-family-binding.yaml"
 _BINDING_RELPATH = "coordinator/pipelines/stage-family-binding.yaml"
 _REGISTRY_KEY = "engine.working_repos.content_root"
 

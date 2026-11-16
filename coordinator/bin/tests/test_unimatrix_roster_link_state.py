@@ -50,7 +50,7 @@ def test_down_then_up_writes_once_each(monkeypatch, tmp_path):
     mod = load()
     writes = []
     real = mod.write_json_atomic
-    monkeypatch.setattr(mod, "write_json_atomic", lambda p, d: (writes.append(d["state"]), real(p, d)))
+    monkeypatch.setattr(mod, "write_json_atomic", lambda p, d: ("state" in d and writes.append(d["state"]), real(p, d)))
     text = run_main(mod, monkeypatch, tmp_path, [True, False, False, False, False, True, True])
     assert writes == ["down", "up"]
     assert text.count("LINK-DOWN") == 1 and text.count("LINK-UP") == 1
@@ -70,7 +70,7 @@ def test_steady_up_writes_the_first_record_once_then_nothing(monkeypatch, tmp_pa
     mod = load()
     writes = []
     real = mod.write_json_atomic
-    monkeypatch.setattr(mod, "write_json_atomic", lambda p, d: (writes.append(d["state"]), real(p, d)))
+    monkeypatch.setattr(mod, "write_json_atomic", lambda p, d: ("state" in d and writes.append(d["state"]), real(p, d)))
     text = run_main(mod, monkeypatch, tmp_path, [True, True, True, True])
     assert writes == ["up"] and text.count("LINK-UP") == 1 and record(tmp_path)["state"] == "up"
 
@@ -99,6 +99,11 @@ TICKS = 6
 def drive_default_path(mod, monkeypatch, tmp_path, win, fail_first=False):
     """Run main() for TICKS polls through the real fetch_roster over a fake ssh; returns (argvs, dials, clock)."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+    mod._box_mux()._FAR_PLATFORM.clear()
+    if not win:
+        far = tmp_path / "home" / "unimatrix" / "control-far"
+        far.mkdir(parents=True)
+        (far / "example-fleet-pro.json").write_text(json.dumps({"platform": "linux"}))
     for name in ("sync", "reap_orphaned_mirrors", "reap_unbacked_agy_faces", "ensure_key_loaded"):
         monkeypatch.setattr(mod, name, lambda *a, **k: None)
     monkeypatch.setattr(mod, "inbound_names", lambda: set())

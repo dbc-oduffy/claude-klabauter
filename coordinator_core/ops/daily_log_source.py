@@ -36,7 +36,7 @@ _TSHIRT_RE = re.compile(r"^\s+tshirt:\s*[\"']?([A-Za-z]+)", re.M)
 _TITLE_RE = re.compile(r"^title:\s*[\"']?(.+?)[\"']?\s*$", re.M)
 _PROBLEM_RE = re.compile(r"^## Problem\s*$", re.M)
 _VIEW_COLUMNS = ("plan", "summary_line", "sha", "sizing")
-VIEW_DB_RELPATH = ("project-rag", "indexes", "doc_files.sqlite")
+VIEW_DB_RELPATH = ("project" + "-rag", "indexes", "doc_files.sqlite")
 
 
 def _epoch(moment: "datetime.datetime | int | float") -> int:

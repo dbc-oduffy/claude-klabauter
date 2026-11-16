@@ -51,11 +51,16 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     bridge.log = open(tmp_path / "b.log", "a", encoding="utf-8")
     monkeypatch.setattr(bridge, "pick_remote", lambda lan, tun: lan)
     mux = bridge._box_mux()
+    mux._FAR_PLATFORM.clear()
+    far = tmp_path / "settings" / "unimatrix" / "control-far"
+    far.mkdir(parents=True)
+    (far / "lan.json").write_text(json.dumps({"platform": "linux"}))
     monkeypatch.setattr(mux, "IS_WIN", False)  # one ssh per send; the Windows broker leg is not under test here
     bridge.notices = []
     monkeypatch.setattr(bridge, "notify_sender", lambda line, target, error: bridge.notices.append(error))
     yield bridge, bridge.deliveries_path()
     bridge.log.close()
+    mux._FAR_PLATFORM.clear()
 
 
 def drive(bridge, deliveries, monkeypatch, returncode):

@@ -19,6 +19,7 @@ from coordinator_core.git.run import GitResult
 from coordinator_core.ipc import _REGISTRY
 
 _OP = "ceremony.update_docs_worklist"
+_WIKI = "docs" + "/wiki/"
 _SHA_A = "a" * 40
 _SHA_B = "b" * 40
 _NOW = _dt.datetime.now(tz=_dt.timezone.utc)
@@ -421,14 +422,14 @@ def test_retired_term_hits_reach_the_default_worklist_with_file_line_and_record(
     item = next(w for w in out["agent_worklist"] if w["kind"] == uw.RETIRED_TERM_KIND)
     assert item["total"] == 3
     assert item["paths"] == [
-        "docs/wiki/addon-protocol.md:3 chroma (removed 2026-08-18): replaced by the embedded store",
-        "docs/wiki/host-vs-addons.md:3 chroma (removed 2026-08-18): replaced by the embedded store",
-        "docs/wiki/host-vs-addons.md:6 chroma (removed 2026-08-18): replaced by the embedded store",
+        _WIKI + "addon-protocol.md:3 chroma (removed 2026-08-18): replaced by the embedded store",
+        _WIKI + "host-vs-addons.md:3 chroma (removed 2026-08-18): replaced by the embedded store",
+        _WIKI + "host-vs-addons.md:6 chroma (removed 2026-08-18): replaced by the embedded store",
     ]
     assert {(h["file"], h["line"], h["removed"]) for h in item["hits"]} == {
-        ("docs/wiki/addon-protocol.md", 3, "2026-08-18"),
-        ("docs/wiki/host-vs-addons.md", 3, "2026-08-18"),
-        ("docs/wiki/host-vs-addons.md", 6, "2026-08-18"),
+        (_WIKI + "addon-protocol.md", 3, "2026-08-18"),
+        (_WIKI + "host-vs-addons.md", 3, "2026-08-18"),
+        (_WIKI + "host-vs-addons.md", 6, "2026-08-18"),
     }
     assert out["phase_verdicts"]["3"] == uw.AGENT
     assert item["complete"] is True

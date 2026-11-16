@@ -186,6 +186,46 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
         _cleanup(capacity.release_spawn, key, supervisor_pid, host=host)
 
 
+_REFUSAL_KEYS = frozenset({"refused", "reason"})
+
+
+def _refused_submit_outputs(stdout_path: Path) -> list[str]:
+    """Output text of every refused ``engine_ask.submit`` command in a codex transcript."""
+    refused: list[str] = []
+    try:
+        lines = stdout_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return refused
+    for line in lines:
+        try:
+            item = json.loads(line).get("item")
+        except (ValueError, AttributeError):
+            continue
+        if not isinstance(item, dict) or item.get("type") != "command_execution":
+            continue
+        output = item.get("aggregated_output")
+        if ("engine_ask.submit" in str(item.get("command", ""))
+                and isinstance(output, str) and re.search(r'"refused"\s*:', output)):
+            refused.append(output.strip())
+    return refused
+
+
+def _is_refusal_only(value: Any, refused: list[str]) -> bool:
+    """True when the worker's final value is nothing but a refused submit's own output."""
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text in refused:
+            return True
+        try:
+            value = json.loads(text)
+        except ValueError:
+            return False
+    if isinstance(value, dict):
+        inner = value.get("result") if isinstance(value.get("result"), dict) else value
+        return "refused" in inner and set(inner) <= _REFUSAL_KEYS and set(value) <= _REFUSAL_KEYS | {"jsonrpc", "id", "result"}
+    return False
+
+
 def _persona(agent_type: str | None) -> str:
     if not agent_type or agent_type == "general-purpose":
         return ""
@@ -321,5 +361,9 @@ def run_agent(
             jsonschema.validate(value, schema)
     except (OSError, ValueError, KeyError, jsonschema.ValidationError) as exc:
         raise AgentFailed(f"{backend} returned no schema-valid result: {exc}") from exc
+    if backend != "claude":
+        refused = _refused_submit_outputs(artifact_dir / "stdout.jsonl")
+        if refused and _is_refusal_only(value, refused):
+            raise AgentFailed(f"{backend} agent's only output is a refused engine_ask.submit: {refused[-1][-300:]}")
     (artifact_dir / "result.json").write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
     return value

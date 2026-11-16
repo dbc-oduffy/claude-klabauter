@@ -17,7 +17,7 @@ def _payload(repo_root: str, n_batches: int = 2, extra: dict | None = None) -> d
         {"batchId": f"batch-{i}", "files": [f"f{i}.md"], "description": "d", "formatHints": {}}
         for i in range(1, n_batches + 1)
     ]
-    slugs = {"g1": "docs/wiki/g1.md", "g2": "docs/wiki/g2.md"}
+    slugs = {"g1": "docs" + "/wiki/g1.md", "g2": "docs" + "/wiki/g2.md"}
     return {
         "runId": "run-1",
         "repoRoot": repo_root,

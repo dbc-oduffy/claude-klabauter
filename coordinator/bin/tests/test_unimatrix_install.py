@@ -3641,6 +3641,100 @@ def test_install_default_run_links_grok(monkeypatch, tmp_path):
     assert (home / ".local" / "bin" / "grok").is_symlink()
 
 
+_OLD = (3, 9, 6)  # a fake pre-3.11 sys.version_info for the gate
+
+
+def test_gate_is_a_noop_on_a_modern_interpreter():
+    seen = []
+    ui.ensure_modern_python(version_info=(3, 11, 0), env={}, reexec=lambda *a: seen.append(a))
+    ui.ensure_modern_python(env={}, reexec=lambda *a: seen.append(a))
+    assert seen == []
+
+
+def test_gate_reexecs_homebrew_with_same_argv_on_darwin(monkeypatch, tmp_path):
+    brew = tmp_path / "brew-python3"
+    brew.write_text("#!/bin/sh\n", encoding="utf-8")
+    brew.chmod(0o755)
+    monkeypatch.setattr(ui, "HOMEBREW_PYTHONS", (str(tmp_path / "absent"), str(brew)))
+    seen, env = [], {}
+    ui.ensure_modern_python(version_info=_OLD, platform="darwin", env=env, pin=lambda: None,
+                            probe=lambda exe: True, reexec=lambda exe, argv: seen.append((exe, argv)),
+                            argv=["x.py", "--install"])
+    assert seen == [(str(brew), ["x.py", "--install"])]
+    assert env[ui._REEXEC_ENV] == "1"
+
+
+def test_gate_prefers_a_qualifying_pin_over_homebrew(monkeypatch, tmp_path):
+    brew = tmp_path / "brew-python3"
+    brew.write_text("#!/bin/sh\n", encoding="utf-8")
+    brew.chmod(0o755)
+    monkeypatch.setattr(ui, "HOMEBREW_PYTHONS", (str(brew),))
+    seen = []
+    ui.ensure_modern_python(version_info=_OLD, platform="darwin", env={}, pin=lambda: "/pinned/python3",
+                            probe=lambda exe: True, reexec=lambda exe, argv: seen.append(exe), argv=["x.py"])
+    assert seen == ["/pinned/python3"]
+
+
+def test_gate_skips_a_too_old_pin_for_a_qualifying_homebrew(monkeypatch, tmp_path):
+    brew = tmp_path / "brew-python3"
+    brew.write_text("#!/bin/sh\n", encoding="utf-8")
+    brew.chmod(0o755)
+    monkeypatch.setattr(ui, "HOMEBREW_PYTHONS", (str(brew),))
+    seen = []
+    ui.ensure_modern_python(version_info=_OLD, platform="darwin", env={}, pin=lambda: "/pinned/old",
+                            probe=lambda exe: exe != "/pinned/old", reexec=lambda exe, argv: seen.append(exe),
+                            argv=["x.py"])
+    assert seen == [str(brew)]
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_gate_probes_homebrew_only_on_darwin(monkeypatch, tmp_path, platform):
+    brew = tmp_path / "brew-python3"
+    brew.write_text("#!/bin/sh\n", encoding="utf-8")
+    brew.chmod(0o755)
+    monkeypatch.setattr(ui, "HOMEBREW_PYTHONS", (str(brew),))
+    seen = []
+    with pytest.raises(SystemExit) as exc:
+        ui.ensure_modern_python(version_info=_OLD, platform=platform, env={}, pin=lambda: None,
+                                probe=lambda exe: True, reexec=lambda exe, argv: seen.append(exe), argv=["x.py"])
+    assert seen == []
+    assert "3.11" in str(exc.value.code)
+
+
+def test_gate_exits_naming_the_version_when_no_candidate_qualifies(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui, "HOMEBREW_PYTHONS", (str(tmp_path / "absent"),))
+    seen = []
+    with pytest.raises(SystemExit) as exc:
+        ui.ensure_modern_python(version_info=_OLD, platform="darwin", env={}, pin=lambda: "/pinned/old",
+                                probe=lambda exe: False, reexec=lambda exe, argv: seen.append(exe), argv=["x.py"])
+    msg = str(exc.value.code)
+    assert seen == []
+    assert "Python 3.11" in msg and "3.9.6" in msg and "tomllib" not in msg
+
+
+def test_gate_refuses_a_second_reexec(monkeypatch, tmp_path):
+    brew = tmp_path / "brew-python3"
+    brew.write_text("#!/bin/sh\n", encoding="utf-8")
+    brew.chmod(0o755)
+    monkeypatch.setattr(ui, "HOMEBREW_PYTHONS", (str(brew),))
+    seen = []
+    with pytest.raises(SystemExit) as exc:
+        ui.ensure_modern_python(version_info=_OLD, platform="darwin", env={ui._REEXEC_ENV: "1"}, pin=lambda: None,
+                                probe=lambda exe: True, reexec=lambda exe, argv: seen.append(exe), argv=["x.py"])
+    assert seen == []
+    assert "3.11" in str(exc.value.code)
+
+
+def test_gate_probe_accepts_this_interpreter_and_rejects_a_missing_one(tmp_path):
+    assert ui._runs_modern(sys.executable) is True
+    assert ui._runs_modern(str(tmp_path / "absent")) is False
+
+
+def test_gate_runs_before_the_tomllib_import():
+    src = _SRC.read_text(encoding="utf-8")
+    assert src.index("\nensure_modern_python()\n") < src.index("\nimport tomllib\n")
+
+
 def test_grok_present_survives_an_unreadable_path_entry(tmp_path, monkeypatch):
     """An EACCES PATH directory (the Mini's /usr/local/bin/grok) must read absent, never abort the install."""
     locked = tmp_path / "locked"

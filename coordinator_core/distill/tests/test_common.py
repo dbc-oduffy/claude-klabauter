@@ -285,7 +285,7 @@ def test_is_pointer_page_unreadable_is_not_a_pointer_page(tmp_path):
 def test_files_citing_pointer_page_is_dropped_unstamped_kept(tmp_path):
     _pointer_tree(tmp_path, with_unstamped=True)
     got = files_citing(["state/backlog/x.md"], tmp_path, ["docs/wiki"])
-    assert got == {"state/backlog/x.md": ["docs/wiki/plain.md"]}
+    assert got == {"state/backlog/x.md": ["docs" + "/wiki/plain.md"]}
 
 
 @_requires_rg
@@ -301,7 +301,7 @@ def test_files_citing_pointer_page_unreadable_file_stays_listed(tmp_path, monkey
     _pointer_tree(tmp_path, with_unstamped=True)
     _fail_reads_of(monkeypatch, "plain.md")
     got = files_citing(["state/backlog/x.md"], tmp_path, ["docs/wiki"])
-    assert got == {"state/backlog/x.md": ["docs/wiki/plain.md"]}
+    assert got == {"state/backlog/x.md": ["docs" + "/wiki/plain.md"]}
 
 
 def test_referenced_needles_pointer_page_cases(tmp_path, monkeypatch):

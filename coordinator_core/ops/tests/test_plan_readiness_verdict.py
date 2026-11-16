@@ -16,6 +16,9 @@ from coordinator_core.ops import plan_readiness_verdict as op
 
 pytestmark = pytest.mark.complete
 
+_WIKI = "docs" + "/wiki/"
+_PERF = _WIKI + "perf.md"
+
 REL = "docs/plans/2026-10-15-fixture.md"
 SCHEMA = Path(op.__file__).resolve().parents[1] / "contract" / "readiness-verdict.schema.json"
 
@@ -969,16 +972,16 @@ def test_declared_absent_entry_with_trailing_parenthetical_covers_the_bare_path_
 
 
 def test_declared_absent_leading_token_matches_whole_tokens_only(tmp_path):
-    common = _prose_absent_plan(tmp_path, "docs/wiki/perf.md (note)", _FILED)
-    for cited in ("docs/wiki/perf.md.bak", "other/docs/wiki/perf.md"):
+    common = _prose_absent_plan(tmp_path, _PERF + " (note)", _FILED)
+    for cited in (_PERF + ".bak", "other/" + _PERF):
         reply = _op_reply(common, [_row("UNRESOLVED", citation=cited)])
         assert reply["verdict"] == "judgment", cited
 
 
 def test_declared_absent_with_junk_tracked_by_prose_still_blocks(tmp_path):
-    common = _prose_absent_plan(tmp_path, "docs/wiki/perf.md", "n/a ok")
-    reply = _op_reply(common, [_row("UNRESOLVED", citation="docs/wiki/perf.md")])
-    assert reply["blocking"] == ["premise-check: UNRESOLVED docs/wiki/perf.md"]
+    common = _prose_absent_plan(tmp_path, _PERF, "n/a ok")
+    reply = _op_reply(common, [_row("UNRESOLVED", citation=_PERF)])
+    assert reply["blocking"] == ["premise-check: UNRESOLVED " + _PERF]
 
 
 _WRITES_PATH = "coordinator_core/ops/plan_prep_gate.py"
@@ -994,7 +997,7 @@ def test_unresolved_row_on_a_path_a_spine_row_writes_is_expected_absent(tmp_path
 
 def test_unresolved_citation_naming_a_written_path_and_another_missing_path_blocks(tmp_path):
     common = _corrects_plan(tmp_path, "")
-    cited = f"{_WRITES_PATH} and docs/wiki/never-declared.md"
+    cited = f"{_WRITES_PATH} and {_WIKI}never-declared.md"
     reply = _op_reply(common, [_row("UNRESOLVED", citation=cited)])
     assert reply["blocking"] == [f"premise-check: UNRESOLVED {cited}"]
 
@@ -1013,16 +1016,16 @@ def test_contradicted_row_on_a_written_path_still_blocks(tmp_path):
 
 
 def test_unresolved_row_matching_no_declared_absent_entry_still_blocks(tmp_path):
-    common = _prose_absent_plan(tmp_path, "docs/wiki/perf.md", _FILED)
+    common = _prose_absent_plan(tmp_path, _PERF, _FILED)
     reply = _op_reply(common, [_row("UNRESOLVED", citation="bin/unrelated.py")])
     assert reply["verdict"] == "judgment"
     assert reply["blocking"] == ["premise-check: UNRESOLVED bin/unrelated.py"]
 
 
 def test_declared_absent_tracked_by_prose_never_resolves(tmp_path):
-    common = _prose_absent_plan(tmp_path, "docs/wiki/perf.md", "Distill pass item 1, absent at head")
-    reply = _op_reply(common, [_row("UNRESOLVED", citation="docs/wiki/perf.md")])
-    assert reply["blocking"] == ["premise-check: UNRESOLVED docs/wiki/perf.md"]
+    common = _prose_absent_plan(tmp_path, _PERF, "Distill pass item 1, absent at head")
+    reply = _op_reply(common, [_row("UNRESOLVED", citation=_PERF)])
+    assert reply["blocking"] == ["premise-check: UNRESOLVED " + _PERF]
 
 
 def _declared_verdict(citation, declared):

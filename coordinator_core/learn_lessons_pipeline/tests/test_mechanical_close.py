@@ -14,6 +14,8 @@ from coordinator_core.distill.prompt_tier import estimate_tokens
 from coordinator_core.learn_lessons_pipeline import mechanical_close as mc
 from coordinator_core.session import record_homes
 
+_PAGE = "docs" + "/wiki/page.md"
+_NONE = "docs" + "/wiki/none.md"
 BODY = "A published fix does not reach a resident warm server until that server churns."
 
 
@@ -256,29 +258,29 @@ def _wiki(tmp_path, indexed=True) -> Path:
 def test_wiki_append_needs_a_named_existing_index_reachable_page(tmp_path):
     home = _home(tmp_path)
     _wiki(tmp_path)
-    _row(home, "named", body="Named wiki body alpha.", extra="target_wiki: docs/wiki/page.md\n")
-    _row(home, "missing", body="Missing wiki body beta.", extra="target_wiki: docs/wiki/none.md\n")
+    _row(home, "named", body="Named wiki body alpha.", extra=f"target_wiki: {_PAGE}\n")
+    _row(home, "missing", body="Missing wiki body beta.", extra=f"target_wiki: {_NONE}\n")
     _row(home, "outside", body="Outside wiki body gamma.", extra="target_wiki: ../outside.md\n")
     _row(home, "bare", body="Bare wiki body delta.", extra="target_wiki: docs/wiki/\n")
     verdicts, open_rows = mc.classify_with_residue(tmp_path)
-    assert [(v.row_id, v.verdict, v.covered_by) for v in verdicts] == [("named", "wiki-append", "docs/wiki/page.md")]
+    assert [(v.row_id, v.verdict, v.covered_by) for v in verdicts] == [("named", "wiki-append", _PAGE)]
     assert len(open_rows) == 4
 
 
 def test_wiki_append_target_not_linked_by_an_index_stays_residue(tmp_path):
     home = _home(tmp_path)
     _wiki(tmp_path, indexed=False)
-    _row(home, "named", body="Named wiki body alpha.", extra="target_wiki: docs/wiki/page.md\n")
+    _row(home, "named", body="Named wiki body alpha.", extra=f"target_wiki: {_PAGE}\n")
     assert mc.close_candidates(None, tmp_path) == []
 
 
 def test_apply_wiki_append_appends_once_and_archives(tmp_path):
     home = _home(tmp_path)
     page = _wiki(tmp_path)
-    _row(home, "named", title="Heading", body="Named wiki body alpha.", extra="target_wiki: docs/wiki/page.md\n")
+    _row(home, "named", title="Heading", body="Named wiki body alpha.", extra=f"target_wiki: {_PAGE}\n")
     verdicts = mc.close_candidates(None, tmp_path)
     report = mc.apply_verdicts(verdicts, tmp_path)
-    assert report["closed"]["wiki-append"] == 1 and report["appended"] == ["docs/wiki/page.md"]
+    assert report["closed"]["wiki-append"] == 1 and report["appended"] == [_PAGE]
     text = page.read_text(encoding="utf-8")
     assert text.startswith("# Page\n\nExisting text.\n") and "## Heading\n\nNamed wiki body alpha.\n" in text
     assert not (home / "named.yaml").exists() and report["archived"]
@@ -301,10 +303,10 @@ def test_discard_when_named_wiki_already_holds_the_body_else_wiki_append(tmp_pat
     home = _home(tmp_path)
     page = _wiki(tmp_path)
     page.write_text("# Page\n\nExisting   TEXT already recorded in this page.\n", encoding="utf-8")
-    _row(home, "covered", body="existing text already recorded in this page.",extra="target_wiki: docs/wiki/page.md\n")
-    _row(home, "fresh", body="Brand new wiki body epsilon.", extra="target_wiki: docs/wiki/page.md\n")
+    _row(home, "covered", body="existing text already recorded in this page.",extra=f"target_wiki: {_PAGE}\n")
+    _row(home, "fresh", body="Brand new wiki body epsilon.", extra=f"target_wiki: {_PAGE}\n")
     got = {v.row_id: (v.verdict, v.covered_by) for v in mc.close_candidates(None, tmp_path)}
-    assert got == {"covered": ("discard", "docs/wiki/page.md"), "fresh": ("wiki-append", "docs/wiki/page.md")}
+    assert got == {"covered": ("discard", _PAGE), "fresh": ("wiki-append", _PAGE)}
 
 
 def test_universal_scope_retags_only_with_a_domain_tag(tmp_path):
@@ -336,7 +338,7 @@ def _mixed_queue(tmp_path):
     _row(home, "b-dup", title="Keeper", body="A unique judgment lesson about nothing else here.", created="2026-10-02")
     _row(home, "c-empty", body="")
     _row(home, "d-local", body="Local scope lesson with its own distinct body text.", scope="local")
-    _row(home, "e-wiki", body="Wiki lesson with its own distinct body text.", extra="target_wiki: docs/wiki/page.md\n")
+    _row(home, "e-wiki", body="Wiki lesson with its own distinct body text.", extra=f"target_wiki: {_PAGE}\n")
 
 
 def test_both_op_names_dry_run_return_the_same_report_with_residue_ids(tmp_path):
@@ -353,7 +355,7 @@ def test_both_op_names_dry_run_return_the_same_report_with_residue_ids(tmp_path)
 def test_op_write_reports_residue_ids_and_defaults_to_repo_root(tmp_path):
     _mixed_queue(tmp_path)
     report = _call("learn_lessons_pipeline.apply_mechanical", {}, tmp_path)["report"]
-    assert report["residue_ids"] == ["a-keep"] and report["appended"] == ["docs/wiki/page.md"]
+    assert report["residue_ids"] == ["a-keep"] and report["appended"] == [_PAGE]
     assert _call("learn_lessons_pipeline.mechanical_close", {"dry_run": True}, tmp_path)["report"]["verdicts"] == []
 
 

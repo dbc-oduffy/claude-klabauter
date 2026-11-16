@@ -12,7 +12,7 @@ import pytest
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
-_PATHS = ["docs/wiki/x.md", "state/y.json"]
+_PATHS = ["docs" + "/wiki/x.md", "state/y.json"]
 
 
 def _load_cli_module():

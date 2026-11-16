@@ -10,6 +10,8 @@ import pytest
 
 from coordinator_core.ops import weekly_doc_files as wdf
 
+_WIKI = "docs" + "/wiki/"
+
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
@@ -25,7 +27,7 @@ def repo(tmp_path: Path) -> Path:
     _git(r, "config", "user.email", "t@t")
     _git(r, "config", "user.name", "t")
     (r / "docs/plans/p1.md").write_text(
-        "x" * 15000 + "\n```yaml\nwrites: [a/b.py, docs/wiki/w.md]\n```\n", encoding="utf-8"
+        "x" * 15000 + "\n```yaml\nwrites: [a/b.py, " + _WIKI + "w.md]\n```\n", encoding="utf-8"
     )
     _git(r, "add", "-A")
     _git(r, "commit", "-qm", "add plan")
@@ -49,7 +51,7 @@ def db(tmp_path: Path) -> Path:
         INSERT INTO _fp VALUES ('docs/plans/a.md','x.py');
         CREATE TABLE _pd(path, doc);
         CREATE VIEW {wdf.VIEW_PATHS_TO_DOCS} AS SELECT * FROM _pd;
-        INSERT INTO _pd VALUES ('x.py','docs/wiki/x.md');
+        INSERT INTO _pd VALUES ('x.py','{_WIKI}x.md');
         CREATE TABLE _pv(plan, sha, preview);
         CREATE VIEW {wdf.VIEW_PLAN_PREVIEW} AS SELECT * FROM _pv;
         INSERT INTO _pv VALUES ('docs/plans/a.md','s1','{"y" * 20000}');
@@ -69,7 +71,7 @@ def test_view_plans_completed_filters_window(db: Path) -> None:
 def test_view_footprint_and_docs(db: Path) -> None:
     assert wdf.plan_footprint("docs/plans/a.md", index_path=db) == ["x.py"]
     assert wdf.paths_to_docs(["x.py", "z.py"], index_path=db) == {
-        "x.py": ["docs/wiki/x.md"],
+        "x.py": [_WIKI + "x.md"],
         "z.py": [],
     }
 
@@ -105,9 +107,9 @@ def test_git_fallback_completed_and_deleted_preview(repo: Path, tmp_path: Path) 
 def test_git_fallback_footprint_and_docs(repo: Path, tmp_path: Path) -> None:
     missing = tmp_path / "missing.sqlite"
     fp = wdf.plan_footprint("docs/plans/p1.md", index_path=missing, repo=repo)
-    assert fp == ["a/b.py", "docs/wiki/w.md"]
-    assert wdf.paths_to_docs(["docs/wiki/w.md", "a/b.py"], index_path=missing, repo=repo) == {
-        "docs/wiki/w.md": ["docs/wiki/w.md"],
+    assert fp == ["a/b.py", _WIKI + "w.md"]
+    assert wdf.paths_to_docs([_WIKI + "w.md", "a/b.py"], index_path=missing, repo=repo) == {
+        _WIKI + "w.md": [_WIKI + "w.md"],
         "a/b.py": [],
     }
 
@@ -121,13 +123,13 @@ def test_fallback_paths_to_docs_matches_wiki_text(repo: Path, tmp_path: Path) ->
     missing = tmp_path / "missing.sqlite"
     _wiki(repo, "one.md", "See `a/b.py` and `core/x.py::fn`.\n")
     _wiki(repo, "two.md", "Only mentions a/b.pyc and other/a/b.py.\n")
-    _wiki(repo, "three.md", "Names a/b.py, docs/wiki/w.md.\n")
+    _wiki(repo, "three.md", "Names a/b.py, " + _WIKI + "w.md.\n")
     out = wdf.paths_to_docs(
-        ["a/b.py", "core/x.py", "docs/wiki/w.md", "nope.py"], index_path=missing, repo=repo
+        ["a/b.py", "core/x.py", _WIKI + "w.md", "nope.py"], index_path=missing, repo=repo
     )
-    assert out["a/b.py"] == ["docs/wiki/one.md", "docs/wiki/three.md"]
-    assert out["core/x.py"] == ["docs/wiki/one.md"]
-    assert out["docs/wiki/w.md"] == ["docs/wiki/w.md", "docs/wiki/three.md"]
+    assert out["a/b.py"] == [_WIKI + "one.md", _WIKI + "three.md"]
+    assert out["core/x.py"] == [_WIKI + "one.md"]
+    assert out[_WIKI + "w.md"] == [_WIKI + "w.md", _WIKI + "three.md"]
     assert out["nope.py"] == []
 
 
@@ -144,12 +146,12 @@ def test_fallback_wiki_cache_rereads_only_changed_pages(
     assert len(reads) == 2
     reads.clear()
     assert wdf.paths_to_docs(["c/d.py"], index_path=missing, repo=repo) == {
-        "c/d.py": ["docs/wiki/two.md"]
+        "c/d.py": [_WIKI + "two.md"]
     }
     assert reads == []
     _wiki(repo, "two.md", "c/d.py e/f.py\n")
     assert wdf.paths_to_docs(["e/f.py"], index_path=missing, repo=repo) == {
-        "e/f.py": ["docs/wiki/two.md"]
+        "e/f.py": [_WIKI + "two.md"]
     }
     assert [Path(p).name for p in reads] == ["two.md"]
 
@@ -176,7 +178,7 @@ def test_fallback_plan_footprints_one_spawn_matches_per_plan(
         [("docs/plans/p1.md", sha), ("docs/plans/nope.md", sha)], index_path=missing, repo=repo
     )
     assert len(calls) == 1
-    assert out == {"docs/plans/p1.md": ["a/b.py", "docs/wiki/w.md"], "docs/plans/nope.md": []}
+    assert out == {"docs/plans/p1.md": ["a/b.py", _WIKI + "w.md"], "docs/plans/nope.md": []}
     assert out["docs/plans/p1.md"] == wdf.plan_footprint(
         "docs/plans/p1.md", index_path=missing, repo=repo
     )

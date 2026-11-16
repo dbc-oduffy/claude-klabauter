@@ -23,6 +23,78 @@ import subprocess
 import sys
 import threading
 import time
+
+MIN_PYTHON = (3, 11)
+HOMEBREW_PYTHONS = ("/opt/homebrew/bin/python3", "/usr/local/bin/python3")  # literal: the installer must import without lib/ beside it
+_REEXEC_ENV = "UNIMATRIX_INSTALL_REEXEC"
+
+
+def _gate_pin():
+    """The `unimatrix.python` pin when it names a file, else None; best-effort, any failure reads as unset.
+    Loads the sibling scripts by path: lib/ need not be importable and this interpreter is the old one."""
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+
+        def load(script):
+            spec = importlib.util.spec_from_file_location("unimatrix_gate_" + script[9:-3].replace("-", "_"),
+                                                          os.path.join(here, script))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+
+        val = load("unimatrix-autolink.py").pin_key_value(load("unimatrix-roster.py"))
+        return val if val and os.path.isfile(val) else None
+    except Exception:
+        return None
+
+
+def _runs_modern(exe):
+    """True when *exe* starts and reports a version of at least MIN_PYTHON."""
+    code = "import sys;sys.exit(0 if sys.version_info>=%r else 1)" % (MIN_PYTHON,)
+    try:
+        return subprocess.call([exe, "-c", code], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=10,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)) == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _reexec(exe, argv):
+    """Replace this process with *exe* running *argv*; Windows has no true exec, so it relays the exit code."""
+    if sys.platform == "win32":
+        raise SystemExit(subprocess.call([exe, *argv], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)))
+    os.execv(exe, [exe, *argv])
+
+
+def ensure_modern_python(version_info=None, platform=None, env=None, pin=None, probe=None, reexec=None, argv=None):
+    """Before tomllib is imported: on an interpreter older than MIN_PYTHON, re-exec the same argv under the
+    `unimatrix.python` pin, else (darwin) the first HOMEBREW_PYTHONS candidate, that runs MIN_PYTHON or newer;
+    none qualifies (or this is already the re-exec) is a SystemExit naming the required version. A no-op otherwise."""
+    if tuple(version_info or sys.version_info)[:2] >= MIN_PYTHON:
+        return
+    env = os.environ if env is None else env
+    need = "%d.%d" % MIN_PYTHON
+    ran = "%s (%s)" % (sys.executable, ".".join(str(p) for p in tuple(version_info or sys.version_info)[:3]))
+    if env.get(_REEXEC_ENV):
+        raise SystemExit("unimatrix-install requires Python %s or newer; the re-exec under %s is still older" % (need, ran))
+    probe = probe or _runs_modern
+    candidates = []
+    pinned = (pin or _gate_pin)()
+    if pinned:
+        candidates.append(pinned)
+    if (platform or sys.platform) == "darwin":
+        candidates.extend(c for c in HOMEBREW_PYTHONS if os.path.isfile(c) and os.access(c, os.X_OK))
+    for exe in candidates:
+        if probe(exe):
+            env[_REEXEC_ENV] = "1"
+            (reexec or _reexec)(exe, list(sys.argv if argv is None else argv))
+            return
+    raise SystemExit("unimatrix-install requires Python %s or newer; running under %s and no pinned or Homebrew "
+                     "Python %s was found (set machine-local unimatrix.python to one)" % (need, ran, need))
+
+
+ensure_modern_python()
+
 import tomllib
 import tempfile
 import types
@@ -397,7 +469,6 @@ def _machine_local_run(run, argv):
     return done or subprocess.CompletedProcess(argv, 2, "", "machine-local spawn unavailable, failed or timed out")
 
 
-HOMEBREW_PYTHONS = ("/opt/homebrew/bin/python3", "/usr/local/bin/python3")  # literal: the installer must import without lib/ beside it
 _PIN_UNREAD = object()
 PYTHON_PIN_KEY = "unimatrix.python"
 _PIN_CACHE = {}

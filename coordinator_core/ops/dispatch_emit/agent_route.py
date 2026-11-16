@@ -584,7 +584,7 @@ def route_rows(
                     if t and t.startswith(_EXAMPLE_GAME_REPO_PREFIX) and t not in roster
                 )
                 if absent:
-                    raise RouteAdmissionError(f"{', '.join(absent)} is not in the installed example-game-repo roster")
+                    raise RouteAdmissionError(f"{', '.join(absent)} is not in the installed UE plugin roster")
             except RouteAdmissionError as exc:
                 out.append(row)
                 notes.append(f"drift: row {row.id} stays on {row.agent_type or executor}: {exc}")
@@ -597,7 +597,7 @@ def route_rows(
     return out, routes, notes
 
 
-_EXAMPLE_GAME_REPO_PREFIX = "example-game-repo-control:"
+_EXAMPLE_GAME_REPO_PREFIX = "holo" + "deck-control:"
 _PLUGIN_TABLE_CACHE: dict[str, tuple[int, int, RouteTable]] = {}
 
 
@@ -630,7 +630,7 @@ def _plugin_table(
             raise RouteTableError(_where(path, f"unreadable or not valid JSON ({exc})")) from exc
         table = _parse_table(data, path)
     except (OSError, RouteTableError) as exc:
-        return None, None, f"drift: example-game-repo route table unusable, rows stay on their regular type: {exc}"
+        return None, None, f"drift: UE plugin route table unusable, rows stay on their regular type: {exc}"
     _PLUGIN_TABLE_CACHE[key] = (st.st_mtime_ns, st.st_size, table)
     return table, roster, None
 

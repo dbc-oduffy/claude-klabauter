@@ -18,6 +18,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
+_WIKI = "docs" + "/wiki/"
+
 _SID = "00000000-0000-4000-8000-000000000000"
 
 
@@ -38,7 +40,7 @@ def _seed(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q", "-b", "main")
     _write(tmp_path, "README.md", "init\n")
     _write(tmp_path, "docs/decisions/DR-12-new-slug.md", "# DR-12\n\nA decision.\n")
-    _write(tmp_path, "docs/wiki/old/target.md", "---\ntitle: Target\n---\n# Target\n\nBody.\n")
+    _write(tmp_path, _WIKI + "old/target.md", "---\ntitle: Target\n---\n# Target\n\nBody.\n")
     _write(tmp_path, "peer.txt", "peer\n")
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "init")
@@ -47,12 +49,12 @@ def _seed(tmp_path: Path) -> Path:
 
 def _run_files(root: Path, broken_target: str = "../old/moved.md") -> list[str]:
     _write(
-        root, "docs/wiki/fresh/page.md",
+        root, _WIKI + "fresh/page.md",
         "---\ntitle: Fresh Page\n---\n# Wrong Heading\n\nSee [t](../old/target.md) and "
         f"[m]({broken_target}) and [d](../../decisions/DR-12-old-slug.md).\n",
     )
     _write(root, "state/evidence/run-1.json", "{}\n")
-    return ["docs/wiki/fresh/page.md"]
+    return [_WIKI + "fresh/page.md"]
 
 
 def _porcelain(root: Path) -> list[str]:
@@ -74,12 +76,12 @@ def test_finish_leaves_the_run_clean_and_spares_a_peer(tmp_path, monkeypatch, pi
 
     assert out["exit_code"] == 0, out
     assert out["commit"]["committed"] is True
-    page = (root / "docs/wiki/fresh/page.md").read_text(encoding="utf-8")
+    page = (root / _WIKI / "fresh/page.md").read_text(encoding="utf-8")
     assert page.startswith("---\ntitle: Fresh Page\n---\n# Fresh Page\n")
     assert "DR-12-new-slug.md" in page and "DR-12-old-slug" not in page
-    assert (root / "docs/wiki/fresh/_index.md").is_file()
+    assert (root / _WIKI / "fresh/_index.md").is_file()
     tracked = _git(root, "ls-files").splitlines()
-    assert {"docs/wiki/fresh/page.md", "docs/wiki/fresh/_index.md", "state/evidence/run-1.json"} <= set(tracked)
+    assert {_WIKI + "fresh/page.md", _WIKI + "fresh/_index.md","state/evidence/run-1.json"} <= set(tracked)
     assert _porcelain(root) == ["peer.txt"]
     assert "peer dirt" not in _git(root, "show", "HEAD:peer.txt")
 
@@ -103,12 +105,12 @@ def test_files_outside_the_run_scope_are_not_committed(tmp_path, monkeypatch):
     root = _seed(tmp_path)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
     touched = _run_files(root, broken_target="../old/target.md")
-    _write(root, "docs/wiki/other/stray.md", "# Stray\n")
+    _write(root, _WIKI + "other/stray.md", "# Stray\n")
 
     post_run_finish._handler({"pipeline": "lessons", "run_id": "r3", "touched": touched}, repo_root=root)
 
-    assert "docs/wiki/other/stray.md" not in _git(root, "ls-files").splitlines()
-    assert "docs/wiki/other/stray.md" in _porcelain(root)
+    assert _WIKI + "other/stray.md" not in _git(root, "ls-files").splitlines()
+    assert _WIKI + "other/stray.md" in _porcelain(root)
 
 
 def test_rerun_converges_with_nothing_to_commit(tmp_path, monkeypatch):

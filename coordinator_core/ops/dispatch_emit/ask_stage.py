@@ -315,14 +315,19 @@ def doc_writes(run_id: str, sizing: Optional[Mapping]) -> tuple[str, ...]:
     return tuple(out)
 
 
-def _reviewable(declared: Sequence[str]) -> tuple[str, ...]:
+def _reviewable(declared: Sequence[str], root: Optional[Path] = None) -> tuple[str, ...]:
     """The declared paths a reviewer can read a product diff for. Bookkeeping and scratch writes
     (audits, state, plans) freeze no reviewable diff, so a run declaring only those has an empty
-    list and the composed script skips the review wave instead of halting at review prep."""
+    list and the composed script skips the review wave instead of halting at review prep. With
+    ``root``, a path that is a directory in the tree is dropped too: the list is files only."""
     from coordinator_core.ops.review_stamp import PRODUCT_FILE_EXCLUDED_PREFIXES
 
     skip = (*PRODUCT_FILE_EXCLUDED_PREFIXES, "scratch/")
-    return tuple(p for p in declared if not p.replace("\\", "/").removeprefix("./").startswith(skip))
+    return tuple(
+        p for p in declared
+        if not p.replace("\\", "/").removeprefix("./").startswith(skip)
+        and not (root is not None and (root / p).is_dir())
+    )
 
 
 def _widen_with_existing_tests(paths: Sequence[str], root: Path) -> list[str]:
@@ -2045,7 +2050,7 @@ def stage(
 
         served = rr.spine_claimants(raw_by_id.values())
         ledger_item_ids = tuple(i for i in ledger_item_ids if i in served or i not in stage_claimed)
-    review_declared = _reviewable(_dedupe_preserve_order(review_paths))
+    review_declared = _reviewable(_dedupe_preserve_order(review_paths), root)
     review_code = review_floor.code_paths(review_declared)
     if ledger_resume and only_rows is not None:
         # A resume's landed rows stay out of the declared set but still owe the review floor.

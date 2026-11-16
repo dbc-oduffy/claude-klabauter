@@ -543,6 +543,39 @@ def test_point6_location_missing_candidates_default_override(tmp_path, capsys):
     assert "configurable_locations[0] ('bare') has no override.flag or override.env" in err
 
 
+def test_point6_override_none_declares_a_deliberately_override_less_location(tmp_path, capsys):
+    manifest = _compliant_manifest()
+    manifest["configurable_locations"] = [
+        {
+            "name": "fixed",
+            "discovery": {"candidates": ["interpreter"]},
+            "default": "interpreter",
+            "override": {"none": "no override exists"},
+        }
+    ]
+    path = _write_manifest(tmp_path, manifest)
+    rc = main(["--manifest-path", str(path)])
+    assert rc == 0, capsys.readouterr().err
+
+
+def test_point6_override_none_does_not_excuse_a_dependency_root(tmp_path, capsys):
+    manifest = _compliant_manifest()
+    manifest["configurable_locations"] = [
+        {
+            "name": "claude_klabauter_root",
+            "dependency_id": "claude-klabauter",
+            "discovery": {"candidates": ["../claude-klabauter"]},
+            "default": "../claude-klabauter",
+            "override": {"none": "no override exists"},
+        }
+    ]
+    path = _write_manifest(tmp_path, manifest)
+    rc = main(["--manifest-path", str(path)])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "configurable_locations[0] ('claude_klabauter_root') has no override.flag or override.env" in err
+
+
 def test_point6_dependency_root_requires_both_flag_and_env(tmp_path, capsys):
     manifest = _compliant_manifest()
     manifest["configurable_locations"] = [

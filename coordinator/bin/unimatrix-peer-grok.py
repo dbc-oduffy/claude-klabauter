@@ -25,7 +25,7 @@ def grok_home():
 
 
 def grok_binary(home=None):
-    """$GROK_BIN, else grok on PATH, else <grok home>/bin/grok(.exe)."""
+    """The GROK_BIN environment variable, else grok on PATH, else <grok home>/bin/grok(.exe)."""
     configured = os.environ.get("GROK_BIN")
     if configured:
         return shutil.which(configured) or configured

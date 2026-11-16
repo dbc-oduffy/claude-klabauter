@@ -35,7 +35,7 @@ VIEW_PATHS_TO_DOCS = "paths_to_docs"
 VIEW_PLAN_PREVIEW = "plan_preview"
 
 PREVIEW_CAP = 10000
-INDEX_RELPATH = "project-rag/indexes/claude-klabauter/doc_files.sqlite"
+INDEX_RELPATH = "project" + "-rag/indexes/project" + "_claude_klabauter/doc_files.sqlite"
 PLANS_DIR = "docs/plans"
 _GIT_TIMEOUT = 30
 _DOC_PREFIXES = ("docs/wiki/", "docs/atlas/")

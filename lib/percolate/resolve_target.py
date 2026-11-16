@@ -233,16 +233,50 @@ def resolve_machine_local_bin(root: Path) -> Optional[str]:
 # running process, not to skip re-reading the registry on the next process.
 _dump_cache: dict[str, dict[str, str]] = {}
 
-#: Kill ceiling on the one `machine-local dump` spawn (== coordinator_core
-#: .machine_local_spawn.ML_SPAWN_TIMEOUT_S, which this self-contained library cannot
-#: import). No scheduling headroom: a dump that outlives it is killed and reaped.
+#: Kill ceiling on the fallback `machine-local dump` spawn (== coordinator_core
+#: .machine_local_spawn.ML_SPAWN_TIMEOUT_S). No scheduling headroom: a dump that outlives
+#: it is killed and reaped.
 _REGISTRY_CLI_TIMEOUT_SECS = 2.0
+
+
+def _kernel_beside(machine_local_bin: str) -> Optional[str]:
+    """The `_machine_local.py` kernel shipped with `machine_local_bin`, or None.
+
+    Looked up from the resolved bin's own directory (the settings-home bin dir, or a
+    claude-klabauter `coordinator/bin` whose kernel lives under `../templates/bin`), never from
+    ambient settings, so a bin that ships no kernel (a test stub, a foreign CLI) is
+    never answered from this box's real registry.
+    """
+    bin_dir = Path(machine_local_bin).parent
+    for candidate in (
+        bin_dir / "_machine_local.py",
+        bin_dir.parent / "templates" / "bin" / "_machine_local.py",
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _dump_in_process(machine_local_bin: str) -> Optional[dict[str, str]]:
+    """The registry read by the kernel in this process (zero spawns), or None when the
+    bin ships no kernel or the in-process read could not answer."""
+    impl = _kernel_beside(machine_local_bin)
+    if impl is None:
+        return None
+    from coordinator_core import machine_local_spawn
+
+    payload = machine_local_spawn.cached_dump(impl)
+    if payload is None:
+        return None
+    return {k: v for k, v in payload.items() if isinstance(v, str)}
 
 
 def _dump_registry(machine_local_bin: str) -> dict[str, str]:
     """Resolve EVERY key `machine-local` knows about, in one process, and
     memoize the result in `_dump_cache` for the remainder of this process's
-    lifetime. Backed by `machine-local dump` — the same resolution kernel
+    lifetime. The kernel shipped beside `machine_local_bin` is read in-process
+    first (no spawn); only a bin with no kernel, or a read the kernel cannot
+    answer in-process, spawns `machine-local dump`. Both legs use the same resolution kernel
     `machine-local get` uses (`resolve_one`, shared by both CLI verbs) — so a
     value read from here is byte-identical to what a per-key `get` call would
     have returned for that key.
@@ -264,6 +298,11 @@ def _dump_registry(machine_local_bin: str) -> dict[str, str]:
     produced for every one of those calls individually."""
     if machine_local_bin in _dump_cache:
         return _dump_cache[machine_local_bin]
+
+    in_process = _dump_in_process(machine_local_bin)
+    if in_process is not None:
+        _dump_cache[machine_local_bin] = in_process
+        return in_process
 
     try:
         result = subprocess.run(

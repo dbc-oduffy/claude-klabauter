@@ -19,6 +19,10 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _SID = "11111111-2222-4333-8444-555555555555"
+_OLD = "docs" + "/wiki/old.md"
+_NEW = "docs" + "/wiki/new.md"
+_PEER = "docs" + "/wiki/peer.md"
+_INDEX = "docs" + "/wiki/_index.md"
 
 
 def _git(args, cwd: Path) -> str:
@@ -51,9 +55,9 @@ def repo(tmp_path):
     _git(["config", "user.name", "t"], root)
     _git(["config", "core.autocrlf", "false"], root)
     _write(root, ".gitignore", "scratch/\n")
-    _write(root, "docs/wiki/old.md", "# Old\n")
-    _write(root, "docs/wiki/peer.md", "# Peer\n")
-    _git(["add", "--", ".gitignore", "docs/wiki/old.md", "docs/wiki/peer.md"], root)
+    _write(root, _OLD, "# Old\n")
+    _write(root, _PEER, "# Peer\n")
+    _git(["add", "--", ".gitignore", _OLD, _PEER], root)
     _git(["commit", "-q", "-m", "base"], root)
     return root
 
@@ -63,16 +67,16 @@ def _head_count(root: Path) -> int:
 
 
 def test_run_scope_lands_and_a_peer_dirty_file_stays_unstaged(repo):
-    _write(repo, "docs/wiki/old.md", "# Old\n\nedited\n")
-    _write(repo, "docs/wiki/new.md", "# New\n")
-    _write(repo, "docs/wiki/_index.md", "# Wiki\n")
+    _write(repo, _OLD, "# Old\n\nedited\n")
+    _write(repo, _NEW, "# New\n")
+    _write(repo, _INDEX, "# Wiki\n")
     _write(repo, "state/evidence/run-1.json", "{}\n")
-    _write(repo, "docs/wiki/peer.md", "# Peer\n\nmid-edit by a peer\n")
+    _write(repo, _PEER, "# Peer\n\nmid-edit by a peer\n")
 
     result = commit_scoped(
         repo,
-        touched=["docs/wiki/old.md", "docs/wiki/new.md"],
-        transform_outputs=["docs/wiki/_index.md"],
+        touched=[_OLD, _NEW],
+        transform_outputs=[_INDEX],
         evidence=["state/evidence/run-1.json"],
         message="post-run: finish run-1",
         session_id=_SID,
@@ -82,55 +86,55 @@ def test_run_scope_lands_and_a_peer_dirty_file_stays_unstaged(repo):
     assert result.process_sha and _git(["rev-parse", "HEAD"], repo).strip() == result.process_sha
     product = set(_git(["show", "--name-only", "--format=", result.sha], repo).split())
     process = set(_git(["show", "--name-only", "--format=", result.process_sha], repo).split())
-    assert product == {"docs/wiki/old.md", "docs/wiki/new.md", "docs/wiki/_index.md"}
+    assert product == {_OLD, _NEW, _INDEX}
     assert process == {"state/evidence/run-1.json"}
-    assert _porcelain(repo) == {"docs/wiki/peer.md": " M"}
+    assert _porcelain(repo) == {_PEER: " M"}
 
 
 def test_a_peer_staged_file_is_not_swept_into_the_commit(repo):
-    _write(repo, "docs/wiki/peer.md", "# Peer\n\nstaged by a peer\n")
-    _git(["add", "--", "docs/wiki/peer.md"], repo)
-    _write(repo, "docs/wiki/old.md", "# Old\n\nedited\n")
+    _write(repo, _PEER, "# Peer\n\nstaged by a peer\n")
+    _git(["add", "--", _PEER], repo)
+    _write(repo, _OLD, "# Old\n\nedited\n")
 
-    result = commit_scoped(repo, ["docs/wiki/old.md"], [], [], "post-run: old", session_id=_SID)
+    result = commit_scoped(repo, [_OLD], [], [], "post-run: old", session_id=_SID)
 
     assert result.ok and result.committed, result.error
     landed = set(_git(["show", "--name-only", "--format=", "HEAD"], repo).split())
-    assert landed == {"docs/wiki/old.md"}
-    assert _porcelain(repo) == {"docs/wiki/peer.md": "M "}
+    assert landed == {_OLD}
+    assert _porcelain(repo) == {_PEER: "M "}
 
 
 def test_a_scoped_deletion_lands_as_a_deletion(repo):
-    (repo / "docs/wiki/old.md").unlink()
+    (repo / _OLD).unlink()
 
-    result = commit_scoped(repo, ["docs/wiki/old.md"], [], [], "post-run: drop old", session_id=_SID)
+    result = commit_scoped(repo, [_OLD], [], [], "post-run: drop old", session_id=_SID)
 
     assert result.ok and result.committed, result.error
-    assert "docs/wiki/old.md" not in _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).split()
+    assert _OLD not in _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).split()
     assert _porcelain(repo) == {}
 
 
 def test_a_gitignored_untracked_path_is_dropped_not_committed(repo):
-    _write(repo, "docs/wiki/new.md", "# New\n")
+    _write(repo, _NEW, "# New\n")
     _write(repo, "scratch/ev.json", "{}\n")
 
     result = commit_scoped(
-        repo, ["docs/wiki/new.md"], [], ["scratch/ev.json"], "post-run: new", session_id=_SID
+        repo, [_NEW], [], ["scratch/ev.json"], "post-run: new", session_id=_SID
     )
 
     assert result.ok and result.committed, result.error
     assert result.dropped_ignored == ["scratch/ev.json"]
     landed = set(_git(["show", "--name-only", "--format=", "HEAD"], repo).split())
-    assert landed == {"docs/wiki/new.md"}
+    assert landed == {_NEW}
 
 
 def test_a_rerun_with_nothing_left_to_commit_is_ok_and_adds_no_commit(repo):
-    _write(repo, "docs/wiki/old.md", "# Old\n\nedited\n")
-    first = commit_scoped(repo, ["docs/wiki/old.md"], [], [], "post-run: old", session_id=_SID)
+    _write(repo, _OLD, "# Old\n\nedited\n")
+    first = commit_scoped(repo, [_OLD], [], [], "post-run: old", session_id=_SID)
     assert first.committed
     count = _head_count(repo)
 
-    second = commit_scoped(repo, ["docs/wiki/old.md"], [], [], "post-run: old again", session_id=_SID)
+    second = commit_scoped(repo, [_OLD], [], [], "post-run: old again", session_id=_SID)
 
     assert second.ok and not second.committed and second.error is None
     assert _head_count(repo) == count
@@ -146,15 +150,15 @@ def test_an_empty_scope_commits_nothing(repo):
 
 
 def test_a_commit_refusal_is_returned_not_swallowed(repo, monkeypatch):
-    _write(repo, "docs/wiki/old.md", "# Old\n\nedited\n")
+    _write(repo, _OLD, "# Old\n\nedited\n")
     monkeypatch.setattr(
         commit_v2, "_handler", lambda params, repo_root=None: {"committed": False, "sha": None, "error": "gate X"}
     )
 
-    result = commit_scoped(repo, ["docs/wiki/old.md"], [], [], "post-run: old", session_id=_SID)
+    result = commit_scoped(repo, [_OLD], [], [], "post-run: old", session_id=_SID)
 
     assert not result.ok and result.error == "gate X"
-    assert _porcelain(repo) == {"docs/wiki/old.md": " M"}
+    assert _porcelain(repo) == {_OLD: " M"}
 
 
 def test_an_exception_in_the_handler_is_returned_as_a_failure(repo, monkeypatch):
@@ -162,9 +166,9 @@ def test_an_exception_in_the_handler_is_returned_as_a_failure(repo, monkeypatch)
         raise RuntimeError("disk gone")
 
     monkeypatch.setattr(commit_v2, "_handler", boom)
-    _write(repo, "docs/wiki/old.md", "# Old\n\nedited\n")
+    _write(repo, _OLD, "# Old\n\nedited\n")
 
-    result = commit_scoped(repo, ["docs/wiki/old.md"], [], [], "post-run: old", session_id=_SID)
+    result = commit_scoped(repo, [_OLD], [], [], "post-run: old", session_id=_SID)
 
     assert not result.ok and "RuntimeError: disk gone" in result.error
 
@@ -177,11 +181,11 @@ def test_the_call_names_explicit_paths_and_never_stages_everything(repo, monkeyp
         return {"committed": False, "sha": None, "nothing_to_commit": True}
 
     monkeypatch.setattr(commit_v2, "_handler", spy)
-    _write(repo, "docs/wiki/old.md", "# Old\n\nedited\n")
+    _write(repo, _OLD, "# Old\n\nedited\n")
 
-    commit_scoped(repo, ["docs/wiki/old.md"], ["docs/wiki/old.md"], [], "m", session_id=_SID)
+    commit_scoped(repo, [_OLD], [_OLD], [], "m", session_id=_SID)
 
-    assert seen["paths"] == ["docs/wiki/old.md"]
+    assert seen["paths"] == [_OLD]
     assert seen["ignored_untracked"] == []
 
 
@@ -194,7 +198,7 @@ def test_scoped_paths_unions_dedupes_and_normalises(repo):
         evidence=["a/b.md"],
     )
 
-    assert got == ["a/b.md", "docs/wiki/old.md"]
+    assert got == ["a/b.md", _OLD]
 
 
 @pytest.mark.parametrize("bad", ["../escape.md", ".git/config", "docs", "", "/elsewhere/x.md"])

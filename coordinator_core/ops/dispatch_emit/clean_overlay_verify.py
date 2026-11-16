@@ -42,6 +42,9 @@ MIRROR_SLOTS = 4
 SETUP_TIMEOUT_S = 60
 TEST_TIMEOUT_S = 120
 PYTEST_STALL_S = 120
+# Silence allowed before pytest's first byte: a cold start (imports, conftest, collection) prints nothing, and its
+# length tracks interpreter start under peer load, not test progress, so it is never measured against the stall window.
+PYTEST_STARTUP_S = 120
 IMPORTER_CAP = 25
 _PYTEST_FAILED = 1
 _PYTEST_INTERRUPTED = 2
@@ -60,12 +63,14 @@ class OverlayVerdict:
     (no mirror or no test ran: land_run refuses it unless `timed_out`). "missing" (no verdict was produced) is
     built by `check_verdict`: land_run lands it with an advisory. `detail` is the tail of the runner output or
     the reason. `timed_out` is True only on an "inconclusive" whose seeds pytest stalled (no output for
-    `PYTEST_STALL_S`); every other inconclusive keeps it False."""
+    `PYTEST_STALL_S`); every other inconclusive keeps it False. `failing` is the FAILED/ERROR node ids that made
+    a "red" or "pre_existing" verdict (empty on every other verdict)."""
 
     verdict: str
     detail: str = ""
     seeds: tuple = field(default_factory=tuple)
     timed_out: bool = False
+    failing: tuple = field(default_factory=tuple)
 
     @property
     def red(self) -> bool:
@@ -100,7 +105,8 @@ def _last_progress(raw: bytes) -> str:
 
 def _watched(proc, close, argv: list, stall_s: float) -> subprocess.CompletedProcess:
     """Drain `proc`'s stdout and stderr on reader threads until it exits; any new output resets the stall clock.
-    A silence of `stall_s` closes the tree and raises `PytestStalled`. Output is read in whatever chunks the pipe
+    A silence of `stall_s` (`PYTEST_STARTUP_S` if longer, before the first byte) closes the tree and raises
+    `PytestStalled`. Output is read in whatever chunks the pipe
     holds (pytest `-q` prints dots with no newline), so a slow test file that keeps reporting never stalls."""
     import threading
 
@@ -131,11 +137,12 @@ def _watched(proc, close, argv: list, stall_s: float) -> subprocess.CompletedPro
                 proc.wait(timeout=tick)
                 break
             except subprocess.TimeoutExpired:
-                if time.monotonic() - clock[0] >= stall_s:
+                window = stall_s if arrived else max(stall_s, PYTEST_STARTUP_S)
+                if time.monotonic() - clock[0] >= window:
                     progress = _last_progress(b"".join(arrived))
                     close()
                     proc.wait()
-                    raise PytestStalled(argv, stall_s, time.monotonic() - started, progress)
+                    raise PytestStalled(argv, window, time.monotonic() - started, progress)
     finally:
         close()
         for reader in readers:
@@ -713,8 +720,11 @@ def _base_failing_body(
 
 
 def _pytest_argv(root: Path, dest: Path, basetemp: Path, targets: Sequence[str]) -> list:
+    """`--rootdir` is the symlink-resolved mirror: pytest roots node ids at the realpath of each test file, so a
+    rootdir behind a symlink (macOS /var -> /private/var) loses the prefix match and every id becomes a file-less
+    `../../..::name`."""
     return [
-        _gate_python(root), "-m", "pytest", "-q", "-p", "no:cacheprovider", "--rootdir", str(dest),
+        _gate_python(root), "-m", "pytest", "-q", "-p", "no:cacheprovider", "--rootdir", str(dest.resolve()),
         "--basetemp", str(basetemp), *targets,
     ]
 
@@ -822,8 +832,9 @@ def verify(
         if ids and at_base == frozenset(ids):
             return OverlayVerdict(
                 "pre_existing", f"every failing test also fails at base {str(base_sha)[:12]}: {', '.join(ids)}: {tail}", seeds,
+                failing=ids,
             )
-        return OverlayVerdict("red", f"test collection failed: {tail}" if collected else tail, seeds)
+        return OverlayVerdict("red", f"test collection failed: {tail}" if collected else tail, seeds, failing=ids)
     return OverlayVerdict("inconclusive", f"pytest exit {bad[0].returncode}: {tail}", seeds)
 
 
@@ -854,7 +865,7 @@ def name_peer_owners(outcome: OverlayVerdict, measured: dict) -> OverlayVerdict:
         if outcome.red:
             verdict = "inconclusive"
             notes.append("the red may belong to that run's hunks, not this run: re-run once the owner lands or releases them")
-    return OverlayVerdict(verdict, f"{'; '.join(notes)}: {outcome.detail}", outcome.seeds, outcome.timed_out)
+    return OverlayVerdict(verdict, f"{'; '.join(notes)}: {outcome.detail}", outcome.seeds, outcome.timed_out, outcome.failing)
 
 
 def landing_key(measured: dict) -> str:
@@ -879,7 +890,7 @@ def write_verdict(root: Path, run_id: str, measured: dict, outcome: OverlayVerdi
         json.dumps(
             {
                 "verdict": outcome.verdict, "detail": outcome.detail, "seeds": list(outcome.seeds),
-                "timed_out": outcome.timed_out, "key": landing_key(measured), "base_sha": measured.get("base_sha"), "sha": measured.get("sha"),
+                "timed_out": outcome.timed_out, "failing_ids": list(outcome.failing), "key": landing_key(measured), "base_sha": measured.get("base_sha"), "sha": measured.get("sha"),
             },
             indent=2, sort_keys=True,
         ),
@@ -939,7 +950,7 @@ def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
         return OverlayVerdict("inconclusive", str(data.get("detail", "")), seeds, data.get("timed_out") is True)
     if verdict not in ("green", "red", "pre_existing", ENV_DEFECT):
         return OverlayVerdict("missing", f"overlay verdict was {verdict!r}: {data.get('detail', '')}", seeds)
-    return OverlayVerdict(verdict, str(data.get("detail", "")), seeds)
+    return OverlayVerdict(verdict, str(data.get("detail", "")), seeds, failing=tuple(data.get("failing_ids") or ()))
 
 
 #: Step name and cap of the one verdict read plus detached spawn; `reverify_on_mismatch` ends in

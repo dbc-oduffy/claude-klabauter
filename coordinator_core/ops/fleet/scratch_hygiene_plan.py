@@ -400,11 +400,20 @@ def classify_entry(
     return rec("would-delete", w)
 
 
-def _entries(root: Path) -> list[str]:
+def _entries(root: Path) -> list[tuple[str, bool]]:
+    """``(path, is_dir)`` for each child of ``root``; the type comes free with the listing."""
     try:
-        return sorted(os.path.join(root, n) for n in os.listdir(root))
+        with os.scandir(root) as it:
+            return [(e.path, _is_real_dir(e)) for e in it]
     except OSError:
         return []
+
+
+def _is_real_dir(e: os.DirEntry) -> bool:
+    try:
+        return e.is_dir(follow_symlinks=False) and not _entry_is_junction(e)
+    except OSError:
+        return False
 
 
 def _candidate_roots(repo_root: Path) -> tuple[tuple[Path, Optional[str]], ...]:
@@ -415,44 +424,62 @@ def _candidate_roots(repo_root: Path) -> tuple[tuple[Path, Optional[str]], ...]:
     )
 
 
-def purge_candidates(repo_root: str | os.PathLike[str]) -> list[str]:
-    """Every top-level entry in ``<repo>/scratch``, ``<repo>/state/scratch`` and ``coordinator_temp_root(repo)``.
-    ``pytest/`` under the Temp root and ``warp/`` under scratch are not entries: their
-    per-run children are. The op's own cursor file (``CURSOR_NAME`` and its temp files) is never one."""
-    repo_root = Path(repo_root)
-    paths = []
-    for root, per_run in _candidate_roots(repo_root):
-        for p in _entries(root):
-            base = os.path.basename(p)
-            if base.startswith(CURSOR_NAME):
-                continue
-            if base == per_run and not _is_link(p) and os.path.isdir(p):
-                paths.extend(_entries(Path(p)))
-            else:
-                paths.append(p)
-    return paths
-
-
-def _order_key(roots: list[str], path: str) -> tuple[int, str]:
+def _order_key(roots: list[str], path: str, is_dir: bool) -> tuple[int, int, str]:
+    """Directories sort before files: a file entry is one stat, a directory is the walk that can hold the bytes."""
     norm = _norm(path)
     for i, root in enumerate(roots):
         if norm.startswith(root + os.sep):
-            return (i, norm)
-    return (len(roots), norm)
+            return (not is_dir, i, norm)
+    return (not is_dir, len(roots), norm)
 
 
-def ordered_candidates(repo_root: str | os.PathLike[str], cursor: Optional[str] = None) -> list[str]:
-    """``purge_candidates`` rotated to start at the first entry ordered after ``cursor`` (a path),
-    wrapping at the end. The cursor names an entry, not a position, so deletions since it was
-    written do not shift the resume point. No cursor, or one ordered after every entry, starts at the top."""
+def candidate_scan(repo_root: str | os.PathLike[str]) -> list[tuple[str, bool]]:
+    """``(path, is_dir)`` for every top-level entry in ``<repo>/scratch``, ``<repo>/state/scratch`` and
+    ``coordinator_temp_root(repo)``, directories first so the shared budget reaches them before the files.
+    ``pytest/`` under the Temp root and ``warp/`` under scratch are not entries: their
+    per-run children are. The op's own cursor file (``CURSOR_NAME`` and its temp files) is never one."""
     repo_root = Path(repo_root)
-    paths = purge_candidates(repo_root)
-    if not cursor:
-        return paths
     roots = [_norm(root) for root, _per_run in _candidate_roots(repo_root)]
-    key = _order_key(roots, cursor)
-    start = next((i for i, p in enumerate(paths) if _order_key(roots, p) > key), 0)
-    return paths[start:] + paths[:start]
+    found: list[tuple[str, bool]] = []
+    for root, per_run in _candidate_roots(repo_root):
+        for p, is_dir in _entries(root):
+            base = os.path.basename(p)
+            if base.startswith(CURSOR_NAME):
+                continue
+            if base == per_run and is_dir:
+                found.extend(_entries(Path(p)))
+            else:
+                found.append((p, is_dir))
+    found.sort(key=lambda pd: _order_key(roots, pd[0], pd[1]))
+    return found
+
+
+def purge_candidates(repo_root: str | os.PathLike[str]) -> list[str]:
+    """The paths of ``candidate_scan``, in its order."""
+    return [p for p, _is_dir in candidate_scan(repo_root)]
+
+
+def ordered_candidate_scan(
+    repo_root: str | os.PathLike[str], cursor: Optional[str] = None, cursor_is_dir: Optional[bool] = None
+) -> list[tuple[str, bool]]:
+    """``candidate_scan`` rotated to start at the first entry ordered after ``cursor`` (a path),
+    wrapping at the end. The cursor names an entry, not a position, so deletions since it was
+    written do not shift the resume point. No cursor, or one ordered after every entry, starts at the top.
+    ``cursor_is_dir`` is the cursor's recorded type; unrecorded, it is read from disk, and a cursor
+    gone from disk counts as a directory."""
+    repo_root = Path(repo_root)
+    scan = candidate_scan(repo_root)
+    if not cursor:
+        return scan
+    if cursor_is_dir is None:
+        try:
+            cursor_is_dir = stat.S_ISDIR(os.lstat(cursor).st_mode)
+        except OSError:
+            cursor_is_dir = True
+    roots = [_norm(root) for root, _per_run in _candidate_roots(repo_root)]
+    key = _order_key(roots, cursor, cursor_is_dir)
+    start = next((i for i, (p, d) in enumerate(scan) if _order_key(roots, p, d) > key), 0)
+    return scan[start:] + scan[:start]
 
 
 def plan_purge(

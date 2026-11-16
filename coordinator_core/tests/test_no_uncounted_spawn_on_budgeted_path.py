@@ -7911,6 +7911,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "tracker.mint_person": 1,
     "workflow_runs.list": 2,
     "workflow.fire_status": 0,
+    # `fire_wait` reaches `git/run.py::run_git` once, only after the record reads `exited` with no landing sha.
+    "workflow.fire_wait": 1,
     # Newly live ops measured at their reachable-site counts when first pinned.
     "ci.run_commenting_sweep": 1,
     # close.background's legs run lazy imports and a detached launch the static walk does not

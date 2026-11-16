@@ -34,7 +34,8 @@ def _script(tmp_path, monkeypatch, served: bool) -> str:
     return emit_script(_plan_file(tmp_path), repo_root=tmp_path, **REVIEW_KW)
 
 
-def test_served_repo_script_states_the_line_exactly_once(tmp_path, monkeypatch):
+def _plugin_root(tmp_path, monkeypatch) -> None:
+    """A hermetic plugin root with the rag-preamble snippet carrying the line and an empty review-signals contract; `CLAUDE_PLUGIN_ROOT` points at it."""
     plugin = tmp_path / "plugin"
     (plugin / "snippets").mkdir(parents=True)
     (plugin / "snippets" / "example-retrieval-repo-preamble.md").write_text(
@@ -43,7 +44,13 @@ def test_served_repo_script_states_the_line_exactly_once(tmp_path, monkeypatch):
         "2. Then something else.\n",
         encoding="utf-8",
     )
+    (plugin / "contract").mkdir()
+    (plugin / "contract" / "review-signals.json").write_text('{"signals": {}}', encoding="utf-8")
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin))
+
+
+def test_served_repo_script_states_the_line_exactly_once(tmp_path, monkeypatch):
+    _plugin_root(tmp_path, monkeypatch)
     script = _script(tmp_path, monkeypatch, True)
     assert script.count(_MARK) == 1
     assert script.count("mcp__project-rag__project_staleness_check") == 1
@@ -62,11 +69,12 @@ def test_unreadable_snippet_falls_back_to_the_hint(monkeypatch):
     assert emit._example_retrieval_repo_first_line() == _EXAMPLE_RETRIEVAL_REPO_HINT
 
 
-def _ask_script(monkeypatch, served: bool) -> str:
+def _ask_script(tmp_path, monkeypatch, served: bool) -> str:
     from coordinator_core.ops.dispatch_emit import ask_compose, prompt_fragments
     from coordinator_core.ops.dispatch_emit.ask_plan_blitz import AskPlanBlitzRefused
     from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_prompt_fragments import _STUB_KW
 
+    _plugin_root(tmp_path, monkeypatch)
     monkeypatch.setattr(_rag_serving, "serves_repo", lambda cwd=None: served)
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", False)
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "m_plus")
@@ -77,14 +85,14 @@ def _ask_script(monkeypatch, served: bool) -> str:
         return ask_compose.compose_ask_script(**kw, **_STUB_KW)
 
 
-def test_served_ask_briefs_carry_the_line_and_the_fallback_rule(monkeypatch):
-    script = _ask_script(monkeypatch, True)
+def test_served_ask_briefs_carry_the_line_and_the_fallback_rule(tmp_path, monkeypatch):
+    script = _ask_script(tmp_path, monkeypatch, True)
     assert script.count(_MARK) >= 3
     assert script.count("retry it once, then fall back to scoped grep and report the fallback") == script.count(_MARK)
 
 
-def test_unserved_ask_briefs_carry_neither(monkeypatch):
-    script = _ask_script(monkeypatch, False)
+def test_unserved_ask_briefs_carry_neither(tmp_path, monkeypatch):
+    script = _ask_script(tmp_path, monkeypatch, False)
     assert _MARK not in script
     assert "fall back to scoped grep" not in script
 

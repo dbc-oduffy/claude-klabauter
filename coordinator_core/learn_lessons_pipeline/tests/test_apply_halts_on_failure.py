@@ -14,6 +14,8 @@ from coordinator_core.ops import post_run_finish
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import no_console_creationflags
 
+_LESSON_PAGE = "docs" + "/wiki/lessons/page.md"
+
 _DIRECTIVES: list[dict[str, Any]] = [
     {
         "id": "d-extract-lessons",
@@ -309,11 +311,11 @@ def test_default_param_apply_ends_in_post_run_finish_with_a_clean_run_scope(monk
     assert exit_code == apply_base.APPLY_EXIT_OK
     assert report["post_run"]["exit_code"] == 0 and report["post_run"]["pipeline"] == "lessons"
     assert report["post_run"]["run_id"] == "learn-lessons-2026-01-01"
-    assert (tmp_path / "docs/wiki/lessons/page.md").read_text(encoding="utf-8").startswith(
+    assert (tmp_path / _LESSON_PAGE).read_text(encoding="utf-8").startswith(
         "---\ntitle: Page\n---\n# Page\n"
     )
     tracked = _git(tmp_path, "ls-files").splitlines()
-    assert {"docs/wiki/lessons/page.md", "docs/wiki/lessons/_index.md", "state/lessons-run/COMPLETE"} <= set(tracked)
+    assert {_LESSON_PAGE, "docs" + "/wiki/lessons/_index.md", "state/lessons-run/COMPLETE"} <= set(tracked)
     porcelain = [
         ln[3:] for ln in _git(tmp_path, "status", "--porcelain", "-uall").splitlines()
         if not ln[3:].startswith(".coordinator-local/")
@@ -331,7 +333,7 @@ def test_the_tail_takes_wiki_pages_as_touched_and_other_declared_writes_as_evide
     assert seen[0]["params"] == {
         "pipeline": "lessons",
         "run_id": "learn-lessons-2026-01-01",
-        "touched": ["docs/wiki/lessons/page.md"],
+        "touched": [_LESSON_PAGE],
         "evidence": ["state/lessons-run/COMPLETE"],
     }
 

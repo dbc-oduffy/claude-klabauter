@@ -316,3 +316,100 @@ def test_a_crlf_signer_pin_has_the_same_fingerprint_as_the_lf_pin():
     assert membership.fingerprint(line + "\r\n") == lf
     with pytest.raises(membership.MembershipError):
         membership.fingerprint(line + "\r\n" + line + "\r\n")
+
+
+MUX_OPTIONS = lambda h: ["-o", "ControlMaster=auto", "-o", "ControlPath=/ctl/r-key"]
+
+
+@pytest.fixture
+def far_homes(tmp_path, monkeypatch, mux):
+    """A tmp settings home and a tmp session registry; no far platform recorded yet."""
+    home = tmp_path / "settings"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    (tmp_path / ".claude" / "sessions").mkdir(parents=True)
+    mux._FAR_PLATFORM.clear()
+
+    def record(box, platform):
+        path = home / "unimatrix" / "control-far" / f"{box}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"platform": platform}), encoding="utf-8")
+
+    def session(name, **entry):
+        (tmp_path / ".claude" / "sessions" / name).write_text(json.dumps(entry), encoding="utf-8")
+
+    return types.SimpleNamespace(record=record, session=session)
+
+
+def _argv(mux, box="machine-a", **kw):
+    ch = mux.channel(box, key="k", host=box, direct=True, mux_options=MUX_OPTIONS, **kw)
+    return ch._argv()
+
+
+def test_a_windows_far_box_gets_no_control_option(mux, far_homes):
+    far_homes.record("machine-a", "win32")
+    assert not any("Control" in a for a in _argv(mux))
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_a_posix_far_box_keeps_its_control_options(mux, far_homes, platform):
+    far_homes.record("machine-a", platform)
+    argv = _argv(mux)
+    assert "ControlMaster=auto" in argv and "ControlPath=/ctl/r-key" in argv
+
+
+@pytest.mark.parametrize("platform", [None, "freebsd", ""])
+def test_an_unknown_far_box_gets_no_control_option(mux, far_homes, platform):
+    if platform is not None:
+        far_homes.record("machine-a", platform)
+    assert not any("Control" in a for a in _argv(mux))
+
+
+def test_the_default_roster_mux_options_are_gated_too(mux, far_homes, monkeypatch):
+    roster = mux._roster()
+    monkeypatch.setattr(roster, "mux_options", lambda remote, key=None: ["-o", "ControlMaster=auto"])
+    ch = mux.channel("machine-a", key="k", host="machine-a", direct=True)
+    assert "ControlMaster=auto" not in ch._argv()
+    far_homes.record("other", "linux")
+    mux._FAR_PLATFORM.clear()
+    assert "ControlMaster=auto" in mux.channel("other", key="k", host="other", direct=True)._argv()
+
+
+def test_a_mirror_entrys_far_pid_domain_decides_when_no_record_exists(mux, far_homes):
+    far_homes.session("1.json", box="machine-a", pidDomain="darwin", farPidDomain="win32:machine-a")
+    assert mux.far_platform("machine-a") == "win32"
+    far_homes.session("2.json", box="posixbox", pidDomain="win32:me", farPidDomain="linux")
+    assert mux.far_platform("posixbox") == "posix"
+    far_homes.session("3.json", box="nodomain", pidDomain="linux")
+    assert mux.far_platform("nodomain") is None
+
+
+def test_the_record_outranks_a_session_entry_and_the_answer_is_cached(mux, far_homes):
+    far_homes.record("machine-a", "win32")
+    far_homes.session("1.json", box="machine-a", farPidDomain="linux")
+    assert mux.far_platform("machine-a") == "win32"
+    far_homes.record("machine-a", "linux")
+    assert mux.far_platform("machine-a") == "win32"
+
+
+def test_an_unknown_answer_is_retried_after_its_ttl(mux, far_homes):
+    assert mux.far_platform("late") is None
+    far_homes.record("late", "linux")
+    assert mux.far_platform("late") is None
+    mux._FAR_PLATFORM["late"] = (None, 0.0)
+    assert mux.far_platform("late") == "posix"
+
+
+def test_the_record_file_name_is_sanitised_like_unimatrix_install(mux, far_homes):
+    far_homes.record("a-b", "linux")
+    assert mux.far_platform("a b") == "posix"
+
+
+@pytest.mark.parametrize("box", ["a b", "a/b", "dp:1", "ünï", "plain-1.x_y"])
+def test_the_record_file_name_matches_unimatrix_install_control_far_record_path(mux, far_homes, box):
+    install = _load(BIN / "unimatrix-install.py", "unimatrix_install_parity")
+    path = install.control_far_record_path(box)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"platform": "linux"}), encoding="utf-8")
+    assert mux.far_platform(box) == "posix"

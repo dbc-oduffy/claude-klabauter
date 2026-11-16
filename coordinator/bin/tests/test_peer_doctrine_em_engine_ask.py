@@ -34,6 +34,12 @@ def test_block_carries_route_token(block, token):
     assert token in block
 
 
+def test_em_section_names_the_single_blocking_fire_wait(block):
+    em = _em_section(block)
+    assert "coordinator-invoke workflow.fire_wait '{\"fire_id\": \"<fire_id>\"}'" in em
+    assert "workflow.fire_status" not in em
+
+
 def test_send_placeholder_is_bound(block):
     assert "{SEND}" not in block
 

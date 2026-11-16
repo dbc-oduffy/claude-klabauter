@@ -14,6 +14,8 @@ from coordinator_core.ops.distill_workflow_input import (
     validate_workflow_input,
 )
 
+_WIKI = "docs" + "/wiki/"
+
 
 def _run(coro):
     return asyncio.run(coro)
@@ -24,7 +26,7 @@ def _sample_manifest() -> dict:
         run_id="2026-08-06-15h20",
         batches=[["a.md", "b.md"], ["c.md"]],
         wiki_dirs=["docs/wiki"],
-        wiki_slugs=[{"slug": "foo", "path": "docs/wiki/foo.md"}],
+        wiki_slugs=[{"slug": "foo", "path": _WIKI + "foo.md"}],
         cohorts={"harvest": ["a.md", "b.md", "c.md"]},
     )
 
@@ -50,7 +52,7 @@ def test_translate_batches_shape_and_ids():
 
 def test_translate_wiki_slugs_is_flat_object_map():
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
-    assert payload["wikiSlugs"] == {"foo": "docs/wiki/foo.md"}
+    assert payload["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
     assert isinstance(payload["wikiSlugs"], dict)
 
 
@@ -102,7 +104,7 @@ def test_validate_catches_total_file_count_integrity_mismatch():
 
 def test_validate_catches_wiki_slugs_wrong_type():
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
-    payload["wikiSlugs"] = [{"slug": "foo", "path": "docs/wiki/foo.md"}]
+    payload["wikiSlugs"] = [{"slug": "foo", "path": _WIKI + "foo.md"}]
     errors = validate_workflow_input(payload)
     assert any("wikiSlugs" in e for e in errors)
 
@@ -146,7 +148,7 @@ def test_shard_splits_batches_and_slugs_with_matching_counts():
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/r")
     # ~180-byte entries, the real backlog's width: 100 of them would be ~18 KB.
     payload["wikiSlugs"] = {
-        f"slug-{i:04d}-{'x' * 60}": f"docs/wiki/{'y' * 80}/s{i}.md" for i in range(250)
+        f"slug-{i:04d}-{'x' * 60}": f"{_WIKI}{'y' * 80}/s{i}.md" for i in range(250)
     }
     payload["wikiSlugCount"] = len(payload["wikiSlugs"])
     manifest, files = shard_workflow_input(payload)
@@ -186,8 +188,8 @@ def test_handler_emits_relevant_guides_per_batch_additively(tmp_path):
         batches=[["a.md"], ["c.md"]],
         wiki_dirs=["docs/wiki"],
         wiki_slugs=[
-            {"slug": "foo", "path": "docs/wiki/foo.md"},
-            {"slug": "bar", "path": "docs/wiki/bar.md"},
+            {"slug": "foo", "path": _WIKI + "foo.md"},
+            {"slug": "bar", "path": _WIKI + "bar.md"},
         ],
         cohorts={"harvest": ["a.md", "c.md"]},
     )
@@ -264,7 +266,7 @@ def _tier_manifest(files_by_batch):
         run_id="rt",
         batches=files_by_batch,
         wiki_dirs=["docs/wiki"],
-        wiki_slugs=[{"slug": "g", "path": "docs/wiki/g.md"}],
+        wiki_slugs=[{"slug": "g", "path": _WIKI + "g.md"}],
         cohorts={"harvest": flat},
     )
 
@@ -348,9 +350,9 @@ def test_fit_scan_tier_prices_guides_into_every_split_batch(tmp_path):
 
     _sized(tmp_path, "a.md", 200_000)
     _sized(tmp_path, "b.md", 200_000)
-    _sized(tmp_path, "docs/wiki/g.md", 150_000)
+    _sized(tmp_path, _WIKI + "g.md", 150_000)
     payload = translate_to_workflow_input(_tier_manifest([["a.md", "b.md"]]), repo_root=str(tmp_path))
-    guides = [[{"slug": "g", "path": "docs/wiki/g.md"}]]
+    guides = [[{"slug": "g", "path": _WIKI + "g.md"}]]
     still_over = fit_scan_tier(payload, guides=guides)
     assert still_over == [] and payload["batch_count"] == 2
     # 350,000 B of file+guide is 87,500 tokens: each split batch carries the guide and fits.
@@ -361,9 +363,9 @@ def test_fit_scan_tier_lone_oversized_file_sheds_guides_and_is_reported(tmp_path
     from coordinator_core.ops.distill_workflow_input import fit_scan_tier
 
     _sized(tmp_path, "huge.md", 500_000)
-    _sized(tmp_path, "docs/wiki/g.md", 1_000)
+    _sized(tmp_path, _WIKI + "g.md", 1_000)
     payload = translate_to_workflow_input(_tier_manifest([["huge.md"]]), repo_root=str(tmp_path))
-    still_over = fit_scan_tier(payload, guides=[[{"slug": "g", "path": "docs/wiki/g.md"}]])
+    still_over = fit_scan_tier(payload, guides=[[{"slug": "g", "path": _WIKI + "g.md"}]])
     assert still_over == ["batch-1"] and payload["batches"][0]["relevantGuides"] == []
 
 

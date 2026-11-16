@@ -177,6 +177,32 @@ def test_machine_local_pin_absent_key_or_unexecutable_value_is_a_defect_naming_t
     assert got.defect and "example_retrieval_repo.python" in got.defect
 
 
+def _concern_registry(tmp_path, monkeypatch, *, local_body, registry_local_body=""):
+    reg = tmp_path / "machine-local"
+    reg.mkdir()
+    (reg / "registry.toml").write_text('concerns = ["project_rag"]\n', encoding="utf-8")
+    (reg / "registry.local.toml").write_text(registry_local_body, encoding="utf-8")
+    (reg / "example_retrieval_repo.local.toml").write_text(local_body, encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    monkeypatch.delenv("MACHINE_LOCAL_EXAMPLE_RETRIEVAL_REPO_PYTHON", raising=False)
+
+
+def test_machine_local_pin_reads_a_concern_namespace_file_without_a_registry_stub(tmp_path, monkeypatch):
+    _concern_registry(tmp_path, monkeypatch, local_body=f"python = '{sys.executable}'\n")
+    repo = _repo(tmp_path, targeted_test_python="machine-local:example_retrieval_repo.python")
+    got = ti.resolve_targeted_test_python(repo)
+    assert got == ti.TargetedPython(sys.executable, "targeted_test_python", None)
+    assert "not set" not in (got.defect or "")
+
+
+def test_machine_local_pin_ignores_a_concern_key_declared_only_in_the_top_level_registry(tmp_path, monkeypatch):
+    _concern_registry(
+        tmp_path, monkeypatch, local_body="other = 'x'\n", registry_local_body=f'"example_retrieval_repo.python" = "{sys.executable}"\n',
+    )
+    got = ti.resolve_targeted_test_python(_repo(tmp_path, targeted_test_python="machine-local:example_retrieval_repo.python"))
+    assert got.defect and "example_retrieval_repo.python" in got.defect and "not set" in got.defect
+
+
 def test_remedy_names_the_machine_local_form_and_no_absolute_path():
     assert "targeted_test_python: machine-local:<key>" in ti.REMEDY
     assert not any(tok.startswith(("/", "~")) or ":\\" in tok for tok in ti.REMEDY.split())

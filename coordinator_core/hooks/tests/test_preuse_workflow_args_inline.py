@@ -15,7 +15,7 @@ def _built(tmp_path):
         "repoRoot": str(tmp_path),
         "batches": [{"batchId": "batch-1", "files": ["a.md"], "description": "d", "formatHints": {}}],
         "wikiDirs": ["docs/wiki"],
-        "wikiSlugs": {"g": "docs/wiki/g.md"},
+        "wikiSlugs": {"g": "docs" + "/wiki/g.md"},
         "batch_count": 1,
         "total_file_count": 1,
         "wikiSlugCount": 1,

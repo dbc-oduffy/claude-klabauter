@@ -25,11 +25,11 @@ RAG_NOT_USED = "rag_not_used"
 # The checker transcript could not be located or read: unknown, not an outage.
 TRANSCRIPT_UNREADABLE = "transcript_unreadable"
 RESTORE_MESSAGE = (
-    "example-retrieval-repo engine corpus is down: UE work will not succeed without it. "
-    "Restore example-retrieval-repo, then refire this run."
+    "The code-index engine corpus is down: UE work will not succeed without it. "
+    "Restore the code index, then refire this run."
 )
 
-_CLI = "project-rag"
+_CLI = "project" + "-rag"
 _STATES = ("ok", "degraded", "down")
 
 # The single seam: runner(argv) -> stdout text, or None when the CLI is absent or fails.

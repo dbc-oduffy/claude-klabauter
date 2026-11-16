@@ -630,3 +630,45 @@ def test_headless_em_token_is_stripped_from_agent_child_env(tmp_path, monkeypatc
     agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
     assert "COORDINATOR_ALLOW_HEADLESS_EM_TOKEN" not in json.loads(capture.read_text())["env"]
     assert "COORDINATOR_ALLOW_HEADLESS_EM_TOKEN" not in headless_agents._environment()
+
+
+REFUSAL_OUTPUT = '[warm-client] x\n{\n  "jsonrpc": "2.0",\n  "id": 1,\n  "result": {\n    "refused": "bad-request",\n    "reason": "session_id is required."\n  }\n}\n'
+
+
+def _headless_cli(tmp_path, monkeypatch, **kwargs):
+    capture = fake_cli(tmp_path, monkeypatch, **kwargs)
+    monkeypatch.setattr(headless_agents, "resolve_codex", agents.resolve_codex)
+    monkeypatch.setattr(headless_agents, "preflight_auth", lambda **_kw: None)
+    return capture
+
+
+def _submit_event(command="coordinator-invoke engine_ask.submit --params-file p.json", output=REFUSAL_OUTPUT):
+    return {"type": "item.completed", "item": {"type": "command_execution", "command": command,
+                                              "aggregated_output": output, "exit_code": 0}}
+
+
+def test_worker_whose_only_output_is_refused_submit_fails(tmp_path, monkeypatch):
+    _headless_cli(tmp_path, monkeypatch, result=REFUSAL_OUTPUT, events=[_submit_event()])
+    with pytest.raises(headless_agents.AgentFailed, match="only output is a refused engine_ask.submit"):
+        headless_agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
+
+
+def test_schema_value_that_is_only_the_refusal_fails(tmp_path, monkeypatch):
+    schema = {"type": "object"}
+    refusal = {"jsonrpc": "2.0", "id": 1, "result": {"refused": "bad-request", "reason": "session_id is required."}}
+    _headless_cli(tmp_path, monkeypatch, result=json.dumps(refusal), events=[_submit_event()])
+    with pytest.raises(headless_agents.AgentFailed, match="only output is a refused engine_ask.submit"):
+        headless_agents.run_agent("x", {"schema": schema}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
+
+
+def test_schema_output_with_refused_submit_in_transcript_is_ok(tmp_path, monkeypatch):
+    _headless_cli(tmp_path, monkeypatch, result='{"ok":true}', events=[_submit_event()])
+    assert headless_agents.run_agent("x", {"schema": SCHEMA}, repo_root=tmp_path,
+                                     artifact_dir=tmp_path / "agent") == {"ok": True}
+
+
+def test_text_output_beyond_refusal_and_other_commands_are_ok(tmp_path, monkeypatch):
+    _headless_cli(tmp_path, monkeypatch, result="sized S; submit refused, continued", events=[_submit_event()])
+    assert headless_agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "a1") == "sized S; submit refused, continued"
+    _headless_cli(tmp_path, monkeypatch, result=REFUSAL_OUTPUT, events=[_submit_event(command="coordinator-invoke other.op")])
+    assert headless_agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "a2") == REFUSAL_OUTPUT

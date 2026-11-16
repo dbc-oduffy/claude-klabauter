@@ -68,8 +68,9 @@ pre-grant it. The PM's ask is itself the authorization, so submit fires by defau
 `fire: false` in the params to mint without starting. Steer a run later
 with `workflow.revise`.
 
-After a submit, watch the run: `coordinator-invoke workflow.fire_status '{"fire_id": "<fire_id>"}'`
-with the `fire_id` the submit reply names, until its `state` is `exited`. A run that died or halted
+After a submit, watch the run with one blocking command, with the `fire_id` the submit reply names:
+`coordinator-invoke workflow.fire_wait '{"fire_id": "<fire_id>"}'`. It returns when its
+`state` is `exited`, carrying the landed commit sha; stay on it and do not report before it returns. A run that died or halted
 (`state/warp/<run_id>/halted.json`) is reported and resumed or revised, never hand-done in parallel.
 
 Hand-do only a confident XS by `coordinator/contract/xs-stop-rule.json`, and never while a run of

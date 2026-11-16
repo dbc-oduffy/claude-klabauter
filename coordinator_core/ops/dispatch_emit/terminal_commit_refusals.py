@@ -916,12 +916,15 @@ def _missing_run_outcome(params: object) -> Optional[dict]:
 
 
 def _measured_rev_drift_refusal(
-    run_dir: Path, worktree_root: Path, verdict: dict, ledger: object
+    run_dir: Path, worktree_root: Path, verdict: dict, ledger: object, inline_review: object = None
 ) -> Optional[dict]:
     """A ``ledger-unmet`` refusal (reason ``measured-rev-drift``) when a ``met`` item stands on a
     measurement whose recorded blobs no longer match the worktree; None when nothing drifted, no
-    item is ``met``, or the run recorded no measurement."""
+    item is ``met``, or the run recorded no measurement. When ``inline_review`` shows the test leg
+    left no review (``land_run.test_leg_failure``), the reason is ``test-leg-error`` instead: the
+    stale measurement is the leg's failure, not the requirement's."""
     from coordinator_core.ops.dispatch_emit import measured_rev
+    from coordinator_core.ops.dispatch_emit.land_run import drift_reason_for_leg
 
     met = [
         str(i["id"]) for i in verdict.get("items") or []
@@ -937,6 +940,9 @@ def _measured_rev_drift_refusal(
         if not drifted:
             return None
         reason = detail = "measured-rev-drift: " + ", ".join(drifted)
+    reason = drift_reason_for_leg(reason, inline_review)
+    if reason.startswith("test-leg-error"):
+        detail = reason
     return _error(
         f"the requirements are not met: {', '.join(met)}: {detail}. Re-measure and re-run the ledger check",
         refused="ledger-unmet",

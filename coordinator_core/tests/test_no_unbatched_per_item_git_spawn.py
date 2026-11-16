@@ -5429,16 +5429,6 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str, int], tuple[str, str]] = {
     #: `test_oracle_claims_still_name_live_sites`'s own ruling: a claim whose site no longer fires
     #: silently pre-approves whatever next takes that key. The oracle test named above still
     #: stands on its own; only this claim binding is gone.
-    # --- batched default, per-item OVERRIDE seam, and the split is the property (fast tier) ---
-    #: The default callee already carries N queue files in ONE spawn; what the collector counts is
-    #: the operator-supplied override CLI, which is an arbitrary third-party program with no batch
-    #: contract to assume. The oracle pins BOTH arms -- collapsing the override arm loses the
-    #: per-queue failure attribution, and per-item-ising the default arm is the amplification this
-    #: gate exists to catch -- and each arm ships its own fails-when-inverted leg.
-    ("coordinator_core/ops/updatedocs_sweeps.py", "_gate_queue_prune_sweep", "_run", 0): (
-        "test_queue_prune_sweep_spawn_split::test_override_cli_issues_one_spawn_per_queue_file",
-        "fast",
-    ),
 }
 
 

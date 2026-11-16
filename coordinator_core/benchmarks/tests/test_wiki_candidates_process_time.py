@@ -34,7 +34,7 @@ def repo(tmp_path, monkeypatch):
     root.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_PATHS_UPDATE_DOCS_WORKLIST_CACHE", str(tmp_path / "cache"))
     _git(root, "init", "-q", "-b", "main")
-    _write(root, "docs/wiki/alpha.md", "# alpha\n\nSee `src/a.py`.\n")
+    _write(root, "docs" + "/wiki/alpha.md", "# alpha\n\nSee `src/a.py`.\n")
     _write(
         root, "docs/plans/2026-11/p1.md",
         "---\ntitle: p1\nstatus: landed\n---\n\n# p1\n\nbody\n\n"

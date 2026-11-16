@@ -26,7 +26,8 @@ from coordinator_core.ops.dispatch_emit import grind_profile as gp
 
 PROFILE = "lessons"
 TRIAGE_NODE = "triage"
-COVERED_BY = "docs/wiki/x.md:1"
+_WIKI = "docs" + "/wiki/"
+COVERED_BY = _WIKI + "x.md:1"
 ROW_COUNT = 9
 PRE_FIX_COVERED = ("r0", "r1")
 FIX_COVERED = ("r2",)

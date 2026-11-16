@@ -61,6 +61,7 @@ _PRIO_DARWIN_PROCESS = 4
 PULL_SOURCES_INTERVAL_SECONDS = 900
 PULL_STAMP_NAME = "pull-sources-stamp.json"
 LOCK_STALE_SECONDS = 60
+STAMP_GLOB = "supervisor-*.json"
 KEYS_PREFIX = "unimatrix.keys."
 SSH_DEFAULT_IDENTITIES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519", "id_ed25519_sk", "id_xmss"}
 SUPERVISORS = (("bridge", "unimatrix-roster.py"), ("inbox", "unimatrix-mirror-all.py"))
@@ -647,7 +648,7 @@ def ssh_alias_fallback(roster, alias, key, why, probe_fn, aliases_fn=None, hostn
 
 
 def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe, stable_fn=None, now=None, liveness=None,
-              pull_fn=None, mdns_fn=None, alias_fn=None):
+              pull_fn=None, mdns_fn=None, alias_fn=None, hosts=None):
     """Start whichever of the peer's two supervisors is not live. Never raises for a down peer.
 
     The mDNS live-address retry, the ssh-config alias retry, then the stable-name fallback, run only after the
@@ -656,12 +657,22 @@ def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe, stable_fn
     liveness = liveness or _liveness()
     sdir = state_dir(roster)
     rec_path = record_path(sdir, alias)
-    lock = sdir / f"autolink-{slug(link_key(alias))}.lock"
+    hosts = {} if hosts is None else hosts
+    box = box_key(roster, alias, hosts)
+    lock = sdir / f"autolink-{slug(box)}.lock"
     if not acquire_lock(lock):
         say(f"far box {alias}: link lock held by another start; skipped")
         return
+    raw_probe = probe_fn
+
+    def probe_fn(*args, **kwargs):  # a probe chain outlasts LOCK_STALE_SECONDS; keep the lock fresh
+        try:
+            os.utime(lock)
+        except OSError:
+            pass
+        return raw_probe(*args, **kwargs)
     try:
-        legacy = [p for p in group_records(sdir).get(link_key(alias), []) if p != rec_path]
+        legacy = [p for p in group_records(roster, sdir, hosts).get(box, []) if p != rec_path]
         rec = read_record(rec_path)
         for p in legacy:  # an old raw-slug record is read once, then folded into the canonical one
             old = read_record(p)
@@ -712,7 +723,14 @@ def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe, stable_fn
             except (OSError, subprocess.SubprocessError):
                 stamp = None
             rec[role] = {"pid": p.pid, "procStart": stamp}
-        roster.write_json_atomic(str(rec_path), rec)
+            rec["box"] = box
+            if stamp is not None:  # the reaper's evidence of a supervisor, kept after a record loses its pid
+                try:
+                    roster.write_json_atomic(str(sdir / f"supervisor-{p.pid}.json"),
+                                             {"pid": p.pid, "procStart": stamp, "remote": remote})
+                except OSError:
+                    pass
+            roster.write_json_atomic(str(rec_path), rec)  # per spawn: a later failure never orphans this one
         migrate()
     finally:
         try:
@@ -822,17 +840,68 @@ def record_aliases(sdir):
 
 
 def record_path(sdir, alias):
-    """The canonical supervisor record of `alias`'s box: one file per `link_key`."""
+    """The supervisor record of one spelling: one file per `link_key`, its name a dialable alias."""
     return Path(sdir) / f"autolink-{slug(link_key(alias))}.json"
 
 
-def group_records(sdir):
-    """{link_key: [path]} over every supervisor record, the canonical path first in each group."""
+def box_key(roster, name, hosts=None, run=subprocess.run):
+    """Identity of the far box `name` spells: the normalised host of `user@host`, or of a bare alias's `ssh -G` HostName.
+
+    `hosts` caches alias -> normalised HostName across calls; an unresolvable alias is its own host."""
+    text = str(name).strip()
+    if "@" in text:
+        return _host_key(text.rpartition("@")[2])
+    hosts = {} if hosts is None else hosts
+    if text not in hosts:
+        hosts[text] = _host_key(ssh_hostname(roster, text, run=run) or "")
+    return hosts[text] or _host_key(text)
+
+
+def record_box(roster, alias, path, hosts, run=subprocess.run):
+    """The box a record serves: its stamped `box`, else resolved once and written back so the next run spawns nothing."""
+    if "@" in alias:
+        return box_key(roster, alias, hosts, run)
+    rec = read_record(path)
+    stamped = rec.get("box")
+    if isinstance(stamped, str) and stamped:
+        hosts.setdefault(alias, stamped)
+        return stamped
+    box = box_key(roster, alias, hosts, run)
+    if rec and hosts.get(alias):  # an unresolved alias (ssh -G failed) is never stamped as its own box
+        rec["box"] = box
+        try:
+            roster.write_json_atomic(str(path), rec)
+        except OSError:
+            pass
+    return box
+
+
+def resolve_record_boxes(roster, entries, hosts, run=subprocess.run):
+    """Fill `hosts` for every bare-alias record that is neither stamped nor cached, resolving them concurrently.
+
+    `ssh -G` takes one destination per call, so the unresolved set costs one spawn each, once, in parallel
+    (a stamped or `user@host` record costs none); the grouping loop that follows then spawns nothing."""
+    pending = sorted({a for a, p in entries if "@" not in a and a not in hosts and not read_record(p).get("box")})
+    if not pending:
+        return
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(8, len(pending))) as pool:
+        list(pool.map(lambda alias: box_key(roster, alias, hosts, run), pending))
+
+
+def group_records(roster, sdir, hosts=None, run=subprocess.run):
+    """{box_key: [path]} over every supervisor record, the user@host spelling and canonical file name first."""
+    hosts = {} if hosts is None else hosts
+    entries = list(record_files(sdir))
+    resolve_record_boxes(roster, entries, hosts, run)
     groups = {}
-    for alias, path in record_files(sdir):
-        groups.setdefault(link_key(alias), []).append((alias, path))
-    return {key: [p for _, p in sorted(items, key=lambda i: (i[1] != record_path(sdir, key), i[0]))]
-            for key, items in groups.items()}
+    for alias, path in entries:
+        groups.setdefault(record_box(roster, alias, path, hosts), []).append((alias, path))
+
+    def order(item):
+        alias, path = item
+        return ("@" not in alias, path != record_path(sdir, alias), alias)
+    return {box: [p for _, p in sorted(items, key=order)] for box, items in groups.items()}
 
 
 def pair_live(roster, rec):
@@ -844,17 +913,17 @@ def _pids(rec):
     return {(rec.get(role) or {}).get("pid") for role, _ in SUPERVISORS} - {None}
 
 
-def stop_duplicate_pairs(roster, sdir, say, kill=None):
-    """Keep one live supervisor pair per `link_key`; stop every other live supervisor and drop its record.
+def stop_duplicate_pairs(roster, sdir, say, kill=None, hosts=None):
+    """Keep one live supervisor pair per `box_key`; stop every other live supervisor and drop its record.
 
     The kept pair is the first live one, the canonical record's before any other. A record sharing the kept
     pair's pids is a stale copy of it: removed without a kill. A stop needs pid plus procStart to match."""
     kill = kill or roster.tree_kill
-    for key, paths in group_records(sdir).items():
+    for key, paths in group_records(roster, sdir, hosts).items():
         if len(paths) < 2:
             continue
         lock = Path(sdir) / f"autolink-{slug(key)}.lock"
-        if not acquire_lock(lock):  # a link_peer for this key is mid-spawn; the next start cleans up
+        if not acquire_lock(lock):  # a link_peer for this box is mid-spawn; the next start cleans up
             continue
         try:
             recs = [(p, read_record(p)) for p in paths]
@@ -877,6 +946,98 @@ def stop_duplicate_pairs(roster, sdir, say, kill=None):
                     pass
                 if stopped:
                     say(f"far box {key}: duplicate supervisor pair stopped ({', '.join(stopped)}); kept {kept[0].name}")
+        finally:
+            try:
+                os.remove(lock)
+            except OSError:
+                pass
+
+
+def _unresolved_alias(sdir, path, hosts):
+    """True for a bare-alias record whose box never resolved (`ssh -G` failed): its identity is a guess, never retired on."""
+    alias = next((a for a, p in record_files(sdir) if p == path), "")
+    return "@" not in alias and not hosts.get(alias)
+
+
+def retire_non_targets(roster, sdir, say, targets, kill=None, hosts=None):
+    """Stop and retire every supervisor record whose box is not a `box_key` of `targets`.
+
+    An empty `targets` retires nothing: it is how a failed or missing target read looks. A record moves to
+    `<sdir>/retired/`; a supervisor is stopped only when pid plus procStart still match. A box whose link
+    lock is held is left for the next run."""
+    if not targets:
+        return
+    kill = kill or roster.tree_kill
+    hosts = {} if hosts is None else hosts
+    groups = group_records(roster, sdir, hosts)
+    wanted = {box_key(roster, t, hosts) for t in targets}
+    for key, paths in groups.items():
+        if key in wanted:
+            continue
+        paths = [p for p in paths if not _unresolved_alias(sdir, p, hosts)]
+        if not paths:
+            continue
+        lock = Path(sdir) / f"autolink-{slug(key)}.lock"
+        if not acquire_lock(lock):
+            continue
+        try:
+            for path in paths:
+                rec = read_record(path)
+                stopped = []
+                for role, _ in SUPERVISORS:
+                    entry = rec.get(role) or {}
+                    if supervisor_live(roster, entry):
+                        kill(entry["pid"])
+                        stopped.append(f"{role} pid {entry['pid']}")
+                try:
+                    (Path(sdir) / "retired").mkdir(exist_ok=True)
+                    os.replace(path, Path(sdir) / "retired" / Path(path).name)
+                except OSError:
+                    continue
+                say(f"far box {key}: record {Path(path).name} retired, no longer a link target"
+                    + (f"; stopped {', '.join(stopped)}" if stopped else ""))
+        finally:
+            try:
+                os.remove(lock)
+            except OSError:
+                pass
+
+
+def reap_unrecorded(roster, sdir, say, kill=None, hosts=None):
+    """Stop every live supervisor that names itself in a `supervisor-<pid>.json` stamp but sits in no record.
+
+    A stamp is `{pid, procStart, remote}` written by `link_peer` at each spawn. A dead or reused pid
+    drops its stamp without a kill; a recorded pid is left alone; a box whose link lock is held is
+    left for the next run. Needs no process-table scan: only stamp files and `supervisor_live`."""
+    kill = kill or roster.tree_kill
+    hosts = {} if hosts is None else hosts
+    recorded = set()
+    for _, path in record_files(sdir):
+        recorded |= _pids(read_record(path))
+    for stamp in sorted(Path(sdir).glob(STAMP_GLOB)):
+        entry = read_record(stamp)
+        if not supervisor_live(roster, entry):
+            try:
+                os.remove(stamp)
+            except OSError:
+                pass
+            continue
+        if entry["pid"] in recorded:
+            continue
+        remote = entry.get("remote")
+        box = box_key(roster, remote, hosts) if isinstance(remote, str) and remote else "unknown"
+        lock = Path(sdir) / f"autolink-{slug(box)}.lock"
+        if not acquire_lock(lock):
+            continue
+        try:
+            if not supervisor_live(roster, entry):
+                continue
+            kill(entry["pid"])
+            say(f"far box {box}: supervisor pid {entry['pid']} outside any record stopped")
+            try:
+                os.remove(stamp)
+            except OSError:
+                pass
         finally:
             try:
                 os.remove(lock)
@@ -1190,12 +1351,17 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
         supervise_router(roster, sdir, say, spawn=spawn)
     except Exception as ex:  # a router failure must not stop the far links or fail the session
         say(f"peer router supervision failed: {type(ex).__name__}: {str(ex)[:120]}")
+    lookup = {}
+    hosts = lookup.setdefault("hosts", {})
     try:  # one live pair per box: a second spelling of the same box is stopped even when every link reads healthy
-        stop_duplicate_pairs(roster, sdir, say, kill)
+        stop_duplicate_pairs(roster, sdir, say, kill, hosts)
     except Exception as ex:  # duplicate cleanup must not stop the links or fail the session
         say(f"duplicate supervisor cleanup failed: {type(ex).__name__}: {str(ex)[:120]}")
+    try:  # a supervisor outside every record (a respawn whose record was lost) is stopped on every run
+        reap_unrecorded(roster, sdir, say, kill, hosts)
+    except Exception as ex:  # orphan cleanup must not stop the links or fail the session
+        say(f"orphan supervisor cleanup failed: {type(ex).__name__}: {str(ex)[:120]}")
     clock = time.time() if now is None else now
-    lookup = {}
     healthy = liveness.healthy(sdir, now) and not _epoch_moved(sdir, liveness)
     if boxes is None and pull_due(liveness, sdir, clock):
         try:
@@ -1206,9 +1372,17 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
             say(f"off-snapshot membership pull failed: {type(ex).__name__}: {str(ex)[:120]}")
         healthy = healthy and not adopted
     if healthy:
+        if boxes is None:  # the last written target list is the predicate: no snapshot read, no spawn
+            cached = liveness.read_record(sdir / liveness.CACHE_NAME).get("aliases")
+            try:
+                if isinstance(cached, list) and all(isinstance(a, str) for a in cached):
+                    retire_non_targets(roster, sdir, say, cached, kill, hosts)
+            except Exception as ex:  # retirement must not fail the session
+                say(f"record retirement failed: {type(ex).__name__}: {str(ex)[:120]}")
         return
 
     reason = NO_ALIAS_REASON
+    explicit = boxes is not None
     names, epoch, snapshot_mode = {}, None, False
     if boxes is None:
         status, names, skipped, epoch, why = split_members(roster, membership, self_names)
@@ -1237,6 +1411,11 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
             write_cache([])
         return
     write_cache(boxes)
+    if not explicit:
+        try:
+            retire_non_targets(roster, sdir, say, boxes, kill, hosts)
+        except Exception as ex:  # retirement must not fail the session
+            say(f"record retirement failed: {type(ex).__name__}: {str(ex)[:120]}")
 
     if snapshot_mode:
         stable_fn = stable_fn or (lambda alias: None)
@@ -1254,11 +1433,11 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
 
     def link_all(aliases):
         pending, seen = [], set()
-        groups = group_records(sdir)
+        groups = group_records(roster, sdir, hosts)
         for alias in aliases:
             try:
-                key = link_key(alias)
-                if key in seen:  # another spelling of the same box is already handled in this pass
+                key = box_key(roster, alias, hosts)
+                if key in seen:  # another spelling (alias or user@host) of this box is already handled
                     continue
                 seen.add(key)
                 if any(pair_live(roster, read_record(p)) for p in groups.get(key, [])):
@@ -1280,7 +1459,7 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
                 target = names.get(alias, alias)
                 if snapshot_mode:
                     target = member_alias(roster, target, alias.rpartition("@")[2], lookup["aliases"],
-                                          lookup.setdefault("hosts", {}))
+                                          hosts)
                 key = key_fn(roster, target)
                 if not Path(key).is_file():
                     # A configured alias with no key is a misconfiguration worth one line, not silence.
@@ -1295,7 +1474,8 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
                         f"unavailable; encrypted key {key} not loaded")
                     continue
                 link_peer(roster, alias, key, say, spawn=spawn, probe_fn=probe_fn, stable_fn=stable_fn,
-                          now=now, liveness=liveness, pull_fn=pull_fn, mdns_fn=shared_mdns, alias_fn=alias_fn)
+                          now=now, liveness=liveness, pull_fn=pull_fn, mdns_fn=shared_mdns, alias_fn=alias_fn,
+                          hosts=hosts)
             except Exception as ex:  # one peer's failure must not stop the next or fail the session
                 say(f"far box {alias} link failed: {type(ex).__name__}: {str(ex)[:120]}")
 

@@ -74,9 +74,10 @@ def shape_codex_child(
     Mutates and returns `env`. On Windows, inserts the installed PowerShell 7 dir immediately before
     the first PATH entry holding a pwsh.exe (appended when none does), so a leading private-bin stays
     first, and drops every WindowsApps PATH entry holding a pwsh.exe alias once the installed pwsh
-    exists. With `writable_root`, TEMP and TMP become the existing `<writable_root>/scratch/codex-tmp`;
-    with None they are left as inherited. Ends with
-    `check_pwsh_launchable(env)`, whose `SandboxSetupRefused` propagates. Stat and mkdir only; no spawn.
+    exists. With `writable_root` (an engine-launched worker), TEMP and TMP become the existing
+    `<writable_root>/scratch/codex-tmp` and CODEX_HOME becomes a seeded worker home with no AGENTS.md;
+    with None both are left as inherited. Ends with `check_pwsh_launchable(env)`, whose
+    `SandboxSetupRefused` propagates. Stat and mkdir only; no spawn.
     """
     if windows is None:
         windows = os.name == "nt"
@@ -87,7 +88,7 @@ def shape_codex_child(
         for name in ("TEMP", "TMP"):
             env[_key(env, name) or name] = str(tmp)
     if writable_root is not None:
-        _isolate_codex_home(env, Path(writable_root), os.environ if environ is None else environ)
+        _isolate_codex_home(env, Path(writable_root), os.environ if environ is None else environ, worker=True)
     check_pwsh_launchable(env)
     return env
 
@@ -134,24 +135,29 @@ def rekey_hook_trust(config_text: str, old_hooks: Path, new_hooks: Path) -> str:
     return _HOOK_STATE_HEADER.sub(swap, config_text)
 
 
-def _isolate_codex_home(env: dict[str, str], writable_root: Path, environ: Mapping[str, str]) -> None:
+def _isolate_codex_home(
+    env: dict[str, str], writable_root: Path, environ: Mapping[str, str], *, worker: bool = False
+) -> None:
     """Point the child's CODEX_HOME at `<writable_root>/scratch/codex-home`, seeded with auth, config, hooks.
 
-    Only when the parent is codex-sandboxed (CODEX_SANDBOX / CODEX_SANDBOX_NETWORK_DISABLED set) or the
-    real home rejects a write; otherwise the env is untouched. Copies only auth.json, hooks.json and
-    config.toml (hook trust re-keyed to the isolated hooks.json), never sessions, logs or tmp. Child env only.
+    Always when `worker` (an engine-launched stage worker, which must never read the real home's AGENTS.md
+    EM doctrine). Otherwise only when the parent is codex-sandboxed (CODEX_SANDBOX /
+    CODEX_SANDBOX_NETWORK_DISABLED set) or the real home rejects a write, else the env is untouched.
+    Copies only auth.json, hooks.json, models_cache.json and config.toml (hook trust re-keyed to the isolated hooks.json),
+    never AGENTS.md, sessions, logs or tmp. Child env only.
     """
     real = _real_codex_home(env, environ)
     if real is None:
         return
     sandboxed = any(_key(environ, n) for n in ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED"))
-    if not sandboxed and _home_writable(real):
+    if not worker and not sandboxed and _home_writable(real):
         return
     home = writable_root / "scratch" / "codex-home"
     home.mkdir(parents=True, exist_ok=True)
+    (home / "AGENTS.md").unlink(missing_ok=True)
     # Trap: hooks.json carries codex's only guard (PreToolUse host-guard). Without it, or with its trust
     # entries still keyed to the real path, the isolated child runs every tool unguarded and silently.
-    for name in ("auth.json", "config.toml", "hooks.json"):
+    for name in ("auth.json", "config.toml", "hooks.json", "models_cache.json"):
         src, dst = real / name, home / name
         try:
             if src.is_file() and (not dst.is_file() or src.stat().st_mtime > dst.stat().st_mtime):

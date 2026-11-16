@@ -1436,20 +1436,32 @@ def test_a_slow_but_progressing_verify_runs_past_the_stall_interval_and_reaches_
     assert took > stall, f"the run must outlast the stall interval to show progress, not silence, is what is watched: {took}s"
 
 
+def test_pre_output_silence_is_judged_by_the_startup_window_not_the_stall_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(cov, "PYTEST_STARTUP_S", 30)
+    late = [sys.executable, "-c", "import time; time.sleep(2); print('.', flush=True)"]
+    assert cov._run(late, tmp_path, None, stall_s=0.5).returncode == 0
+
+    monkeypatch.setattr(cov, "PYTEST_STARTUP_S", 1)
+    silent = [sys.executable, "-c", "import time; time.sleep(60)"]
+    with pytest.raises(cov.PytestStalled, match="no output for 1s"):
+        cov._run(silent, tmp_path, None, stall_s=0.5)
+
+
 def test_a_stalled_verify_is_inconclusive_timed_out_and_names_the_last_progress_point(tmp_path, monkeypatch):
     root, _ = _repo(tmp_path)
     head = _commit_files(
         root, {_HANG: "import time\n\n\ndef test_first():\n    assert True\n\n\ndef test_hangs():\n    time.sleep(600)\n"},
     )
-    monkeypatch.setattr(cov, "PYTEST_STALL_S", 20)
+    # A Windows pytest cold start alone can take ~20s before the first dot, so a shorter window reads startup as the stall.
+    monkeypatch.setattr(cov, "PYTEST_STALL_S", 45)
 
     started = time.monotonic()
     out = cov.verify(root, "run1", head, [_HANG])
 
     assert out.verdict == "inconclusive" and out.timed_out is True, out
-    assert "stalled" in out.detail and "no output for 20s" in out.detail, out.detail
+    assert "stalled" in out.detail and "no output for 45s" in out.detail, out.detail
     assert "1 test result(s) reported" in out.detail and "last output line" in out.detail, out.detail
-    assert time.monotonic() - started < 90
+    assert time.monotonic() - started < 150
 
 
 def test_a_red_importer_shard_is_red_and_a_seeds_timeout_is_inconclusive_with_timed_out(tmp_path, monkeypatch):
@@ -1485,6 +1497,41 @@ def test_timed_out_round_trips_through_write_verdict_and_check_verdict(tmp_path)
     back = cov.check_verdict(root, "run1", measured)
     assert back.verdict == "inconclusive" and back.timed_out is False
     assert cov.name_peer_owners(cov.OverlayVerdict("inconclusive", "x", (), True), {"peer_hunks": {"a": {"split": True}}}).timed_out
+
+
+def test_the_pytest_rootdir_is_the_symlink_resolved_mirror(tmp_path):
+    real = tmp_path / "real" / "repo"
+    real.mkdir(parents=True)
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(tmp_path / "real", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    argv = cov._pytest_argv(tmp_path, link / "repo", tmp_path / "bt", [READER])
+
+    assert argv[argv.index("--rootdir") + 1] == str(real.resolve())
+
+
+def test_a_red_verdict_names_the_failing_node_ids_file_qualified_and_green_names_none(tmp_path):
+    root, head = _repo(tmp_path, data="bad\n")
+    measured = {"sha": head, "base_sha": head, "blobs": {}}
+
+    red = cov.verify(root, "run1", head, [READER])
+    path = cov.write_verdict(root, "run1", measured, red)
+
+    assert red.verdict == "red" and red.failing == (f"{READER}::test_reads_data",)
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["failing_ids"] == [f"{READER}::test_reads_data"]
+    assert cov.check_verdict(root, "run1", measured).failing == red.failing
+
+    _write(root, "t/data.txt", "ok\n")
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "fix")
+    green = cov.verify(root, "run2", _git(root, "rev-parse", "HEAD").strip(), [READER])
+    path = cov.write_verdict(root, "run2", measured, green)
+
+    assert green.verdict == "green" and json.loads(path.read_text(encoding="utf-8"))["failing_ids"] == []
 
 
 def test_no_touched_module_means_the_seeds_alone_and_a_runaway_importer_set_is_capped(tmp_path, monkeypatch):

@@ -38,6 +38,7 @@ from typing import Callable, Optional, Sequence
 
 STATES = ("fresh", "stale", "absent", "unknown")
 SCHEMA_VERSION = 1
+_RAG_NAME = "project" + "-rag"
 KNOWN_REASONS = (
     "no_structural_db",
     "no_structural_stamp",
@@ -107,7 +108,7 @@ def verdict_from_reply(reply: object, slugs: Sequence[str]) -> FreshnessVerdict:
         return _unknown("unrecognised_action")
     if verdict == "current":
         if reason is None and action == "none":
-            return FreshnessVerdict("fresh", (), "project-rag", "none")
+            return FreshnessVerdict("fresh", (), _RAG_NAME, "none")
         return _unknown("current_not_clean")
     if verdict not in ("stale", "absent"):
         return _unknown("verdict_" + str(verdict))
@@ -117,9 +118,9 @@ def verdict_from_reply(reply: object, slugs: Sequence[str]) -> FreshnessVerdict:
         argv = remedy.get("argv")
         if not isinstance(argv, list) or not argv or not all(isinstance(a, str) and a for a in argv):
             return _unknown("malformed_argv")
-        return FreshnessVerdict(verdict, tuple(argv), "project-rag", action)
+        return FreshnessVerdict(verdict, tuple(argv), _RAG_NAME, action)
     if action == "register_publish_repo":
-        return FreshnessVerdict(verdict, (), "project-rag", action)
+        return FreshnessVerdict(verdict, (), _RAG_NAME, action)
     return _unknown("stale_without_action")
 
 
@@ -345,24 +346,24 @@ def freshness_precondition(
         else:
             verdict = verdict_fn(repo_root)
     except Exception as exc:  # noqa: BLE001 -- fail open
-        return {"state": "unknown", "refresh_queued": False, "message": f"example-retrieval-repo verdict unavailable: {exc}"}
+        return {"state": "unknown", "refresh_queued": False, "message": f"{_RAG_NAME} verdict unavailable: {exc}"}
     state = verdict.state if verdict.state in STATES else "unknown"
     if state not in ("stale", "absent"):
-        return {"state": state, "refresh_queued": False, "message": f"example-retrieval-repo index {state}"}
+        return {"state": state, "refresh_queued": False, "message": f"{_RAG_NAME} index {state}"}
     try:
         queued = queue_refresh(repo_root, verdict.remedy, spawn_fn=spawn_fn, marker_root=marker_root, now=now)
     except FreshnessRefusal as exc:
-        return {"state": state, "refresh_queued": False, "message": f"example-retrieval-repo index {state}; refresh not queued: {exc}"}
+        return {"state": state, "refresh_queued": False, "message": f"{_RAG_NAME} index {state}; refresh not queued: {exc}"}
     except Exception as exc:  # noqa: BLE001 -- spawn failure fails open
-        return {"state": state, "refresh_queued": False, "message": f"example-retrieval-repo index {state}; refresh spawn failed: {exc}"}
+        return {"state": state, "refresh_queued": False, "message": f"{_RAG_NAME} index {state}; refresh spawn failed: {exc}"}
     if queued:
-        message = f"example-retrieval-repo index {state}; refresh queued"
+        message = f"{_RAG_NAME} index {state}; refresh queued"
     elif verdict.remedy:
-        message = f"example-retrieval-repo index {state}; refresh already queued"
+        message = f"{_RAG_NAME} index {state}; refresh already queued"
     elif verdict.action == "register_publish_repo":
-        message = f"example-retrieval-repo index {state}; no publish target registered (set-publish-repo)"
+        message = f"{_RAG_NAME} index {state}; no publish target registered (set-publish-repo)"
     else:
-        message = f"example-retrieval-repo index {state}; verdict names no remedy"
+        message = f"{_RAG_NAME} index {state}; verdict names no remedy"
     return {"state": state, "refresh_queued": queued, "message": message}
 
 

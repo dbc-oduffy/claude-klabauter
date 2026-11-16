@@ -87,6 +87,9 @@ def test_door_fails_when_not_installed(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_setup_check_cli_fails_on_a_bare_settings_home(tmp_path):
+    engine_root = tmp_path / "engine"
+    (engine_root / "coordinator_core").mkdir(parents=True)
+    (engine_root / "coordinator_core" / "_engine_stamp").write_text("sha:deadbeef\n", encoding="utf-8")
     env = {
         "PATH": __import__("os").environ["PATH"],
         "HOME": str(tmp_path),
@@ -94,7 +97,7 @@ def test_setup_check_cli_fails_on_a_bare_settings_home(tmp_path):
         "MACHINE_LOCAL_REGISTRY_DIR": str(tmp_path / "reg"),
     }
     proc = subprocess.run(
-        ["python3", str(REPO_ROOT / "scripts" / "setup.py"), "--check", "--claude-klabauter-live-root", str(REPO_ROOT)],
+        ["python3", str(REPO_ROOT / "scripts" / "setup.py"), "--check", "--claude-klabauter-live-root", str(engine_root)],
         capture_output=True, text=True, env=env, timeout=120, check=False, **no_console_creationflags(),
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr

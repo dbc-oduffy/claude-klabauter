@@ -328,7 +328,7 @@ def _released_holders(root: Path, run_id: str, path: str, holders: Mapping[str, 
     return {h for h in others if not attributable(h, [path])}
 
 
-def _own_lineage(root: Path, run_id: str, holders: Mapping[str, bool]) -> set[str]:
+def own_lineage(root: Path, run_id: str, holders: Mapping[str, bool]) -> set[str]:
     """Holders that are `run_id`'s own earlier attempts: its `resumed_from` chain, and any holder bound to
     the same sizing (`ask_stage._chain_kin` reads the same kin). Their delta is the run's own claim, not a
     competing one. Unreadable ledger records yield nothing (the holder competes)."""
@@ -336,13 +336,19 @@ def _own_lineage(root: Path, run_id: str, holders: Mapping[str, bool]) -> set[st
     if not others:
         return set()
     from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
     from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
 
     kin = set(_resumed_chain(root, run_id)) & set(others)
 
     def sizing_of(rid: str) -> Optional[str]:
+        # `record_dir` prefers `state/warp/<id>` once it exists, but a run's run.json may still sit under `scratch/warp/<id>`.
         try:
-            bound = (rl.read_run(rl.run_dir(root, rid)) or {}).get("sizing_rel")
+            record = rl.read_run(rl.run_dir(root, rid))
+            if record is None:
+                record = rl.read_run(root / RUN_DIR_ROOT / rid) if safe_id(rid) else None
+            bound = (record or {}).get("sizing_rel")
         except (OSError, ValueError, rl.LedgerRefused):
             return None
         return str(bound).replace("\\", "/") if isinstance(bound, str) and bound else None
@@ -381,7 +387,7 @@ def _split(root: Path, run_id: str, path: str, hunks: list[Hunk], holders: Mappi
     except FileNotFoundError:
         tree = []
     released = _released_holders(root, run_id, path, holders)
-    lineage = _own_lineage(root, run_id, holders)
+    lineage = own_lineage(root, run_id, holders)
     claimants = [run_id, *[h for h in holders if h != run_id and h not in released and h not in lineage]]
     deltas = {
         c: _claimant_delta(root, common_dir, c, path, tree, coarse_ok=c != run_id, absent_claims_all=c == run_id)

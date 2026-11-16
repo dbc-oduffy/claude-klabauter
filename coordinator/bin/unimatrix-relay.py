@@ -314,7 +314,7 @@ def entries():
 
 def _engine_roots():
     """Candidate engine roots: env locators first, then the checkout this copy sits in."""
-    for var in ("COORDINATOR_ENGINE_SOURCE_ROOT", "COORDINATOR_ENGINE_ROOT", "CLAUDE_KLABAUTER_ROOT"):
+    for var in ("COORDINATOR_ENGINE_SOURCE_ROOT", "COORDINATOR_ENGINE_ROOT"):
         if os.environ.get(var):
             yield Path(os.environ[var])
     yield Path(__file__).resolve().parents[2]

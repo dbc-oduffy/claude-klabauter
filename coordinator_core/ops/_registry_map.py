@@ -460,6 +460,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "ceremony.result":                        "coordinator_core.ops.session_ceremonies",
     "workflow.fire":                          "coordinator_core.ops.workflow_fire.op",
     "workflow.fire_status":                   "coordinator_core.ops.workflow_fire.op",
+    "workflow.fire_wait":                     "coordinator_core.ops.workflow_fire.wait",
     "review_stamp.mint":                      "coordinator_core.ops.review_stamp",
     "review_stamp.rejudge":                   "coordinator_core.ops.review_stamp",
     "review_stamp.check":                     "coordinator_core.ops.review_stamp",

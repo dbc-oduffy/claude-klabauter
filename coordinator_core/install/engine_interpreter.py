@@ -27,11 +27,12 @@ from pathlib import Path
 from typing import NamedTuple, Optional, Sequence
 
 from coordinator_core import _settings_home
+from coordinator_core.install.timeouts import PACKAGE_INSTALL_SECS
 from coordinator_core.win_portability import no_console_creationflags
 
 _DIR_NAME = "engine-site"
 _STAMP_NAME = ".engine-site-stamp"
-_PIP_TIMEOUT_S = 600
+_PIP_TIMEOUT_S = PACKAGE_INSTALL_SECS
 _PROBE_TIMEOUT_S = 30
 
 

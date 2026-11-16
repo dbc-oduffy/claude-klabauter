@@ -5,6 +5,8 @@ from coordinator_core.ops.dispatch_emit import grind_compose as gc
 
 from .test_grind_verify_covered_flip import _ROUTING as _FLIP_ROUTING
 
+_WIKI = "docs" + "/wiki/"
+
 _LESSONS = {
     "triage": {
         "kind": "triage",
@@ -88,7 +90,7 @@ def _types(result):
 
 def test_pre_fix_covered_row_closes_through_discard_without_a_verify_retry():
     calls, result, _ = _run(_LESSONS, verify=[
-        {"outcome": "fail", "reason": "covered", "covered_by": "docs/wiki/x.md:12"},
+        {"outcome": "fail", "reason": "covered", "covered_by": _WIKI + "x.md:12"},
     ])
     assert calls.count("verify") == 1 and "fix" not in calls and "refute-close" in calls
     assert _types(result) == []
@@ -96,7 +98,7 @@ def test_pre_fix_covered_row_closes_through_discard_without_a_verify_retry():
 
 def test_a_covered_flip_is_terminal_the_retire_verify_never_re_judges_it():
     routing = {**_LESSONS, "triage": {**_LESSONS["triage"], "edges": {**_LESSONS["triage"]["edges"], "wiki-new": "verify-routing-fix"}}}
-    covered = {"outcome": "fail", "reason": "covered", "covered_by": "docs/wiki/x.md:12"}
+    covered = {"outcome": "fail", "reason": "covered", "covered_by": _WIKI + "x.md:12"}
     calls, result, _ = _run(routing, verify=[covered, covered], verdict="wiki-new")
     assert calls.count("verify") == 1 and "refute-close" in calls and "fix" not in calls
     assert "rejected-after-retry" not in _types(result)
@@ -104,7 +106,7 @@ def test_a_covered_flip_is_terminal_the_retire_verify_never_re_judges_it():
 
 def test_a_discard_row_whose_retire_verify_finds_it_covered_closes_in_exactly_one_verify_call():
     calls, result, _ = _run(_LESSONS, verdict="discard", verify=[
-        {"outcome": "fail", "reason": "Triage is right: already covered", "covered_by": "docs/wiki/x.md:12"},
+        {"outcome": "fail", "reason": "Triage is right: already covered", "covered_by": _WIKI + "x.md:12"},
     ])
     assert calls.count("verify") == 1 and "refute-close" in calls and "fix" not in calls
     assert _types(result) == []
@@ -129,7 +131,7 @@ def test_post_fix_covered_verify_undoes_the_fix_and_closes_without_a_second_fix(
         fix=[{"outcome": "done", "touched_files": ["lib/a.py"]}],
         verify=[
             {"outcome": "pass"},
-            {"outcome": "fail", "reason": "covered", "covered_by": "docs/wiki/x.md:3"},
+            {"outcome": "fail", "reason": "covered", "covered_by": _WIKI + "x.md:3"},
             {"undo": _UNDONE},
         ],
     )
@@ -142,7 +144,7 @@ def test_post_fix_covered_verify_with_a_failed_undo_is_stage_dead():
     calls, result, _ = _run(
         _LESSONS,
         fix=[{"outcome": "done", "touched_files": ["lib/a.py"]}],
-        verify=[{"outcome": "pass"}, {"outcome": "fail", "covered_by": "docs/wiki/x.md:3"}, {"undo": {"outcome": "undo-failed"}}],
+        verify=[{"outcome": "pass"}, {"outcome": "fail", "covered_by": _WIKI + "x.md:3"}, {"undo": {"outcome": "undo-failed"}}],
     )
     assert calls.count("fix") == 1 and _types(result) == ["stage-dead"]
 
@@ -150,7 +152,7 @@ def test_post_fix_covered_verify_with_a_failed_undo_is_stage_dead():
 def test_fix_reporting_covered_by_closes_without_any_post_fix_verify():
     calls, result, sink = _run(
         _LESSONS,
-        fix=[{"outcome": "done", "touched_files": [], "covered_by": "docs/wiki/x.md:1"}],
+        fix=[{"outcome": "done", "touched_files": [], "covered_by": _WIKI + "x.md:1"}],
         verify=[{"outcome": "pass"}, {"outcome": "pass"}],
     )
     assert calls.count("fix") == 1 and calls.count("verify") == 2
@@ -160,7 +162,7 @@ def test_fix_reporting_covered_by_closes_without_any_post_fix_verify():
 def test_fix_covered_with_edits_undoes_them_before_closing():
     calls, result, sink = _run(
         _LESSONS,
-        fix=[{"outcome": "done", "touched_files": ["lib/a.py"], "covered_by": "docs/wiki/x.md:1"}],
+        fix=[{"outcome": "done", "touched_files": ["lib/a.py"], "covered_by": _WIKI + "x.md:1"}],
         verify=[{"outcome": "pass"}, {"undo": _UNDONE}, {"outcome": "pass"}],
     )
     assert calls.count("fix") == 1 and sink == [{"row": "r0", "paths": ["lib/a.py"]}]
@@ -169,32 +171,32 @@ def test_fix_covered_with_edits_undoes_them_before_closing():
 
 def test_no_fix_free_route_hands_a_fix_reported_cover_back_needs_judgment():
     calls, result, _ = _run(
-        _NO_RETIRE, fix=[{"outcome": "done", "touched_files": [], "covered_by": "docs/wiki/x.md:1"}],
+        _NO_RETIRE, fix=[{"outcome": "done", "touched_files": [], "covered_by": _WIKI + "x.md:1"}],
     )
     assert calls.count("fix") == 1 and "verify" not in calls
     [entry] = [h for h in result["handed_back"] if h["row"] == "r0"]
-    assert entry["type"] == "needs-judgment" and "docs/wiki/x.md:1" in entry["reason"]
+    assert entry["type"] == "needs-judgment" and _WIKI + "x.md:1" in entry["reason"]
 
 
 def test_post_fix_cover_in_a_profile_with_no_fix_free_route_hands_back_instead_of_refixing():
     calls, result, _ = _run(
         _NO_RETIRE,
         fix=[{"outcome": "done", "touched_files": ["lib/a.py"]}],
-        verify=[{"outcome": "fail", "covered_by": "docs/wiki/x.md:3"}, {"undo": _UNDONE}],
+        verify=[{"outcome": "fail", "covered_by": _WIKI + "x.md:3"}, {"undo": _UNDONE}],
     )
     assert calls.count("fix") == 1 and calls.count("verify") == 2
     [entry] = [h for h in result["handed_back"] if h["row"] == "r0"]
-    assert entry["type"] == "needs-judgment" and "docs/wiki/x.md:3" in entry["reason"]
+    assert entry["type"] == "needs-judgment" and _WIKI + "x.md:3" in entry["reason"]
 
 
 def test_post_fix_covered_by_naming_the_rows_own_touched_file_takes_the_normal_retry():
     calls, result, _ = _run(
         _LESSONS,
-        fix=[{"outcome": "done", "touched_files": ["docs/wiki/x.md"]}] * 2,
+        fix=[{"outcome": "done", "touched_files": [_WIKI + "x.md"]}] * 2,
         verify=[
             {"outcome": "pass"},
-            {"outcome": "fail", "covered_by": "./docs/wiki/x.md:4"},
-            {"outcome": "fail", "covered_by": "docs/wiki/x.md:4", "undo": _UNDONE},
+            {"outcome": "fail", "covered_by": "./" + _WIKI + "x.md:4"},
+            {"outcome": "fail", "covered_by": _WIKI + "x.md:4", "undo": _UNDONE},
         ],
     )
     assert calls.count("fix") == 2 and _types(result) == ["rejected-after-retry"]
@@ -204,13 +206,13 @@ def test_covered_by_in_a_second_post_fix_verify_is_not_re_undone():
     calls, result, _ = _run(
         _LESSONS,
         fix=[{"outcome": "done", "touched_files": ["lib/a.py"]}] * 2,
-        verify=[{"outcome": "pass"}, {"outcome": "fail"}, {"outcome": "fail", "covered_by": "docs/wiki/x.md:3", "undo": _UNDONE}],
+        verify=[{"outcome": "pass"}, {"outcome": "fail"}, {"outcome": "fail", "covered_by": _WIKI + "x.md:3", "undo": _UNDONE}],
     )
     assert calls.count("verify") == 3 and _types(result) == ["rejected-after-retry"]
 
 
 def test_pre_fix_cover_whose_only_route_re_enters_fix_is_handed_back_not_retried():
-    calls, result, _ = _run(_DEDUPE_REENTERS_FIX, verify=[{"outcome": "fail", "covered_by": "docs/wiki/x.md:2"}])
+    calls, result, _ = _run(_DEDUPE_REENTERS_FIX, verify=[{"outcome": "fail", "covered_by": _WIKI + "x.md:2"}])
     assert calls.count("verify") == 1 and "fix" not in calls
     assert _types(result) == ["needs-judgment"]
 

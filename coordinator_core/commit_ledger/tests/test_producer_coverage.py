@@ -110,6 +110,17 @@ _EXEMPT_PRODUCERS = {
         "benchmark fixture builder -- seeds a throwaway corpus repo for the "
         "terminal-sizing drain budget; not a production commit path."
     ),
+    "benchmarks/run_landing_spike.py": (
+        "benchmark fixture builder (`build_fixture` seed commit) -- seeds a "
+        "disposable temp repo so the run-landing spike has a history to land "
+        "into; not a production commit path."
+    ),
+    "gem_inbox_apply.py": (
+        "`apply_manifest` lands one scoped `git commit -- <pathspec>` of a "
+        "fleet-inbox-blitz apply manifest in the G-EM home repo; no baton or "
+        "handoff owns that commit (same shape as `group_em/gem_home_sync.py`), "
+        "so there is no ledger entry to record."
+    ),
     "group_em/gem_home_sync.py": (
         "commit-pull-push of the G-EM home repo at handoff and quick-wrap; "
         "no baton or handoff owns that commit, so there is no ledger entry to "

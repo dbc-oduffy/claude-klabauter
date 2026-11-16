@@ -28,7 +28,7 @@ if str(_REPO) not in sys.path:
 
 import pytest  # noqa: E402
 
-from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home  # noqa: E402
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed  # noqa: E402
 from coordinator_core.git.run import run_git  # noqa: E402
 
@@ -142,8 +142,9 @@ def main(argv: list | None = None) -> int:
     from coordinator_core.temp_layout import mkdtemp_in
     base = mkdtemp_in("dirty-scan-bytes-", scratch)
     try:
-        for variant in VARIANTS:
-            print(json.dumps(run_variant(variant, base, args.files, args.changed), sort_keys=True))
+        with fixture_settings_home(base):
+            for variant in VARIANTS:
+                print(json.dumps(run_variant(variant, base, args.files, args.changed), sort_keys=True))
     finally:
         shutil.rmtree(base, ignore_errors=True)
     return 0

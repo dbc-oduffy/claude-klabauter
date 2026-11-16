@@ -21,7 +21,8 @@ def _em_section() -> str:
 
 def test_em_watches_a_submitted_run_to_exit_and_never_hand_does_it_in_parallel():
     em = _em_section()
-    assert "coordinator-invoke workflow.fire_status '{\"fire_id\": \"<fire_id>\"}'" in em
+    assert "coordinator-invoke workflow.fire_wait '{\"fire_id\": \"<fire_id>\"}'" in em
+    assert "workflow.fire_status" not in em
     assert "`state` is `exited`" in em
     assert "never hand-done in parallel" in em
 

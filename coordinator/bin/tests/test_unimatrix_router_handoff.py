@@ -8,10 +8,13 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
+import weakref
 from pathlib import Path
 
 import pytest
@@ -68,6 +71,10 @@ class Box:
                            ("UNIMATRIX_TEST_NS", uuid.uuid4().hex)):
             monkeypatch.setenv(var, str(value))
         monkeypatch.delenv("UNIMATRIX_AUTOLINK_NO_ROUTER", raising=False)
+        # A pytest tmp_path overruns the AF_UNIX path limit (104 on macOS), so the router dies at bind.
+        self.socks = tempfile.mkdtemp(prefix="hs-", dir="/tmp" if os.name == "posix" else None)
+        weakref.finalize(self, shutil.rmtree, self.socks, True)
+        monkeypatch.setenv("UNIMATRIX_LOOPBACK_SOCKS", self.socks)
         self.src.mkdir()
         names = set(ui.VENDORED_SCRIPTS) | set(ui.OPTIONAL_SCRIPTS) | {p.name for p in BIN.glob("unimatrix-*.py")}
         for name in sorted(names):
@@ -160,6 +167,7 @@ class Box:
                 self.roster.tree_kill(pid)
         except (OSError, ValueError):
             pass
+        shutil.rmtree(self.socks, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)

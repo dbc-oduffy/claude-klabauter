@@ -338,6 +338,8 @@ Options:
                                       clone_auth (coordinator_core.install.prereq_probe). Prints one
                                       pass/warn/fail line per probe; mutates nothing. Exit 0 if no
                                       `severity: hard` probe fails, exit 1 otherwise.
+  --uninstall-pruner                 Remove the periodic pruner job (launchd / schtasks / systemd-user)
+                                      and exit; touches nothing else
   --help                             Show this message
 """
 
@@ -442,6 +444,7 @@ class Args:
         self.deps_only = False
         self.check = False
         self.preflight = False
+        self.uninstall_pruner = False
         self.help = False
         self.hosts: list[str] = []
         self.warm: str = ""  # "" | "on" | "off"
@@ -481,6 +484,8 @@ def parse_args(argv: list[str]) -> Args:
             args.check = True
         elif tok == "--preflight":
             args.preflight = True
+        elif tok == "--uninstall-pruner":
+            args.uninstall_pruner = True
         elif tok == "--help":
             args.help = True
         elif tok == "--host":
@@ -4639,6 +4644,46 @@ def install_host_sampler_task(repo_root: Path, claude_klabauter_root_resolved: P
     if register_host_sampler_task(repo_root):
         _note_change("host-sampler", "host-resource sampler scheduled job registered or refreshed")
 
+
+def install_pruner_task(repo_root: Path, claude_klabauter_root_resolved: Path) -> None:
+    """Install-chain step: register the periodic scratch-hygiene and emitted-output
+    pruner job (launchd / schtasks / systemd-user). ADVISORY, non-fatal, idempotent;
+    skips under a redirected install or an unregistered clone, as the sampler does."""
+    if str(claude_klabauter_root_resolved) not in sys.path:
+        sys.path.insert(0, str(claude_klabauter_root_resolved))
+    from coordinator_core.install.install_root_scope import (
+        redirected_install_reason,
+        unregistered_clone_reason,
+    )
+    from coordinator_core.install.pruner_scheduler import register_pruner_task
+
+    if redirected_install_reason() is None:
+        unregistered = unregistered_clone_reason(repo_root)
+        if unregistered is not None:
+            print(
+                f"[ADVISORY] pruner job not registered: {unregistered} "
+                "(machine-global job belongs to the registered clone)"
+            )
+            return
+
+    if register_pruner_task(repo_root):
+        _note_change("pruner", "periodic scratch-hygiene pruner scheduled job registered or refreshed")
+
+
+def uninstall_pruner_task(repo_root: Path) -> int:
+    """Uninstall leg: remove the periodic pruner job. An absent job is success; a
+    genuine removal failure exits 1."""
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from coordinator_core.install.pruner_scheduler import unregister_pruner_task
+
+    if unregister_pruner_task():
+        print("PASS [pruner] periodic pruner job removed (or already absent)")
+        return 0
+    print("FAIL [pruner] periodic pruner job could not be removed", file=sys.stderr)
+    return 1
+
+
 def install_verify_settings_home(claude_klabauter_root_resolved: Path, *, forwarders_failed: bool = False) -> None:
     """Install-chain step: report whether `<settings-home>` is actually
     complete, not merely whether each of its individual population steps
@@ -5219,6 +5264,9 @@ def main(argv: list[str]) -> int:
     if args.preflight:
         return run_preflight()
 
+    if args.uninstall_pruner:
+        return uninstall_pruner_task(Path(__file__).resolve().parent.parent)
+
     # Override flag pair gate (exit 93 on single-flag violation — contract § exit-code 93)
     if args.skip_dep_check != args.accept_risk:
         print(
@@ -5360,6 +5408,7 @@ def main(argv: list[str]) -> int:
         install_box_identity(claude_klabauter_root_resolved)
         install_box_capability(claude_klabauter_root_resolved)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
+        install_pruner_task(repo_root, claude_klabauter_root_resolved)
         install_verify_settings_home(claude_klabauter_root_resolved, forwarders_failed=forwarders_failed)
         install_record_receipt(claude_klabauter_root_resolved)
         install_write_hook_plane_verdict(repo_root, claude_klabauter_root_resolved, args)

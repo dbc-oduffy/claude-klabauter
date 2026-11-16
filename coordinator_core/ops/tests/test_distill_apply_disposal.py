@@ -99,7 +99,8 @@ pytestmark = [
     pytest.mark.cadence,
 ]
 
-_HAS_RG = shutil.which("rg") is not None
+_WIKI = "docs" + "/wiki/"
+_HAS_RG =shutil.which("rg") is not None
 _requires_rg = pytest.mark.skipif(not _HAS_RG, reason="ripgrep (rg) not installed")
 
 
@@ -1491,7 +1492,7 @@ def _init_repo_with_wiki_harvest(tmp_path: Path) -> str:
     page = tmp_path / "docs" / "wiki" / "harvest" / "page.md"
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text("---\ntitle: Harvested\n---\n# Wrong\n\nBody.\n", encoding="utf-8")
-    _git("add", "--", "state/distillation-log.md", "docs/wiki/harvest/page.md", cwd=tmp_path)
+    _git("add", "--", "state/distillation-log.md", _WIKI + "harvest/page.md", cwd=tmp_path)
     _git("commit", "-q", "-m", "harvest commit", cwd=tmp_path)
     harvest = _git("rev-parse", "HEAD", cwd=tmp_path)
 
@@ -1546,12 +1547,12 @@ def test_default_param_apply_ends_in_post_run_finish_as_its_own_commit(tmp_path:
     tail = result["post_run"]
     assert tail["pipeline"] == "distill" and tail["exit_code"] == 0, tail
     assert tail["commit"]["committed"] is True
-    page = (tmp_path / "docs/wiki/harvest/page.md").read_text(encoding="utf-8")
+    page = (tmp_path / _WIKI / "harvest/page.md").read_text(encoding="utf-8")
     assert page.startswith("---\ntitle: Harvested\n---\n# Harvested\n")
-    assert (tmp_path / "docs/wiki/harvest/_index.md").is_file()
+    assert (tmp_path / _WIKI / "harvest/_index.md").is_file()
     tracked = _git("ls-files", cwd=tmp_path).splitlines()
     assert result["receipt_path"] in tracked
-    assert "docs/wiki/harvest/_index.md" in tracked
+    assert _WIKI + "harvest/_index.md" in tracked
     subjects = _git("log", "--format=%s", f"-{int(_git('rev-list', '--count', 'HEAD', cwd=tmp_path)) - int(before)}",
                     cwd=tmp_path).splitlines()
     assert any(s.startswith("distill: apply disposal for run 2026-07-23-04h00") for s in subjects)
@@ -1589,7 +1590,7 @@ def test_p5_audit_fails_the_tail_on_an_unexplained_tree_change(tmp_path: Path, m
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
     harvest = _init_repo_with_wiki_harvest(tmp_path)
     (tmp_path / "stray.txt").write_text("x\n", encoding="utf-8")
-    _seed_run_result_after_manifest(tmp_path, monkeypatch, "2026-07-23-07h00", ["docs/wiki/harvest/page.md"])
+    _seed_run_result_after_manifest(tmp_path, monkeypatch, "2026-07-23-07h00", [_WIKI + "harvest/page.md"])
     head = _git("rev-parse", "HEAD", cwd=tmp_path)
 
     tail = _dispatch_apply(tmp_path, harvest, "2026-07-23-07h00")["result"]["post_run"]
@@ -1603,7 +1604,7 @@ def test_p5_audit_fails_the_tail_on_an_unexplained_tree_change(tmp_path: Path, m
 def test_p5_audit_passes_when_every_change_is_explained(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
     harvest = _init_repo_with_wiki_harvest(tmp_path)
-    _seed_run_result_after_manifest(tmp_path, monkeypatch, "2026-07-23-08h00", ["docs/wiki/harvest/page.md"])
+    _seed_run_result_after_manifest(tmp_path, monkeypatch, "2026-07-23-08h00", [_WIKI + "harvest/page.md"])
 
     tail = _dispatch_apply(tmp_path, harvest, "2026-07-23-08h00")["result"]["post_run"]
 

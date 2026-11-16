@@ -47,6 +47,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "workflow.fire":                         "common_dir",
     "engine_ask.submit":                     "common_dir",
     "workflow.fire_status":                  "common_dir",
+    "workflow.fire_wait":                    "common_dir",
     "handoff.blocked_by_dependents":         "common_dir",
     "hooks.nudge_foreground_agent_dispatch": "common_dir",
     "hooks.nudge_em_code_dispatch":          "common_dir",

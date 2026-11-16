@@ -25,7 +25,7 @@ from coordinator_core.ops.fleet.scratch_hygiene_plan import (
     ENTRY_OVER_ALLOWANCE,
     _Context,
     classify_entry,
-    ordered_candidates,
+    ordered_candidate_scan,
     plan_purge,
 )
 from coordinator_core.ops.fleet.scratch_hygiene_records import contract_exit, summary_record
@@ -57,22 +57,24 @@ def _cursor_path(repo_root: Path) -> Path:
     return repo_root / "scratch" / CURSOR_NAME
 
 
-def _read_cursor(repo_root: Path) -> str | None:
-    """The last walked entry's path, or None when the file is missing or unreadable."""
+def _read_cursor(repo_root: Path) -> tuple[str | None, bool | None]:
+    """The last walked entry's path and whether it was a directory (None when unrecorded);
+    ``(None, None)`` when the file is missing or unreadable."""
     try:
-        value = json.loads(_cursor_path(repo_root).read_text(encoding="utf-8")).get("after")
+        data = json.loads(_cursor_path(repo_root).read_text(encoding="utf-8"))
+        value, is_dir = data.get("after"), data.get("dir")
     except (OSError, ValueError, AttributeError):
-        return None
-    return value if isinstance(value, str) and value else None
+        return None, None
+    return (value if isinstance(value, str) and value else None), (is_dir if isinstance(is_dir, bool) else None)
 
 
-def _write_cursor(repo_root: Path, entry: str) -> None:
+def _write_cursor(repo_root: Path, entry: str, is_dir: bool) -> None:
     """Temp file plus ``os.replace``: a concurrent reader sees an old or a new cursor, never a torn one.
     A missing scratch dir or a failed write leaves the cursor as it was."""
     target = _cursor_path(repo_root)
     tmp = target.with_name(f"{CURSOR_NAME}.{os.getpid()}.tmp")
     try:
-        tmp.write_text(json.dumps({"after": entry}), encoding="utf-8")
+        tmp.write_text(json.dumps({"after": entry, "dir": is_dir}), encoding="utf-8")
         os.replace(tmp, target)
     except OSError:
         try:
@@ -137,7 +139,9 @@ def run_hygiene(params: dict) -> dict[str, Any]:
     applied = False
     walk: dict[str, int] | None = None
     if not nag_only:
-        candidates = ordered_candidates(repo_root, _read_cursor(repo_root))
+        scan = ordered_candidate_scan(repo_root, *_read_cursor(repo_root))
+        candidates = [p for p, _d in scan]
+        is_dir = dict(scan)
     # Armed after the listing: the listing is outside the budget, so a large scratch dir
     # costs process time beyond ``budget`` (brightline: keep the listing cheap).
     deadline = time.monotonic() + budget
@@ -154,7 +158,7 @@ def run_hygiene(params: dict) -> dict[str, Any]:
         walk = _walk_counts(records)
         last = next((c for c, r in zip(reversed(candidates), reversed(records)) if not _deferred(r)), None)
         if last is not None:
-            _write_cursor(repo_root, last)
+            _write_cursor(repo_root, last, is_dir[last])
     elif not nag_only:
         # Gate and delete one entry at a time, so each entry is walked once and a budget
         # that runs out mid-pass has still freed what it gated. One registry read for the pass.
@@ -182,7 +186,7 @@ def run_hygiene(params: dict) -> dict[str, Any]:
                 deleted += out[0]["action"] == "deleted"
         applied = True
         if last_walked is not None:
-            _write_cursor(repo_root, last_walked)
+            _write_cursor(repo_root, last_walked, is_dir[last_walked])
         walk = _walk_counts(gated)
         walk["deleted"] = deleted
         walk["recheck_kept"] = eligible - deleted

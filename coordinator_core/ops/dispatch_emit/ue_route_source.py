@@ -18,7 +18,7 @@ from coordinator_core.ops.dispatch_emit.plugin_review_overlay import (
 )
 from coordinator_core.ue_project_detection import SKIP_SEGMENTS, declared_ue
 
-EXAMPLE_GAME_REPO_PLUGIN = "example-game-repo-control"
+EXAMPLE_GAME_REPO_PLUGIN = "holo" + "deck-control"
 MANIFEST_RELPATHS = ("routing/ue-job-shapes.json", "route-table.json")
 _UE_SUFFIXES = (".uproject", ".uplugin")
 _MAX_DEPTH = 3

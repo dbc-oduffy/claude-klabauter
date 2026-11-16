@@ -151,7 +151,13 @@ def test_close_out_codes_eight_rows_at_their_checkpoints_and_stamps_implemented(
     for rid, sha in expect.items():
         assert rows[rid]["disposition"] == "coded"
         assert rows[rid]["disposition_ref"] == sha
-    assert int(_git(tmp_path, "rev-list", "--count", f"{pre}..HEAD")) == 1
+    # Two commits by design: the flip commit (plan + coded rows), then the
+    # plan-completion ledger row, which records the flip's own sha and so
+    # cannot ride in it (plan_status_transition._record_completion).
+    subjects = _git(tmp_path, "log", "--format=%s", f"{pre}..HEAD").splitlines()
+    assert len(subjects) == 2, subjects
+    assert "record completion of plan.md" in subjects[0]
+    assert "close-out" in subjects[1] or "stamp status" in subjects[1]
 
 
 def test_dry_run_reports_the_same_verdict_and_leaves_the_plan_bytes_alone(tmp_path, monkeypatch):

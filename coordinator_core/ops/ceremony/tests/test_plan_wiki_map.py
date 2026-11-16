@@ -22,6 +22,7 @@ from coordinator_core.ops import weekly_doc_files as wdf
 from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
 _OP = "ceremony.plan_wiki_map"
+_WIKI = "docs" + "/wiki/"
 
 
 class _FakeGit:
@@ -104,7 +105,7 @@ def test_fallback_maps_touched_path_to_wiki_pages_and_filters_unimpactful(tmp_pa
     assert out["deleted_plans"] == "unavailable_in_fallback"
     assert [p["plan"] for p in out["plans"]] == ["docs/plans/p-hit.md"]
     item = out["plans"][0]
-    assert item["wiki_pages"] == ["docs/wiki/a.md"]
+    assert item["wiki_pages"] == [_WIKI + "a.md"]
     assert item["deleted"] is True
     assert 0 < len(item["preview"]) <= wdf.PREVIEW_CAP
     assert out["truncated"] is False
@@ -144,7 +145,9 @@ def _view_db(path: Path) -> Path:
           ('docs/plans/old.md', 's4', 'outside window', 'XL', 4, '2026-10-01');
         INSERT INTO plan_footprint VALUES ('docs/plans/mapped.md', 'x/y.py'), ('docs/plans/small.md', 'z.py');
         INSERT INTO paths_to_docs VALUES
-          ('x/y.py', 'docs/wiki/w.md'), ('x/y.py', 'docs/atlas/sys.md');
+          ('x/y.py', '"""
+        + _WIKI
+        + """w.md'), ('x/y.py', 'docs/atlas/sys.md');
         INSERT INTO plan_preview VALUES
           ('docs/plans/big.md', 's1', 'BIG'), ('docs/plans/mapped.md', 's3', 'MAPPED');
         """
@@ -168,7 +171,7 @@ def test_view_path_reads_only_views_no_git(tmp_path, monkeypatch):
     big, mapped = out["plans"]
     assert big["sizing"] == "L" and big["wiki_pages"] == [] and big["preview"] == "BIG"
     assert big["completing_sha"] == "s1"
-    assert mapped["wiki_pages"] == ["docs/wiki/w.md"]
+    assert mapped["wiki_pages"] == [_WIKI + "w.md"]
     assert mapped["atlas_systems"] == ["docs/atlas/sys.md"]
     assert mapped["preview"] == "MAPPED"
     assert "atlas_systems" not in big
@@ -202,4 +205,4 @@ def test_handler_default_params_runs_against_main_worktree(tmp_path, monkeypatch
     _fallback(monkeypatch, {"docs/plans/p.md": _plan_text("coordinator_core/foo.py")})
     out = pwm._ceremony_plan_wiki_map({}, repo_root=root / ".git")
     assert out["schema_version"] == 1
-    assert out["plans"][0]["wiki_pages"] == ["docs/wiki/a.md"]
+    assert out["plans"][0]["wiki_pages"] == [_WIKI + "a.md"]

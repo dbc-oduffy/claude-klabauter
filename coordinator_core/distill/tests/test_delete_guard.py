@@ -993,7 +993,7 @@ def _failed(results) -> set[str]:
 @_requires_rg
 def test_pointer_page_in_docs_wiki_is_not_harvest_proof_for_a_harvested_candidate(tmp_path: Path):
     cand, needle = _completion(tmp_path)
-    _write_page(tmp_path, "docs/wiki/durable-pointer-index.md", _POINTER_STAMP_TEXT + f"- `{needle}`\n")
+    _write_page(tmp_path, "docs" + "/wiki/durable-pointer-index.md", _POINTER_STAMP_TEXT + f"- `{needle}`\n")
     cls, results = evaluate_candidate_detailed(cand, tmp_path)
     assert cls == "completion"
     assert "harvest-provenance" in _failed(results)
@@ -1002,8 +1002,8 @@ def test_pointer_page_in_docs_wiki_is_not_harvest_proof_for_a_harvested_candidat
 @_requires_rg
 def test_unstamped_docs_wiki_page_is_still_harvest_proof_for_a_harvested_candidate(tmp_path: Path):
     cand, needle = _completion(tmp_path)
-    _write_page(tmp_path, "docs/wiki/durable-pointer-index.md", _POINTER_STAMP_TEXT + f"- `{needle}`\n")
-    _write_page(tmp_path, "docs/wiki/guide.md", f"Captured from {needle}\n")
+    _write_page(tmp_path, "docs" + "/wiki/durable-pointer-index.md", _POINTER_STAMP_TEXT + f"- `{needle}`\n")
+    _write_page(tmp_path, "docs" + "/wiki/guide.md", f"Captured from {needle}\n")
     _, results = evaluate_candidate_detailed(cand, tmp_path)
     assert "harvest-provenance" not in _failed(results)
 

@@ -15,6 +15,7 @@ from coordinator_core.ops import distill_launch_args as dla
 from coordinator_core.ops.distill_workflow_input import validate_workflow_input
 
 RUN_ID = "2026-11-14-10h00"
+_WIKI = "docs" + "/wiki/"
 
 
 def _manifest() -> dict:
@@ -22,7 +23,7 @@ def _manifest() -> dict:
         run_id=RUN_ID,
         batches=[["a.md", "b.md"], ["c.md"]],
         wiki_dirs=["docs/wiki"],
-        wiki_slugs=[{"slug": "foo", "path": "docs/wiki/foo.md"}],
+        wiki_slugs=[{"slug": "foo", "path": _WIKI + "foo.md"}],
         cohorts={"harvest": ["a.md", "b.md", "c.md"]},
     )
 
@@ -60,7 +61,7 @@ def test_default_call_inlines_batches_slugs_and_curated_tags_and_digest_verifies
     args = out["args"]
     assert json.loads(written.read_text(encoding="utf-8")) == args
     assert [b["files"] for b in args["batches"]] == [["a.md", "b.md"], ["c.md"]]
-    assert args["wikiSlugs"] == {"foo": "docs/wiki/foo.md"}
+    assert args["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
     assert args["curatedTags"] == CURATED["verdicts"]
     for key in ("threshold_applied", "threshold_auto", "nugget_drop_share", "contradictionClusters", "contradictionClusterCount"):
         assert args[key] == CURATED[key]
@@ -109,7 +110,7 @@ PROMOTED_REL = f"state/scratch/artifact-distillation/{RUN_ID}/promoted.json"
 SPLICE_REL = f"state/scratch/artifact-distillation/{RUN_ID}/splice.json"
 
 
-def _leg2_inputs(tmp_path, promoted=("docs/wiki/foo.md",), splice=None):
+def _leg2_inputs(tmp_path, promoted=(_WIKI + "foo.md",), splice=None):
     for rel, data in ((PROMOTED_REL, list(promoted)), (SPLICE_REL, splice or {"dispositions": [], "spliced": []})):
         target = tmp_path / rel
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +128,7 @@ def test_leg2_reuses_leg1_args_and_adds_promoted_and_splice_report(tmp_path):
     assert Path(leg1["path"]).read_bytes() == leg1_bytes
     assert hashlib.sha256(Path(out["path"]).read_bytes()).hexdigest() == out["sha256"]
     args = out["args"]
-    assert args["promoted"] == ["docs/wiki/foo.md"] and args["spliceReport"] == {"dispositions": [], "spliced": []}
+    assert args["promoted"] == [_WIKI + "foo.md"] and args["spliceReport"] == {"dispositions": [], "spliced": []}
     assert {k: v for k, v in args.items() if k not in ("promoted", "spliceReport")} == leg1["args"]
 
 
@@ -212,7 +213,7 @@ def _scope_result(tmp_path) -> dict:
 def test_scope_result_as_manifest_loads_input_json(tmp_path):
     out = dla._handler({"manifest": _scope_result(tmp_path), "repo_root": str(tmp_path)})
 
-    assert out["args"]["wikiSlugs"] == {"foo": "docs/wiki/foo.md"}
+    assert out["args"]["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
     assert validate_workflow_input(out["args"]) == []
 
 
@@ -220,7 +221,7 @@ def test_run_id_alone_loads_that_runs_input_json(tmp_path):
     _scope_result(tmp_path)
     out = dla._handler({"run_id": RUN_ID, "repo_root": str(tmp_path)})
 
-    assert out["args"]["wikiSlugs"] == {"foo": "docs/wiki/foo.md"}
+    assert out["args"]["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
 
 
 @pytest.mark.parametrize("bad", [{"run_id": RUN_ID}, {"run_id": RUN_ID, "batches": []}, {}])

@@ -137,4 +137,4 @@ def test_constants_pinned():
     assert rag_use.DEBOUNCE_SECONDS == 180
     assert rag_use.PROBE_INTERVAL_SECONDS == 60
     assert rag_use.HALT_RAG_CORPUS_DOWN == "rag_corpus_down"
-    assert "Restore example-retrieval-repo" in rag_use.RESTORE_MESSAGE
+    assert "Restore the code index" in rag_use.RESTORE_MESSAGE

@@ -566,7 +566,7 @@ def _ledger_gate(
         )
         if dirt is not None:
             return dirt, ledger, []
-        drift = _measured_rev_drift_refusal(run_dir, worktree_root, verdict, ledger)
+        drift = _measured_rev_drift_refusal(run_dir, worktree_root, verdict, ledger, inline_review)
         if drift is not None:
             return drift, ledger, []
         return None, ledger, [

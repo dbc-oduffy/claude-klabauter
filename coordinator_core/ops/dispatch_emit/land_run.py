@@ -164,6 +164,28 @@ def _error(message: str, **extra: object) -> dict:
     return {"committed": False, "sha": None, "error": message, **extra}
 
 
+TEST_LEG_AGENT_TYPE = "dispatch.test_leg"
+
+
+def test_leg_failure(inline_review: object) -> Optional[str]:
+    """``"<agent_type> <reason>"`` of the first ``wave_not_run`` entry the test leg left (no review
+    returned, rejected or skipped); None when the test leg produced a review or the review is absent."""
+    entries = inline_review.get("wave_not_run") if isinstance(inline_review, dict) else None
+    for entry in entries if isinstance(entries, list) else ():
+        if isinstance(entry, dict) and entry.get("agent_type") == TEST_LEG_AGENT_TYPE:
+            return f"{TEST_LEG_AGENT_TYPE} {entry.get('reason') or 'did not run'}"
+    return None
+
+
+def drift_reason_for_leg(reason: str, inline_review: object) -> str:
+    """``reason`` relabelled ``test-leg-error`` when it is a ``measured-rev-drift`` reason and the test
+    leg left no review; an unreadable-record reason and a leg that ran pass through unchanged."""
+    leg_failure = test_leg_failure(inline_review)
+    if leg_failure and reason.startswith("measured-rev-drift"):
+        return f"test-leg-error: {leg_failure}; the measurement is stale, not the requirement"
+    return reason
+
+
 def held_revision_refusal(root: Path, ledger: object, run_dir: Path) -> Optional[dict]:
     """Refusal (``refused="held-revision-unconsumed"``) when a ``workflow.revise`` held for the
     ledger's sizing was never folded into the run; else None. One indexed read, shared by both commit gates."""
@@ -1498,7 +1520,7 @@ def foreign_halted_withheld(
             # A holder in the landing run's own lineage (resumed_from chain, same sizing) is its own earlier attempt, not a peer.
             from coordinator_core.ops.dispatch_emit import run_hunk_claims
 
-            kin = run_hunk_claims._own_lineage(root, run_id, {rid: True for rid in live})
+            kin = run_hunk_claims.own_lineage(root, run_id, {rid: True for rid in live})
             live = {rid: r for rid, r in live.items() if rid not in kin}
         if not any(r.withheld for r in live.values()):
             return {}
@@ -1894,6 +1916,7 @@ def _ledger_gate(
         drift_reason = f"measured-rev-drift: {', '.join(drifted)}"
     except (OSError, ValueError):
         drifted, drift_reason = ["<record>"], "measured-rev-record-unreadable"
+    drift_reason = drift_reason_for_leg(drift_reason, inline_review)
     if drifted:
         items = verdict.get("items")
         stale_met = [
@@ -4466,11 +4489,23 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 
     # A path still co-declared after settle is withheld unless its sibling is halted, so a live peer's
     # hunks never ride this commit; an UNREADABLE_PEER_CLAIMS sibling has unknown halt state and withholds too.
+    # A sibling of the landing run's own lineage (resumed_from chain, same sizing) is its earlier attempt, never a peer.
+    from coordinator_core.ops.dispatch_emit import run_hunk_claims
+
+    co_siblings = {
+        f.detail.partition(":")[0] for f in findings
+        if f.reason == _phg.PEER_HUNKS_CO_DECLARED and f.path in paths and f.path not in settled_stage
+    } - {_phg.UNREADABLE_PEER_CLAIMS}
+    landing_run = art_run_id or sibling_run_id
+    own_kin = (
+        run_hunk_claims.own_lineage(root, str(landing_run), {s: True for s in co_siblings})
+        if landing_run else set()
+    )
     for f in findings:
         if f.reason != _phg.PEER_HUNKS_CO_DECLARED or f.path not in paths or f.path in settled_stage:
             continue
         sibling = f.detail.partition(":")[0]
-        if sibling != _phg.UNREADABLE_PEER_CLAIMS and _cds.sibling_halted(root, sibling):
+        if sibling in own_kin or (sibling != _phg.UNREADABLE_PEER_CLAIMS and _cds.sibling_halted(root, sibling)):
             continue
         reason = "peer-held" if _cds.is_per_run_artifact(f.path) else f"withheld by {sibling}"
         paths.remove(f.path)
@@ -4907,7 +4942,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             settled_blobs[p] = b
 
     # A "pre_existing" overlay (measured) or a "missing" one (the engine never produced a verdict) lands with
-    # an advisory; red, inconclusive and mismatch refuse.
+    # an advisory, as does an "environment_defect" one; red, inconclusive and mismatch refuse.
     reach_dirt_foreign: dict = {}
     reach_dirt_overlay: dict = {}
     if measured is not None and merge_plan is None and not (anchor_only or request.review_only):
@@ -4977,7 +5012,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 overlay.verdict == "inconclusive" and overlay.timed_out
                 and isinstance(inline_review, dict) and _reverify_passed(inline_review.get("reverify"))
             )
-            if overlay.verdict in ("pre_existing", "missing") or timed_out_reverified:
+            if overlay.verdict in ("pre_existing", "missing", clean_overlay_verify.ENV_DEFECT) or timed_out_reverified:
                 reach_dirt_overlay["advisory"] = (
                     f"clean-overlay verdict {overlay.verdict}"
                     f"{' (timed out; the run reverify passed)' if timed_out_reverified else ''}: {overlay.detail}"
@@ -5652,7 +5687,7 @@ def _split_free_targets(
     landing_run = next((r for r in reversed(list(own_run_ids)) if r), None)
     if landing_run and halted:
         # A halted holder in the landing run's own lineage (resumed_from chain, same sizing) is its earlier attempt, not a peer.
-        own |= run_hunk_claims._own_lineage(root, str(landing_run), {str(r): True for r in halted.values()})
+        own |= run_hunk_claims.own_lineage(root, str(landing_run), {str(r): True for r in halted.values()})
         halted = {p: r for p, r in halted.items() if str(r) not in own}
     halted = halted_hold_release.still_held_by_index(root, halted, landing_run, plan_rel)
     holders: dict = {}

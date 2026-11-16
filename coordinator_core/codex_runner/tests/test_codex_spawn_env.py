@@ -192,15 +192,23 @@ def test_isolated_home_carries_hooks_and_rekeys_trust(tmp_path, monkeypatch):
     assert 'trusted_hash = "sha256:aa"' in cfg
 
 
-def test_untouched_real_home_gets_no_hooks_seed(tmp_path, monkeypatch):
+def test_interactive_caller_keeps_real_home_and_gets_no_hooks_seed(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: False)
+    real, _, _ = _real_home(tmp_path)
+    env = {"CODEX_HOME": str(real)}
+    shape_codex_child(env, writable_root=None, environ={}, windows=False)
+    assert env["CODEX_HOME"] == str(real)
+
+
+def test_worker_launch_always_gets_seeded_home_even_on_writable_real_home(tmp_path, monkeypatch):
     monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: False)
     real, _, _ = _real_home(tmp_path)
     root = tmp_path / "repo"
     root.mkdir()
     env = {"CODEX_HOME": str(real)}
     shape_codex_child(env, writable_root=root, environ={}, windows=False)
-    assert env["CODEX_HOME"] == str(real)
-    assert not (root / "scratch" / "codex-home").exists()
+    assert env["CODEX_HOME"] == str(root / "scratch" / "codex-home")
+    assert (root / "scratch" / "codex-home" / "hooks.json").is_file()
 
 
 def test_refreshed_config_is_rekeyed_again(tmp_path, monkeypatch):

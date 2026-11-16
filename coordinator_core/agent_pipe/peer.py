@@ -39,7 +39,7 @@ RESUME = "resume"
 _ADDRESS = re.compile(r"^@([A-Za-z0-9_.-]+)[\s:]+(.*)$", re.DOTALL)
 # Named vars a codex peer needs to reach the engine and the network; the reviewer allowlist drops them.
 _ENGINE_REACH_ENV = frozenset({
-    "COORDINATOR_SETTINGS_HOME", "COORDINATOR_ENGINE_ROOT", "COORDINATOR_ENGINE_SOURCE_ROOT", "CLAUDE_KLABAUTER_ROOT",
+    "COORDINATOR_SETTINGS_HOME", "COORDINATOR_ENGINE_ROOT", "COORDINATOR_ENGINE_SOURCE_ROOT",
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR",
     "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
 })

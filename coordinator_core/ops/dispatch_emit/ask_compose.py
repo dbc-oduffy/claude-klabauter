@@ -5619,10 +5619,10 @@ def compose_ask_script(
                     "Docs-check the spine plan at ",
                     "js:_gate.spine_plan",
                     ": verify every Unreal Engine API, class, module and behavior claim it makes against the "
-                    "engine docs and source (example-retrieval-repo engine tools), and apply each correction IN PLACE with "
+                    "engine docs and source (the code-index engine tools), and apply each correction IN PLACE with "
                     "Edit -- never scaffold a new plan, never change its path. Return its repo-relative path as "
                     "plan_rel and `verdict` ok or corrected."
-                    " If example-retrieval-repo answered but some results were degraded, return `verdict` degraded with `degraded_bands` naming them; return rag_down only when example-retrieval-repo did not answer at all.",
+                    " If the code index answered but some results were degraded, return `verdict` degraded with `degraded_bands` naming them; return rag_down only when the code index did not answer at all.",
                     *_docs_gate_clause(docs_label, repo_root),
                 )
                 return _agent(
@@ -6380,9 +6380,9 @@ def compose_ask_script(
                 f"{head}\n\n{anchor}\n\n",
                 "Docs-check this run's diff: verify every Unreal Engine API, class, module and behavior claim in "
                 f"the changes since {run_base_sha or 'the run base'} to the review paths listed after this brief, "
-                "against the engine docs and source (example-retrieval-repo engine tools), and apply each correction IN PLACE "
+                "against the engine docs and source (the code-index engine tools), and apply each correction IN PLACE "
                 "with Edit. Return `verdict` ok or corrected."
-                " If example-retrieval-repo answered but some results were degraded, return `verdict` degraded with `degraded_bands` naming them; return rag_down only when example-retrieval-repo did not answer at all.",
+                " If the code index answered but some results were degraded, return `verdict` degraded with `degraded_bands` naming them; return rag_down only when the code index did not answer at all.",
                 # Parenthesised so the stager keeps the runtime paths out of the staged static run.
                 "js:('\\n\\nReview paths: ' + _reviewPaths.join(', ') + '.')",
                 *_docs_gate_clause(docs_label, repo_root),
@@ -7731,6 +7731,39 @@ def _hoist_invoke(script: str) -> str:
     return body[:at] + f"const {_INVOKE_FN} = '{_INVOKE}';\n" + body[at:]
 
 
+_PRECEDENCE_TAIL_FN = "_briefPrecedenceTail"
+#: Characters of the clause each prompt keeps verbatim: `test_brief_outranks_relayed_chat` finds a prompt's clause by this head.
+_PRECEDENCE_HEAD_LEN = 60
+
+
+def _share_brief_precedence(script: str) -> str:
+    """Cut the tail of each single-quoted literal's copy of the brief-precedence clause (two or more uses) to one const, declared ahead of the manifest marker line.
+
+    Runs whether or not the fragment hoist is on: the clause opens every agent prompt, so unhoisted it is the largest repeated text in the script.
+    Trap: each prompt keeps the clause's first `_PRECEDENCE_HEAD_LEN` characters inline; the const is a template literal under a non-`_PF` name, which the hoist skips, so the unhoisted script stays free of `_PF` consts.
+    """
+    text = _lit(_emit._BRIEF_PRECEDENCE_CLAUSE)[1:-1]
+    head, tail = text[:_PRECEDENCE_HEAD_LEN], text[_PRECEDENCE_HEAD_LEN:]
+    if "`" in tail or "${" in tail or "\\" in head:
+        return script
+    spans = [(s, e) for s, e in _prompt_fragments._scan_literals(script) if script[s] == "'" and text in script[s:e]]
+    if len(spans) < 2:
+        return script
+    out: list[str] = []
+    last = 0
+    for s, e in spans:
+        expr = ("'" + script[s + 1 : e - 1].replace(text, f"{head}' + {_PRECEDENCE_TAIL_FN} + '") + "'").removesuffix(" + ''")
+        if script[e : e + 3].lstrip()[:1] in (".", "[", "(") or script[e : e + 3].lstrip()[:2] == "?.":
+            expr = "(" + expr + ")"
+        out.append(script[last:s])
+        out.append(expr)
+        last = e
+    out.append(script[last:])
+    body = "".join(out)
+    at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
+    return body[:at] + f"const {_PRECEDENCE_TAIL_FN} = `{tail}`;\n" + body[at:]
+
+
 _ROOT_FN = "_PF9002"
 _ROOT_MIN_USES = 4
 
@@ -7809,6 +7842,7 @@ def _finish_script(
     script = _share_chain_params(script)
     script = _share_review_wave_list(script)
     script = _share_repo_root(script, repo_roots)
+    script = _share_brief_precedence(script)
     script = _hoist_invoke(script)
     script = _prompt_fragments.hoist_repeated_fragments(script, anchor=ASK_MANIFEST_MARKER)
     script = _agent_body_dedupe.dedupe_agent_payloads(script, anchor=ASK_MANIFEST_MARKER)

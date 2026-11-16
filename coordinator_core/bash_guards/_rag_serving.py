@@ -1,7 +1,7 @@
 """Does a example-retrieval-repo server serve this repo? One local file read, no network.
 
 The example-retrieval-repo hooks leave a per-box verdict file (`rag-nudge-server.json`, under
-the directory named by `$COORDINATOR_RAG_STATE_DIR` or `<settings-home>/rag-state-dir`;
+the directory named by the COORDINATOR_RAG_STATE_DIR environment variable or `<settings-home>/rag-state-dir`;
 only this module, never the door, also falls back to the legacy per-OS location) listing the source names
 the running server serves. A repo counts as served when its root directory's name
 matches a listed source (case-insensitive) and the verdict is reachable and fresh.
@@ -24,7 +24,7 @@ _parsed: Dict[Tuple[str, int], FrozenSet[str]] = {}
 
 
 def _state_dir() -> Optional[Path]:
-    """`$COORDINATOR_RAG_STATE_DIR`, else the first line of `<settings-home>/rag-state-dir`
+    """The COORDINATOR_RAG_STATE_DIR environment variable, else the first line of `<settings-home>/rag-state-dir`
     (written by scripts/setup.py). The door's `pc_verdict_path` resolves the same way."""
     env = os.environ.get("COORDINATOR_RAG_STATE_DIR", "")
     if env:

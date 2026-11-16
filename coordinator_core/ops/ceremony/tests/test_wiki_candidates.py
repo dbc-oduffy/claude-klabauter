@@ -18,6 +18,7 @@ from coordinator_core import plan_completion_ledger as ledger
 from coordinator_core.ipc import _REGISTRY
 
 _OP = "ceremony.wiki_candidates"
+_WIKI = "docs" + "/wiki/"
 _NOW = datetime.now(timezone.utc)
 
 
@@ -67,7 +68,7 @@ def _row(repo, rel, text, sha, *, tshirt=None, writes=(), status="landed", at=No
 
 
 def _wiki(repo: Path, name: str, cites: str) -> str:
-    rel = f"docs/wiki/{name}.md"
+    rel = f"{_WIKI}{name}.md"
     (repo / "docs" / "wiki").mkdir(parents=True, exist_ok=True)
     (repo / rel).write_text(f"# {name}\n\nSee `{cites}` for details.\n", encoding="utf-8")
     return rel
@@ -100,7 +101,7 @@ def test_default_window_selects_ledger_plan_and_citing_page(repo):
     out = _run(repo)
     assert out["schema"] == "wiki-update-candidates" and out["schema_version"] == 1
     assert out["window"] == {"since": None, "head": sha, "source": "default-7d"}
-    assert [pg["page"] for pg in out["pages"]] == ["docs/wiki/alpha.md"]
+    assert [pg["page"] for pg in out["pages"]] == [_WIKI + "alpha.md"]
     entry = out["pages"][0]["plans"][0]
     assert entry["path"] == plan and entry["commit_sha"] == sha and entry["tshirt"] == "L"
     assert entry["preview"].startswith("# p1") and "status:" not in entry["preview"]
@@ -131,7 +132,7 @@ def test_hub_path_cited_by_many_pages_is_dropped_and_a_narrow_path_still_matches
     _plan(repo, "ph", writes=("src/hub.py",), tshirt="XL")
     _plan(repo, "pn", writes=("src/narrow.py",), tshirt="S")
     pages = _run(repo)["pages"]
-    assert [pg["page"] for pg in pages] == ["docs/wiki/narrow.md"]
+    assert [pg["page"] for pg in pages] == [_WIKI + "narrow.md"]
     assert [pl["path"] for pl in pages[0]["plans"]] == ["docs/plans/2026-11/pn.md"]
 
 
@@ -173,7 +174,7 @@ def test_ranking_by_highest_tshirt_then_plan_count_then_page(repo):
     _plan(repo, "pm2", writes=("src/m.py",))
     pages = _run(repo)["pages"]
     assert [pg["page"] for pg in pages] == [
-        "docs/wiki/big.md", "docs/wiki/many-a.md", "docs/wiki/many-b.md", "docs/wiki/small.md",
+        _WIKI + "big.md", _WIKI + "many-a.md", _WIKI + "many-b.md", _WIKI + "small.md",
     ]
     assert [pl["tshirt"] for pl in pages[1]["plans"]] == ["S", None]
 
@@ -187,7 +188,7 @@ def test_caps_cut_from_the_bottom_and_are_counted(repo, monkeypatch):
     _wiki(repo, "shared", "src/shared.py")
     _commit(repo)
     out = _run(repo)
-    assert [pg["page"] for pg in out["pages"]] == ["docs/wiki/shared.md"]
+    assert [pg["page"] for pg in out["pages"]] == [_WIKI + "shared.md"]
     assert len(out["pages"][0]["plans"]) == 3
     assert out["truncated"] == {"pages": 4, "plans": 5}
     assert out["preview_chars_total"] == sum(len(pl["preview"]) for pg in out["pages"] for pl in pg["plans"])

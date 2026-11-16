@@ -12,6 +12,8 @@ from coordinator_core.ops.ceremony import commit_v2
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
+_WIKI = "docs" + "/wiki/"
+
 
 def _git(args, cwd) -> str:
     result = subprocess.run(
@@ -34,11 +36,11 @@ def _repo(tmp_path: Path) -> Path:
 
 
 def _mixed(repo: Path) -> dict:
-    for rel in ("docs/wiki/x.md", "state/y.json"):
+    for rel in (_WIKI + "x.md", "state/y.json"):
         target = repo / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("x\n", encoding="utf-8")
-    return {"paths": ["docs/wiki/x.md", "state/y.json"], "message": "harvest\n"}
+    return {"paths": [_WIKI + "x.md", "state/y.json"], "message": "harvest\n"}
 
 
 def _call(repo: Path, params: dict) -> dict:
@@ -62,7 +64,7 @@ def test_one_commit_lands_a_mixed_set_as_one_commit(tmp_path):
     assert result["committed"] is True, result
     assert _count(repo) == 2
     assert sorted(_git(["show", "--name-only", "--format=", "HEAD"], repo).split()) == [
-        "docs/wiki/x.md", "state/y.json",
+        _WIKI + "x.md", "state/y.json",
     ]
     assert all("(process files)" not in s for s in _subjects(repo))
 

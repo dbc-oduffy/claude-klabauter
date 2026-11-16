@@ -8,7 +8,7 @@ beyond the stdlib it needs only `coordinator_core.git.run`, so a by-file-path
 loader must put the checkout root on sys.path first.
 
 Invariants:
-- The index is `$GIT_INDEX_FILE` when set, else `<git_dir>/index`. A pathspec
+- The index is the GIT_INDEX_FILE environment variable's path when set, else `<git_dir>/index`. A pathspec
   commit hands every hook a temporary index; never assume `.git/index`.
 - The cache key carries the index's realpath, mtime_ns, size, inode, trailing
   20-byte checksum and the HEAD oid (read with no spawn). A restaging hook or a

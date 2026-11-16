@@ -78,7 +78,6 @@ def assert_unpinned_child_loads_core_from_checkout(
     """
     env = dict(os.environ)
     env.pop("COORDINATOR_ENGINE_ROOT", None)
-    env.pop("CLAUDE_KLABAUTER_ROOT", None)
     out, proc = _run_probe(tmp_path, env)
     root = checkout_root()
     if may_refuse_without_published_engine and len(out) < 2:

@@ -13,9 +13,12 @@ assigned more than once in a scope is followed through every assignment (the `if
 ... else ...` shape of the known P0 caller was invisible to the single-assignment rule), and test
 files are not scanned (they stub the CLI, they do not storm the box).
 
-The inventory is a site-key set (`path::enclosing.scope`, never line numbers). While the conversions
-land it is a two-sided ratchet: live hits must equal it, so a new unbounded site reds this test and a
-converted site left listed does too. Target: the empty set.
+A bounded direct spawn outside `coordinator_core/machine_local_spawn.py` is its own hit class
+(`DIRECT_SITES`): it bypasses the box-wide cap and kill-on-close.
+
+Each inventory is a site-key set (`path::enclosing.scope`, never line numbers) under a two-sided
+ratchet: live hits must equal it, so a new site reds the test and a converted site left listed does
+too. `KNOWN_UNBOUNDED_SITES` is empty; `DIRECT_SITES` only shrinks.
 
 Out of reach by construction: a spawn whose argv is built by a helper call
 (`subprocess.run(_argv("get", key))`) names no literal subcommand in the spawn expression.
@@ -34,6 +37,8 @@ from coordinator_core.spawn_policy.detect import DEFAULT_EXCLUDE, discover_sourc
 pytestmark = [pytest.mark.cadence]
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+_HELPER_PATH = "coordinator_core/machine_local_spawn.py"
 
 MAX_TIMEOUT_S = 2.0
 _TIMEOUT_CONSTANT_NAME = "ML_SPAWN_TIMEOUT_S"
@@ -63,8 +68,37 @@ _SUBCOMMAND_WORD = re.compile(r"\b(" + "|".join(sorted(_SUBCOMMANDS, key=len, re
 
 # Sites no conversion row owned. Target is the empty set; the ratchet only shrinks (a converted
 # site left here fails `test_inventory_has_no_stale_entries`).
-KNOWN_UNBOUNDED_SITES: frozenset[str] = frozenset(
+KNOWN_UNBOUNDED_SITES: frozenset[str] = frozenset()
+
+# Timeout-bounded direct spawns outside the helper: they bypass the box cap and kill-on-close.
+# Shrink-only, same two-sided ratchet; target is the empty set.
+DIRECT_SITES: frozenset[str] = frozenset(
     {
+        "coordinator/bin/claude-author.py::_resolve_doe_clone",
+        "coordinator/bin/claude-author.py::_resolve_doe_clone#2",
+        "coordinator/bin/coordinator-lesson-add.py::_machine_local_get",
+        "coordinator/bin/fleet-test-write-scan.py::_machine_local",
+        "coordinator/bin/lib/coordinator_registry.py::_load_manifest",
+        "coordinator/bin/lib/coordinator_registry.py::_registry_machine_local_get",
+        "coordinator/bin/lib/engine_bootstrap.py::_machine_local_get",
+        "coordinator/bin/lib/git_hook_install.py::_ml_get",
+        "coordinator/bin/publish-repo-bundle-at-ceremony.py::_resolve_registry_key",
+        "coordinator/bin/scip-rebuild-at-ceremony.py::_resolve_registry_key",
+        "coordinator/bin/unimatrix-autolink.py::far_boxes_status",
+        "coordinator/bin/unimatrix-autolink.py::machine_local_key",
+        "coordinator/bin/unimatrix-autolink.py::pin_key_value",
+        "coordinator/bin/unimatrix-control.py::resolve_repo_key",
+        "coordinator/lib/percolate/ensure_required_targets.py::_run_machine_local",
+        "coordinator/lib/percolate/resolve_target.py::_dump_registry",
+        "coordinator/lib/resolve-coordinator-clone.py::_registry_content_root",
+        "coordinator/templates/bin/claude_machine_local.py::_Namespace.__getattr__",
+        "coordinator_core/_claude_klabauter_root.py::_machine_local_get",
+        "coordinator_core/engine_root.py::coordinator_engine_root",
+        "coordinator_core/ops/learn_lessons_roots.py::_machine_local_run",
+        "coordinator_core/ops/repo_bootstrap.py::_machine_local_registry_get",
+        "coordinator_core/ops/repo_bootstrap.py::_machine_local_set",
+        "scripts/cloud_setup.py::register_machine_local_repo_keys",
+        "scripts/cloud_setup.py::register_publish_mirror_keys",
     }
 )
 
@@ -282,6 +316,7 @@ def _scan_scope(
     scope: _Scope,
     module: _Scope,
     hits: list[Hit],
+    direct: list[Hit],
     rel_posix: str,
     name: str,
 ) -> None:
@@ -289,11 +324,11 @@ def _scan_scope(
     for stmt in stmts:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             inner = stmt.name if name == "<module>" else f"{name}.{stmt.name}"
-            _scan_scope(stmt.body, _Scope(stmt.body), module, hits, rel_posix, inner)
+            _scan_scope(stmt.body, _Scope(stmt.body), module, hits, direct, rel_posix, inner)
             continue
         if isinstance(stmt, ast.ClassDef):
             inner = stmt.name if name == "<module>" else f"{name}.{stmt.name}"
-            _scan_scope(stmt.body, _Scope(stmt.body), module, hits, rel_posix, inner)
+            _scan_scope(stmt.body, _Scope(stmt.body), module, hits, direct, rel_posix, inner)
             continue
         collector.visit(stmt)
 
@@ -312,8 +347,7 @@ def _scan_scope(
         else:
             timeout = _kw_timeout(call)
             bounded = timeout is not None and _timeout_is_bounded(timeout, scope, module)
-        if not bounded:
-            hits.append((rel_posix, call.lineno, name))
+        (direct if bounded else hits).append((rel_posix, call.lineno, name))
 
     if ml_calls:
         for node in collector.tries:
@@ -322,16 +356,32 @@ def _scan_scope(
                     hits.append((rel_posix, handler.lineno, f"{name}~retry"))
 
 
-def scan_file(rel_posix: str, text: str) -> list[Hit]:
-    """Unbounded machine-local spawn sites in one source text as (path, lineno, scope)."""
+def scan_file_both(rel_posix: str, text: str) -> tuple[list[Hit], list[Hit]]:
+    """(unbounded, bounded-direct) machine-local spawn sites in one source text as (path, lineno, scope).
+
+    The helper module itself is the one place a direct spawn is the implementation, not a bypass.
+    """
+    if rel_posix == _HELPER_PATH:
+        return [], []
     try:
         tree = ast.parse(text)
     except SyntaxError:
-        return []
+        return [], []
     hits: list[Hit] = []
+    direct: list[Hit] = []
     module = _Scope(tree.body, in_machine_local_module=_names_marker(pathlib.PurePosixPath(rel_posix).name))
-    _scan_scope(tree.body, module, module, hits, rel_posix, "<module>")
-    return hits
+    _scan_scope(tree.body, module, module, hits, direct, rel_posix, "<module>")
+    return hits, direct
+
+
+def scan_file(rel_posix: str, text: str) -> list[Hit]:
+    """Unbounded machine-local spawn sites in one source text as (path, lineno, scope)."""
+    return scan_file_both(rel_posix, text)[0]
+
+
+def scan_file_direct(rel_posix: str, text: str) -> list[Hit]:
+    """Timeout-bounded machine-local spawns outside the helper: they bypass the box cap and kill-on-close."""
+    return scan_file_both(rel_posix, text)[1]
 
 
 def site_keys(hits: list[Hit]) -> set[str]:
@@ -345,8 +395,9 @@ def site_keys(hits: list[Hit]) -> set[str]:
     return keys
 
 
-def _collect_live_hits() -> list[Hit]:
+def _collect_live() -> tuple[list[Hit], list[Hit]]:
     hits: list[Hit] = []
+    direct: list[Hit] = []
     for root_name in _SCAN_ROOTS:
         root = _REPO_ROOT / root_name
         if not root.is_dir():
@@ -360,8 +411,18 @@ def _collect_live_hits() -> list[Hit]:
                 text = file_path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
-            hits.extend(scan_file(repo_rel, text))
-    return hits
+            unbounded, bounded = scan_file_both(repo_rel, text)
+            hits.extend(unbounded)
+            direct.extend(bounded)
+    return hits, direct
+
+
+def _collect_live_hits() -> list[Hit]:
+    return _collect_live()[0]
+
+
+def _collect_live_direct() -> list[Hit]:
+    return _collect_live()[1]
 
 
 def test_live_unbounded_sites_are_inside_the_inventory() -> None:
@@ -378,8 +439,21 @@ def test_inventory_has_no_stale_entries() -> None:
     assert not stale, f"converted sites still listed; remove them (target: empty set): {sorted(stale)}"
 
 
+def test_live_direct_sites_are_inside_the_inventory() -> None:
+    new = site_keys(_collect_live_direct()) - DIRECT_SITES
+    assert not new, (
+        "direct machine-local spawn(s) outside coordinator_core.machine_local_spawn bypass the box "
+        f"cap and kill-on-close; route through run_bounded/dump/get: {sorted(new)}"
+    )
+
+
+def test_direct_inventory_has_no_stale_entries() -> None:
+    stale = DIRECT_SITES - site_keys(_collect_live_direct())
+    assert not stale, f"converted direct sites still listed; remove them (target: empty set): {sorted(stale)}"
+
+
 def test_inventory_keys_are_function_qualified_not_line_numbers() -> None:
-    for key in KNOWN_UNBOUNDED_SITES:
+    for key in KNOWN_UNBOUNDED_SITES | DIRECT_SITES:
         path, _, scope = key.partition("::")
         assert path.endswith(".py") and scope, key
         assert not re.search(r":\d+$", key), key
@@ -406,6 +480,10 @@ def _keys(body: str, path: str = "coordinator/bin/_fx.py") -> set[str]:
     return site_keys(scan_file(path, body))
 
 
+def _direct_keys(body: str, path: str = "coordinator/bin/_fx.py") -> set[str]:
+    return site_keys(scan_file_direct(path, body))
+
+
 def test_fires_on_the_literal_unbounded_dump_shape() -> None:
     body = '''
 import subprocess
@@ -420,7 +498,7 @@ def test_fires_on_the_known_p0_caller_shape_through_a_two_branch_binding() -> No
     assert _keys(_P0_CALLER) == {"coordinator/bin/_fx.py::_machine_local_dump"}
 
 
-def test_silent_when_the_same_call_carries_a_ceiling() -> None:
+def test_fires_when_the_same_call_carries_a_ceiling_but_bypasses_the_helper() -> None:
     body = '''
 import subprocess
 
@@ -428,6 +506,13 @@ def read(python, impl):
     return subprocess.run([python, impl, "dump", "--include-unset"], capture_output=True, timeout=2.0)
 '''
     assert _keys(body) == set()
+    assert _direct_keys(body) == {"coordinator/bin/_fx.py::read"}
+
+
+def test_the_helper_module_itself_is_exempt() -> None:
+    body = 'import subprocess\ndef r(impl):\n    return subprocess.run([impl, "get", "k"], timeout=2.0)\n'
+    assert _direct_keys(body, "coordinator_core/machine_local_spawn.py") == set()
+    assert _direct_keys(body, "coordinator_core/other.py") == {"coordinator_core/other.py::r"}
 
 
 def test_silent_on_the_bounded_helper() -> None:

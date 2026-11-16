@@ -178,6 +178,50 @@ def test_run_is_abandoned_needs_staged_unhalted_dead_known_owner(tmp_path, monke
     assert not idx.run_holds_no_claim(root, "dead")
 
 
+def _stage_only_run(root, run_id, **stage):
+    from coordinator_core import warp_live
+
+    record = warp_live._ask_record_dir(root, run_id)
+    record.mkdir(parents=True, exist_ok=True)
+    (record / "run-stage.json").write_text(json.dumps(stage), encoding="utf-8")
+
+
+def _iso(epoch):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def test_stage_only_run_holds_no_claim_when_owner_exited_and_activity_old(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    root = _root(tmp_path)
+    old = _iso(time.time() - idx.STALE_RUN_SECONDS - 3600)
+    fresh = _iso(time.time() - 60)
+    _stage_only_run(root, "dead", session_id="s1", stage="executing", last_activity_at=old)
+    _stage_only_run(root, "fresh", session_id="s1", stage="executing", last_activity_at=fresh)
+    _stage_only_run(root, "nameless", stage="executing", last_activity_at=old)
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, m: True)
+    assert idx.run_holds_no_claim(root, "dead")
+    assert not idx.run_holds_no_claim(root, "fresh")
+    assert not idx.run_holds_no_claim(root, "nameless")
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, m: False)
+    assert not idx.run_holds_no_claim(root, "dead")
+
+
+def test_stage_stamp_stands_in_for_minted_at(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    root = _root(tmp_path)
+    old = _iso(time.time() - idx.STALE_RUN_SECONDS - 3600)
+    _stage_only_run(root, "started", session_id="s1", stage="executing", started_at=old)
+    _stage_only_run(root, "staged", session_id="s1", stage="staged", staged_at=_iso(time.time() - 60))
+    seen = []
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, m: seen.append(m) or True)
+    assert idx.run_is_stale(root, "started")
+    assert idx.run_is_abandoned(root, "staged")
+    assert abs(seen[0] - (time.time() - idx.STALE_RUN_SECONDS - 3600)) < 5
+    assert abs(seen[1] - (time.time() - 60)) < 5
+
+
 def test_claim_ignores_an_abandoned_peer_and_refuses_a_live_one(tmp_path, monkeypatch):
     from coordinator_core import warp_live
 

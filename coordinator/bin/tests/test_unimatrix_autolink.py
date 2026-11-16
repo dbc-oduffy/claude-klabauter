@@ -60,6 +60,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(al, "_known_hosts_entries", lambda *a, **k: [])
     monkeypatch.setattr(al, "ssh_identity_file", lambda roster, alias, run=None: None)
     monkeypatch.setattr(al, "pin_key_value", lambda roster, run=None: None)
+    monkeypatch.setattr(al, "ssh_hostname", lambda roster, alias, run=None: None)
     roster = al._roster()
     live = set()
     monkeypatch.setattr(roster, "pid_alive", lambda pid: pid in live)
@@ -214,7 +215,7 @@ def test_configured_box_gets_one_bridge_and_one_inbox_with_relay_key_only(env):
         assert c[c.index("--remote") + 1] == "machine-a"
         assert c.count("--key") == 1
     rec = json.loads((env.sdir / "autolink-machine-a.json").read_text())
-    assert set(rec) == {"bridge", "inbox"}
+    assert set(rec) == {"bridge", "inbox", "box"} and rec["box"] == "machine-a"
     assert not (env.sdir / "autolink-machine-a.lock").exists()
 
 
@@ -1770,10 +1771,10 @@ def test_pull_sources_drops_members_dedupes_by_link_key_and_keeps_registry_befor
 
 def test_record_aliases_reads_link_records_and_skips_cache_router_and_backoff_files(env):
     env.sdir.mkdir(parents=True)
-    for n in ("autolink-example_operator_at_machine_b.json", "autolink-machine-a.json", "autolink-boxes.json",
+    for n in ("autolink-kim_at_bishop.json", "autolink-machine-a.json", "autolink-boxes.json",
               "autolink-router.json", "autolink-machine-a.backoff.json", "autolink-machine-a.lock"):
         (env.sdir / n).write_text("{}")
-    assert env.al.record_aliases(env.sdir) == ["example-operator@machine-b", "machine-a"]
+    assert env.al.record_aliases(env.sdir) == ["kim@bishop", "machine-a"]
 
 
 def far_boxes_reader(env, aliases):
@@ -1890,3 +1891,301 @@ def test_a_niced_fallback_router_is_named_loudly_with_the_launchd_fix():
 def test_a_nice_zero_fallback_router_draws_no_warning():
     al = load("unimatrix-autolink")
     assert al.niced_router_warning(4242, al.LOGIN_AGENT_LABEL, nice_fn=lambda: 0) is None
+
+
+def seed_pair(e, name, pids, box=None):
+    e.sdir.mkdir(parents=True, exist_ok=True)
+    e.live.update(pids)
+    rec = {"bridge": {"pid": pids[0], "procStart": f"start-{pids[0]}"},
+           "inbox": {"pid": pids[1], "procStart": f"start-{pids[1]}"}}
+    if box:
+        rec["box"] = box
+    path = e.sdir / f"autolink-{name}.json"
+    path.write_text(json.dumps(rec))
+    return path
+
+
+def healthy_cache(e, aliases):
+    (e.sdir / "autolink-boxes.json").write_text(json.dumps({"aliases": aliases}))
+    stamp_pull(e)
+
+
+def test_one_pair_per_box_two_spellings(env, monkeypatch):
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-a-lan": "machine-a.local"}.get(a))
+    alias_rec = seed_pair(env, "machine-a-lan", (2001, 2002))
+    member_rec = seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004))
+    healthy_cache(env, ["example-operator@machine-a.local"])
+    killed = []
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
+    assert killed == [2001, 2002]
+    assert member_rec.is_file() and not alias_rec.exists()
+
+
+def test_one_pair_per_box_keeps_the_live_pair_when_only_the_alias_spelling_lives(env, monkeypatch):
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-a-lan": "machine-a.local"}.get(a))
+    alias_rec = seed_pair(env, "machine-a-lan", (2001, 2002))
+    member_rec = seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004))
+    env.live.difference_update({2003, 2004})
+    healthy_cache(env, ["example-operator@machine-a.local"])
+    killed = []
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
+    assert killed == [] and alias_rec.is_file() and not member_rec.exists()
+
+
+def test_one_pair_per_box_never_merges_two_boxes(env, monkeypatch):
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-a-lan": "elsewhere.local"}.get(a))
+    seed_pair(env, "machine-a-lan", (2001, 2002))
+    seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004))
+    healthy_cache(env, ["example-operator@machine-a.local", "machine-a-lan"])
+    killed = []
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
+    assert killed == []
+    assert len(list(env.sdir.glob("autolink-*.json"))) == 3  # two records plus the boxes cache
+
+
+def test_a_healthy_run_over_stamped_records_spawns_no_ssh(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: calls.append(a))
+    seed_pair(env, "machine-a-lan", (2001, 2002), box="machine-a")
+    seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004), box="machine-a")
+    healthy_cache(env, ["example-operator@machine-a.local"])
+    with monkeypatch.context() as mp:
+        mp.setattr(env.al.subprocess, "run", lambda *a, **k: calls.append(a) or boom())
+        env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=lambda pid: None)
+    assert calls == []
+
+
+def test_a_legacy_record_is_resolved_once_and_stamped_for_the_next_run(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: calls.append(a) or "machine-a.local")
+    rec_path = seed_pair(env, "machine-a-lan", (2001, 2002))
+    healthy_cache(env, ["example-operator@machine-a.local"])
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=lambda pid: None)
+    assert calls == ["machine-a-lan"] and json.loads(rec_path.read_text())["box"] == "machine-a"
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=lambda pid: None)
+    assert calls == ["machine-a-lan"]
+
+
+def test_the_link_lock_is_one_file_per_box_across_spellings(env, monkeypatch):
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-a-lan": "machine-a.local"}.get(a))
+    env.sdir.mkdir(parents=True)
+    (env.sdir / "autolink-machine-a.lock").write_text("")
+    said = []
+    for alias in ("machine-a-lan", "example-operator@machine-a.local"):
+        env.al.link_peer(env.roster, alias, str(env.key), said.append, spawn=boom, probe_fn=boom)
+    assert len(said) == 2 and all("lock held" in line for line in said)
+
+
+def test_link_peer_folds_the_other_spelling_record_into_one_stamped_record(env, monkeypatch):
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-a-lan": "machine-a.local"}.get(a))
+    old = seed_pair(env, "machine-a-lan", (2001, 2002))
+    env.live.clear()
+    sp = Spawner()
+    env.al.link_peer(env.roster, "example-operator@machine-a.local", str(env.key), lambda m: None, spawn=sp, probe_fn=ok)
+    assert not old.exists()
+    rec = json.loads(env.al.record_path(env.sdir, "example-operator@machine-a.local").read_text())
+    assert rec["box"] == "machine-a" and len(sp.cmds) == 2
+
+
+def test_run_does_not_spawn_a_second_pair_for_a_box_whose_other_spelling_lives(env, monkeypatch):
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-a-lan": "machine-a.local"}.get(a))
+    seed_pair(env, "machine-a-lan", (2001, 2002))
+    env.al.run(roster=env.roster, boxes=["example-operator@machine-a.local"], spawn=boom, probe_fn=boom, key_fn=boom)
+    log = env.sdir / "autolink.log"
+    assert "link failed" not in (log.read_text() if log.exists() else "")
+
+
+def test_retire_non_target_record(env):
+    gone = seed_pair(env, "example_operator_at_oldbox.local", (2001, 2002))
+    kept = seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004))
+    healthy_cache(env, ["example-operator@machine-a.local"])
+    killed = []
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
+    assert killed == [2001, 2002]
+    assert not gone.exists() and (env.sdir / "retired" / gone.name).is_file() and kept.is_file()
+
+
+def test_retire_non_target_record_in_a_live_snapshot_run(env, snap):
+    snap.adopt("me", "machine-a")
+    gone = seed_pair(env, "example_operator_at_oldbox.local", (2001, 2002))
+    seed_pair(env, "kim_at_machine_a.local", (2003, 2004))
+    killed = []
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=ok, key_fn=boom, self_names={"me"},
+               pull_fn=lambda *a: False, kill=killed.append)
+    assert killed == [2001, 2002] and (env.sdir / "retired" / gone.name).is_file()
+
+
+def test_retire_spares_a_bare_alias_record_whose_hostname_did_not_resolve(env, monkeypatch):
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: None)
+    flaky = seed_pair(env, "machine-c-lan", (2001, 2002))
+    seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004))
+    healthy_cache(env, ["example-operator@machine-a.local"])
+    killed = []
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
+    assert killed == [] and flaky.is_file() and "box" not in json.loads(flaky.read_text())
+
+
+def test_retire_still_retires_a_bare_alias_record_whose_hostname_resolved_elsewhere(env, monkeypatch):
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-c-lan": "oldbox.local"}.get(a))
+    gone = seed_pair(env, "machine-c-lan", (2001, 2002))
+    seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004))
+    healthy_cache(env, ["example-operator@machine-a.local"])
+    killed = []
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
+    assert killed == [2001, 2002] and not gone.exists()
+
+
+def test_retire_skipped_on_failed_target_read(env):
+    rec = seed_pair(env, "example_operator_at_oldbox.local", (2001, 2002))
+    killed = []
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)  # reader missing
+    assert killed == [] and rec.is_file() and not (env.sdir / "retired").exists()
+
+
+def test_retire_needs_a_readable_cache_on_the_healthy_path(env):
+    rec = seed_pair(env, "example_operator_at_oldbox.local", (2001, 2002))
+    (env.sdir / "autolink-boxes.json").write_text("not json")
+    stamp_pull(env)
+    killed = []
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
+    assert killed == [] and rec.is_file()
+
+
+def test_explicit_boxes_never_retire(env):
+    rec = seed_pair(env, "example_operator_at_oldbox.local", (2001, 2002))
+    seed_pair(env, "example_operator_at_machine_a.local", (2003, 2004))
+    env.al.run(roster=env.roster, boxes=["example-operator@machine-a.local"], spawn=boom, probe_fn=boom, key_fn=boom,
+               kill=boom)
+    assert rec.is_file()
+
+
+def test_retire_stops_a_live_supervisor_only_on_a_matching_start_stamp(env):
+    rec = seed_pair(env, "example_operator_at_oldbox.local", (2001, 2002))
+    data = json.loads(rec.read_text())
+    data["bridge"]["procStart"] = "reused"
+    rec.write_text(json.dumps(data))
+    killed = []
+    env.al.retire_non_targets(env.roster, env.sdir, lambda m: None, ["example-operator@machine-a.local"], killed.append, {})
+    assert killed == [2002] and not rec.exists()
+
+
+def seed_stamp(e, pid, remote, start=None):
+    e.sdir.mkdir(parents=True, exist_ok=True)
+    e.live.add(pid)
+    stamp = e.sdir / f"supervisor-{pid}.json"
+    stamp.write_text(json.dumps({"pid": pid, "procStart": start or f"start-{pid}", "remote": remote}))
+    return stamp
+
+
+def test_unrecorded_live_supervisor_is_stopped_by_a_default_run(env, monkeypatch):
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, a, run=None: {"machine-a-lan": "machine-a.local"}.get(a))
+    kept = seed_pair(env, "example_operator_at_machine_a.local", (2001, 2002), box="machine-a")
+    orphan = seed_stamp(env, 7496, "machine-a-lan")
+    recorded = [seed_stamp(env, 2001, "example-operator@machine-a.local"), seed_stamp(env, 2002, "example-operator@machine-a.local")]
+    healthy_cache(env, ["example-operator@machine-a.local"])
+    killed = []
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
+    assert killed == [7496] and not orphan.exists() and kept.is_file() and all(s.is_file() for s in recorded)
+    assert any("pid 7496 outside any record" in line for line in log_lines(env))
+
+
+def test_unrecorded_supervisor_of_a_box_with_no_record_is_stopped(env):
+    stamp = seed_stamp(env, 7496, "example-operator@oldbox.local")
+    healthy_cache(env, ["example-operator@machine-a.local"])
+    killed = []
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, kill=killed.append)
+    assert killed == [7496] and not stamp.exists()
+
+
+def test_stamp_with_a_reused_pid_or_a_dead_pid_is_dropped_without_a_kill(env):
+    reused = seed_stamp(env, 7496, "example-operator@oldbox.local", start="reused")
+    dead = seed_stamp(env, 7497, "example-operator@oldbox.local")
+    env.live.discard(7497)
+    killed = []
+    env.al.reap_unrecorded(env.roster, env.sdir, lambda m: None, killed.append, {})
+    assert killed == [] and not reused.exists() and not dead.exists()
+
+
+def test_unrecorded_supervisor_of_a_box_mid_link_is_left_for_the_next_run(env):
+    stamp = seed_stamp(env, 7496, "example-operator@machine-a.local")
+    (env.sdir / "autolink-machine-a.lock").write_text("")
+    killed = []
+    env.al.reap_unrecorded(env.roster, env.sdir, lambda m: None, killed.append, {})
+    assert killed == [] and stamp.is_file()
+
+
+def test_reap_runs_no_ssh_when_every_live_stamp_is_recorded(env, monkeypatch):
+    monkeypatch.setattr(env.al, "ssh_hostname", boom)
+    seed_pair(env, "machine-a-lan", (2001, 2002), box="machine-a")
+    seed_stamp(env, 2001, "machine-a-lan")
+    env.al.reap_unrecorded(env.roster, env.sdir, lambda m: None, boom, {})
+
+
+def test_link_peer_writes_the_record_after_each_spawn(env):
+    add_key(env)
+    env.sdir.mkdir(parents=True, exist_ok=True)
+    seen = []
+    base = Spawner()
+
+    def spawn(cmd):
+        seen.append(json.loads(env.al.record_path(env.sdir, "machine-a").read_text()) if
+                    env.al.record_path(env.sdir, "machine-a").exists() else {})
+        if len(base.cmds) == 1:
+            raise OSError("second spawn fails")
+        return base(cmd)
+
+    with pytest.raises(OSError):
+        env.al.link_peer(env.roster, "machine-a", str(env.key), lambda m: None, spawn=spawn, probe_fn=ok)
+    rec = json.loads(env.al.record_path(env.sdir, "machine-a").read_text())
+    assert seen == [{}, {"bridge": rec["bridge"], "box": "machine-a"}] and rec["bridge"]["pid"] == 1001
+
+
+def test_link_peer_stamps_each_spawn_and_a_lost_record_pid_is_reaped(env):
+    add_key(env)
+    env.sdir.mkdir(parents=True, exist_ok=True)
+    env.al.link_peer(env.roster, "machine-a", str(env.key), lambda m: None, spawn=Spawner(), probe_fn=ok)
+    stamps = sorted(env.sdir.glob("supervisor-*.json"))
+    assert [json.loads(s.read_text())["pid"] for s in stamps] == [1001, 1002]
+    assert all(json.loads(s.read_text())["remote"] == "machine-a" for s in stamps)
+    path = env.al.record_path(env.sdir, "machine-a")
+    rec = json.loads(path.read_text())
+    rec["bridge"] = {"pid": 9999, "procStart": "start-9999"}  # the record lost the live bridge's pid
+    path.write_text(json.dumps(rec))
+    env.live.update({1001, 1002, 9999})
+    killed = []
+    env.al.reap_unrecorded(env.roster, env.sdir, lambda m: None, killed.append, {})
+    assert killed == [1001] and not (env.sdir / "supervisor-1001.json").exists()
+    assert (env.sdir / "supervisor-1002.json").is_file()
+
+
+def test_link_peer_keeps_its_lock_fresh_across_the_probe_chain(env):
+    add_key(env)
+    env.sdir.mkdir(parents=True, exist_ok=True)
+    lock = env.sdir / "autolink-machine-a.lock"
+    stale = time.time() - 3600
+    ages = []
+
+    def probe_fn(roster, alias, key, remote=None):
+        if remote is None:  # first probe fails after a long step: the lock goes stale
+            os.utime(lock, (stale, stale))
+            return "timeout"
+        ages.append(time.time() - lock.stat().st_mtime)
+        return None
+
+    env.al.link_peer(env.roster, "machine-a", str(env.key), lambda m: None, spawn=Spawner(), probe_fn=probe_fn,
+                     stable_fn=lambda alias: "machine-a.local")
+    assert ages and ages[0] < 60
+
+
+def test_supervisor_started_outside_autolink_stamps_itself_and_is_reaped(env):
+    # Producer: a supervisor's own main writes the stamp, so one started by install or by hand is reapable.
+    pid = os.getpid()
+    env.sdir.mkdir(parents=True, exist_ok=True)
+    env.roster.stamp_supervisor("example-operator@machine-a.local")
+    stamp = env.sdir / f"supervisor-{pid}.json"
+    assert json.loads(stamp.read_text()) == {"pid": pid, "procStart": f"start-{pid}", "remote": "example-operator@machine-a.local"}
+    env.live.add(pid)
+    killed = []
+    env.al.reap_unrecorded(env.roster, env.sdir, lambda m: None, killed.append, {})
+    assert killed == [pid]
+    assert not stamp.exists()

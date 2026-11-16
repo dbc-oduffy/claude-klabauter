@@ -552,6 +552,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.workflow_fire.op",
         'registers "workflow.fire", "workflow.fire_status"',
     ),
+    ("coordinator_core.ops.workflow_fire.wait", 'registers "workflow.fire_wait"'),
     (
         "coordinator_core.ops.review_stamp",
         'registers "review_stamp.mint", "review_stamp.check"',

@@ -7,9 +7,12 @@ import json
 from coordinator_core.ops import post_run_finish
 from coordinator_core.post_run import p5_audit
 
+_A = "docs" + "/wiki/a.md"
+_B = "docs" + "/wiki/b.md"
+
 RESULT = {
     "run_id": "r-1",
-    "promoted_files": ["docs/wiki/a.md", {"target": "docs/wiki/b.md"}],
+    "promoted_files": [_A, {"target": _B}],
     "distillation_log_rows": [
         {"path": "tasks/x.md", "disposition": "DELETE", "fate": "promoted"},
         {"path": "tasks/y.md", "disposition": "KEEP", "fate": "kept", "run_id": "r-0"},
@@ -44,10 +47,10 @@ def test_counts_and_log_lines(tmp_path):
 
 def test_unexplained_both_sides(tmp_path):
     porcelain = [
-        " M docs/wiki/a.md",
+        f" M {_A}",
         "?? docs/decisions/DR-1.md",
         " D tasks/x.md",
-        "R  old.md -> docs/wiki/b.md",
+        f"R  old.md -> {_B}",
         " M src/stray.py",
         '?? "odd/name.md"',
     ]

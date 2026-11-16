@@ -1,7 +1,8 @@
 """One ssh carrier per far box, addressed by member host name (else the IP as given) and pinned with HostKeyAlias.
 
 `channel(box, key=, host=)` is the only way the roster poll, the bridge relay and the inbox reach a
-far box. POSIX rides one ssh ControlMaster per box (the roster's `mux_options`). Windows OpenSSH has
+far box. A far box recorded POSIX (`far_platform`) rides one ssh ControlMaster per box (the roster's
+`mux_options`); a Windows or unrecorded far box never gets ControlMaster options. Windows OpenSSH has
 no ControlMaster, so `run` goes through a per-box broker that owns one long-lived `ssh <host> mux`
 carrier and multiplexes NDJSON request frames over it; against a far relay with no `mux` mode the
 broker serves each request as a single-flight one-shot ssh, which still holds the far sshd to one
@@ -15,6 +16,7 @@ import importlib.util
 import ipaddress
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -237,16 +239,79 @@ class BrokerChannel(DirectChannel):
             return _fault(command, ex)
 
 
+_FAR_PLATFORM = {}
+_ALIAS_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")  # the filename rule of unimatrix-install control_far_record_path
+UNKNOWN_FAR_PLATFORM_TTL_SECONDS = 30.0
+_POSIX_DOMAINS = ("darwin", "linux")
+
+
+def _platform_class(value):
+    """'win32' | 'posix' | None for a probe platform ('win32', 'darwin', 'linux') or a pidDomain ('win32:<host>')."""
+    v = str(value or "").strip().lower()
+    if v == "win32" or v.startswith("win32:"):
+        return "win32"
+    return "posix" if v in _POSIX_DOMAINS else None
+
+
+def _recorded_far_platform(box):
+    """The platform class of far `box` from the control-far record, else from a mirror session entry, else None."""
+    roster = _roster()
+    safe = _ALIAS_UNSAFE.sub("-", box)
+    try:
+        rec = json.loads((Path(roster.settings_home()) / "unimatrix" / "control-far" / f"{safe}.json").read_text(encoding="utf-8"))
+        found = _platform_class(rec.get("platform")) if isinstance(rec, dict) else None
+    except (OSError, ValueError):
+        found = None
+    if found:
+        return found
+    sessions = Path(roster.sessions_dir())
+    try:
+        names = sorted(os.listdir(sessions))
+    except OSError:
+        return None
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        try:
+            entry = json.loads((sessions / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        # A mirror's own `pidDomain` is the local bridge's; the far session's is `farPidDomain`.
+        if isinstance(entry, dict) and str(entry.get("box") or "").lower() == box.lower():
+            found = _platform_class(entry.get("farPidDomain"))
+            if found:
+                return found
+    return None
+
+
+def far_platform(box):
+    """'win32', 'posix' or None (unknown) for far `box`, from records on disk only; cached per process per box.
+
+    A known platform is cached for the process; an unknown one for UNKNOWN_FAR_PLATFORM_TTL_SECONDS so a record
+    written later (unimatrix-install, a new mirror) is picked up."""
+    now = time.monotonic()
+    hit = _FAR_PLATFORM.get(box)
+    if hit and (hit[0] is not None or now < hit[1]):
+        return hit[0]
+    found = _recorded_far_platform(box)
+    _FAR_PLATFORM[box] = (found, now + UNKNOWN_FAR_PLATFORM_TTL_SECONDS)
+    return found
+
+
 def channel(box, *, key, host, home=None, extra=(), direct=False, mux_options=None, win=None,
             spawn_broker=None):
     """The channel to far `box`, dialled at member host name `host`; never connects at construction.
 
-    POSIX, `direct=True`, or a non-Windows `win` gives a ControlMaster-backed DirectChannel; Windows
-    gives the broker-backed channel, which under a test home refuses to start a broker for a box or
-    key the C1 guard calls real."""
+    `direct=True` or a non-Windows `win` gives a DirectChannel, ControlMaster-backed only when `far_platform(box)`
+    is 'posix' (a Windows or unrecorded far box gets no Control* option, whatever `mux_options` the caller
+    passes); Windows gives the broker-backed channel, which under a test home refuses to start a broker for a box
+    or key the C1 guard calls real."""
     if direct or not (IS_WIN if win is None else win):
         if mux_options is None:
             mux_options = lambda h: _roster().mux_options(h, key)
+        if far_platform(box) != "posix":
+            # Windows sshd replays a master's first command to later channels: a send lands in the wrong session.
+            mux_options = lambda h: []
         return DirectChannel(box, key, host, extra, mux_options)
     return BrokerChannel(box, key, host, home or _roster().settings_home(), extra, spawn_broker)
 

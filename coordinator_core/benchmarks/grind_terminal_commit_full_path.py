@@ -20,7 +20,9 @@ from coordinator_core.git.run import run_git
 
 RUN_ID = "20261015T000000Z"
 PROFILE = "bug"
-EVIDENCE = f"state/queue-grind/{PROFILE}/evidence/{RUN_ID}/r1.done.md"
+FOREIGN_RUN_ID = "20260101T000000Z"
+# Another run's evidence: the run's own evidence lands as a rider, a foreign one is dropped.
+EVIDENCE = f"state/queue-grind/{PROFILE}/evidence/{FOREIGN_RUN_ID}/r1.done.md"
 
 
 def _git(repo: Path, *args: str) -> str:

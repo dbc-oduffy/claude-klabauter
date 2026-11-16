@@ -1977,7 +1977,8 @@ def _ref_only_merge_verdict(cmd_norm: str, cwd: Optional[str]) -> Optional[str]:
     """Deny kind when the command moves the checked-out branch to a merge commit with no earlier `read-tree -m -u`.
 
     A new value is a merge when the command builds it with a two-parent `commit-tree`, or when it is a
-    literal commit with a second parent (one `rev-parse`, spent only on a HEAD-branch update-ref).
+    literal commit with a second parent (one batched `cat-file --batch-check` per repo, spent only on
+    HEAD-branch update-refs).
     """
     if "update-ref" not in cmd_norm:
         return None
@@ -1988,6 +1989,7 @@ def _ref_only_merge_verdict(cmd_norm: str, cwd: Optional[str]) -> Optional[str]:
     two_parent_build = any(
         "commit-tree" in seg and sum(1 for t in seg if t in ("-p", "--parent")) >= 2 for seg in segments
     )
+    candidates: List[Tuple[int, Optional[str], str]] = []
     for index, seg in enumerate(segments):
         if "update-ref" not in seg:
             continue
@@ -2012,15 +2014,40 @@ def _ref_only_merge_verdict(cmd_norm: str, cwd: Optional[str]) -> Optional[str]:
         branch = _checked_out_branch_ref(workdir)
         if branch is None or ref not in ("HEAD", branch):
             continue
+        candidates.append((index, workdir, new))
+    literal = [(w, n) for _i, w, n in candidates if not _UNRESOLVED_VALUE_RE.search(n)]
+    merges = _second_parent_flags(literal)
+    for index, workdir, new in candidates:
         if _UNRESOLVED_VALUE_RE.search(new):
             merge = two_parent_build
         else:
-            from coordinator_core.git.run import run_git
-
-            merge = run_git(["rev-parse", "--verify", "-q", f"{new}^2"], cwd=workdir, timeout=2.0).returncode == 0
+            merge = merges.get((workdir, new), False)
         if merge and not any(_syncs_worktree(prior) for prior in segments[:index]):
             return _REF_ONLY_MERGE_DENY_KIND
     return None
+
+
+def _second_parent_flags(pending: List[Tuple[Optional[str], str]]) -> Dict[Tuple[Optional[str], str], bool]:
+    """`{(workdir, rev): True}` for each rev that names a commit with a second parent; one spawn per workdir.
+
+    Recurses over workdirs rather than looping: the amplification gate flags a spawn inside a loop.
+    """
+    if not pending:
+        return {}
+    from coordinator_core.git.run import run_git
+
+    first = pending[0][0]
+    revs = list(dict.fromkeys(n for w, n in pending if w == first and "\n" not in n))
+    rest = _second_parent_flags([(w, n) for w, n in pending if w != first])
+    if not revs:
+        return rest
+    reply = run_git(
+        ["cat-file", "--batch-check"], cwd=first, timeout=2.0,
+        input="".join(f"{n}^2\n" for n in revs).encode("utf-8"),
+    )
+    lines = reply.stdout.splitlines() if reply.returncode == 0 else []
+    rest.update({(first, n): len(ln.split()) == 3 and ln.split()[1] == "commit" for n, ln in zip(revs, lines)})
+    return rest
 
 #: Verbs that stay denied when unrecognized: each can lose work another session has not committed
 #: or published, or move a ref off-box.

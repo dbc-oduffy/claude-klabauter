@@ -623,6 +623,19 @@ def pick_remote(lan, tunnel=None, reachable=None):
     return lan if (reachable or lan_reachable)(lan) else tunnel
 
 
+def stamp_supervisor(remote):
+    """Write this process's `supervisor-<pid>.json` stamp, the autolink reaper's evidence of a live supervisor.
+
+    Self-written so a supervisor started outside autolink (install, by hand) is still reapable when no
+    record names it. A stamp that cannot be written never stops the supervisor."""
+    pid = os.getpid()
+    try:
+        write_json_atomic(str(settings_home() / "unimatrix" / f"supervisor-{pid}.json"),
+                          {"pid": pid, "procStart": proc_start(pid), "remote": remote})
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def write_json_atomic(path, data):
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -1535,6 +1548,7 @@ def main(argv=None):
             say(f"stopped by signal {signum}; mirrors drop until relaunched")
             sys.exit(128 + signum)
         signal.signal(signal.SIGTERM, stopped)
+    stamp_supervisor(cfg.remote)
     bridges = {}
     link_path = link_state_path(cfg.remote)
     # No record yet: None, so the first poll writes one and the G-EM watch sees a new box's first state.
