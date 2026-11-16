@@ -701,3 +701,114 @@ def test_reap_commit_that_fails_for_another_reason_stays_an_error(bare, monkeypa
     out = _reap(bare)
 
     assert out["ok"] is False
+
+
+MINTED = "ask-20261001T000020-aaaa20"
+MINTED_YOUNG = "ask-20261001T000021-bbbb21"
+
+
+def _minted(root: Path, run_id: str, *, age: float) -> None:
+    from datetime import datetime, timezone
+
+    rec = root / "state" / "warp" / run_id
+    rec.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.fromtimestamp(time.time() - age, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    (rec / "run-stage.json").write_text(
+        json.dumps({"stage": "minted", "session_id": None, "started_at": stamp, "last_activity_at": stamp}),
+        encoding="utf-8",
+    )
+
+
+def _commit_all(root: Path) -> None:
+    _git(["add", "-A", "-f", "."], root)
+    _git(["commit", "-q", "-m", "clean"], root)
+
+
+def _tree_state(root: Path) -> dict[str, tuple[bytes, int]]:
+    return {
+        p.relative_to(root).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in sorted(root.rglob("*"))
+        if p.is_file() and ".git" not in p.relative_to(root).parts
+    }
+
+
+def test_minted_never_fired_run_with_clean_record_files_is_reaped(bare):
+    _minted(bare, MINTED, age=ar.QUIET_SECONDS + 300)
+    _minted(bare, MINTED_YOUNG, age=60)
+    _commit_all(bare)
+    assert _porcelain(bare) == set()
+
+    out = _reap(bare)
+
+    assert out["ok"] is True
+    assert out["reaped"] == [MINTED]
+    assert out["committed_sha"] == _git(["rev-parse", "HEAD"], bare).strip()
+    assert _committed_names(bare) == {f"state/run-evidence/{MINTED}/outcome.json"}
+    assert json.loads((bare / f"state/run-evidence/{MINTED}/outcome.json").read_text())["state"] == "abandoned"
+
+
+def test_minted_run_with_a_live_token_is_not_reaped(bare):
+    _minted(bare, MINTED, age=ar.QUIET_SECONDS + 300)
+    _commit_all(bare)
+    run_token.mint(bare, MINTED, SCRIPT, session_id="s")
+
+    assert _reap(bare)["reaped"] == []
+
+
+def test_second_call_on_a_host_repo_reaps_nothing_and_writes_nothing(bare):
+    _minted(bare, MINTED, age=ar.QUIET_SECONDS + 300)
+    _record(bare, STALE, age=run_token.TTL_SECONDS + 3600)
+    _commit_all(bare)
+    _record(bare, STALE, age=run_token.TTL_SECONDS + 3600)
+    (bare / "state" / "warp" / STALE / "ask.md").write_text("rewritten\n", encoding="utf-8")
+    old = time.time() - run_token.TTL_SECONDS - 3600
+    os.utime(bare / "state" / "warp" / STALE / "ask.md", (old, old))
+
+    first = _reap(bare)
+    assert set(first["reaped"]) == {MINTED, STALE}
+    head, before = _git(["rev-parse", "HEAD"], bare), _tree_state(bare)
+    dirty = _porcelain(bare)
+
+    second = _reap(bare)
+
+    assert second["reaped"] == [] and second["committed_sha"] is None
+    assert _git(["rev-parse", "HEAD"], bare) == head
+    assert _tree_state(bare) == before
+    assert _porcelain(bare) == dirty
+
+
+@pytest.mark.foreign_repo
+def test_non_host_repo_writes_nothing_before_the_host_check_and_second_call_is_a_noop(bare, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_close
+
+    _minted(bare, MINTED, age=ar.QUIET_SECONDS + 300)
+    _record(bare, STALE, age=run_token.TTL_SECONDS + 3600)
+    _commit_all(bare)
+    ask = bare / "state" / "warp" / STALE / "ask.md"
+    ask.write_text("tracked and dirty\n", encoding="utf-8")
+    old = time.time() - run_token.TTL_SECONDS - 3600
+    os.utime(ask, (old, old))
+    _aged_token(bare, STALE, run_token.TTL_SECONDS + 3600)
+
+    def _no_write(*a, **k):
+        raise AssertionError("write before the host check")
+
+    monkeypatch.setattr(run_token, "discard", _no_write)
+    monkeypatch.setattr(run_close, "close_builds_held_after", _no_write)
+    head = _git(["rev-parse", "HEAD"], bare)
+
+    first = _reap(bare)
+
+    assert set(first["reaped"]) == {MINTED, STALE}
+    assert {"run_id": STALE, "reason": ar.process_artifact_policy.WITHHELD_REASON,
+            "path": f"state/warp/{STALE}/ask.md"} in first["skipped"]
+    assert first["committed_sha"] is None and _git(["rev-parse", "HEAD"], bare) == head
+    assert not (bare / "archive").exists()
+    assert ask.read_text(encoding="utf-8") == "tracked and dirty\n"
+    before = _tree_state(bare)
+
+    second = _reap(bare)
+
+    assert second["reaped"] == [] and second["committed_sha"] is None
+    assert _tree_state(bare) == before
+    assert _git(["rev-parse", "HEAD"], bare) == head

@@ -14,6 +14,7 @@ import asyncio
 import json
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 import pytest
 import yaml
@@ -43,7 +44,9 @@ class _Repo:
     def head(self) -> str:
         return self.git("rev-parse", "HEAD")
 
-    def seed(self, name: str, legs: list) -> Path:
+    def seed(
+        self, name: str, legs: Optional[list], notes_key: Optional[str] = "gate_notes"
+    ) -> Path:
         path = self.root / "state" / "handoffs" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         fm = {
@@ -53,7 +56,6 @@ class _Repo:
             "predecessor": "none",
             "status": "open",
             "deployment_state": "awaiting_gate",
-            "gate_notes": "PM must clear",
             "pickup_ready": False,
             "kind": "spinoff-roadmap",
             "roadmap_id": "rdm-human",
@@ -61,8 +63,11 @@ class _Repo:
             "wave": 1,
             "blocks": [],
             "blocked_by": [],
-            "gate_evidence": {"covers_prose": True, "legs": legs},
         }
+        if notes_key:
+            fm[notes_key] = "PM must clear"
+        if legs is not None:
+            fm["gate_evidence"] = {"covers_prose": True, "legs": legs}
         path.write_text(
             "---\n" + yaml.safe_dump(fm, sort_keys=False) + "---\n\n# Handoff\n\nBody.\n",
             encoding="utf-8",
@@ -251,11 +256,61 @@ def test_not_awaiting_gate_refused(repo: _Repo, pm_log: Path) -> None:
     _assert_untouched(repo, path, before, head, result)
 
 
-def test_no_human_leg_refused(repo: _Repo, pm_log: Path) -> None:
-    path = repo.seed("h.md", [_DEADLINE])
+def test_no_human_leg_and_no_gate_notes_refused(repo: _Repo, pm_log: Path) -> None:
+    path = repo.seed("h.md", [_DEADLINE], notes_key=None)
     before, head = path.read_bytes(), repo.head()
     result = _call(repo, {"handoff_path": str(path), "pm_turn": {"session_id": _SID, "turn": 0}})
     _assert_untouched(repo, path, before, head, result)
+
+
+def test_no_gate_evidence_and_no_notes_refused(repo: _Repo, pm_log: Path) -> None:
+    path = repo.seed("h.md", None, notes_key=None)
+    before, head = path.read_bytes(), repo.head()
+    result = _call(repo, {"handoff_path": str(path), "pm_turn": {"session_id": _SID, "turn": 0}})
+    _assert_untouched(repo, path, before, head, result)
+
+
+@pytest.mark.parametrize("notes_key", ["gate_notes", "blocking_notes"])
+def test_gate_notes_only_human_gate_clears_on_pm_turn(
+    repo: _Repo, pm_log: Path, notes_key: str
+) -> None:
+    repo.seed("h.md", None, notes_key=notes_key)
+    head = repo.head()
+    result = _call(repo, {"handoff_path": _path(repo), "pm_turn": {"session_id": _SID, "turn": 1}})
+    assert result["ok"] is True, result
+    citation = f"pm-turn:{_SID}#1"
+    assert result["gate_cleared_by"] == [citation]
+    assert result["deployment_state"] == "ready_to_fire"
+    fm = repo.fm("h.md")
+    assert fm["gate_cleared_by"] == [citation]
+    assert fm["deployment_state"] == "ready_to_fire"
+    assert result["commit_sha"] == repo.head() != head
+
+
+def test_gate_notes_only_human_gate_clears_on_commit_sha(repo: _Repo) -> None:
+    repo.seed("h.md", None)
+    repo.git("commit", "--allow-empty", "-m", f"decision: {_VERBATIM}")
+    sha = repo.head()
+    result = _call(repo, {"handoff_path": _path(repo), "commit_sha": sha, "verbatim": _VERBATIM})
+    assert result["ok"] is True, result
+    fm = repo.fm("h.md")
+    assert fm["gate_cleared_by"] == [sha]
+    assert fm["deployment_state"] == "ready_to_fire"
+
+
+def test_gate_notes_only_still_needs_a_valid_citation(repo: _Repo, pm_log: Path) -> None:
+    path = repo.seed("h.md", None)
+    before, head = path.read_bytes(), repo.head()
+    result = _call(repo, {"handoff_path": str(path), "pm_turn": {"session_id": _SID, "turn": 99}})
+    _assert_untouched(repo, path, before, head, result)
+
+
+def test_gate_notes_with_non_human_leg_stays_awaiting_gate(repo: _Repo, pm_log: Path) -> None:
+    repo.seed("h.md", [_DEADLINE])
+    result = _call(repo, {"handoff_path": _path(repo), "pm_turn": {"session_id": _SID, "turn": 0}})
+    assert result["ok"] is True, result
+    assert result["deployment_state"] == "awaiting_gate"
+    assert repo.fm("h.md")["gate_cleared_by"] == [f"pm-turn:{_SID}#0"]
 
 
 def test_mixed_human_and_deadline_stays_awaiting_gate(repo: _Repo, pm_log: Path) -> None:

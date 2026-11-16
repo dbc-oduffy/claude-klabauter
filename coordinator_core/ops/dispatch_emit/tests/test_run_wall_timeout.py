@@ -81,6 +81,14 @@ def test_a_run_under_the_wall_bound_is_not_halted(repo):
     assert wrd._past_wall_timeout(repo, RUN) is None
 
 
+def test_the_wall_is_four_hours_and_a_9014s_run_is_not_halted(repo):
+    assert wrd.RUN_WALL_TIMEOUT_SECONDS == 14400
+    peer = _run(repo, stage="staged", age=9014)
+    assert wrd._past_wall_timeout(repo, RUN) is None
+    assert _tail(repo) is True
+    assert not (peer / "halted.json").exists()
+
+
 def test_the_halt_reason_names_the_elapsed_seconds_and_the_bound(repo):
     peer = _run(repo, stage="staged", age=OVER)
     elapsed = wrd._past_wall_timeout(repo, RUN)

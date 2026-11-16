@@ -35,6 +35,13 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path / "settings"
 
 
+def _add_dir() -> list[str]:
+    from coordinator_core.locked_write import _machine_lock_dir
+
+    return ["--add-dir", str(_machine_lock_dir().parent)]
+
+
+
 def _run(family="codex", env=None, **kw):
     """Launch with a recording spawn; returns (rc, [(cli, argv)], the child's env, else the caller's env)."""
     calls, env = [], {} if env is None else env
@@ -66,7 +73,8 @@ EXEC_FAMILIES = tuple(f for f in hel.FAMILIES if f != "claude")
 def test_launched_em_passes_require_fire_authority(family, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, calls, env = _run(family, extra=["-m", "x"])
     assert rc == 0
-    assert calls == [(f"/bin/{family}", [f"/bin/{family}", "-m", "x"])]
+    head = _add_dir() if family == "codex" else []
+    assert calls == [(f"/bin/{family}", [f"/bin/{family}", *head, "-m", "x"])]
     assert g.headless_em_grant_matches(env, env[hel.SESSION_ENV], family)
     caller = _fire(monkeypatch, env)
     assert caller.session_id == env[hel.SESSION_ENV]
@@ -126,7 +134,7 @@ def test_windows_prepare_emits_token_without_executing(capsys: pytest.CaptureFix
                     platform="win32", prepare_only=True, native_executable="codex.exe")
     plan = json.loads(capsys.readouterr().out)
     assert rc == 0 and not calls and not env
-    assert plan["argv"] == ["codex.exe"]
+    assert plan["argv"] == ["codex.exe", *_add_dir()]
     assert g.headless_em_grant_matches(plan["environment"], plan["session_id"], "codex")
 
 
@@ -139,7 +147,7 @@ def _win_prepare(family, which, capsys, **kw):
 @pytest.mark.parametrize("family", hel.FAMILIES)
 def test_windows_native_exe_on_path_used_as_is(family, capsys: pytest.CaptureFixture[str]) -> None:
     rc, out = _win_prepare(family, lambda n: f"pathbin/{n}" if n.endswith(".exe") else None, capsys)
-    tail = ["--bg"] if family == "claude" else []
+    tail = ["--bg"] if family == "claude" else _add_dir() if family == "codex" else []
     assert rc == 0 and json.loads(out.out)["argv"] == [f"pathbin/{family}.exe", *tail]
 
 
@@ -152,7 +160,7 @@ def test_windows_codex_cmd_shim_maps_to_native_exe(tmp_path: Path, capsys: pytes
     if platform.machine().lower() in {"arm64", "aarch64"}:
         pytest.skip("x64 fixture layout")
     rc, out = _win_prepare("codex", lambda n: str(shim) if n == "codex" else None, capsys)
-    assert rc == 0 and json.loads(out.out)["argv"] == [str(exe)]
+    assert rc == 0 and json.loads(out.out)["argv"] == [str(exe), *_add_dir()]
 
 
 @pytest.mark.parametrize("family", hel.FAMILIES)
@@ -458,3 +466,34 @@ def test_prepare_only_json_names_the_exit_check_argv(family, capsys):
     assert rc == 0
     assert plan["exit_check"] == [sys.executable, str(Path(hel.__file__).resolve()),
                                   "--exit-check", "--session-id", "s9"]
+
+
+def test_codex_gets_the_machine_lock_root_as_a_writable_dir() -> None:
+    rc, calls, _ = _run("codex", env={"PATH": "x"}, extra=["--model", "m"])
+    assert rc == 0 and calls[0][1] == ["/bin/codex", *_add_dir(), "--model", "m"]
+
+
+def test_codex_exec_takes_the_dir_after_the_subcommand() -> None:
+    rc, calls, _ = _run("codex", env={"PATH": "x"}, extra=["exec", "do it"])
+    assert rc == 0 and calls[0][1] == ["/bin/codex", "exec", *_add_dir(), "do it"]
+
+
+def test_codex_dir_already_passed_is_not_doubled() -> None:
+    rc, calls, _ = _run("codex", env={"PATH": "x"}, extra=_add_dir())
+    assert rc == 0 and calls[0][1] == ["/bin/codex", *_add_dir()]
+
+
+@pytest.mark.parametrize("family", ["agy", "grok"])
+def test_other_families_get_no_add_dir(family) -> None:
+    rc, calls, _ = _run(family, env={"PATH": "x"}, extra=["x"])
+    assert rc == 0 and "--add-dir" not in calls[0][1]
+
+
+def test_codex_cwd_becomes_the_working_dir_flag() -> None:
+    rc, calls, _ = _run("codex", env={"PATH": "x"}, extra=["exec", "do it"], cwd="repo/sub")
+    assert rc == 0 and calls[0][1] == ["/bin/codex", "exec", *_add_dir(), "-C", "repo/sub", "do it"]
+
+
+def test_codex_caller_working_dir_flag_wins_over_cwd() -> None:
+    rc, calls, _ = _run("codex", env={"PATH": "x"}, extra=["exec", "-C", "mine"], cwd="repo/sub")
+    assert rc == 0 and calls[0][1] == ["/bin/codex", "exec", *_add_dir(), "-C", "mine"]

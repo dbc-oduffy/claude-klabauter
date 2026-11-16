@@ -100,6 +100,29 @@ def log_path(sid: str, cwd: Optional[str] = None) -> Optional[Path]:
     return sdir / PM_TURNS_FILENAME if sdir is not None else None
 
 
+#: Session-hub subdirectory the reaper moves a stale session dir into, as ``<sid>-<YYYY-MM-DD>``.
+_ARCHIVE_DIRNAME = ".archive"
+
+
+def archived_log_path(sid: str, cwd: Optional[str] = None) -> Optional[Path]:
+    """The newest ``<hub>/.archive/<sid>-<YYYY-MM-DD>/pm_turns.jsonl`` that exists, else None.
+    Read-only fallback for a session whose live dir was reaped; the hub comes from ``log_path``."""
+    live = log_path(sid, cwd)
+    if live is None:
+        return None
+    archive = live.parent.parent / _ARCHIVE_DIRNAME
+    dated = re.compile(re.escape(sid) + r"-\d{4}-\d{2}-\d{2}")
+    try:
+        names = sorted((p.name for p in archive.iterdir() if dated.fullmatch(p.name)), reverse=True)
+    except OSError:
+        return None
+    for name in names:
+        candidate = archive / name / PM_TURNS_FILENAME
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 #: An injected ``/compact`` is attributed to the watcher only within this age of its log record.
 INJECTED_FRESH_SECS = 120
 #: Bytes read from the end of the injection log; the newest record is near the tail.
@@ -263,6 +286,8 @@ def read_turns(session_id: Optional[str] = None, cwd: Optional[str] = None, *,
     if path is None:
         return dict(empty, session_id=sid, reason="session hub unresolvable")
 
+    if not path.is_file():
+        path = archived_log_path(sid, cwd) or path
     turns = _load(path) if path.is_file() else []
     base = dict(empty, session_id=sid, log_path=str(path), count=len(turns))
     if not turns:

@@ -178,10 +178,11 @@ def midx_names_missing_pack(common_dir) -> bool:
 def midx_upkeep_owed(common_dir) -> bool:
     """True when the MIDX needs a (sub-second) rewrite, whatever the box load: it names a pack
     whose `.idx` is gone, or the packs it does not cover exceed STALE_PACK_SLACK. Stat calls
-    plus one read of the MIDX file; no spawn, no lock, no liveness read."""
+    plus one read of the MIDX file; no spawn, no lock, no liveness read, no loose-object sample."""
     common_dir = Path(common_dir)
-    s = status(common_dir)
-    if s.pack_count - (s.midx_pack_count or 0) > STALE_PACK_SLACK:
+    pack_dir = common_dir / "objects" / "pack"
+    midx_count = _midx_pack_count(pack_dir / "multi-pack-index") or 0
+    if _count_suffix(pack_dir, ".idx") - midx_count > STALE_PACK_SLACK:
         return True
     return midx_names_missing_pack(common_dir)
 

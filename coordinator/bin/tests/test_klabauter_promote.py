@@ -108,6 +108,7 @@ class _SubprocessSpy:
         self._ls_remote_stdout = ls_remote_stdout
         self._ls_remote_returncode = ls_remote_returncode
         self.for_each_ref_stdout = _REFS_PUSHED
+        self.left_right_stdout = "1\t0\n"
         self._tip_subject = tip_subject
         self._source_subject = source_subject
         self._source_returncode = source_returncode
@@ -142,6 +143,8 @@ class _SubprocessSpy:
             return _completed(self._symref_returncode, self._symref_stdout, self._symref_stderr)
         if cmd[:1] == ["git"] and "for-each-ref" in cmd:
             return _completed(0, self.for_each_ref_stdout, "")
+        if cmd[:1] == ["git"] and "rev-list" in cmd:
+            return _completed(0, self.left_right_stdout, "")
         if cmd[:1] == ["git"] and "merge-base" in cmd:
             return _completed(self._merge_base_returncode, "", self._merge_base_stderr)
         if cmd[:1] == ["git"] and "push" in cmd:
@@ -477,12 +480,13 @@ def test_target_equal_to_candidate_refuses_naming_cause_and_never_pushes(
     assert "promoted" not in captured.out
 
 
-def _run_with_refs(tmp_path, monkeypatch, refs, *, confirm):
+def _run_with_refs(tmp_path, monkeypatch, refs, *, confirm, left_right="1\t0\n"):
     original = _SubprocessSpy.__init__
 
     def patched(self, *a, **kw):
         original(self, *a, **kw)
         self.for_each_ref_stdout = refs
+        self.left_right_stdout = left_right
 
     monkeypatch.setattr(_SubprocessSpy, "__init__", patched)
     return _run_promote(tmp_path, monkeypatch, confirm=confirm)
@@ -499,6 +503,27 @@ def test_unpushed_candidate_refuses_predicate_5_and_never_pushes(
     assert "predicate 5 (candidate pushed) FAILED" in captured.err
     assert f"git -C {dest} push origin candidate" in captured.err
     assert "promoted" not in captured.out
+    assert _pushes(spy) == []
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+@pytest.mark.parametrize("left_right, wanted, unwanted", [
+    ("1\t0\n", "push origin candidate", "merge --ff-only"),
+    ("0\t1\n", "merge --ff-only origin/candidate", "push origin"),
+    ("2\t3\n", "ahead 2, behind 3", "push origin"),
+    ("garbled\n", "push origin candidate", "merge --ff-only"),
+])
+def test_predicate_5_names_the_remedy_for_ahead_behind_diverged(
+    tmp_path, monkeypatch, capsys, left_right, wanted, unwanted, confirm,
+):
+    rc, spy, dest = _run_with_refs(
+        tmp_path, monkeypatch, _REFS_LAGGING, confirm=confirm, left_right=left_right,
+    )
+    assert rc == _mod._EXIT_USAGE
+    err = capsys.readouterr().err
+    assert "predicate 5 (candidate pushed) FAILED" in err
+    assert wanted in err
+    assert unwanted not in err
     assert _pushes(spy) == []
 
 

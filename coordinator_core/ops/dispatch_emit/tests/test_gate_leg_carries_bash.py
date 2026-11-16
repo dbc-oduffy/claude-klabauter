@@ -37,7 +37,6 @@ def test_the_gate_type_is_the_model_pinned_op_runner_never_test_runner_or_unpinn
     assert gate == "coordinator:queue-grind-op-runner"
     assert gate != emit._TEST_AGENT_TYPE
     assert gate != "general-purpose"
-    assert gate != emit._TEST_AGENT_TYPE
     assert gate in emit._AGENT_MODELS
     assert gate not in _INVOKE_ONLY_AGENT_TYPES
     assert ask_compose._MECHANICAL_MODEL == emit._AGENT_MODELS[gate]

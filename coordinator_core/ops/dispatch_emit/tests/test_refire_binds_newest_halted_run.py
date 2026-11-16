@@ -44,3 +44,12 @@ def test_resume_two_warp_halts_revise_after_newest_halt_wins(tmp_path: Path) -> 
     _halt(tmp_path, OLD, revised_at="2026-11-17T09:00:00Z")
     _halt(tmp_path, NEW)
     assert hr.halted_run_to_resume(tmp_path, SIZING) == OLD
+
+
+def test_prefer_a_later_note_on_another_run_supersedes_the_revise(tmp_path: Path) -> None:
+    _halt(tmp_path, OLD, revised_at="2026-11-14T09:00:00Z")
+    _halt(tmp_path, "ask-20261113T210000-ab12cd")
+    (tmp_path / hr.RECORD_DIR_ROOT / "ask-20261113T210000-ab12cd" / "notes.jsonl").write_text(
+        '{"at": "2026-11-15T00:00:00Z"}\n', encoding="utf-8"
+    )
+    assert hr._prefer(tmp_path, SIZING, [OLD, "ask-20261113T210000-ab12cd"], None) == "ask-20261113T210000-ab12cd"

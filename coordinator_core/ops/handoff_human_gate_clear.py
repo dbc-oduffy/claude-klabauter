@@ -2,7 +2,8 @@
 coordinator_core.ops.handoff_human_gate_clear -- the human-leg sibling of gate-recheck (DR-266).
 
 Purpose: `handoff.human_gate_clear` discharges the `kind: human` legs of an awaiting_gate
-handoff's `gate_evidence` on a validated PM citation (a recorded `baton.pm_turns` turn, or a
+handoff's `gate_evidence` (or, with no human leg, a human gate recorded only in
+`gate_notes`/`blocking_notes`) on a validated PM citation (a recorded `baton.pm_turns` turn, or a
 commit whose message carries the PM's verbatim words), stamps the citation into
 `gate_cleared_by`, flips to ready_to_fire when no other leg is left open, and commits that one
 file. Any refusal writes nothing and commits nothing.
@@ -54,6 +55,7 @@ from coordinator_core.ops.handoff_transition import (
     _validate_fm,
     _write_gate_evidence_results,
 )
+from coordinator_core.pickup_gate_brief import _gate_notes_text
 from coordinator_core.reconcile.gate_eval import reduce_gate_evidence
 from coordinator_core.session import scope as session_scope
 
@@ -128,8 +130,8 @@ def _clear_human_legs(
     legs = evidence.get("legs") if isinstance(evidence, dict) else None
     legs = [leg for leg in legs if isinstance(leg, dict)] if isinstance(legs, list) else []
     human = [leg for leg in legs if leg.get("kind") == "human"]
-    if not human:
-        raise MutateAbort("handoff carries no human gate_evidence leg")
+    if not human and (leg_ids is not None or not _gate_notes_text(fm_dict)):
+        raise MutateAbort("handoff carries no human gate_evidence leg and no gate_notes")
     if leg_ids is not None:
         known = {leg.get("leg_id") for leg in human}
         unknown = [i for i in leg_ids if i not in known]
@@ -159,7 +161,8 @@ def _clear_human_legs(
     if citation not in items:
         items.append(citation)
     fm = _stamp_gate_cleared_by(fm, items)
-    fm = _write_gate_evidence_results(fm, status, at, results)
+    if results:
+        fm = _write_gate_evidence_results(fm, status, at, results)
 
     if status != "freed":
         return fm, "awaiting_gate"

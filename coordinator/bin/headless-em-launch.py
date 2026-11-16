@@ -139,6 +139,27 @@ def exit_check(session_id, cwd=None, *, open_runs=None):
     return EXIT_OPEN_RUNS if runs else 0
 
 
+_CODEX_SUBCOMMANDS = ("exec", "e")
+
+
+def _codex_writable_dirs(extra: list[str], cwd: str | None = None) -> list[str]:
+    """`extra` with `--add-dir <machine lock root>` added: codex's workspace-write sandbox otherwise denies
+    the engine's per-user lock sidecar, and engine_ask.submit refuses. With `cwd`, `-C <cwd>` too: the
+    supervised spawn takes no cwd, so codex otherwise works in the caller's tree. Placed after an `exec`
+    subcommand, whose own flags are the ones it reads."""
+    from coordinator_core.locked_write import _machine_lock_dir
+
+    root = str(_machine_lock_dir().parent)
+    flag = [] if root in extra else ["--add-dir", root]
+    if cwd and not {"-C", "--cd"} & set(extra):
+        flag += ["-C", cwd]
+    if not flag:
+        return list(extra)
+    if extra and extra[0] in _CODEX_SUBCOMMANDS:
+        return [extra[0], *flag, *extra[1:]]
+    return [*flag, *extra]
+
+
 def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, environ=None,
            prepare_only=False, platform=None, native_executable=None, mint=uuid.uuid4,
            name=None, resume=None, cwd=None, runner=subprocess.run, open_runs=None):
@@ -190,7 +211,7 @@ def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, 
     except HeadlessEmGrantError as exc:
         print(f"headless-em-launch: refused: {exc}", file=sys.stderr)
         return REFUSED
-    cmd = [cli, *extra]
+    cmd = [cli, *_codex_writable_dirs(extra, cwd)] if family == "codex" else [cli, *extra]
     if family == "claude":
         cmd = [cli, "--bg", *(["--resume", resume] if resume else ["-n", name] if name else []), *extra]
     child = {SESSION_ENV: sid, HEADLESS_EM_TOKEN_ENV: token, PROVIDER_ENV: family}

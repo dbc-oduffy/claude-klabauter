@@ -363,27 +363,13 @@ def test_tracked_at_base_undeclared_foreign_file_is_not_removed(world, monkeypat
     """A path tracked in the snapshot's base commit cannot be review-created, even when no sibling
     declared it and its mtime is after the snapshot."""
     root, _orig, _ = world
-    monkeypatch.setattr(subprocess, "Popen", _REAL_POPEN)
     tracked = root / "tests/test_tracked_foreign.py"
     tracked.write_bytes(b"def test_x():\n    assert True\n")
-    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-    import os
-    full_env = {**os.environ, **env}
-    for argv in (["init", "-q"], ["add", "tests/test_tracked_foreign.py"], ["commit", "-q", "-m", "base"]):
-        subprocess.run(["git", "-C", str(root), *argv], check=True, env=full_env, capture_output=True, creationflags=_NOWIN)
-    base = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"],
-        check=True, capture_output=True, text=True, creationflags=_NOWIN,
-    ).stdout.strip()
-    manifest = Path(share_dir(str(root), SESSION)) / f"{PREFIX}.pre-review" / "manifest.json"
-    data = json.loads(manifest.read_text(encoding="utf-8"))
-    data["base"] = base
-    manifest.write_text(json.dumps(data), encoding="utf-8")
+    base = _commit_tracked(root, monkeypatch, ["tests/test_tracked_foreign.py"])
     tracked.write_bytes(b"def test_x():\n    assert False\n")
     before = tracked.read_bytes()
     monkeypatch.setattr(review_edits, "review_writes", lambda *_a, **_k: {"tests/test_tracked_foreign.py": "a1"})
     monkeypatch.setattr(review_edits, "live_sibling_declared", lambda *_a, **_k: {})
-    monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("spawn")))
     out = rr.review_reverify(
         root, base=base, slice_prefix=PREFIX, session_id=SESSION, failing=["tests/test_tracked_foreign.py::test_x"]
     )

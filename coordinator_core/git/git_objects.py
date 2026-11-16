@@ -691,7 +691,11 @@ def _record_read_store(common_dir: Path) -> None:
         with open(entry, "x", encoding="utf-8") as fh:
             fh.write(key + "\n")
     except FileExistsError:
-        pass
+        # The tick evicts the oldest-mtime entries past its cap: a store still read is refreshed.
+        try:
+            os.utime(entry)
+        except OSError:
+            pass
     except Exception as exc:  # noqa: BLE001 -- a registry failure must not fail a read
         _log.warning("engine read-store registry not written (settings_home unresolved?): %s", exc)
 

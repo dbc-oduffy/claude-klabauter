@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Mapping, Optional
 
@@ -41,7 +42,13 @@ SIZING_ROOT = Path(home_dir("", "sizings")).as_posix()
 RUN_FILE = "run.json"
 QUIET_SECONDS = 600
 TOKENLESS_QUIET_SECONDS = 3600
-STATUS_ROOTS = [RECORD_DIR_ROOT, SIZING_ROOT, Path(home_dir("", "handoffs")).as_posix(),"docs/plans", "docs/delivery"]
+STATUS_ROOTS = [
+    RECORD_DIR_ROOT, SIZING_ROOT, Path(home_dir("", "handoffs")).as_posix(), "docs/plans", "docs/delivery",
+    run_artifacts.EVIDENCE_ROOT,
+]
+HELD_MARKER_ROOT = ".coordinator-local/reap-held"
+RUN_STAGE_FILE = "run-stage.json"
+MINTED_STAGE = "minted"
 
 
 def abandoned_run_ids(
@@ -55,19 +62,21 @@ def abandoned_run_ids(
     halted: Optional[set[str]] = None,
     late_written: Optional[set[str]] = None,
     artifact_runs: Optional[set[str]] = None,
+    minted: Optional[set[str]] = None,
 ) -> list[str]:
     """Sorted run ids with a changed file directly under ``<record_root>/<run_id>/`` or named in
     ``artifact_runs`` (runs owning a dirty plan, handoff, sidecar, delivery note or sizing), absent
     from ``live_run_ids`` (live AND claimed tokens), and ended: newest mtime older than the token
     TTL, or older than ``QUIET_SECONDS`` when the run is superseded (a key of ``later_stamp_of``),
     halt-marked (in ``halted``) or has a tracked top-level file modified after its commit (in
-    ``late_written``). Both discovery routes share one ``ended`` rule. A run id with no
-    ``newest_mtime`` entry is not abandoned. Pure."""
+    ``late_written``), or a ``minted`` run (never fired; a candidate without a changed file)
+    quiet for ``QUIET_SECONDS``. A run id with no ``newest_mtime`` entry is not abandoned. Pure."""
     prefix = record_root.rstrip("/") + "/"
     superseded = later_stamp_of or {}
     halted = halted or set()
     late_written = late_written or set()
-    candidates: set[str] = set(artifact_runs or ())
+    minted = minted or set()
+    candidates: set[str] = set(artifact_runs or ()) | minted
     for rel in changed:
         if not rel.startswith(prefix):
             continue
@@ -84,7 +93,9 @@ def abandoned_run_ids(
         # A run mid-flight always holds a token, so an hour of tokenless quiet means it ended.
         if age > TOKENLESS_QUIET_SECONDS:
             return True
-        return age > QUIET_SECONDS and (run_id in superseded or run_id in halted or run_id in late_written)
+        return age > QUIET_SECONDS and (
+            run_id in minted or run_id in superseded or run_id in halted or run_id in late_written
+        )
 
     return sorted(run_id for run_id in candidates - live_run_ids if ended(run_id))
 
@@ -162,6 +173,53 @@ def _status(root: Path):
         if kind != b"?":
             tracked.add(path)
     return Snapshot(changed, ignored, set(), roots), tracked
+
+
+def _held_marker(root: Path, run_id: str) -> Path:
+    return root / HELD_MARKER_ROOT / f"{run_id}.json"
+
+
+def _already_reaped(root: Path, run_id: str, newest: Optional[float], changed: set[str]) -> bool:
+    """True when this run was reaped before and nothing new has landed in it: its tracked
+    ``outcome.json`` reads ``abandoned`` and is itself committed (not in ``changed``), or a non-host
+    repo's held-back marker is at least as new as the run's newest file. Two stats and one read."""
+    outcome = run_artifacts.outcome_rel(run_id)
+    if outcome not in changed and run_artifacts.read_tracked_outcome(root, run_id).get("state") == "abandoned":
+        return True
+    try:
+        held_at = _held_marker(root, run_id).stat().st_mtime
+    except OSError:
+        return False
+    return newest is not None and newest <= held_at
+
+
+def _minted_runs(root: Path, only: Optional[set[str]], now: float) -> dict[str, float]:
+    """``{run_id: last_activity_epoch}`` for record dirs whose ``run-stage.json`` stage is ``minted``
+    and quiet beyond ``QUIET_SECONDS``. One ``scandir`` of the record root and one small file read per
+    dir; no spawn. ``only`` restricts the scan to those ids."""
+
+    out: dict[str, float] = {}
+    try:
+        with os.scandir(root / RECORD_DIR_ROOT) as it:
+            entries = [e for e in it if e.is_dir() and (only is None or e.name in only)]
+    except OSError:
+        return out
+    for entry in entries:
+        stage_path = Path(entry.path) / RUN_STAGE_FILE
+        try:
+            data = json.loads(stage_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or data.get("stage") != MINTED_STAGE:
+                continue
+            stamp = data.get("last_activity_at")
+            try:
+                at = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+            except (AttributeError, ValueError):
+                at = stage_path.stat().st_mtime
+        except (OSError, ValueError):
+            continue
+        if now - at > QUIET_SECONDS:
+            out[entry.name] = at
+    return out
 
 
 def _top_level_run(rel: str) -> Optional[str]:
@@ -274,6 +332,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             newest[run_id] = max(mtimes)
 
     now = time.time()
+    for run_id in sorted(run_ids):
+        if _already_reaped(root, run_id, newest.get(run_id), snapshot.changed):
+            run_ids.discard(run_id)
+            artifact_runs.discard(run_id)
+            newest.pop(run_id, None)
+    minted = {
+        r: at for r, at in _minted_runs(root, set(wanted) if wanted else None, now).items()
+        if not _already_reaped(root, r, at, snapshot.changed)
+    }
+    for run_id, at in minted.items():
+        newest.setdefault(run_id, at)
+    run_ids |= set(minted)
     active = [r for r in records if _token_active(root, r, newest, now)]
     live_ids = {r["run_id"] for r in active}
     workflow_live = {r for r in run_ids - live_ids if run_stage_live(root, r)}
@@ -302,12 +372,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         halted=halted,
         late_written=late_written,
         artifact_runs=artifact_runs,
+        minted=set(minted),
     )
     if wanted is not None:
         reaped = [r for r in reaped if r in set(wanted)]
         run_ids &= set(wanted)
     # Asked only of runs already selected, so a call with nothing to reap pays no liveness probe.
-    owner_held = {r for r in reaped if run_owner_holds(root, r)}
+    # A never-fired minted run has no stage to protect; its submitting session may outlive it.
+    owner_held = {r for r in reaped if r not in minted and run_owner_holds(root, r)}
     reaped = [r for r in reaped if r not in owner_held]
     workflow_live |= owner_held
     base["skipped"] = [
@@ -323,7 +395,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     artifact_gone: list[str] = []
     ignored_state: list[str] = []
     for run_id in reaped:
-        kept, state_files = run_artifacts.split_run_state(files[run_id])
+        kept, state_files = run_artifacts.split_run_state(files.get(run_id, []))
         paths += kept
         ignored_state += state_files
         if params.get("dry_run") is not True and process_artifact_policy.hosts_coordinator_state(root):  # a dry run writes nothing
@@ -362,6 +434,26 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if params.get("dry_run") is True:
         return base
 
+    if not process_artifact_policy.hosts_coordinator_state(root):
+        held_back = []
+        for run_id in reaped:
+            for path in [*files.get(run_id, ()), *base["artifacts"].get(run_id, ())]:
+                if path not in held_back:
+                    held_back.append(path)
+                    base["skipped"].append(
+                        {"run_id": run_id, "reason": process_artifact_policy.WITHHELD_REASON, "path": path}
+                    )
+        markers = []
+        for run_id in reaped:
+            try:
+                _held_marker(root, run_id).parent.mkdir(parents=True, exist_ok=True)
+                _held_marker(root, run_id).write_text(json.dumps({"run_id": run_id, "held_at": now}), encoding="utf-8")
+            except OSError:
+                continue  # no marker: the run is re-reaped next call, never reported as held
+            markers.append(f"{HELD_MARKER_ROOT}/{run_id}.json")
+        process_artifact_policy.exclude_locally(root, [*held_back, *markers])
+        return base
+
     from coordinator_core.ops.dispatch_emit import run_close
 
     for run_id in reaped:
@@ -369,18 +461,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             run_token.discard(root, run_id)
         if run_id not in halted:
             run_close.close_builds_held_after(root, run_id, "research-run-reaped")
-
-    if not process_artifact_policy.hosts_coordinator_state(root):
-        held_back = []
-        for run_id in reaped:
-            for path in [*files[run_id], *base["artifacts"].get(run_id, ())]:
-                if path not in held_back:
-                    held_back.append(path)
-                    base["skipped"].append(
-                        {"run_id": run_id, "reason": process_artifact_policy.WITHHELD_REASON, "path": path}
-                    )
-        process_artifact_policy.exclude_locally(root, held_back)
-        return base
 
     from coordinator_core.ops.dispatch_emit import landing_integrity
     from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_halted_trailer_lines

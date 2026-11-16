@@ -756,9 +756,11 @@ def _check_kill_switch_marker() -> Layer:
 
 _GIT_HOOK_GEN_RE = re.compile(r"coordinator-hook-gen: (\d+)")
 
-#: The two hooks `git_hook_install` emits, paired with the installer entrypoint
-#: that regenerates each. Order is the order they are repaired in.
-_GEN_HOOKS = ("prepare-commit-msg", "post-commit")
+#: Hook name -> `git_hook_install` entrypoint that regenerates it. The single
+#: source for both the staleness verdict and the repair: a hook with no
+#: installer (post-commit is an inert no-op) is never judged, so BROKEN always
+#: means `--fix` can clear it.
+_GEN_INSTALLERS = {"prepare-commit-msg": "ensure_prepare_commit_msg_hook"}
 
 
 def _git_hook_install():
@@ -803,7 +805,7 @@ def _stale_generation_hooks(ghi) -> tuple[List[tuple], Optional[int]]:
         if not key.startswith("repos.") or not path:
             continue
         name = key.split(".", 1)[1]
-        for hook in _GEN_HOOKS:
+        for hook in _GEN_INSTALLERS:
             f = Path(path) / ".git" / "hooks" / hook
             if not f.is_file():
                 continue  # absent is not stale — never install where nothing was
@@ -886,9 +888,7 @@ def _fix_stale_hook_generations(fix_report: List[str]) -> None:
     if bin_dir is None:
         return
 
-    entry = {
-        "prepare-commit-msg": getattr(ghi, "ensure_prepare_commit_msg_hook", None),
-    }
+    entry = {hook: getattr(ghi, attr, None) for hook, attr in _GEN_INSTALLERS.items()}
     # Hold the emitter's own directory on sys.path for the WHOLE sweep. The
     # installer lazy-imports siblings out of `coordinator/bin/lib` while it
     # runs, and `_git_hook_install` pops the path before returning -- so
@@ -1325,6 +1325,10 @@ def run_doctor(
         _fix_bare_hook_commands(fix_report)
         _fix_stale_hook_generations(fix_report)
         _fix_box_identity(fix_report)
+        # Layers were evaluated before the repairs; re-judge the one the repair changes.
+        for i, layer in enumerate(report.layers):
+            if layer.name == "Git-hook generation currency":
+                report.layers[i] = _check_hook_generation_currency()
 
     return report, fix_report
 
@@ -1359,7 +1363,8 @@ def render_report(report: DoctorReport, fix_report: List[str]) -> str:
         lines.append("All layers healthy. Nothing to fix.")
     elif any_broken:
         lines.append("BROKEN layer(s) found above — hand-fix per the remediation line, "
-                      "or re-run with --fix for the one auto-repairable class (bare hook commands).")
+                      "or re-run with --fix for the auto-repairable classes (bare hook commands, "
+                      "stale prepare-commit-msg hooks, missing box identity).")
     else:
         lines.append("Some layer(s) could not be evaluated (UNKNOWN) — see above; "
                       "absence of a check is not the same as a clean result.")

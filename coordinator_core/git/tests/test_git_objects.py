@@ -611,3 +611,9 @@ def test_opening_a_store_records_it_only_under_the_isolated_settings_home(
     assert registry.parent == settings_home()
     assert "home-quarantine" in str(registry)
     assert [p.read_text(encoding="utf-8").strip() for p in registry.iterdir()] == [str(common)]
+
+    (entry,) = registry.iterdir()
+    os.utime(entry, (1_000_000, 1_000_000))
+    monkeypatch.setattr(git_objects, "_RECORDED_READ_STORES", set())
+    git_objects._record_read_store(common)
+    assert entry.stat().st_mtime > 1_000_000

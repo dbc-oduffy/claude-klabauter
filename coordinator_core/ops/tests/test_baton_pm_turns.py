@@ -350,3 +350,39 @@ def test_compact_without_fresh_injection_record_is_unmarked(tmp_path: Path, monk
     _inject_log(tmp_path, monkeypatch, _rec("sid-old", "run-2", 1))
     PT.append_turn("hello there friend", session_id="sid-old")
     assert "injected" not in json.loads((sdir / PT.PM_TURNS_FILENAME).read_text().splitlines()[-1])
+
+
+def _archived(tmp_path: Path, name: str, prompts: list) -> Path:
+    adir = tmp_path / HUB_NAME / ".archive" / name
+    adir.mkdir(parents=True)
+    (adir / PT.PM_TURNS_FILENAME).write_text(
+        "".join(json.dumps({"turn": i, "ts": "t", "prompt": p}) + "\n" for i, p in enumerate(prompts)),
+        encoding="utf-8")
+    return adir
+
+
+def test_read_turns_falls_back_to_the_archived_session_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / HUB_NAME / s)
+    adir = _archived(tmp_path, "sid-arc-2026-11-09", ["old stop"])
+    _archived(tmp_path, "sid-arc-2026-11-10", ["newer stop"])
+    out = PT.read_turns(session_id="sid-arc")
+    assert out["ok"] is True and out["text"] == "newer stop"
+    assert out["log_path"] == str(adir.parent / "sid-arc-2026-11-10" / PT.PM_TURNS_FILENAME)
+
+
+def test_live_log_wins_over_the_archive_and_archive_is_never_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _session(tmp_path, monkeypatch, "sid-live")
+    adir = _archived(tmp_path, "sid-live-2026-11-09", ["archived"])
+    before = (adir / PT.PM_TURNS_FILENAME).read_bytes()
+    PT.append_turn("live", session_id="sid-live")
+    assert PT.read_turns(session_id="sid-live")["text"] == "live"
+    assert (adir / PT.PM_TURNS_FILENAME).read_bytes() == before
+
+
+def test_archive_fallback_matches_exact_sid_and_date_suffix_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / HUB_NAME / s)
+    _archived(tmp_path, "sid-x-extra-2026-11-09", ["other session"])
+    _archived(tmp_path, "sid-x-notadate", ["not dated"])
+    out = PT.read_turns(session_id="sid-x")
+    assert out["ok"] is False and out["count"] == 0
+    assert out["reason"] == "no PM turns recorded for this session"

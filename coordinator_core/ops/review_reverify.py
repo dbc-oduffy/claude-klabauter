@@ -46,7 +46,9 @@ plus created paths) and all withheld by a readable foreign halt record; an unrea
 in-footprint cause file, or no cause files leaves the node ``unattributed``. ``foreign_red``
 (``{node id: [culprit paths]}``) carries the remaining nodes whose every cause file is outside the
 footprint and dirty versus HEAD, whether or not a halt record holds it (unreadable record excepted): the
-failure is shared-tree contamination, evidence rather than a blocker; a node green at the run base
+failure is shared-tree contamination, evidence rather than a blocker; so is a node with no cause file in
+a test file outside the footprint that reaches no footprint path (``_reaches``: imports followed
+transitively, string literals, ``conftest.py``) and whose failure text names none; a node green at the run base
 (``failing_at_base`` supplied) classes there only when every such cause file is untracked. Absent ``cause_files``
 they are derived (``_derive_cause_files``); a bare file name resolving nowhere falls back to the sole
 dirty tracked path of that basename. A failing node id's
@@ -809,6 +811,90 @@ def _sibling_owned(
     return owned, foreign_red
 
 
+_REACH_CAP = 400
+
+
+def _import_targets(repo_root: Path, rel: str) -> Optional[Set[str]]:
+    """Repo ``.py`` files ``rel`` imports, each import resolved against the directories above ``rel``
+    (a project nested under the root puts its packages there), plus every parent package's
+    ``__init__``. ``None`` when ``rel`` is unreadable or unparseable."""
+    try:
+        tree = ast.parse((repo_root / rel).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        return None
+    records, _ = collect_imports(tree)
+    parts = rel.split("/")[:-1]
+    out: Set[str] = set()
+    for rec in records:
+        if rec.level:
+            if rec.level - 1 > len(parts):
+                continue
+            anchors = ["/".join(parts[: len(parts) - (rec.level - 1)])]
+        else:
+            anchors = ["/".join(parts[:i]) for i in range(len(parts), -1, -1)]
+        base = rec.module or ""
+        mods = [base, *(f"{base}.{n}" if base else n for n in rec.names if n != "*")]
+        for anchor in anchors:
+            for mod in filter(None, mods):
+                segs = mod.split(".")
+                for i in range(1, len(segs) + 1):
+                    stem = "/".join(([anchor] if anchor else []) + segs[:i])
+                    out.update(c for c in (f"{stem}.py", f"{stem}/__init__.py") if (repo_root / c).is_file())
+    return out
+
+
+def _reaches(repo_root: Path, test_file: str, footprint: Set[str]) -> bool:
+    """True when ``test_file`` can reach a footprint path: it imports one directly or through other repo
+    modules, or a string literal in a reached module names one. A ``conftest.py`` above it counts as
+    reached. Fails closed (True) when more than ``_REACH_CAP`` modules are reached or ``test_file`` is
+    unreadable."""
+    parts = test_file.split("/")[:-1]
+    seeds = [test_file, *(f"{'/'.join(parts[:i])}/conftest.py".lstrip("/") for i in range(len(parts) + 1))]
+    todo = [s for s in dict.fromkeys(seeds) if s == test_file or (repo_root / s).is_file()]
+    seen: Set[str] = set()
+    named = sorted(footprint)
+    while todo:
+        cur = todo.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        if cur in footprint or len(seen) > _REACH_CAP:
+            return True
+        found = _import_targets(repo_root, cur)
+        if found is None:
+            if cur == test_file:
+                return True
+            continue
+        if _literal_named(repo_root, cur, named):
+            return True
+        todo.extend(sorted(found - seen))
+    return False
+
+
+def _unreachable_red(
+    repo_root: Path, nodes: List[str], footprint: Set[str], failing_output: Optional[Dict[str, str]],
+    base_green: Set[str],
+) -> Dict[str, List[str]]:
+    """``{node: [test file]}`` for nodes in a test file the run never wrote whose failure text names no
+    footprint path and that reaches none through its imports or literals (``_reaches``): the diff cannot
+    have caused them, whether or not the file is dirty. A node green at the run base is the run's own, so
+    it is never returned."""
+    own = names_own_path_in_output(failing_output, nodes, sorted(footprint))
+    out: Dict[str, List[str]] = {}
+    reached: Dict[str, bool] = {}
+    for node in nodes:
+        test_file = _node_file(node)
+        if node in own or node in base_green or test_file in footprint or not test_file.endswith(".py"):
+            continue
+        if not (repo_root / test_file).is_file():
+            continue
+        if test_file not in reached:
+            reached[test_file] = _reaches(repo_root, test_file, footprint)
+        if not reached[test_file]:
+            out[node] = [test_file]
+    return out
+
+
 def _open_probe(
     repo_root: Path, snapshot_dir: Path, ids: List[str], implicated: Dict[str, List[str]],
     created_set: Set[str], sidecars: List[str], run_id: str = "", plan_path: str = "",
@@ -1080,6 +1166,12 @@ def review_reverify(
         repo_root, candidates, cause_files, {*rels, *created}, run_id, plan_path, untracked_only=base_green,
         failing_output=failing_output,
     )
+    rest = [n for n in candidates if n in unattributed and not (cause_files or {}).get(n)]
+    if rest:
+        foreign_red = {
+            **foreign_red,
+            **_unreachable_red(repo_root, rest, {*rels, *created, *outside}, failing_output, base_green),
+        }
     if sibling_owned or foreign_red:
         unattributed = [n for n in unattributed if n not in sibling_owned and n not in foreign_red]
     unmeasured: List[str] = []

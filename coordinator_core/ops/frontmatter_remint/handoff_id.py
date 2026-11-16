@@ -7,11 +7,10 @@ the cockpit wire never publishes. The mint site is guarded here, not left to the
 
 from __future__ import annotations
 
-import contextlib
 import os
 import re
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any, Mapping
 
 import yaml
 
@@ -37,14 +36,8 @@ from coordinator_core.ops.frontmatter_remint._contract import Refused, Resolved
 _MINTED_ID_RE = re.compile(r"^hnd-(?!placeholder-replace-with)[a-z0-9-]+-[0-9a-f]{6}$")
 
 # Gravestone (DR-344): the `scan_citers` git-grep over state/ + archive/handoffs measured 484-719ms
-# process time, over the 500ms kill bar, and was deleted. A rebuild reads a write-time citer index,
-# never a scan.
-
-
-@contextlib.contextmanager
-def primed(old_ids: Iterable[str], repo_root: Path) -> Iterator[None]:
-    """No-op: the citer scan this primed is deleted; kept only until the caller drops the call."""
-    yield
+# process time, over the 500ms kill bar, and was deleted. No caller needs citers: `resolve` keeps the
+# old id as an alias that every handoff_id index resolves, so no citer dangles.
 
 
 def resolve(path: Path, fm: Mapping[str, Any], repo_root: Path) -> Resolved | Refused:
