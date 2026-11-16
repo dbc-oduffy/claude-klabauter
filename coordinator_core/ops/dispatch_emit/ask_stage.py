@@ -1767,7 +1767,7 @@ def stage(
     kept_ids: set[str] = set()
     served_widen_rows: set[str] = set()
     refire_prior = _refire_prior(record, resume_snap)
-    refire_notes = _refire_notes(root, run_id, refire_prior) if refire_prior else []
+    refire_notes = _refire_notes(root, run_id, refire_prior) if refire_prior or ledger_resume else []
     fresh_rows: dict[str, tuple[tuple[str, ...], str]] = {}
     try:
         sizing_family = stage_family.resolve((run_sizing or {}).get("family"))

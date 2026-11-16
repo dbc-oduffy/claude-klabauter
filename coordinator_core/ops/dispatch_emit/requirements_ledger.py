@@ -2664,6 +2664,20 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "run live, verify already staged: the run's late-row read has passed, so no leg of this run "
             "executes or reads this revision; " + out["note"].replace("run finished: ", "", 1) + " Fire next.call to land it."
         )
+    elif _script_has_late_leg(dir_) is False:
+        if _rows_briefed(dir_):
+            out["briefed"] = True
+        out["will_not_read"] = True
+        out["lands_on_refire"] = True
+        out.update(_refire(ledger.sizing_rel, root))
+        out["note"] = (
+            "run live, its script has no late-row leg: no leg of this run executes or reads this revision; "
+            + out["note"].replace("run finished: ", "", 1) + " Fire next.call to land it."
+        )
+        refused.append({
+            "input": "note" if params.get("note") else "verbatim" if params.get("verbatim") else "revision",
+            "reason": "run_will_not_read",
+        })
     else:
         if _rows_briefed(dir_):
             out["briefed"] = True
@@ -2685,7 +2699,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         refused.append({"input": "note", "paths": note_refused["paths"], "reason": note_refused["reason"]})
     applied += [
         k for k in ("note", "all_of_pm_ask")
-        if params.get(k) is not None and params.get(k) != "" and not (k == "note" and note_refused)
+        if params.get(k) is not None and params.get(k) != ""
+        and not (k == "note" and (note_refused or out.get("will_not_read")))
     ]
     return _mutation_reply(tuple(applied), tuple(refused), params["run_id"], **out)
 
@@ -2740,15 +2755,20 @@ def _mutation_reply(applied: tuple, refused: tuple, target: str, **fields) -> di
     return out
 
 
-def late_rows(repo_root: Path, run_id: str) -> list[str]:
-    """Ids of the run's live ledger items its staged manifest holds no work for (not in
-    `manifest.json` `ledger_item_ids`, not withheld), in arrival order. [] with no readable manifest.
+def late_rows(repo_root: Path, run_id: str, served: Optional[Sequence[str]] = None) -> list[str]:
+    """Ids of the run's live ledger items no work is held for, in arrival order. With `served` (the
+    register ids of the rows the script dispatched) an item is late unless a dispatched row serves it
+    or it is withheld; the manifest is not read. Without it, an item absent from `manifest.json`
+    `ledger_item_ids` and not withheld; [] with no readable manifest.
     Two file reads, no spawn; LedgerRefused on an unsafe run_id or unreadable sizing."""
     dir_ = run_dir(repo_root, run_id)
-    try:
-        staged = json.loads((dir_ / "manifest.json").read_text(encoding="utf-8")).get("ledger_item_ids")
-    except (OSError, ValueError, AttributeError):
-        return []
+    if served is None:
+        try:
+            staged = json.loads((dir_ / "manifest.json").read_text(encoding="utf-8")).get("ledger_item_ids")
+        except (OSError, ValueError, AttributeError):
+            return []
+    else:
+        staged = served
     ledger = read_ledger(repo_root, dir_)
     if ledger is None:
         return []
@@ -2770,13 +2790,15 @@ def verify_staged(dir_: Path) -> bool:
 def _late_rows_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "workflow.late_rows" (MUTATING only for `verify_read`): params `run_id`, optional
     `verify_read` (the verify leg's read; stamps `verify-late-read` before reading, so a revise landing
-    after the read answers lands_on_refire). Replies `{late_rows: [id]}`; a refused request replies
+    after the read answers lands_on_refire), optional `served` (register ids of the dispatched rows).
+    Replies `{late_rows: [id]}`; a refused request replies
     `{"error": str}`."""
     if repo_root is None:
         return {"error": f"{OP_LATE_ROWS} requires repo_root"}
     refusal = validate_params(
         OP_LATE_ROWS, params,
-        (Field("run_id", "nonempty_str", required=True), Field("verify_read", "bool")), strict=True,
+        (Field("run_id", "nonempty_str", required=True), Field("verify_read", "bool"), Field("served", "str_list")),
+        strict=True,
     )
     if refusal is not None:
         return refusal
@@ -2788,9 +2810,23 @@ def _late_rows_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             dir_ = run_dir(root, params["run_id"])
             if dir_.is_dir():
                 atomic_write_bytes(dir_ / VERIFY_READ_MARKER, b"1\n", preserve_mode=False)
-        return {LATE_ROWS_FIELD: late_rows(root, params["run_id"])}
+        return {LATE_ROWS_FIELD: late_rows(root, params["run_id"], params.get("served"))}
     except LedgerRefused as exc:
         return {"error": str(exc)}
+
+
+_LATE_LEG_MARKER = "_lateLeg = async (_ids) =>"
+
+
+def _script_has_late_leg(dir_: Path) -> Optional[bool]:
+    """True/False whether the run's emitted script carries the late-row leg; None with no readable
+    script (a run not yet emitted), which keeps the promise."""
+    from coordinator_core.ops.dispatch_emit.halt_resume_build import COMPOSED_SCRIPT_FILE
+
+    try:
+        return _LATE_LEG_MARKER in (dir_ / COMPOSED_SCRIPT_FILE).read_text(encoding="utf-8")
+    except OSError:
+        return None
 
 
 def _rows_briefed(dir_: Path) -> bool:

@@ -538,6 +538,27 @@ _PACK_LATCH_BYPASS: "contextvars.ContextVar[frozenset[str]]" = contextvars.Conte
 )
 
 
+_READ_BUDGET: "contextvars.ContextVar[Optional[float]]" = contextvars.ContextVar("pack_read_budget", default=None)
+
+
+@contextmanager
+def read_budget(secs: float):
+    """Cap every object read in this scope by one absolute deadline `secs` from now (nested scopes
+    keep the earlier deadline). Each read's wall is `min(remaining, PACK_READ_DEADLINE_SECS)`, no
+    re-open retry runs, and expiry raises `PackReadDeadline` without arming the repo-wide stall
+    cooldown: a caller's cap is not evidence the drive stalled.
+
+    Trap: an expired read leaves its `run_bounded` key stalled until the worker returns, so a later
+    unbudgeted read of the same sha gets the stalled default and does arm the cooldown."""
+    deadline = _pack_clock() + secs
+    outer = _READ_BUDGET.get()
+    token = _READ_BUDGET.set(deadline if outer is None else min(outer, deadline))
+    try:
+        yield
+    finally:
+        _READ_BUDGET.reset(token)
+
+
 _PACK_TYPE_NAMES = {1: "commit", 2: "tree", 3: "blob", 4: "tag"}
 _PACK_TYPE_NUMS = {v: k for k, v in _PACK_TYPE_NAMES.items()}
 
@@ -1357,13 +1378,15 @@ def _read_pack_object_deadlined(
     One expiry re-opens the pack and retries; a second raises `PackReadDeadline`."""
     if getattr(_PACK_DEADLINE, "at", None) is not None:
         return _read_pack_object_at(common_dir, pack_path, pack_bytes, offset)
+    budget = _READ_BUDGET.get()
     try:
         for attempt in (0, 1):
-            _PACK_DEADLINE.at = _pack_clock() + PACK_READ_DEADLINE_SECS
+            now = _pack_clock()
+            _PACK_DEADLINE.at = now + PACK_READ_DEADLINE_SECS if budget is None else min(budget, now + PACK_READ_DEADLINE_SECS)
             try:
                 return _read_pack_object_at(common_dir, pack_path, pack_bytes, offset)
             except PackReadDeadline:
-                if attempt:
+                if attempt or budget is not None:
                     raise
                 _drop_scoped_pack_map(pack_path)
                 pack_bytes = _read_pack_bytes(pack_path)
@@ -1384,6 +1407,13 @@ def _under_read_wall(kind: str, common_dir: Path, sha: str, fn):
         raise PackReadDeadline(
             f"{PACK_READ_STALLED_ADVISORY}: pack reads under {common_dir} are failing fast after a stall"
         )
+    budget = _READ_BUDGET.get()
+    wall = PACK_READ_DEADLINE_SECS
+    if budget is not None:
+        remaining = budget - _pack_clock()
+        if remaining <= 0:
+            raise PackReadDeadline(f"read budget spent before {kind} of {sha}")
+        wall = min(remaining, wall)
     probes: list = []
     probe_token = _PACK_PROBES.set(probes)
     try:
@@ -1402,13 +1432,15 @@ def _under_read_wall(kind: str, common_dir: Path, sha: str, fn):
     # repo's packs concurrently. The per-repo cooldown above is what stops a stalled drive
     # costing every distinct sha its own full wait.
     try:
-        out = run_bounded(f"{kind}:{ckey}:{sha}", _work, deadline=PACK_READ_DEADLINE_SECS, default=_PACK_STALLED)
+        out = run_bounded(f"{kind}:{ckey}:{sha}", _work, deadline=wall, default=_PACK_STALLED)
     except PackReadDeadline as exc:
         if not probes:
             raise
         report = _probe_report(probes)
         _log.warning("pack read deadline under %s: %s", common_dir, report)
         raise PackReadDeadline(f"{exc}; {report}") from exc
+    if out is _PACK_STALLED and budget is not None and wall < PACK_READ_DEADLINE_SECS:
+        raise PackReadDeadline(f"read budget exhausted during {kind} of {sha} after {wall:.3f}s")
     if out is _PACK_STALLED:
         _PACK_STALL_UNTIL[ckey] = _pack_clock() + PACK_STALL_COOLDOWN_SECS
         detail = f"; {_probe_report(probes)}" if probes else ""

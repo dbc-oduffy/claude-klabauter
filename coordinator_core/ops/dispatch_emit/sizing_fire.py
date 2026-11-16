@@ -48,6 +48,7 @@ from coordinator_core.sizing_route_table import _BASE_ROUTE_BY_TSHIRT
 ARM_XS, ARM_S, ARM_M_PLUS, ARM_ROADMAP = "xs", "s", "m_plus", "roadmap"
 
 OUTSIDE_CREDIT_REASON = "landed outside the executor at {sha}"
+OUTSIDE_CREDIT_BUDGET_SECS = 0.3
 ARM_ROUTE = {ARM_XS: "dispatch", ARM_S: "spec-dispatch", ARM_M_PLUS: "plan", ARM_ROADMAP: "roadmap"}
 _PM_DECISION = "pm-decision"
 _ROADMAP_EXIT = "roadmap"
@@ -447,7 +448,8 @@ def resumable_plan(
             from coordinator_core.ops.dispatch_emit.plan_row_coding import rows_landed_outside_executor
 
             outside = rows_landed_outside_executor(
-                root, plan_rel, [r for r in rows if r.get("id") in open_ids and r.get("id") not in named]
+                root, plan_rel, [r for r in rows if r.get("id") in open_ids and r.get("id") not in named],
+                budget_secs=OUTSIDE_CREDIT_BUDGET_SECS,
             )
             landed_open += tuple((i, outside[i]) for i in open_ids if i in outside)
             reasons.update({i: OUTSIDE_CREDIT_REASON.format(sha=outside[i]) for i in open_ids if i in outside})

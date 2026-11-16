@@ -6131,7 +6131,7 @@ def compose_ask_script(
     late_read_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         f"Run `{_INVOKE} {OP_LATE_ROWS} '",
-        "js:JSON.stringify(_final ? { run_id: _runId, verify_read: true } : { run_id: _runId })",
+        "js:JSON.stringify({ run_id: _runId, ...(_final ? { verify_read: true } : {}), ..._lateServedParam() })",
         f"'{_repo_flag(repo_root)}` once and return the {LATE_ROWS_FIELD} array of its JSON reply as "
         f"{LATE_ROWS_FIELD}. Commit nothing.",
     )
@@ -6145,6 +6145,16 @@ def compose_ask_script(
     b.append("  let _verifyLateIds = [];")
     b.append("  let _lateUnplanned = [];")
     b.append("  let _lateLeg = null;")
+    # The register ids of the rows this script dispatched, read at call time so a late row adopted by
+    # `_lateLeg` is served. Omitted on a ledger resume (landed rows are credited, not in `_manifest.rows`)
+    # and when no row names a register id: `workflow.late_rows` then diffs the disk manifest.
+    b.append(
+        "  const _lateServedParam = () => {\n"
+        "    if (_resumeLedger) return {};\n"
+        "    const _s = (_manifest?.rows ?? []).flatMap((r) => Array.isArray(r.register_rows) ? r.register_rows.map(String) : []);\n"
+        "    return _s.length ? { served: [...new Set(_s)] } : {};\n"
+        "  };"
+    )
     b.append(
         "  const _lateRead = async (_final) => {\n"
         f"    try {{ const _r = await {late_read_call}; "
@@ -6260,17 +6270,19 @@ def compose_ask_script(
             "    const _lateSaved = [_stagedManifest, _relayGap, _diskHalt, _stageRefusal];\n"
             "    _stagedManifest = null; _relayGap = null; _diskHalt = null; _stageRefusal = null;\n"
             "    let _lateAdded = []; let _lateTry = 0; let _lateReply = null;\n"
+            "    const _lateStaged = (x) => !!x?.stage_reply && typeof x.stage_reply === 'object' && Object.keys(x.stage_reply).length > 0;\n"
             f"    do {{ _lateReply = await {late_replan_call}; _lateTry++; "
             "_lateAdded = (Array.isArray(_lateReply?.added_rows) ? _lateReply.added_rows : [])"
             ".filter((s) => typeof s === 'string' && s.trim()); } "
-            f"while (!_lateAdded.length && _lateTry < {MAX_IN_RUN_REMEDY_ATTEMPTS});\n"
-            "    if (_lateAdded.length) { await _adoptStageReply(_lateReply?.stage_reply); }\n"
+            f"while (!_lateAdded.length && !_lateStaged(_lateReply) && _lateTry < {MAX_IN_RUN_REMEDY_ATTEMPTS});\n"
+            "    if (_lateAdded.length || _lateStaged(_lateReply)) { await _adoptStageReply(_lateReply?.stage_reply); }\n"
             "    const _lateM = (_stagedManifest && !_stagedManifest.error && !_stageRefusal && !_relayGap && !_diskHalt) "
             "? _stagedManifest : null;\n"
             "    [_stagedManifest, _relayGap, _diskHalt, _stageRefusal] = _lateSaved;\n"
             "    if (_lateM) {\n"
             "      const _u = (a, c) => [...new Map([...(a ?? []), ...(c ?? [])].map((x) => [JSON.stringify(x), x])).values()];\n"
-            "      const _lateRows = (_lateM.rows ?? []).filter((r) => _lateAdded.includes(String(r.id)));\n"
+            "      const _lateRows = (_lateM.rows ?? []).filter((r) => _lateAdded.includes(String(r.id)) || (!_lateKeep.includes(String(r.id)) "
+            "&& (Array.isArray(r.register_rows) ? r.register_rows : []).some((x) => _ids.map(String).includes(String(x)))));\n"
             "      _manifest = { ..._lateM, rows: [..._manifest.rows, ..._lateRows], "
             "review_declared_paths: _u(_manifest.review_declared_paths, _lateM.review_declared_paths), "
             f"{_REVIEW_CODE_KEY}: _u(_manifest.{_REVIEW_CODE_KEY}, _lateM.{_REVIEW_CODE_KEY}), "

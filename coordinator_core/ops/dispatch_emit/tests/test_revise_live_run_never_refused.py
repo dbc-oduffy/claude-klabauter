@@ -49,6 +49,16 @@ def test_live_revise_never_refuses_a_row_or_note(tmp_path, monkeypatch, tshirt, 
     assert "refire fresh" not in json.dumps(out)
 
 
+def test_live_revise_refuses_only_when_the_script_lacks_the_late_leg(tmp_path, monkeypatch):
+    root = _repo(tmp_path, "M")
+    _brief(root)
+    (record_dir(root, RUN) / "resume-script.workflow.mjs").write_text("export default 1;\n", encoding="utf-8")
+    monkeypatch.setattr(run_token, "is_live", lambda *_a, **_k: True)
+    out = rl._handler({"run_id": RUN, "verbatim": "also cover Windows"}, repo_root=root)
+    assert out["will_not_read"] is True
+    assert {"input": "verbatim", "reason": "run_will_not_read"} in out["refused"]
+
+
 def test_briefed_live_revise_before_verify_names_the_late_row_leg_and_writes_no_delta_file(tmp_path, monkeypatch):
     root = _repo(tmp_path, "M")
     _brief(root)

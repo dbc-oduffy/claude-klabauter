@@ -89,6 +89,10 @@ _bspec.loader.exec_module(bridge)
 
 @pytest.fixture
 def box():
+    # The socket-lost watch is the darwin/linux bridge path only (`_is_win()` gates it off; Windows
+    # bridges are named pipes), and win32 Python has no `socket.AF_UNIX` nor a `/tmp` to bind under.
+    if not hasattr(socket, "AF_UNIX"):
+        pytest.skip("bridge socket rebind is the AF_UNIX (non-win32) bridge path; win32 bridges use named pipes")
     d = Path(_tempfile.mkdtemp(prefix="pri-", dir="/tmp"))  # AF_UNIX path limit
     (d / "sessions").mkdir()
     yield d

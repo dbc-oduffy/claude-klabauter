@@ -9,6 +9,7 @@ commit outside the run already landed, by an in-process first-parent walk (zero 
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Optional
@@ -612,14 +613,20 @@ def outside_landing_attribution(
     }
 
 
-def rows_landed_outside_executor(worktree_root: Path, plan_path: str, rows: list) -> dict:
+def rows_landed_outside_executor(
+    worktree_root: Path, plan_path: str, rows: list, *, budget_secs: Optional[float] = None
+) -> dict:
     """Row id -> newest landing sha for each ``open`` row of ``plan_path`` whose every declared write
     a commit at or before HEAD already landed. The walk is in-process (zero spawns) and bounded by the
     plan file's creation commit, itself excluded, so a write at or before the plan never counts. A row with no ``writes`` is absent.
 
     Trap: another plan's checkpoint or another run's halt-record commit landing a shared file is that
     plan's work, not this row's, so such commits are never credited (``skip_foreign_runs``). Merge
-    commits and commits not naming this plan (``Deliverable-Id`` or ``Halt-Plan``) are never credited either."""
+    commits and commits not naming this plan (``Deliverable-Id`` or ``Halt-Plan``) are never credited either.
+
+    ``budget_secs`` (opt-in) runs the walk under one absolute read deadline with no retry wall; a
+    stall past it returns ``{}`` so the open rows are dispatched rather than credited. Without it a
+    stall retries once, then raises: callers reading an empty map as "nothing landed" need the raise."""
     from types import SimpleNamespace
 
     from coordinator_core.git.git_state import head_sha
@@ -633,13 +640,23 @@ def rows_landed_outside_executor(worktree_root: Path, plan_path: str, rows: list
     if not head or not chunks:
         return {}
     from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.git.git_objects import retry_past_stall
+    from coordinator_core.git.git_objects import PackReadDeadline, read_budget, retry_past_stall
 
-    landings = retry_past_stall(
-        resolve_git_common_dir(worktree_root),
-        lambda: outside_landings(
+    def _walk() -> dict:
+        return outside_landings(
             worktree_root, head, plan_path, chunks, include_start=True, after_creation=True,
             skip_foreign_runs=True, require_evidence=True,
-        ),
-    )
+        )
+
+    if budget_secs is None:
+        landings = retry_past_stall(resolve_git_common_dir(worktree_root), _walk)
+    else:
+        try:
+            with read_budget(budget_secs):
+                landings = _walk()
+        except PackReadDeadline as exc:
+            logging.getLogger(__name__).warning(
+                "outside-landing walk exceeded %.3fs; open rows dispatch uncredited: %s", budget_secs, exc
+            )
+            return {}
     return {cid: shas[0] for cid, shas in landings.items()}

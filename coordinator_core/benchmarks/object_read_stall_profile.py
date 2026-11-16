@@ -9,6 +9,11 @@ Process time and spawns are the verdict axes; elapsed only shows whether the wal
 
     python coordinator_core/benchmarks/object_read_stall_profile.py [--json] [--deadline 1.0]
     python coordinator_core/benchmarks/object_read_stall_profile.py --git-objects-file <path>
+    python coordinator_core/benchmarks/object_read_stall_profile.py --json --refire-walk <plan>
+
+`--refire-walk` runs `plan_row_coding.rows_landed_outside_executor` for the plan's open rows against
+this repo, in a fresh process (cold) and again in it (warm), and splits each slow read into pack
+lookup, pack map, inflate and delta depth; the reply's top level is the cold walk.
 
 `--git-objects-file` runs the same cases against another copy of git_objects.py (a
 `git show <ref>:...` export), which is how a committed-ref baseline is taken while the
@@ -202,7 +207,7 @@ class Stall:
     """Blocks a read on an Event: `pack_path` blocks `_pack_bytes_for_read`, `read_path` blocks
     `Path.read_bytes`, `listing` blocks `_temp_pair_is_complete`. Auto-releases after `hold`."""
 
-    def __init__(self, go, *, hold: float, pack_path: Path | None = None, read_path: Path | None = None, listing: bool = False):
+    def __init__(self, go, *, hold: float, pack_path: Path | None = None, read_path: Path | None = None, listing: bool = False) -> None:
         self._go = go
         self._pack_path = pack_path
         self._read_path = read_path
@@ -275,10 +280,10 @@ class InflateSpy:
         self._decompressobj = zlib.decompressobj
 
         class _Obj:
-            def __init__(self, *a, **k):
+            def __init__(self, *a, **k) -> None:
                 self._d = spy._decompressobj(*a, **k)
 
-            def decompress(self, data, *a):
+            def decompress(self, data, *a) -> bytes:
                 out = self._d.decompress(data, *a)
                 spy.bytes_out += len(out)
                 return out
@@ -286,7 +291,7 @@ class InflateSpy:
             def __getattr__(self, name):
                 return getattr(self._d, name)
 
-        def decompress(data, *a, **k):
+        def decompress(data, *a, **k) -> bytes:
             out = spy._decompress(data, *a, **k)
             spy.bytes_out += len(out)
             return out
@@ -463,7 +468,228 @@ def profile(go, deadline: float, scratch: Path) -> dict:
     }
 
 
+_STAGE_KEYS = ("lookup", "map", "inflate", "loose")
+_SLOW_READS_REPORTED = 5
+
+
+class ReadProbe:
+    """Times every outermost object read of the walk and splits it by stage: pack lookup
+    (`_locate_packed`), pack map (`_pack_bytes_for_read`), inflate (`_zlib_decompress_bounded`),
+    loose read (`_read_loose_object`), plus the deepest delta chain (`_read_pack_object_at`).
+    A nested REF_DELTA base read is part of its outer read, never its own row. Single-walk
+    only: one current record, no per-thread state."""
+
+    def __init__(self, go) -> None:
+        self._go = go
+        self.reads: list[dict] = []
+        self._cur: dict | None = None
+        self._nest = 0
+        self._undo: list = []
+
+    def _patch(self, owner, name: str, make) -> None:
+        orig = getattr(owner, name)
+        setattr(owner, name, make(orig))
+        self._undo.append(lambda: setattr(owner, name, orig))
+
+    def _stage(self, key: str):
+        def make(orig):
+            def wrapper(*a, **k):
+                cur = self._cur
+                if cur is None:
+                    return orig(*a, **k)
+                c0, t0 = time.process_time(), time.perf_counter()
+                try:
+                    return orig(*a, **k)
+                finally:
+                    st = cur["stages"][key]
+                    st["process_ms"] += (time.process_time() - c0) * 1000.0
+                    st["elapsed_ms"] += (time.perf_counter() - t0) * 1000.0
+                    st["calls"] += 1
+
+            return wrapper
+
+        return make
+
+    def _read(self, orig):
+        def wrapper(common_dir, sha, *a, **k):
+            if self._nest:
+                return orig(common_dir, sha, *a, **k)
+            cur = {
+                "sha": str(sha)[:12],
+                "delta_depth": 0,
+                "stages": {key: {"process_ms": 0.0, "elapsed_ms": 0.0, "calls": 0} for key in _STAGE_KEYS},
+            }
+            self._cur = cur
+            self._nest += 1
+            c0, t0 = time.process_time(), time.perf_counter()
+            try:
+                return orig(common_dir, sha, *a, **k)
+            finally:
+                cur["process_ms"] = (time.process_time() - c0) * 1000.0
+                cur["elapsed_ms"] = (time.perf_counter() - t0) * 1000.0
+                self._nest -= 1
+                self._cur = None
+                self.reads.append(cur)
+
+        return wrapper
+
+    def _depth(self, orig):
+        def wrapper(*a, **k):
+            cur = self._cur
+            if cur is not None:
+                depth = a[4] if len(a) > 4 else k.get("_depth", 0)
+                cur["delta_depth"] = max(cur["delta_depth"], depth)
+            return orig(*a, **k)
+
+        return wrapper
+
+    def __enter__(self) -> "ReadProbe":
+        from coordinator_core.git import commit_walk
+
+        go = self._go
+        self._patch(go, "_read_object", self._read)
+        self._patch(commit_walk, "_read_object", self._read)
+        self._patch(go, "_locate_packed", self._stage("lookup"))
+        self._patch(go, "_pack_bytes_for_read", self._stage("map"))
+        self._patch(go, "_zlib_decompress_bounded", self._stage("inflate"))
+        self._patch(go, "_read_loose_object", self._stage("loose"))
+        self._patch(go, "_read_pack_object_at", self._depth)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        for undo in reversed(self._undo):
+            undo()
+
+
+def _summarize_reads(reads: list[dict]) -> dict:
+    slow = sorted(reads, key=lambda r: (r["process_ms"], r["elapsed_ms"]), reverse=True)[:_SLOW_READS_REPORTED]
+    return {
+        "reads": len(reads),
+        "max_read_process_ms": round(max((r["process_ms"] for r in reads), default=0.0), 1),
+        "max_read_elapsed_ms": round(max((r["elapsed_ms"] for r in reads), default=0.0), 1),
+        "slow_reads": [
+            {
+                "sha": r["sha"],
+                "process_ms": round(r["process_ms"], 1),
+                "elapsed_ms": round(r["elapsed_ms"], 1),
+                "delta_depth": r["delta_depth"],
+                "stages": {
+                    k: {"process_ms": round(v["process_ms"], 1), "elapsed_ms": round(v["elapsed_ms"], 1), "calls": v["calls"]}
+                    for k, v in r["stages"].items()
+                },
+            }
+            for r in slow
+        ],
+        "stage_total_elapsed_ms": {
+            key: round(sum(r["stages"][key]["elapsed_ms"] for r in reads), 1) for key in _STAGE_KEYS
+        },
+        "max_delta_depth": max((r["delta_depth"] for r in reads), default=0),
+    }
+
+
+def _plan_open_rows(root: Path, plan_rel: str) -> list[dict]:
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    loaded = load_rows((root / plan_rel).read_text(encoding="utf-8"))
+    return [r for r in loaded.rows if isinstance(r, dict) and r.get("disposition") == "open"]
+
+
+def _walk_once(go, root: Path, plan_rel: str, rows: list[dict]) -> dict:
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import rows_landed_outside_executor
+
+    probe = ReadProbe(go)
+    outcome = "returned"
+    credited = 0
+    with probe, _Counts() as counts:
+        cpu0 = time.process_time()
+        t0 = time.perf_counter()
+        try:
+            credited = len(rows_landed_outside_executor(root, plan_rel, rows))
+        except BaseException as exc:  # noqa: BLE001 - the outcome is the datum
+            outcome = f"raised:{type(exc).__name__}"
+        cpu = time.process_time() - cpu0
+        elapsed = time.perf_counter() - t0
+    return {
+        "outcome": outcome,
+        "process_ms": round(cpu * 1000.0, 1),
+        "elapsed_ms": round(elapsed * 1000.0, 1),
+        "spawns": counts.spawns,
+        "rows_credited": credited,
+        **_summarize_reads(probe.reads),
+    }
+
+
+def refire_walk_in_process(plan_rel: str) -> dict:
+    """The refire outside-credit walk twice in this process: first cold (no cache cleared, imports
+    done before timing), then warm (the object cache the first walk filled)."""
+    go = _default_go
+    root = _REPO
+    rows = _plan_open_rows(root, plan_rel)
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    pack_dir = resolve_git_common_dir(root) / "objects" / "pack"
+    idx_count = sum(1 for _ in pack_dir.glob("*.idx")) if pack_dir.is_dir() else 0
+    cold = _walk_once(go, root, plan_rel, rows)
+    warm = _walk_once(go, root, plan_rel, rows)
+    return {
+        "plan": plan_rel,
+        "open_rows": [r["id"] for r in rows if isinstance(r.get("id"), str)],
+        "pack_idx_files": idx_count,
+        "pack_read_deadline_secs": go.PACK_READ_DEADLINE_SECS,
+        **cold,
+        "cold": cold,
+        "warm": warm,
+        "mechanism": _named_mechanism(cold),
+    }
+
+
+def _named_mechanism(walk: dict) -> str:
+    """The stage with the largest elapsed total across the walk's reads: lookup, map, inflate or loose;
+    `delta` when the deepest chain exceeds 8 and inflate dominates."""
+    totals = walk.get("stage_total_elapsed_ms") or {}
+    if not totals or not any(totals.values()):
+        return "none"
+    top = max(totals, key=totals.get)
+    return "delta" if top == "inflate" and walk.get("max_delta_depth", 0) > 8 else top
+
+
+def _plan_rel(plan: str) -> str:
+    p = Path(plan)
+    if p.is_absolute():
+        p = p.resolve().relative_to(_REPO)
+    return p.as_posix()
+
+
+def refire_walk(plan: str) -> dict:
+    """`refire_walk_in_process` in a fresh interpreter, so the cold figure is a cold process."""
+    from coordinator_core.win_portability import no_console_creationflags
+
+    proc = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--refire-walk-child", _plan_rel(plan)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+        **no_console_creationflags(),
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"refire-walk child failed rc={proc.returncode}: {proc.stderr.strip()[-800:]}")
+    return json.loads(proc.stdout)
+
+
 def _print(report: dict) -> None:
+    if "refire_walk" in report:
+        walk = report["refire_walk"]
+        print(f"refire_walk plan={walk['plan']} open_rows={walk['open_rows']} pack_idx_files={walk['pack_idx_files']}")
+        for label in ("cold", "warm"):
+            w = walk[label]
+            print(
+                f"  {label}: outcome={w['outcome']} process_ms={w['process_ms']} elapsed_ms={w['elapsed_ms']} spawns={w['spawns']} "
+                f"reads={w['reads']} max_read_process_ms={w['max_read_process_ms']} max_read_elapsed_ms={w['max_read_elapsed_ms']} "
+                f"max_delta_depth={w['max_delta_depth']} stage_total_elapsed_ms={w['stage_total_elapsed_ms']}"
+            )
+        print(f"  mechanism={walk['mechanism']}")
+        return
     print(f"deadline_secs={report['deadline_secs']} wall_in_tree={report['wall_in_tree']}")
     print(f"git_objects_file={report['git_objects_file']}")
     for row in report["cases"]:
@@ -475,7 +701,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--deadline", type=float, default=1.0, help="PACK_READ_DEADLINE_SECS for the run (production: 4.0)")
     ap.add_argument("--git-objects-file", default=None, help="run against this git_objects.py instead of the working tree")
+    ap.add_argument("--refire-walk", metavar="PLAN", default=None, help="time the refire outside-credit walk for PLAN's open rows against this repo (cold fresh process, then warm)")
+    ap.add_argument("--refire-walk-child", metavar="PLAN", default=None, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+    if args.refire_walk_child is not None:
+        print(json.dumps(refire_walk_in_process(args.refire_walk_child)))
+        return 0
+    if args.refire_walk is not None:
+        report = {"refire_walk": refire_walk(args.refire_walk)}
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            _print(report)
+        return 0
     go = load_git_objects(args.git_objects_file)
     tmp = make_managed_temp_dir(prefix="object-read-stall-")
     saved = go.PACK_READ_DEADLINE_SECS
