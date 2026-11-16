@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from coordinator_core.agent_pipe import bridge, mailbox, roster
+from coordinator_core.agent_pipe import bridge, grok, mailbox, roster
 from coordinator_core.ops.workflow_fire.notify import notify_terminal
 
 
@@ -67,7 +67,13 @@ def test_grok_peer_gets_one_labelled_message(monkeypatch):
         def shutdown(self):
             pass
 
-    monkeypatch.setattr(bridge, "GrokAcpDriver", FakeDriver)
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+    monkeypatch.setattr(grok, "GrokAcpDriver", FakeDriver)
     roster.bind("gk", "grok", "gs-1")
     rec = _record(notify_to="gk", exit_code=None)
     done = notify_terminal(rec)

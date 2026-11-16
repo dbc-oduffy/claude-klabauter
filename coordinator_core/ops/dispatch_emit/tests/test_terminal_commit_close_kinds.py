@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.benchmarks import terminal_commit_full_path as driver
-from coordinator_core.ops.dispatch_emit import run_close, terminal_commit
+from coordinator_core.ops.dispatch_emit import completion_gate, run_close, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -58,13 +58,23 @@ def base(tmp_path, monkeypatch):
     return repo, script
 
 
+def _judge_backed_review() -> dict:
+    """The driver's review with a judge-authored, test-backed verdict, so the completion gate passes."""
+    review = copy.deepcopy(driver.INLINE_REVIEW)
+    review["tests"] = {"status": "pass", "run": 1, "failed": 0, "sidecar": "t.md"}
+    review["criterion"].update(
+        authored_by=completion_gate.JUDGE_AGENT, falsifier={"verdict": "pass", "output": "ls a.py\na.py"}
+    )
+    return review
+
+
 def _fire(repo: Path, script: str) -> dict:
     return terminal_commit._handler(
         {
             "script_path": script,
             "incomplete_chunks": [],
             "session_id": driver.SESSION_ID,
-            "inline_review": copy.deepcopy(driver.INLINE_REVIEW),
+            "inline_review": _judge_backed_review(),
         },
         repo_root=repo / ".git",
     )

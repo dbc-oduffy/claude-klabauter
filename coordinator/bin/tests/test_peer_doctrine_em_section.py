@@ -51,3 +51,12 @@ def test_the_em_section_opens_with_the_worker_condition_before_any_em_rule():
     assert worker < em.index("engine_ask.submit")
     assert "a bounded list of files to change, with or without that" in em
     assert em.count("WORKER ROLE") == 1
+
+
+def test_the_em_section_applies_only_under_the_headless_em_token_or_an_interactive_pm():
+    # Prose alone did not stop a codex sizing-scout obeying the EM rules (1b attempt 3, run 1712a5); the
+    # gate names the env var only headless-em-launch sets, and the executor strips from agent children.
+    em = _em_section()
+    gate = em.index("`COORDINATOR_ALLOW_HEADLESS_EM_TOKEN` is set")
+    assert gate < em.index("A prompt that begins `WORKER ROLE`") < em.index("engine_ask.submit")
+    assert "Any other prompt is a worker's, and nothing below applies." in em

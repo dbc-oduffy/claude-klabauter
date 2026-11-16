@@ -35,6 +35,8 @@ Nothing is ever printed to stdout (only `detached`'s one-line stderr note when n
 status is always 0: a session start must not fail on it.
 """
 import base64
+import hashlib
+import hmac
 import importlib.util
 import ipaddress
 import json
@@ -527,19 +529,75 @@ def ssh_config_aliases(path=None, depth=0):
     return list(dict.fromkeys(out))
 
 
-def ssh_alias_fallback(roster, alias, key, why, probe_fn, aliases_fn=None, hostname_fn=None, mdns_fn=None,
-                       resolve_fn=None):
-    """(remote, why, note) after the recorded name and mDNS failed: probe each ssh-config alias naming the same box.
+def _known_hosts_entries(path=None):
+    """[(host patterns, 'type base64')] of the user's known_hosts; markers (`@cert-authority`, `@revoked`) skipped."""
+    try:
+        text = Path(path or Path(os.path.expanduser("~/.ssh")) / "known_hosts").read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 3 or parts[0].startswith(("#", "@")):
+            continue
+        out.append((parts[0].split(","), f"{parts[1]} {parts[2]}"))
+    return out
 
-    An alias names the box when its `ssh -G` HostName equals the recorded host (`.local`, case ignored), or is
-    or resolves to a live mDNS address (asked once, only when no HostName matched by name). The first alias
-    that answers a probe with the same key is `remote` (`<user>@<alias>` when the recorded name had a user)."""
+
+def _known_host_match(pattern, name):
+    if pattern.startswith("|1|"):
+        try:
+            _, _, salt, digest = pattern.split("|")[:4]
+            mac = hmac.new(base64.b64decode(salt), name.encode("utf-8"), hashlib.sha1).digest()
+            return base64.b64encode(mac).decode("ascii") == digest
+        except (ValueError, TypeError):
+            return False
+    if pattern.startswith("["):
+        pattern = pattern[1:].partition("]")[0]
+    return pattern.lower().rstrip(".") == name.lower().rstrip(".")
+
+
+def known_host_keys(names, entries=None):
+    """Host keys the known_hosts file records for any of `names` (a `.local` name also tried bare, and the reverse)."""
+    variants = set()
+    for n in names:
+        n = str(n).strip().rstrip(".")
+        if n:
+            variants |= {n, _host_key(n), f"{_host_key(n)}.local"} if not ipaddress_literal(n) else {n}
+    entries = _known_hosts_entries() if entries is None else entries
+    return {k for pats, k in entries if any(_known_host_match(p, v) for p in pats for v in variants)}
+
+
+def ipaddress_literal(name):
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        return False
+
+
+def ssh_alias_fallback(roster, alias, key, why, probe_fn, aliases_fn=None, hostname_fn=None, mdns_fn=None,
+                       resolve_fn=None, entries=None, identity_fn=None):
+    """(remote, why, note, key) after the recorded name and mDNS failed: probe each ssh-config alias naming the same box.
+
+    An alias names the box when its `ssh -G` HostName equals the recorded host (`.local`, case ignored); else when
+    a known_hosts host key recorded for the alias or its HostName equals one recorded for the recorded host (no
+    network, so a stale hosts line or failing mDNS cannot hide it); else when its HostName is or resolves to a
+    live mDNS address (asked once). The first alias that answers a probe is `remote` (`<user>@<alias>` when the
+    recorded name had a user), probed with its own IdentityFile and the recorded `key` when it has none;
+    `key` returned is the one that answered."""
     host = alias.rpartition("@")[2]
     want, user = _host_key(host), alias.rpartition("@")[0]
     hostname_fn = hostname_fn or ssh_hostname
     cands = [a for a in (aliases_fn or ssh_config_aliases)() if _host_key(a) != want]
     names = [(a, hostname_fn(roster, a) or "") for a in cands]
     matched = [a for a, h in names if _host_key(h) == want]
+    if not matched and names:
+        entries = _known_hosts_entries() if entries is None else entries
+        recorded = known_host_keys([host], entries)
+        if recorded:
+            matched = [a for a, h in names if recorded & known_host_keys([a, h], entries)]
     if not matched:
         name = live_name(roster, alias)
         live = set((mdns_fn or mdns_a_records)(name) if name and names else [])
@@ -547,9 +605,11 @@ def ssh_alias_fallback(roster, alias, key, why, probe_fn, aliases_fn=None, hostn
         matched = [a for a, h in names if h and (h in live or resolve(h) in live)] if live else []
     for cand in matched:
         remote = f"{user}@{cand}" if user else cand
-        if not probe_fn(roster, alias, key, remote=remote):
-            return remote, None, f"ssh alias {cand} names the same box and answered"
-    return alias, why, (f"ssh alias {', '.join(matched)} named the same box and did not answer" if matched else None)
+        own = (identity_fn or ssh_identity_file)(roster, cand) or key
+        if not probe_fn(roster, alias, own, remote=remote):
+            return remote, None, f"ssh alias {cand} names the same box and answered", own
+    return (alias, why,
+            f"ssh alias {', '.join(matched)} named the same box and did not answer" if matched else None, key)
 
 
 def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe, stable_fn=None, now=None, liveness=None,
@@ -592,7 +652,7 @@ def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe, stable_fn
             remote, why, note = mdns_fallback(roster, alias, key, why, probe_fn, mdns_fn)
         if why:
             first_note = note
-            remote, why, note = ssh_alias_fallback(roster, alias, key, why, probe_fn, alias_fn, mdns_fn=mdns_fn)
+            remote, why, note, key = ssh_alias_fallback(roster, alias, key, why, probe_fn, alias_fn, mdns_fn=mdns_fn)
             note = "; ".join(n for n in (first_note, note) if n) or None
         if why:
             remote, why = stable_fallback(roster, alias, key, why, probe_fn, stable_fn)

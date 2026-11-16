@@ -68,13 +68,83 @@ def test_never_halted_run_is_reaped_despite_fresh_activity(repo):
     assert out["removed"] == [f"scratch/warp/{RUN}"]
 
 
-def test_halted_kept(repo):
-    _record(repo, RUN, "halted")
+def _warp_run(root: Path, run_id: str = RUN) -> Path:
+    """A run's warp dir: the export trees and briefs a resume rebuilds, plus every resume input."""
+    warp = root / "scratch" / "warp" / run_id
+    for tree in ("export", "export-head", "export.base", "briefs"):
+        _scratch(root, f"scratch/warp/{run_id}/{tree}")
+    for name in run_scratch_reap.RESUME_INPUTS:
+        (warp / name).write_text("x", encoding="utf-8")
+    (warp / "terminal-commit-params.json").write_text("x", encoding="utf-8")
+    return warp
+
+
+def _left(warp: Path) -> set[str]:
+    return {p.name for p in warp.iterdir()}
+
+
+@pytest.mark.parametrize("status", [None, "landed", "superseded", "closed"])
+def test_terminal_run_leaves_no_warp_tree(repo, status):
+    _record(repo, RUN, status)
+    warp = _warp_run(repo)
+    out = run_scratch_reap.reap_run(repo, RUN, NOW)
+    assert out["removed"] == [f"scratch/warp/{RUN}"] and out["held"] == ""
+    assert not warp.exists()
+
+
+@pytest.mark.parametrize("status", ["halted", "resumed"])
+def test_resumable_halt_keeps_exactly_its_resume_inputs(repo, status):
+    _record(repo, RUN, status)
+    warp = _warp_run(repo)
     _scratch(repo, "scratch/land-one")
     run_scratch.record_paths(repo, RUN, ["scratch/land-one"])
     out = run_scratch_reap.reap_run(repo, RUN, NOW)
-    assert out["removed"] == [] and "scratch/land-one" in out["kept"] and out["held"]
-    assert (repo / "scratch" / "land-one").is_dir()
+    assert _left(warp) == set(run_scratch_reap.RESUME_INPUTS)
+    assert sorted(out["removed"]) == sorted(
+        [f"scratch/warp/{RUN}/{n}" for n in ("export", "export-head", "export.base", "briefs", "terminal-commit-params.json")]
+        + ["scratch/land-one"]
+    )
+    assert out["held"] == "" and not (repo / "scratch" / "land-one").exists()
+
+
+def test_resumable_halt_reap_is_idempotent(repo):
+    _record(repo, RUN, "halted")
+    warp = _warp_run(repo)
+    run_scratch_reap.reap_run(repo, RUN, NOW)
+    out = run_scratch_reap.reap_run(repo, RUN, NOW)
+    assert out["removed"] == [] and _left(warp) == set(run_scratch_reap.RESUME_INPUTS)
+
+
+def test_unknown_halt_status_holds_whole_tree(repo):
+    _record(repo, RUN, "mystery")
+    warp = _warp_run(repo)
+    out = run_scratch_reap.reap_run(repo, RUN, NOW)
+    assert out["removed"] == [] and out["held"] and (warp / "export").is_dir()
+
+
+def test_halt_record_inside_warp_dir_holds_whole_tree(repo):
+    warp = _warp_run(repo)
+    (warp / "halted.json").write_text(json.dumps({"status": "halted"}), encoding="utf-8")
+    (warp / "run.json").write_text("{}", encoding="utf-8")
+    out = run_scratch_reap.reap_run(repo, RUN, NOW)
+    assert out["removed"] == [] and out["held"] and (warp / "export").is_dir()
+
+
+def test_resumable_halt_live_retest_holds(repo, monkeypatch):
+    _record(repo, RUN, "halted")
+    warp = _warp_run(repo)
+    monkeypatch.setattr(run_scratch_reap.export_lifecycle, "_retest_live", lambda r, i: True)
+    out = run_scratch_reap.reap_run(repo, RUN, NOW)
+    assert out["removed"] == [] and out["held"] and (warp / "export").is_dir()
+
+
+def test_resumable_halt_spares_unexpired_keep_under_warp(repo):
+    _record(repo, RUN, "halted")
+    warp = _warp_run(repo)
+    run_scratch.declare_keep(repo, RUN, f"scratch/warp/{RUN}/export", "repro", 2, now=NOW)
+    out = run_scratch_reap.reap_run(repo, RUN, NOW + timedelta(hours=1))
+    assert (warp / "export").is_dir() and not (warp / "briefs").exists()
+    assert f"scratch/warp/{RUN}/export" in out["kept"]
 
 
 def test_superseded_reaped(repo):
@@ -184,3 +254,9 @@ def test_no_spawn_and_no_listing(repo, monkeypatch):
             m.setattr(os, name, boom)
         out = run_scratch_reap.reap_run(repo, RUN, NOW)
     assert len(out["removed"]) == 5
+
+
+def test_halted_run_landed_close_queues_scratch_reap():
+    from coordinator_core.ops.dispatch_emit import halted_run_landed
+
+    assert "scratch-reap" in halted_run_landed.CLOSE_LEGS

@@ -25,6 +25,7 @@ from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
 from coordinator_core.codex_runner.review import _unattended_env
 from coordinator_core.bash_guards import _heavy_command_class as capacity
 from coordinator_core.group_em import admission_post, slot_grant, slot_wait
+from coordinator_core.ops.workflow_fire.worker_preamble import with_worker_preamble
 
 DEFAULT_AGENT_PEAK_GIB = 1.0
 
@@ -76,6 +77,8 @@ def _environment() -> dict[str, str]:
     source.pop("OPENAI_API_KEY", None)
     source.pop("CODEX_API_KEY", None)
     env = _unattended_env(source, requested=False)
+    # Only the headless-em-launch session holds the EM token; a worker child never does.
+    env.pop("COORDINATOR_ALLOW_HEADLESS_EM_TOKEN", None)
     # Reach a live engine, never start one: warmth stays on (an inherited WARM=0
     # is dropped) while both autostart gates are pinned off.
     env.pop('COORDINATOR_WARM', None)
@@ -241,6 +244,7 @@ def run_agent(
             'Do not wrap a command in cmd.exe /c, use POSIX parameter expansion, or add literal backslash-escaped quotes. '
             'Use Python or native PowerShell for file operations. Preserve all operation arguments and JSON payloads.\n\n'
         ) + full_prompt
+    full_prompt = with_worker_preamble(backend, full_prompt)
     native_schema = _codex_schema(schema) if schema is not None else None
     if backend == "codex" and schema is not None and native_schema is None:
         full_prompt += (

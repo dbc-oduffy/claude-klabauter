@@ -57,6 +57,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(al, "pull_membership", lambda *a, **k: False)
     monkeypatch.setattr(al, "live_name", lambda *a, **k: None)
     monkeypatch.setattr(al, "ssh_config_aliases", lambda *a, **k: [])
+    monkeypatch.setattr(al, "_known_hosts_entries", lambda *a, **k: [])
     monkeypatch.setattr(al, "ssh_identity_file", lambda roster, alias, run=None: None)
     monkeypatch.setattr(al, "pin_key_value", lambda roster, run=None: None)
     roster = al._roster()
@@ -611,6 +612,70 @@ def test_ssh_alias_that_also_fails_links_nothing_and_says_so(env, monkeypatch):
                stable_fn=lambda a: None, mdns_fn=lambda name: [])
     assert sp.cmds == [] and probe_fn.seen == ["mini-box.local", "boxalias"]
     assert "ssh alias boxalias named the same box and did not answer" in (env.sdir / "autolink.log").read_text()
+
+
+def _hostkey_env(env, monkeypatch, alias_key="ssh-ed25519 AAAAmini", known_name="Mac-mini.local"):
+    _alias_env(env, monkeypatch, {"macmini": "192.168.0.175"})
+    monkeypatch.setattr(env.al, "_known_hosts_entries", lambda *a, **k: [
+        ([known_name], "ssh-ed25519 AAAAmini"), (["192.168.0.175", "macmini"], alias_key)])
+    own = str(env.home / "unimatrix-zero-machine-a-to-macmini")
+    monkeypatch.setattr(env.al, "ssh_identity_file", lambda roster, a, run=None: own if a == "macmini" else None)
+    return own
+
+
+def _keyed_probe(good):
+    seen = []
+
+    def fn(roster, alias, key, remote=None):
+        seen.append((remote or alias, key))
+        return None if (remote or alias) in good else "rc=255: Connection timed out"
+
+    fn.seen = seen
+    return fn
+
+
+def test_ip_hostname_alias_with_the_recorded_host_key_links_with_its_own_key(env, monkeypatch):
+    own = _hostkey_env(env, monkeypatch)
+    sp, probe_fn = Spawner(), _keyed_probe({"example-operator@macmini"})
+    env.al.run(roster=env.roster, boxes=["example-operator@Mac-mini.local"], spawn=sp, probe_fn=probe_fn,
+               stable_fn=boom, mdns_fn=lambda name: [])
+    assert probe_fn.seen[-1] == ("example-operator@macmini", own)
+    assert len(sp.cmds) == 2
+    for c in sp.cmds:
+        assert c[c.index("--remote") + 1] == "example-operator@macmini" and own in c
+    assert "ssh alias macmini names the same box and answered" in (env.sdir / "autolink.log").read_text()
+
+
+def test_alias_without_an_identity_file_is_probed_with_the_recorded_key(env, monkeypatch):
+    _hostkey_env(env, monkeypatch)
+    monkeypatch.setattr(env.al, "ssh_identity_file", lambda roster, a, run=None: None)
+    probe_fn = _keyed_probe({"macmini"})
+    remote, why, note, key = env.al.ssh_alias_fallback(env.roster, "Mac-mini.local", "/rec", "rc=255", probe_fn,
+                                                       mdns_fn=lambda n: [])
+    assert (remote, why, key) == ("macmini", None, "/rec") and probe_fn.seen[-1] == ("macmini", "/rec")
+
+
+def test_alias_with_a_different_host_key_is_never_used(env, monkeypatch):
+    _hostkey_env(env, monkeypatch, alias_key="ssh-ed25519 AAAAother")
+    sp, probe_fn = Spawner(), _keyed_probe({"example-operator@macmini"})
+    env.al.run(roster=env.roster, boxes=["example-operator@Mac-mini.local"], spawn=sp, probe_fn=probe_fn,
+               stable_fn=lambda a: None, mdns_fn=lambda name: [])
+    assert sp.cmds == [] and [r for r, _ in probe_fn.seen] == ["example-operator@Mac-mini.local"]
+
+
+def test_hashed_known_hosts_entry_for_the_recorded_name_matches(env):
+    import base64, hashlib, hmac
+    salt = b"0123456789abcdefghij"
+    mac = base64.b64encode(hmac.new(salt, b"mac-mini.local", hashlib.sha1).digest()).decode()
+    pat = f"|1|{base64.b64encode(salt).decode()}|{mac}"
+    entries = [([pat], "ssh-ed25519 AAAAmini"), (["macmini"], "ssh-ed25519 AAAAmini")]
+    assert env.al.known_host_keys(["Mac-mini.local"], entries) == {"ssh-ed25519 AAAAmini"}
+    assert env.al.known_host_keys(["other.local"], entries) == set()
+
+
+def test_bracketed_port_known_hosts_pattern_matches_the_bare_name(env):
+    entries = [(["[mac-mini.local]:2222"], "ssh-ed25519 AAAAmini")]
+    assert env.al.known_host_keys(["Mac-mini.local"], entries) == {"ssh-ed25519 AAAAmini"}
 
 
 def test_healthy_primary_never_looks_up_ssh_aliases(env, monkeypatch):

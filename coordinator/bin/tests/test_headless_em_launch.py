@@ -25,6 +25,13 @@ def home(tmp_path, monkeypatch):
     for name in _IDENTITY_VARS:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv(g.SETTINGS_HOME_KEY, str(tmp_path / "settings"))
+    user_home = tmp_path / "user-home"
+    user_home.mkdir()
+    monkeypatch.setenv("HOME", str(user_home))
+    monkeypatch.setenv("USERPROFILE", str(user_home))
+    monkeypatch.delenv("npm_config_prefix", raising=False)
+    for fam in ("CODEX", "AGY", "GROK"):
+        monkeypatch.delenv(f"COORDINATOR_{fam}_CLI", raising=False)
     return tmp_path / "settings"
 
 

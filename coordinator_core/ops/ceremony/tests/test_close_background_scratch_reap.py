@@ -64,13 +64,17 @@ def test_landed_run_scratch_reaped(tmp_path):
     assert len(list((tmp_path / "scratch" / ".deleted").iterdir())) == 3
 
 
-def test_halted_run_scratch_stays_until_landed(tmp_path):
-    _tree(tmp_path, f"scratch/warp/{RUN}")
+def test_halted_run_keeps_only_resume_inputs_until_landed(tmp_path):
+    warp = _tree(tmp_path, f"scratch/warp/{RUN}")
+    (warp / "run-base").write_text("sha", encoding="utf-8")
+    _tree(tmp_path, f"scratch/warp/{RUN}/export-tree")
     _marker(tmp_path, RUN, "halted")
 
     result = _run(tmp_path)
-    assert result.status == "ran" and "held" in result.detail
-    assert (tmp_path / "scratch/warp" / RUN).is_dir()
+    assert result.status == "ran" and "held" not in result.detail
+    assert (warp / "run-base").is_file()
+    assert _gone(tmp_path, f"scratch/warp/{RUN}/export-tree")
+    assert _gone(tmp_path, f"scratch/warp/{RUN}/f.txt")
 
     _marker(tmp_path, RUN, "landed")
     _run(tmp_path)

@@ -52,7 +52,10 @@ You run:
 
 ## When the PM addresses you as EM
 
-**First, check this section applies.** A prompt that begins `WORKER ROLE` is a stage brief from a workflow, never a PM ask and never an EM
+**First, check this section applies.** It applies only when the env var
+`COORDINATOR_ALLOW_HEADLESS_EM_TOKEN` is set, or the PM is typing to you in an interactive session.
+Any other prompt is a worker's, and nothing below applies.
+A prompt that begins `WORKER ROLE` is a stage brief from a workflow, never a PM ask and never an EM
 session: do that one row and stop. Never submit, fire or mint a run from it. The same holds for any
 prompt that hands you a row, a brief or a bounded list of files to change, with or without that
 line: you are a worker, and nothing below applies.

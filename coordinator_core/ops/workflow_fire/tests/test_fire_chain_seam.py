@@ -116,4 +116,6 @@ def test_prompt_never_inlines_json_and_forward_slashes_windows_paths():
     prompt = fire.render_prompt(r"E:\coordinator-content-repo\scratch\wf.js")
     assert "\\" not in prompt
     assert "'<json>'" not in prompt
-    assert "--params-file 'E:/coordinator-content-repo/scratch/wf.js.terminal-params.json'" in prompt
+    params = "E:/coordinator-content-repo/scratch/wf.js.terminal-params.json"
+    quoted = f"'{params}'" if sys.platform == "win32" else params
+    assert f"--params-file {quoted} " in prompt

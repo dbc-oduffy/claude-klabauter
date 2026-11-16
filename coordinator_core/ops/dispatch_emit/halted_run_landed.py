@@ -81,6 +81,7 @@ _NEVER_HALTED = "no halt record: the run never halted, so there is no marker to 
 #: "no review stamp minted" without it.
 CLOSE_LEGS = (
     "review-stamp", "coded-stamp", "sizing-ship", "plan-reconciliation", "deliverable-cascade", "close-commit",
+    "scratch-reap",
 )
 _CLOSE_JOB_WINDOW_MINUTES = 5
 _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")

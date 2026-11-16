@@ -622,3 +622,11 @@ def test_headless_codex_windowsapps_only_path_refuses_before_admission(tmp_path,
     with pytest.raises(headless_agents.AgentFailed, match="WindowsApps|pwsh"):
         headless_agents.run_agent("x", {}, repo_root=repo, artifact_dir=tmp_path / "agent")
     assert "env" not in seen
+
+
+def test_headless_em_token_is_stripped_from_agent_child_env(tmp_path, monkeypatch):
+    capture = fake_cli(tmp_path, monkeypatch)
+    monkeypatch.setenv("COORDINATOR_ALLOW_HEADLESS_EM_TOKEN", "em-secret")
+    agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
+    assert "COORDINATOR_ALLOW_HEADLESS_EM_TOKEN" not in json.loads(capture.read_text())["env"]
+    assert "COORDINATOR_ALLOW_HEADLESS_EM_TOKEN" not in headless_agents._environment()

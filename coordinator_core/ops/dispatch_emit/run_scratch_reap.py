@@ -1,9 +1,12 @@
 """Run-end scratch reaper: tombstones the scratch a finished run's own ledger lists.
 
-Inputs are the run ledger and the repo keep index only; nothing here lists a directory or spawns a
-process. A path leaves by one `os.rename` into `scratch/.deleted/`, the shape `scratch.delete` uses.
+Inputs are the run ledger and the repo keep index; no process is spawned, and the only directory
+listing is the one `scratch/warp/<run_id>` of a resumable halt. A path leaves by one `os.rename`
+into `scratch/.deleted/`, the shape `scratch.delete` uses.
 Invariant: the own-run gate reads the halted marker and the retest record directly, never
 `_run_referenced`, which holds a just-landed run for its 24h activity window.
+Invariant: a halted or resumed run keeps exactly `RESUME_INPUTS` under its warp dir; every other
+child (the export trees above all) and its ledgered paths are reaped.
 """
 from __future__ import annotations
 
@@ -17,28 +20,70 @@ from typing import Optional
 from coordinator_core.ops.dispatch_emit import export_lifecycle, run_scratch
 from coordinator_core.ops.dispatch_emit.halted_run import (
     HALTED_FILE,
+    STATUS_CLOSED,
     STATUS_LANDED,
+    STATUS_RESUMED,
     STATUS_SUPERSEDED,
     read_strict,
 )
 from coordinator_core.ops.scratch_delete import TOMBSTONE_DIRNAME, _index_refusal
 
 _WARP_PREFIX = "scratch/warp/"
+_HALTED = "halted"
+_TERMINAL = (STATUS_LANDED, STATUS_SUPERSEDED, STATUS_CLOSED)
+_RESUMABLE = (_HALTED, STATUS_RESUMED)
+
+#: Files under `scratch/warp/<run_id>` a halted run's landing or resume still reads: the recorded
+#: base (`recorded_run_base`), the submission stamp (`land_run`, `landing_retest`), the fan-out
+#: status files peers poll (`ask_fanout_contract`), the commit request the terminal drain parses
+#: and the remainder verdict. Everything else there is rebuildable.
+RESUME_INPUTS = frozenset({
+    "run-base",
+    "submission.json",
+    "sibling-status.json",
+    "superseded.json",
+    "join-waiters.json",
+    "parent.json",
+    "commit-request.txt",
+    "land-remainder-verdict.json",
+})
 
 
-def _own_run_hold(root: Path, run_id: str) -> str:
-    """The reason the run's own scratch must stay, or '' when it may be reaped."""
+def _own_run_gate(root: Path, run_id: str) -> tuple[str, bool]:
+    """`(hold, partial)`: the reason the run's own scratch must stay ('' when it may be reaped),
+    and whether only the non-resume-input part of the warp dir may go (a resumable halt)."""
     from coordinator_core.ops.dispatch_emit import ask_contract
 
     try:
-        marker = read_strict(ask_contract.record_dir(root, run_id))
+        record = ask_contract.record_dir(root, run_id)
+        marker = read_strict(record)
     except ValueError as exc:
-        return f"halt marker unreadable: {exc}"
-    if marker is not None and marker.get("status") not in (STATUS_LANDED, STATUS_SUPERSEDED):
-        return f"{HALTED_FILE} status {marker.get('status')!r} is not landed or superseded"
+        return f"halt marker unreadable: {exc}", False
+    partial = False
+    if marker is not None and marker.get("status") not in _TERMINAL:
+        status = marker.get("status")
+        if status not in _RESUMABLE:
+            return f"{HALTED_FILE} status {status!r} is not a terminal or resumable status", False
+        if record == root / ask_contract.RUN_DIR_ROOT / run_id:
+            return f"{HALTED_FILE} of a resumable run sits inside its warp dir", False
+        partial = True
     if export_lifecycle._retest_live(root, run_id):
-        return "landing retest is live"
-    return ""
+        return "landing retest is live", False
+    return "", partial
+
+
+def _warp_children(root: Path, run_id: str, result: dict) -> list[str]:
+    """The `scratch/warp/<run_id>` children outside `RESUME_INPUTS`; the inputs are reported kept."""
+    base = f"{_WARP_PREFIX}{run_id}"
+    try:
+        with os.scandir(root / base) as it:
+            names = sorted(e.name for e in it)
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        (result["kept"] if name in RESUME_INPUTS else out).append(f"{base}/{name}")
+    return out
 
 
 def _ledger_keep_expiry(keeps: list) -> dict[str, Optional[datetime]]:
@@ -83,8 +128,9 @@ def _tombstone(root: Path, rel: str, seq: int, result: dict) -> bool:
 
 
 def reap_run(root, run_id: str, now: Optional[datetime] = None) -> dict:
-    """Tombstone `run_id`'s ledger paths plus `scratch/warp/<run_id>`, sparing unexpired keeps, a
-    live peer's paths and git-tracked paths. Returns `{removed, kept, refused, absent, held}`;
+    """Tombstone `run_id`'s ledger paths plus `scratch/warp/<run_id>` (all of it, or all but
+    `RESUME_INPUTS` for a halted or resumed run), sparing unexpired keeps, a live peer's paths and
+    git-tracked paths. Returns `{removed, kept, refused, absent, held}`;
     `held` is the own-run gate's reason ('' when the run was reapable). Never raises."""
     root = Path(root)
     result: dict = {"removed": [], "kept": [], "refused": [], "absent": [], "held": ""}
@@ -106,7 +152,8 @@ def _reap(root: Path, run_id: str, moment: datetime, result: dict) -> None:
             result["refused"].append({"path": run_scratch.LEDGER_FILE, "reason": f"ledger unreadable: {exc}"})
             return
     ledger = run_scratch.read_ledger(root, run_id)
-    candidates: list[str] = [f"{_WARP_PREFIX}{run_id}"]
+    hold, partial = _own_run_gate(root, run_id)
+    candidates: list[str] = [] if partial else [f"{_WARP_PREFIX}{run_id}"]
     for p in ledger["paths"]:
         try:
             norm = run_scratch.normalise_rel(p)
@@ -116,11 +163,12 @@ def _reap(root: Path, run_id: str, moment: datetime, result: dict) -> None:
         if norm not in candidates:
             candidates.append(norm)
 
-    hold = _own_run_hold(root, run_id)
     if hold:
         result["held"] = hold
         result["kept"].extend(candidates)
         return
+    if partial:
+        candidates = _warp_children(root, run_id, result) + candidates
 
     index = run_scratch.read_keep_index(root)
     ledger_expiry = _ledger_keep_expiry(ledger["keeps"])

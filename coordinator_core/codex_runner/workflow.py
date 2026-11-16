@@ -43,6 +43,7 @@ from coordinator_core.group_em import admission_post, slot_grant, slot_wait
 from coordinator_core.agent_pipe.agy import family_stage_argv
 from coordinator_core.agent_pipe.model_tiers import model_for_tier
 from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV
+from coordinator_core.ops.workflow_fire.worker_preamble import with_worker_preamble
 from coordinator_core._settings_home import settings_home
 from coordinator_core.locked_write import held_lock
 
@@ -103,6 +104,8 @@ def _environment() -> dict[str, str]:
     source.pop("OPENAI_API_KEY", None)
     source.pop("CODEX_API_KEY", None)
     env = _unattended_env(source, requested=False)
+    # Only the headless-em-launch session holds the EM token; a worker child never does.
+    env.pop("COORDINATOR_ALLOW_HEADLESS_EM_TOKEN", None)
     # The shared provider helper preserves caller identity for ordinary helper
     # subprocesses. A fresh native agent is a new session, so scrub AFTER that
     # helper (it can reinsert the bound caller even when its input was scrubbed).
@@ -939,6 +942,7 @@ def run_agent(
             'Set-Location even where the task text asks for one. '
             'Use Python or native PowerShell for file operations. Preserve all operation arguments and JSON payloads.\n\n'
         ) + full_prompt
+    full_prompt = with_worker_preamble(backend, full_prompt)
     native_schema = _codex_schema(schema) if schema is not None else None
     if schema is not None and (backend in _FAMILY_BACKENDS or (backend == "codex" and native_schema is None)):
         full_prompt += (
