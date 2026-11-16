@@ -378,23 +378,8 @@ function _abandonId(runId, chainedFrom) {
   ABANDON_IDS.push(chainedFrom === null ? { abandon_run: runId } : { abandon_run: runId, chained_from: chainedFrom });
 }
 
-// Trap: a refused baked reply is a prior emit_refused result, never settled: the child is emitted again once here, so a re-run launcher recovers it. An accepted reply is never re-emitted.
-async function _reemit(child, refusal) {
-  try {
-    const again = await _emitLeg(child, { ...child.emit, __LAUNCHER_PARAM__: true }, 're-emit-' + child.run_id);
-    return { emitted: again, refusal: _emitRefusal(child, again, false) };
-  } catch (e) {
-    return { emitted: null, refusal: refusal };
-  }
-}
-
 async function _runChild(child, emitted) {
-  let refusal = _emitRefusal(child, emitted, false);
-  if (refusal !== null) {
-    const again = await _reemit(child, refusal);
-    emitted = again.emitted;
-    refusal = again.refusal;
-  }
+  const refusal = _emitRefusal(child, emitted, false);
   if (refusal !== null) {
     _abandonRedirect(child, emitted);
     return { run_id: child.run_id, status: 'emit_refused', error: refusal };

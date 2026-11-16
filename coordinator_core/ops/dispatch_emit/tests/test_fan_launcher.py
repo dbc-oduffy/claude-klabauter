@@ -727,11 +727,11 @@ def test_a_refused_emitted_reply_starts_nothing_and_carries_the_reason(tmp_path)
     assert results[0]["status"] == "emit_refused"
     assert _DECLINE in results[0]["error"]
     assert 'dispatch.reemit {"params_file":' in results[0]["error"]
-    assert len(prompts) == 1 and "dispatch.emit" in prompts[0]
+    assert prompts == []
 
 
 @pytest.mark.spawns_process
-def test_a_rerun_launcher_re_emits_a_refused_child_and_leaves_an_ok_child_alone(tmp_path):
+def test_a_rerun_launcher_never_re_emits_a_refused_baked_reply_and_leaves_an_ok_child_alone(tmp_path):
     import shutil
     import subprocess
 
@@ -742,25 +742,55 @@ def test_a_rerun_launcher_re_emits_a_refused_child_and_leaves_an_ok_child_alone(
     replies = [refused, _replies("ask-r2")[0]]
     path = fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1", "ask-r2"), "sess-1", replies)
     script = path.read_text(encoding="utf-8")
+    assert "re-emit-" not in script and "_reemit" not in script
     body = script.split("\n", 1)[1].split("const _settled", 1)[0].replace("export const meta", "const meta")
-    fresh = {"path": "scratch/warp/ask-r1.workflow.mjs", "run_id": "ask-r1", "fire_args": {"repoRoot": "/r"}}
     code = (
-        "const prompts = [];\n"
-        "const agent = async (p, o) => { prompts.push([o.label, p]); return " + json.dumps(fresh) + "; };\n"
+        "const legs = [];\n"
+        "const agent = async (p, o) => { legs.push(o.label); return {}; };\n"
         "const calls = [];\n"
         "const workflow = async (o) => { calls.push(o.scriptPath); return { done: true }; };\n"
         "const parallel = async (fns) => Promise.all(fns.map((f) => f()));\n" + body
-        + "\n_startAll().then((r) => console.log(JSON.stringify([r.map((x) => x.status), calls, prompts])));\n"
+        + "\n_startAll().then((r) => console.log(JSON.stringify([r, calls, legs])));\n"
     )
     out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     assert out.returncode == 0, out.stderr
-    statuses, calls, prompts = json.loads(out.stdout)
-    root = tmp_path.as_posix()
-    assert statuses == ["ok", "ok"]
-    assert [p[0] for p in prompts] == ["re-emit-ask-r1"]
-    assert '"reserved_run_id":"ask-r1"' in prompts[0][1] and '"launcher_child":true' in prompts[0][1].replace(" ", "")
-    assert sorted(calls) == [f"{root}/scratch/warp/ask-r1.workflow.mjs", f"{root}/scratch/warp/ask-r2.workflow.mjs"]
+    results, calls, legs = json.loads(out.stdout)
+    assert [r["status"] for r in results] == ["emit_refused", "ok"]
+    assert 'dispatch.reemit {"params_file":' in results[0]["error"]  # the manual recovery route a refused child names
+    assert legs == []
+    assert calls == [f"{tmp_path.as_posix()}/scratch/warp/ask-r2.workflow.mjs"]
+
+
+def test_the_hook_retries_a_refused_deferred_write_once_before_baking_the_reply(tmp_path, monkeypatch):
+    from coordinator_core.hooks import submit_engine_ask as hook
+
+    child = _children("ask-r1")[0]
+    script = tmp_path / "scratch" / "warp" / "defer.mjs"
+    script.parent.mkdir(parents=True)
+    script.write_text("x", encoding="utf-8")
+    attempts = []
+
+    def flaky(root, params):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise OSError("transient")
+        return script
+
+    monkeypatch.setattr(hook, "_write_deferred_script", flaky)
+    reply = hook._deferred_child_reply(tmp_path, child, {"ask": True}, "note")
+    assert len(attempts) == 2
+    assert reply["run_id"] == "ask-r1" and reply["path"] == "scratch/warp/defer.mjs" and "error" not in reply
+
+    attempts.clear()
+
+    def broken(root, params):
+        attempts.append(1)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(hook, "_write_deferred_script", broken)
+    assert hook._deferred_child_reply(tmp_path, child, {"ask": True}, "note") == {"error": "note"}
+    assert len(attempts) == 2  # one retry, no loop
 
 
 @pytest.mark.spawns_process

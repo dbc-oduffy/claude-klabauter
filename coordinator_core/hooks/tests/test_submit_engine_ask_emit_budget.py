@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.hooks.tests import test_submit_engine_ask_real_emit as real
+from coordinator_core.ops.dispatch_emit.tests._receipt_check_fake import RECEIPT_MATCH_FAKE_JS as _RECEIPT_FAKE_JS
 from coordinator_core.ops.dispatch_emit import run_token
 
 pytestmark = [pytest.mark.cadence]
@@ -386,10 +387,9 @@ const fs = require('fs');
 const src = fs.readFileSync(process.argv[2], 'utf8').replace(/^export const meta[^\\n]*\\n/, '');
 const cfg = JSON.parse(process.argv[3]);
 const calls = [];
-const RECEIPT_SHA = 'ab'.repeat(32);
-// The receipt-check relay answers like the real emit's `<script>.emitted.json` beside a script of the same digest.
-const agent = async (prompt) => {
-  if (/sha256sum "/.test(prompt)) return { found: true, receipt_sha256: RECEIPT_SHA, script_sha256: RECEIPT_SHA };
+const agent = async (prompt, opts) => {
+  const receipt = _receiptCheckReply(prompt, opts);
+  if (receipt !== undefined) return receipt;
   calls.push({ agent: prompt });
   return cfg.replies.shift();
 };
@@ -397,6 +397,7 @@ const workflow = async (o) => { calls.push({ workflow: o }); return cfg.results.
 const run = new (Object.getPrototypeOf(async function () {}).constructor)('agent', 'workflow', src);
 run(agent, workflow).then((out) => console.log(JSON.stringify({ out, calls })));
 """
+_NODE_HARNESS = _RECEIPT_FAKE_JS + _NODE_HARNESS
 
 
 def _run_deferred(tmp_path, params, replies, results):

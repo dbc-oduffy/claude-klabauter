@@ -1971,11 +1971,15 @@ def _default_launch(root: Path, parent_id: str, children: Sequence[Any], session
 
 def _deferred_child_reply(root: Path, child: Any, params: dict, note: str) -> dict:
     """The launcher's emitted reply for a child whose emit the hook did not finish: a deferred-emit script
-    that mints `child.run_id`; the error reply when the script cannot be written."""
+    that mints `child.run_id`; the error reply when the script cannot be written twice. A refused write is retried
+    once here, so the launcher bakes a refusal only after two failures and never re-emits in-launcher."""
     try:
         script = _write_deferred_script(root, params)
     except OSError:
-        return {"error": note}
+        try:
+            script = _write_deferred_script(root, params)
+        except OSError:
+            return {"error": note}
     return {"path": script.relative_to(root).as_posix(), "run_id": child.run_id, "fire_args": {}, "deferred": note}
 
 

@@ -48,8 +48,9 @@ def test_every_child_render_variant_is_reader_free_and_the_top_level_keeps_its_r
 
 
 def test_default_emit_renders_a_child_script_reader_free_and_a_standalone_one_with_its_reader(env):  # noqa: F811
-    for params, reader in (({"launcher_child": True}, False), ({}, True)):
-        op._dispatch_emit({"ask": "add a widget", **params}, repo_root=env.root)
+    # A same-ask re-send replies with the first run and composes nothing, so each variant asks differently.
+    for ask, params, reader in (("add a widget", {"launcher_child": True}, False), ("add a gadget", {}, True)):
+        op._dispatch_emit({"ask": ask, **params}, repo_root=env.root)
         kw = env.calls["compose"]
         assert kw["launcher_child"] is bool(params)
         rendered = _REAL_COMPOSE(**kw)

@@ -95,8 +95,8 @@ def _verify_sequence(replies: list) -> dict:
     return json.loads(out.stdout)
 
 
-_GOOD = {"found": True, "receipt_sha256": "ab" * 32, "script_sha256": "ab" * 32}
-_TORN = {"found": True, "receipt_sha256": "ab" * 32, "script_sha256": "cd" * 32}
+_GOOD = {"found": True, "verdict": "MATCH"}
+_TORN = {"found": True, "verdict": "MISMATCH", "detail": "MISMATCH receipt sha256 " + "ab" * 32 + " != script sha256 " + "cd" * 32}
 
 
 def test_a_receipt_read_torn_by_a_retried_emit_is_reread_and_the_run_starts():

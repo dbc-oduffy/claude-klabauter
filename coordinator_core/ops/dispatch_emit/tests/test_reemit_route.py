@@ -20,7 +20,10 @@ const fs = require('fs');
 const src = fs.readFileSync(process.argv[2], 'utf8').replace(/^export const meta[^\\n]*\\n/, '');
 const cfg = JSON.parse(process.argv[3]);
 const calls = [];
-const agent = async (prompt) => { calls.push({ agent: prompt }); return cfg.replies.shift(); };
+const agent = async (prompt, opts) => {
+  calls.push({ agent: prompt });
+  return opts && opts.label === 'receipt-check' ? { found: true, verdict: 'MATCH' } : cfg.replies.shift();
+};
 const workflow = async (o) => { calls.push({ workflow: o }); return cfg.results.shift(); };
 const run = new (Object.getPrototypeOf(async function () {}).constructor)('agent', 'workflow', src);
 run(agent, workflow).then((out) => console.log(JSON.stringify({ out, calls })));

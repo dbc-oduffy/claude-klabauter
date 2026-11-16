@@ -7,13 +7,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coordinator_core.ops.dispatch_emit import fan_launcher, reply_sidecar, run_token, stage_wait
+from coordinator_core.ops.dispatch_emit import fan_launcher, op, reply_sidecar, run_token, stage_wait
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import big_manifest
 from coordinator_core.ops.dispatch_emit.tests.test_launcher_child_stage_no_token_leg_incident import (
     _emit_child,
     _twin_inline,
 )
 from coordinator_core.ops.dispatch_emit.tests.test_sizing_fire_wiring import env  # noqa: F401
+
+
+def _emit_distinct_child(env, monkeypatch, n: int) -> dict:  # noqa: F811
+    """A same-ask re-send yields the first run's id; each child needs its own ask to mint its own run."""
+    real = op._dispatch_emit
+    with monkeypatch.context() as m:
+        m.setattr(op, "_dispatch_emit", lambda params, **kw: real({**params, "ask": f"add widget number {n}"}, **kw))
+        return _emit_child(env, monkeypatch)
 
 
 def _spooled(root: Path) -> list:
@@ -38,8 +46,8 @@ def _commit(root: Path, run_id: str, token: str) -> None:
 
 def test_both_launcher_children_reach_commit_with_their_own_token_after_a_stage_wait_wake(env, monkeypatch):  # noqa: F811
     root = env.root
-    first = _emit_child(env, monkeypatch)
-    second = _emit_child(env, monkeypatch)
+    first = _emit_distinct_child(env, monkeypatch, 1)
+    second = _emit_distinct_child(env, monkeypatch, 2)
     blocker, waiter = first["run_id"], second["run_id"]
     assert blocker != waiter
     tokens = {rid: run_token.escrowed(root, rid) for rid in (blocker, waiter)}

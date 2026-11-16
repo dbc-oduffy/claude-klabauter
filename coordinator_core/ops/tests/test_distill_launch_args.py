@@ -104,6 +104,39 @@ def test_realistic_64kb_curated_payload_inlines_whole(tmp_path):
     assert out["args_bytes"] == len(Path(out["path"]).read_bytes()) > 60_000
 
 
+PREPARED_REL = f"state/scratch/artifact-distillation/{RUN_ID}/prepared.json"
+
+
+def test_prepared_path_inlines_prepared_json_as_args_prepared(tmp_path):
+    prepared = {"synth": {"payloads": [{"topic": "t", "nuggets": ["n1"]}], "schema": {"type": "object"}}}
+    target = tmp_path / PREPARED_REL
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(prepared), encoding="utf-8")
+    out = dla._handler(_params(tmp_path, prepared_path=PREPARED_REL))
+    assert out["args"][dla.PREPARED_KEY] == prepared
+    assert json.loads(Path(out["path"]).read_text(encoding="utf-8"))["prepared"] == prepared
+
+
+def test_no_prepared_path_adds_no_prepared_key(tmp_path):
+    assert dla.PREPARED_KEY not in dla._handler(_params(tmp_path))["args"]
+
+
+@pytest.mark.parametrize("data", [None, "{not json", "[1, 2]"])
+def test_missing_or_malformed_prepared_file_raises_naming_it(tmp_path, data):
+    if data is not None:
+        target = tmp_path / PREPARED_REL
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(data, encoding="utf-8")
+    with pytest.raises(ValueError, match=r"prepared\.json"):
+        dla._handler(_params(tmp_path, prepared_path=PREPARED_REL))
+
+
+@pytest.mark.parametrize("rel", ["../prepared.json", "docs/prepared.json", "", 7])
+def test_prepared_path_outside_scratch_or_not_a_string_is_refused(tmp_path, rel):
+    with pytest.raises(ValueError, match="prepared_path"):
+        dla._handler(_params(tmp_path, prepared_path=rel))
+
+
 @pytest.mark.parametrize("rel", ["../outside.json", "docs/curated.json", "state/scratch", "/abs/elsewhere.json"])
 def test_curated_file_outside_scratch_is_refused(tmp_path, rel):
     with pytest.raises(ValueError, match="state/scratch"):

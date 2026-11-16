@@ -23,6 +23,10 @@ Added args keys, only when that file exists (invocation A runs before curation a
 ``contradictionClusterCount`` (each copied when present). The file is never relayed by path.
 A curated file that is not a JSON object with a ``verdicts`` list raises ValueError naming it.
 
+    prepared_path (str, optional) — repo-relative, confined to ``state/scratch/``: the ``prepared.json``
+        that ``distill_mechanical.py prepare`` wrote. Its object is inlined as ``args.prepared``, the input
+        distill-harvest reads; a missing file or one that is not a JSON object raises ValueError naming it.
+
 Negative-spec: one write (``launch-args.json`` in the run dir); no git, no subprocess, no LLM call.
 """
 
@@ -37,9 +41,10 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops.distill_scope import RUN_DIR_REL
 from coordinator_core.ops.distill_workflow_input import _handler as _workflow_input
 
-__all__ = ["CURATED_TAGS_KEY", "curated_default_rel"]
+__all__ = ["CURATED_TAGS_KEY", "PREPARED_KEY", "curated_default_rel"]
 
 CURATED_TAGS_KEY = "curatedTags"
+PREPARED_KEY = "prepared"
 _PASSTHROUGH_KEYS = (
     "threshold_applied",
     "threshold_auto",
@@ -90,7 +95,24 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
     curated = _curated_target(root, curated_rel)
     if curated.is_file():
         payload = {**payload, **_curated_args(curated, curated_rel)}
+    prepared_rel = params.get("prepared_path")
+    if prepared_rel is not None:
+        payload = {**payload, PREPARED_KEY: _prepared(root, prepared_rel)}
     return build(payload)
+
+
+def _prepared(root: Path, rel: Any) -> dict:
+    if not isinstance(rel, str) or not rel:
+        raise ValueError("distill.launch_args: prepared_path must be a non-empty string")
+    target = _scratch_target(root, rel, "prepared_path")
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"distill.launch_args: prepared file {rel} is unreadable or not JSON: {exc}; "
+                         "distill_mechanical.py prepare writes it") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"distill.launch_args: prepared file {rel} must be a JSON object (prepared.json)")
+    return data
 
 
 def _with_scope_manifest(params: dict, root: Path) -> dict:
