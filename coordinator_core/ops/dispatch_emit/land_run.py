@@ -53,7 +53,7 @@ import json
 import os
 import re
 from pathlib import Path, PurePosixPath
-from typing import Collection, Mapping, Optional, Sequence
+from typing import Collection, Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.git.machine_local_paths import machine_local_paths
 from coordinator_core import ipc as _ipc
@@ -2858,12 +2858,15 @@ def _reconcile_prep(
 # ---- trailers ---------------------------------------------------------------------------------
 
 
-def _run_closed_lines(root: Path, run_id: object, params: dict) -> list:
-    """``Checkpoint-Run-Closed:`` lines for every base the landing run's checkpoints carry; empty when none resolves."""
+def _run_closed_lines(root: Path, run_id: object, params: dict, landed_paths: Iterable[str] = ()) -> list:
+    """``Checkpoint-Run-Closed:`` lines for every base the landing run's checkpoints carry, plus each earlier
+    fire's open checkpoint of the same plan whose withheld paths this landing commits; empty when none resolves.
+    Trap: without ``landed_paths`` a refired run's first-fire checkpoint stays open and refuses every publish."""
     from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_closed_trailer_lines
     from coordinator_core.ops.dispatch_emit.landing_integrity import closing_bases
 
-    return run_closed_trailer_lines(closing_bases(root, run_id if isinstance(run_id, str) else None, params))
+    rid = run_id if isinstance(run_id, str) else None
+    return run_closed_trailer_lines(closing_bases(root, rid, params, landed_paths=list(landed_paths)))
 
 
 def _review_trailer(record_abs: Optional[Path]) -> list:
@@ -4723,7 +4726,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     trailers.extend(review_floor.floor_trailer(n) for n in floor_notes)
     if ledger is not None:
         trailers.append(f"Ledger-Receipt: {review_floor.receipt(review_floor.verdict_count(inline_review, root))}")
-    trailers.extend(_run_closed_lines(root, art_run_id or sibling_run_id, params))
+    trailers.extend(_run_closed_lines(root, art_run_id or sibling_run_id, params, paths))
     if product_only:
         trailers.extend(_ask_trailers(root, request.plan_path, record_abs, receipts_built))
     else:

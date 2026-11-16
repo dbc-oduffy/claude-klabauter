@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import re
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Mapping, Optional, Sequence
+from typing import Callable, Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit import land_deadline
 
@@ -332,9 +333,16 @@ def unparseable_py_at(worktree_root: Path, rev: str, paths: Sequence[str]) -> li
     return [f for f in _cached_parse_findings(worktree_root, items) if f]
 
 
-def closing_bases(worktree_root: Path, run_id: Optional[str], params: Mapping) -> tuple:
+def closing_bases(
+    worktree_root: Path, run_id: Optional[str], params: Mapping, landed_paths: Optional[Iterable[str]] = None,
+) -> tuple:
     """The 40-hex bases a run's closing or halt trailer names, deduplicated, in order: the stage
     manifest ``head_sha``, then ``run_base_for``, then ``params["review_run_base"]``.
+
+    ``landed_paths`` (``None`` = off; any iterable, even empty, = on) appends the base of every other
+    open run-open checkpoint of the run's plan (matched by plan file name, so a moved plan still
+    matches) whose ``Checkpoint-Withheld`` paths are all in ``landed_paths``
+    (``_open_sibling_bases``; one git spawn).
 
     The manifest comes first because the ask route's checkpoints carry it as ``Checkpoint-Base``
     (``emit._checkpoint_trailer_js`` stamps ``_RUN_BASE_VAR`` from the emit sha), and it differs
@@ -347,7 +355,76 @@ def closing_bases(worktree_root: Path, run_id: Optional[str], params: Mapping) -
     found: list = [*_own_bases(worktree_root, rid, params), params.get("review_run_base")]
     for prev in _resumed_chain(worktree_root, rid):
         found.extend(_own_bases(worktree_root, prev, {}))
-    return tuple(dict.fromkeys(b for b in found if isinstance(b, str) and re.fullmatch(r"[0-9a-f]{40}", b)))
+    own = tuple(dict.fromkeys(b for b in found if isinstance(b, str) and re.fullmatch(r"[0-9a-f]{40}", b)))
+    if landed_paths is None:
+        return own
+    siblings = _open_sibling_bases(worktree_root, rid, params, set(own), landed_paths)
+    return tuple(dict.fromkeys((*own, *siblings)))
+
+
+_SIBLING_LOG_CAP = 400
+
+
+def _run_plan_names(worktree_root: Path, rid: Optional[str], params: Mapping) -> frozenset:
+    """File names of the plans the run names: ``params`` ``plan_path``/``plan_rel`` and each ``resume.json`` ``resume_plan_rel`` along the resume chain."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    rels: list = [params.get("plan_path"), params.get("plan_rel")]
+    for one in ([rid, *_resumed_chain(worktree_root, rid)] if rid else []):
+        try:
+            data = json.loads((record_dir(Path(worktree_root), one) / "resume.json").read_text(encoding="utf-8"))
+            rels.append(data.get("resume_plan_rel") if isinstance(data, dict) else None)
+        except (OSError, ValueError):
+            continue
+    return frozenset(r.replace("\\", "/").rsplit("/", 1)[-1] for r in rels if isinstance(r, str) and r.strip())
+
+
+def _open_sibling_bases(
+    worktree_root: Path, rid: Optional[str], params: Mapping, known: set, landed_paths: Iterable[str],
+) -> list:
+    """Bases of open run-open checkpoints, not in ``known``, of the run's plan whose withheld paths are all covered.
+
+    Covered: every withheld path is named in ``landed_paths`` (the run's own landing; a later commit
+    by another run never counts). Open: no ``Checkpoint-Run-Closed`` in the log names the base. One
+    ``git log`` capped at ``_SIBLING_LOG_CAP`` commits (an older checkpoint stays open, logged as a warning); a checkpoint with no withheld paths never closes here; empty when it fails."""
+    plans = _run_plan_names(worktree_root, rid, params)
+    if not plans:
+        return []
+    from coordinator_core.git.run import run_git
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
+        _forward,
+        checkpoint_withheld,
+        parse_checkpoint,
+        run_closed_bases,
+    )
+
+    done = run_git(
+        ["-c", "core.quotepath=off", "log", f"-n{_SIBLING_LOG_CAP}", "--format=%x1e%H%x1d%B%x1f"],
+        cwd=str(worktree_root),
+    )
+    if done.returncode != 0:
+        return []
+    covered = {_forward(p).casefold() for p in landed_paths if isinstance(p, str)}
+    closed: set = set()
+    candidates: list = []
+    scanned = 0
+    for record in done.stdout.split("\x1e"):
+        head, sep, _ = record.partition("\x1f")
+        _, _, message = head.partition("\x1d")
+        if not sep:
+            continue
+        scanned += 1
+        closed |= run_closed_bases(message)
+        cp = parse_checkpoint(message)
+        if cp is not None and cp.not_landed and cp.base and cp.plan_rel.rsplit("/", 1)[-1] in plans:
+            need = {_forward(p).casefold() for p in checkpoint_withheld(message)}
+            if need and need <= covered:
+                candidates.append(cp.base)
+    if scanned >= _SIBLING_LOG_CAP:
+        logging.getLogger(__name__).warning(
+            "sibling checkpoint scan hit the %d-commit cap; older run-open checkpoints stay open", _SIBLING_LOG_CAP,
+        )
+    return [b for b in candidates if b not in known and b not in closed]
 
 
 def _own_bases(worktree_root: Path, rid: Optional[str], params: Mapping) -> list:
