@@ -896,7 +896,7 @@ def test_the_handler_without_params_repo_root_scopes_the_injected_repo(fixture_r
 
 def test_scannable_count_cap_stops_at_cap_and_is_exact_below_it(fixture_repo):
     for day in range(1, 5):
-        _write(fixture_repo / "archive" / "daily-summaries" / f"2026-11-0{day}.md", "- a day\n")
+        _backlog_file(fixture_repo, f"2026-11-0{day}")
     full = scannable_count(fixture_repo)
     assert full > 2
     assert scannable_count(fixture_repo, cap=2) == 2
@@ -1343,6 +1343,13 @@ def _log(root: Path, day: str, *cites: str) -> str:
     return rel
 
 
+def _backlog_file(root: Path, day: str) -> str:
+    """One batchable candidate dated ``day``: a heavy plan and the log that cites it."""
+    plan = _heavy_plan(root, f"{day}-bk")
+    _log(root, day, plan)
+    return plan
+
+
 def _not_admitted(scope) -> dict[str, str]:
     return {row["path"]: row["reason"] for row in scope.manifest["not_admitted"]}
 
@@ -1363,21 +1370,23 @@ def test_cite_keys_name_plans_by_dated_stem_or_path():
     ]
 
 
-def test_admission_takes_logs_first_newest_first_then_cited_plans(fixture_repo, wide_budget):
-    cited = _heavy_plan(fixture_repo, "2026-11-01-big")
-    _log(fixture_repo, "2026-11-02", cited)
-    _log(fixture_repo, "2026-11-03", "nothing of note")
-    scope = _admit_scope(fixture_repo)
-    assert _batched(scope) == [
-        "archive/daily-summaries/2026-11-03.md",
-        "archive/daily-summaries/2026-11-02.md",
-        cited,
-    ]
-    assert scope.manifest["cohorts"]["logs"] == [
-        "archive/daily-summaries/2026-11-02.md",
-        "archive/daily-summaries/2026-11-03.md",
-    ]
-    assert scope.counts["log_cited_plan_count"] == 1
+def test_logs_are_triage_only_and_a_cited_plan_is_the_only_candidate(tmp_path, monkeypatch, wide_budget):
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    for day in _LOG_DAYS[1:]:
+        for rel in (_log_rel(day), f"archive/daily-summaries/{day}.md"):
+            (root / rel).unlink()
+    cited = _log_rel(_LOG_DAYS[0])
+    _log(root, "2026-11-09", "nothing of note")
+    logs = [f"archive/daily-summaries/{_LOG_DAYS[0]}.md", "archive/daily-summaries/2026-11-09.md"]
+    scope = _admit_scope(root)
+    assert scope.manifest["cohorts"]["logs"] == logs
+    assert scope.counts["logs"] == 2 and scope.counts["scannable"] == 1
+    assert _batched(scope) == [cited]
+    assert scope.counts["log_cited_plan_count"] == 1 and _not_admitted(scope).get(cited) is None
+    assert scannable_count(root, cohort_specs=_PM_SPECS) == 1
+    assert scope.watermark is not None
+    assert scope.watermark.cursor.endswith(cited) and scope.watermark.pass_complete is True
+    assert not [rel for rel in scope.keys if rel in logs]
 
 
 def test_admission_refuses_uncited_plans_and_light_plans_and_names_why(fixture_repo):
@@ -1461,15 +1470,12 @@ def test_admission_adds_the_logs_cohort_to_a_caller_set_without_one(fixture_repo
 
 def test_the_batch_budget_defers_overflow_and_keeps_it_out_of_mechanical(fixture_repo):
     for day in range(1, 6):
-        _log(fixture_repo, f"2026-11-0{day}", "a day")
+        _backlog_file(fixture_repo, f"2026-11-0{day}")
     scope = _admit_scope(fixture_repo, size_of=lambda rel: 600, byte_budget=1000, max_scan_batches=2)
-    assert scope.manifest["batches"] == [
-        ["archive/daily-summaries/2026-11-05.md"],
-        ["archive/daily-summaries/2026-11-04.md"],
-    ]
+    assert scope.manifest["batches"] == [[_log_rel("2026-11-01")], [_log_rel("2026-11-02")]]
     deferred = [row["path"] for row in scope.manifest["deferred"]]
-    assert deferred == [f"archive/daily-summaries/2026-11-0{day}.md" for day in (3, 2, 1)]
-    assert {row["cohort"] for row in scope.manifest["deferred"]} == {"logs"}
+    assert deferred == [_log_rel(f"2026-11-0{day}") for day in (3, 4, 5)]
+    assert {row["cohort"] for row in scope.manifest["deferred"]} == {ds.PLANS_COHORT}
     assert scope.counts["scannable"] == 2 and scope.counts["deferred"] == 3
     assert not set(deferred) & {row["path"] for row in scope.manifest["mechanical"]}
 
@@ -1477,10 +1483,9 @@ def test_the_batch_budget_defers_overflow_and_keeps_it_out_of_mechanical(fixture
 def test_every_candidate_settles_exactly_once_and_scannable_count_agrees(fixture_repo):
     _add_plans(fixture_repo)
     _add_fate_rows(fixture_repo)
-    cited = _heavy_plan(fixture_repo, "2026-11-10-cited")
     _heavy_plan(fixture_repo, "2026-11-11-uncited")
     for day in range(1, 5):
-        _log(fixture_repo, f"2026-11-0{day}", cited)
+        _backlog_file(fixture_repo, f"2026-11-0{day}")
     specs = ds._with_logs(_PM_SPECS)
     before = compute_scope(fixture_repo, run_id="r", cohort_specs=specs)
     candidates = set(_batched(before)) | {row["path"] for row in before.manifest["mechanical"]}
@@ -1519,7 +1524,7 @@ def test_the_op_default_admits_under_the_pm_ruling_set(fixture_repo, wide_budget
     result = _handler({"run_id": "r"}, repo_root=fixture_repo / ".git")
     counts = result["counts"]
     assert "handoffs" not in counts and counts["memos"] == 0
-    assert counts["logs"] == 1 and counts["scannable"] == 2 and counts["deferred"] == 0
+    assert counts["logs"] == 1 and counts["scannable"] == 1 and counts["deferred"] == 0
     assert counts["cohort_excluded"] == 7
     assert "not_admitted=" in result["summary"]
     manifest = json.loads((fixture_repo / result["input_json_path"]).read_text(encoding="utf-8"))
@@ -1548,7 +1553,7 @@ def _watermarked_repo(tmp_path: Path, monkeypatch) -> Path:
     root = tmp_path / "wm-repo"
     _write(root / "state" / "distillation-log.md", "## Run seed\n")
     for day in _LOG_DAYS:
-        _log(root, day)
+        _backlog_file(root, day)
     _git_init(root)
     for argv in (
         ["config", "user.email", "t@example.com"],
@@ -1573,7 +1578,12 @@ def _commit_watermark(root: Path, result, run_id: str = "r"):
 
 
 def _log_rel(day: str) -> str:
-    return f"archive/daily-summaries/{day}.md"
+    return f"docs/plans/{day}-bk.md"
+
+
+def _touch(root: Path, rel: str) -> None:
+    path = root / rel
+    path.write_text(path.read_text(encoding="utf-8") + "edited after the run\n", encoding="utf-8")
 
 
 def test_scope_after_promote_is_delta_plus_next_backlog_slice(tmp_path, monkeypatch):
@@ -1583,7 +1593,7 @@ def test_scope_after_promote_is_delta_plus_next_backlog_slice(tmp_path, monkeypa
     assert first.counts["deferred"] == 2
     _commit_watermark(root, first)
 
-    (root / _log_rel(_LOG_DAYS[0])).write_text("- edited after the first run\n", encoding="utf-8")
+    _touch(root, _log_rel(_LOG_DAYS[0]))
     second = _slice_scope(root)
     assert sorted(_batched(second)) == sorted(_log_rel(d) for d in [_LOG_DAYS[0], *_LOG_DAYS[3:]])
     assert second.counts["deferred"] == 2
@@ -1597,7 +1607,7 @@ def test_completed_pass_scopes_only_changed_files(tmp_path, monkeypatch):
     quiet = _slice_scope(root)
     assert _batched(quiet) == [] and quiet.counts["deferred"] == len(_LOG_DAYS)
 
-    (root / _log_rel(_LOG_DAYS[3])).write_text("- changed\n", encoding="utf-8")
+    _touch(root, _log_rel(_LOG_DAYS[3]))
     delta = _slice_scope(root)
     assert _batched(delta) == [_log_rel(_LOG_DAYS[3])]
     assert delta.counts["deferred"] == len(_LOG_DAYS) - 1
@@ -1627,11 +1637,11 @@ def test_no_head_means_no_watermark_and_the_full_admitted_scope(tmp_path, monkey
     root = tmp_path / "unborn"
     _write(root / "state" / "distillation-log.md", "## Run seed\n")
     for day in _LOG_DAYS:
-        _log(root, day)
+        _backlog_file(root, day)
     _git_init(root)
     scope = _slice_scope(root)
     assert scope.watermark is None
-    assert _batched(scope) == [_log_rel(d) for d in reversed(_LOG_DAYS[2:])] and scope.counts["deferred"] == 2
+    assert _batched(scope) == [_log_rel(d) for d in _LOG_DAYS[:3]] and scope.counts["deferred"] == 2
 
 
 def test_byte_packing_overflow_holds_the_cursor_before_the_first_deferred_file(tmp_path, monkeypatch):
@@ -1658,8 +1668,8 @@ def _slice_cost(topics: int, batches: int = 1, file_bytes: int = 0):
 
 
 def _fit_tokens_for_topics(topics: int) -> int:
-    """Token cap that admits exactly ``topics`` topics of one batch (slack covers the fixture's few file bytes)."""
-    return _slice_cost(topics).tokens + 1_000
+    """Token cap that admits exactly ``topics`` topics of one batch (slack covers the fixture's heavy-plan bytes)."""
+    return _slice_cost(topics, file_bytes=_files_for_topics(topics) * (len(_HEAVY) + 64)).tokens + 1_000
 
 
 def _narrow_to_topics(monkeypatch, topics: int, agents: int = 1000, minutes: int = 10_000) -> None:
@@ -1749,7 +1759,7 @@ def _plain_log_repo(tmp_path: Path, days: int) -> Path:
     root = tmp_path / "plain-repo"
     _write(root / "state" / "distillation-log.md", "## Run seed\n")
     for i in range(days):
-        _log(root, f"2026-10-{i + 1:02d}")
+        _backlog_file(root, f"2026-10-{i + 1:02d}")
     return root
 
 
@@ -1858,7 +1868,7 @@ def test_the_topic_file_cap_holds_when_no_watermark_resolves(tmp_path, monkeypat
     root = tmp_path / "plain-repo"
     _write(root / "state" / "distillation-log.md", "## Run seed\n")
     for day in _LOG_DAYS:
-        _log(root, day)
+        _backlog_file(root, day)
     _narrow_to_topics(monkeypatch, 2)
     scope = _admit_scope(root, batch_size=100)
     cap = _files_for_topics(2)

@@ -485,6 +485,39 @@ def _kept_row_holds(root: Path, snap: Optional[resume_snapshot.Snapshot], row_id
     return bool(_DELIVERED_REPORT_RE.search(text)) and not _UNDELIVERED_REPORT_RE.search(text)
 
 
+def _refire_prior(record: Path, snap: Optional[resume_snapshot.Snapshot]) -> str:
+    """The halted run this stage resumes: the run.json `resumed_from`, else the snapshot's kept run; "" for a fresh run."""
+    prev = (requirements_ledger.read_run(record) or {}).get(requirements_ledger.RESUMED_FROM_FIELD)
+    if isinstance(prev, str) and safe_id(prev):
+        return prev
+    return snap.kept_run if snap is not None and snap.kept_run else ""
+
+
+def _refire_notes(root: Path, run_id: str, prior: str) -> list[dict]:
+    """Live revise notes of this run and its halted predecessor (op.py's `_live_carried_notes`); [] when unreadable."""
+    from coordinator_core.ops.dispatch_emit.op import _live_carried_notes
+
+    try:
+        return _live_carried_notes(root, run_id, prior or None)
+    except (requirements_ledger.LedgerRefused, OSError, ValueError):
+        return []
+
+
+def _note_names_row(notes: Sequence[dict], row_id: str, writes: object) -> bool:
+    """True when a live note names the row by id or names one of its writes."""
+    token = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(row_id) + r"(?![A-Za-z0-9_])")
+    paths = [w for w in writes if isinstance(w, str)] if isinstance(writes, (list, tuple)) else []
+    return any(token.search(n["note"]) or any(p in n["note"] for p in paths) for n in notes)
+
+
+def _revise_notes_block(notes: Sequence[dict], run_id: str) -> str:
+    """The brief section listing each live note verbatim under its inherited id."""
+    from coordinator_core.ops.dispatch_emit.op import _inherited_note_id
+
+    lines = "\n".join(f"- {_inherited_note_id(n, run_id)}: {n['note']}" for n in notes)
+    return f"## Revise notes (binding EM context)\n\n{lines}\n"
+
+
 def _persisted_return_line(root: Path, kept_run: str, dep: str) -> str:
     """The brief line naming a kept dependency's persisted return; "" when the kept run holds none."""
     try:
@@ -1733,6 +1766,9 @@ def stage(
     row_families: dict[str, str] = {}
     kept_ids: set[str] = set()
     served_widen_rows: set[str] = set()
+    refire_prior = _refire_prior(record, resume_snap)
+    refire_notes = _refire_notes(root, run_id, refire_prior) if refire_prior else []
+    fresh_rows: dict[str, tuple[tuple[str, ...], str]] = {}
     try:
         sizing_family = stage_family.resolve((run_sizing or {}).get("family"))
     except ValueError as exc:
@@ -1784,12 +1820,15 @@ def stage(
                     if agent_type != REVIEWER_AGENT_TYPE and _kept_row_holds(root, resume_snap, row.id, report_rel)
                     else ""
                 )
+                if kept_from and refire_notes and _note_names_row(refire_notes, row.id, row.writes):
+                    kept_from = ""
                 if kept_from:
                     kept_ids.add(row.id)
                     if role_family or row_family != "claude":
                         agent_type, role_family, row_family = _EXECUTOR_AGENT_TYPE, "", "claude"
                         model = resolve_agent_model(agent_type, None)
                 prior = None if kept_from else _set_aside_prior_report(root, report_rel, report_listings)
+                prior_line = ""
                 if kept_from:
                     text = _kept_brief(kept_from)
                 elif agent_type == REVIEWER_AGENT_TYPE:
@@ -1805,6 +1844,8 @@ def stage(
                         text = intent + "\n" + text
                     if row.id in clauses:
                         text = text.rstrip() + "\n\n" + clauses[row.id] + "\n"
+                    if refire_notes:
+                        text = text.rstrip() + "\n\n" + _revise_notes_block(refire_notes, run_id)
                     scratch_clause = scratch_delete.brief_clause(run_id, row.id, row.writes)
                     if scratch_clause:
                         text = text.rstrip() + "\n\n" + scratch_clause + "\n"
@@ -1812,7 +1853,8 @@ def stage(
                     if delete_clause:
                         text = text.rstrip() + "\n\n" + delete_clause + "\n"
                     if prior:
-                        text = text.rstrip() + "\n\n" + _prior_report_line(prior) + "\n"
+                        prior_line = _prior_report_line(prior)
+                        text = text.rstrip() + "\n\n" + prior_line + "\n"
                     if row.id in premise_ids:
                         text = text.rstrip() + "\n\n" + PREMISE_RECORD_BRIEF_LINE + "\n"
                     for dep in after.get(row.id, ()):
@@ -1845,6 +1887,8 @@ def stage(
                 brief_sizes[row.id] = len(text.encode("utf-8"))
                 paths = _widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root)
                 declared.extend(paths)
+                if not kept_from:
+                    fresh_rows[row.id] = (tuple(paths), text.replace(prior_line, "") if prior_line else text)
                 if ledger_resume and agent_type != REVIEWER_AGENT_TYPE and (raw_by_id.get(row.id) or {}).get("register_rows"):
                     from coordinator_core.ops.dispatch_emit import in_run_widen
 
@@ -1883,6 +1927,16 @@ def stage(
                         report=_dispatch_report_path(plan_posix, row.id),
                     )
                 )
+
+    if refire_prior:
+        from coordinator_core.ops.dispatch_emit import refire_unchanged
+
+        try:
+            unchanged = refire_unchanged.check(root, record_dir(root, refire_prior), run_id, fresh_rows)
+        except ValueError:
+            unchanged = None
+        if unchanged:
+            raise AskStageError(unchanged)
 
     if family_report is not None:
         family_report.update(_family_routing_report(sizing_family, row_families))

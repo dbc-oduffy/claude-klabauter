@@ -351,3 +351,30 @@ def test_postuse_dispatch_under_bar_has_no_turn_advisory(env, monkeypatch, tmp_p
     env.turns(3)
     out = asyncio.run(pad._handler(env.params(tool_name="Write")))
     assert "[em-turn-budget]" not in json.dumps(out)
+
+
+def _entrypoint_head(env: Env, entrypoint: str) -> None:
+    rec = {"type": "user", "entrypoint": entrypoint, "message": {"role": "user", "content": "go"}}
+    env.transcript.write_bytes(json.dumps(rec, separators=(",", ":")).encode() + b"\n")
+
+
+@pytest.mark.parametrize("via", ["env", "transcript"])
+def test_headless_session_gets_no_turn_budget_nudge(env, via):
+    extra = {}
+    if via == "env":
+        extra["env"] = {"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}
+    else:
+        _entrypoint_head(env, "sdk-cli")
+    env.turns(12)
+    assert nb.advisory_text(env.params(**extra)) == ""
+
+
+@pytest.mark.parametrize("via", ["env", "transcript"])
+def test_interactive_session_still_gets_turn_budget_nudge(env, via):
+    extra = {}
+    if via == "env":
+        extra["env"] = {"CLAUDE_CODE_ENTRYPOINT": "cli"}
+    else:
+        _entrypoint_head(env, "cli")
+    env.turns(11)
+    assert "11 turns" in nb.advisory_text(env.params(**extra))

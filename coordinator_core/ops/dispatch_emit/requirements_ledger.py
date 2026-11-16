@@ -594,18 +594,20 @@ def _note_uncovered_paths(root: Path, dir_: Path, run: Mapping, note: str) -> li
     """Repo-relative paths a staged run's frozen footprint does not cover that `note` asks to change:
     existing repo files named in a clause an edit verb governs (`sizing_xs_mint._EDIT_VERB` over
     `_CLAUSE_SPLIT`), plus, when the note has such a clause and the run is halted, the uncovered
-    `self_correction.needs_paths` of its halt. A note with no edit-verb clause (provenance, a tool to
-    run, a re-ruling) is never checked. [] when the run has no manifest. Writes nothing."""
+    `self_correction.needs_paths` of its halt. On a halted run every existing repo file the whole note
+    names counts, verb or not (a refire reads the note). A note on a live run with no edit-verb clause
+    (provenance, a tool to run, a re-ruling) is never checked. [] when the run has no manifest. Writes nothing."""
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.sizing_xs_mint import _CLAUSE_SPLIT, _EDIT_VERB
 
     clauses = [c for c in _CLAUSE_SPLIT.split(note) if _EDIT_VERB.search(c)]
-    wanted = _paths_named(root, clauses)
     try:
-        marker = halted_run.read_strict(dir_) if clauses else None
+        marker = halted_run.read_strict(dir_)
     except ValueError:
         marker = None
-    if marker is not None and marker.get("status") == halted_run.STATUS_HALTED:
+    is_halted = marker is not None and marker.get("status") == halted_run.STATUS_HALTED
+    wanted = _paths_named(root, [note] if is_halted else clauses)
+    if is_halted and clauses:
         correction = marker.get("self_correction")
         needs = correction.get("needs_paths") if isinstance(correction, dict) else None
         for raw in needs if isinstance(needs, list) else ():
@@ -613,6 +615,78 @@ def _note_uncovered_paths(root: Path, dir_: Path, run: Mapping, note: str) -> li
                 wanted.append(raw.strip().replace("\\", "/").removeprefix("./"))
     sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
     return paths_outside_footprint(root, dir_, sizing_rel, wanted)
+
+
+def _pair_key(path: str) -> tuple[str, str]:
+    """`(directory without a trailing /tests, basename without a test_ prefix and .py)`: a module and its test share it."""
+    directory, _, name = path.replace("\\", "/").rpartition("/")
+    directory = directory.removesuffix("/tests")
+    stem = name.rsplit(".", 1)[0]
+    return directory, stem.removeprefix("test_")
+
+
+def _row_for_path(rows: Sequence, path: str) -> Optional[str]:
+    """The id of the plan row whose `writes` hold the file `path` pairs with (same stem and directory), else
+    the first row writing in its directory; None when no row does."""
+    want = _pair_key(path)
+    same_dir: Optional[str] = None
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not isinstance(row.get("writes"), list):
+            continue
+        keys = [_pair_key(w) for w in row["writes"] if isinstance(w, str)]
+        if want in keys:
+            return row["id"]
+        if same_dir is None and any(k[0] == want[0] for k in keys):
+            same_dir = row["id"]
+    return same_dir
+
+
+def _widen_note_paths(
+    root: Path, dir_: Path, run: Mapping, run_id: str, paths: Sequence[str], note: str, outcome: Optional[dict],
+) -> bool:
+    """Covers `paths` a note names: on a halted run each goes onto the plan row it pairs with by directory
+    and test pair (`_stamp_for_rows`), the rest onto an engine-written row (`_widen_footprint`); a live run
+    takes `_widen_footprint` alone. True when every path is covered."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    remaining = list(paths)
+    try:
+        marker = halted_run.read_strict(dir_)
+    except ValueError:
+        marker = None
+    if marker is not None and marker.get("status") == halted_run.STATUS_HALTED:
+        sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
+        rows = _plan_rows(root, sizing_rel)
+        wanted_by_row: dict[str, list[str]] = {}
+        for p in remaining:
+            row_id = _row_for_path(rows, p)
+            if row_id:
+                wanted_by_row.setdefault(row_id, []).append(p)
+        stamp = _stamp_for_rows(root, run, wanted_by_row) if wanted_by_row else None
+        if stamp is not None and stamp[1] and _apply_row_writes(root, (stamp[0], stamp[1])):
+            for update in stamp[1]:
+                added = [p for p in wanted_by_row[update["id"]]]
+                remaining = [p for p in remaining if p not in added]
+                if outcome is not None:
+                    outcome.setdefault("footprint_widened", []).append({"row": update["id"], "paths": added})
+    return not remaining or _widen_footprint(root, run, run_id, remaining, note, outcome)
+
+
+def _plan_rows(root: Path, sizing_rel: Optional[str]) -> list:
+    """The plan-spine rows of the plan the sizing names; [] when there is no readable plan or spine."""
+    plan = _sizing_plan(Path(root), sizing_rel)[1]
+    if plan is None:
+        return []
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+
+    try:
+        located = locate_fenced_block(plan.read_text(encoding="utf-8", errors="replace"))
+        rows = yaml.safe_load(located.body) if located.status is LocateStatus.LOCATED else None
+    except (OSError, yaml.YAMLError):
+        return []
+    return rows if isinstance(rows, list) else []
 
 
 def _stamp_for_rows(
@@ -1866,7 +1940,7 @@ def revise(
         write_base_ref_marker(dir_, base_ref, sender)
         declare_write(dir_ / BASE_REF_FILE)
     note_uncovered = _note_uncovered_paths(root, dir_, run, note) if has_note else []
-    if note_uncovered and _widen_footprint(root, run, run_id, note_uncovered, note, outcome):
+    if note_uncovered and _widen_note_paths(root, dir_, run, run_id, note_uncovered, note, outcome):
         note_uncovered = []
     if note_uncovered:
         if outcome is not None:
@@ -2877,10 +2951,11 @@ def _sizing_shipped(root: Path, sizing_rel: Optional[str]) -> bool:
 def _run_driven(root: Path, run_id: str, sizing_rel: Optional[str], halted: bool, run_token) -> bool:
     """True when any Workflow drives the run: a fresh stage receipt, an unredeemed run token, or
     another run's unredeemed token for the run's sizing (a refire carries its own run id). A halted
-    run's own token does not count: nothing reads it. Token-dir reads only: no spawn."""
+    run's own stage receipt and token do not count: the receipt is its last fire's and nothing reads
+    the token. Token-dir reads only: no spawn."""
     from coordinator_core.warm import live_runs
 
-    if live_runs.run_is_live(root, run_id):
+    if not halted and live_runs.run_is_live(root, run_id):
         return True
     if not halted and run_token.is_live(root, run_id) and not _token_not_a_runner(root, run_id):
         return True

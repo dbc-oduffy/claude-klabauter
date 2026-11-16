@@ -805,3 +805,19 @@ def test_budget_resets_on_a_new_in_progress_task_through_evaluate(env):
     env.write(use("t", "TaskUpdate", {"taskId": "2", "status": "in_progress"}))
     env.survey(7, start=20)
     assert g.evaluate(env.payload(tid="after")) is None
+
+
+def test_headless_session_gets_no_prefire_advisory_and_interactive_does(env):
+    env.write(user())
+    env.survey(8)
+    headless = env.payload(env={"COORDINATOR_SETTINGS_HOME": str(env.home), "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"})
+    assert g.evaluate(headless) is None
+    interactive = env.payload(env={"COORDINATOR_SETTINGS_HOME": str(env.home), "CLAUDE_CODE_ENTRYPOINT": "cli"})
+    assert g.evaluate(interactive) is not None
+
+
+def test_headless_transcript_entrypoint_stands_the_guard_down(env):
+    head = _line({"type": "user", "entrypoint": "sdk-cli", "message": {"role": "user", "content": "go"}})
+    env.write(head)
+    env.survey(9)
+    assert g.evaluate(env.payload()) is None

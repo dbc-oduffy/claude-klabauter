@@ -146,6 +146,10 @@ def _decide(payload: dict) -> Optional[str]:
         return None
     if not _armed(payload, root, sid):
         return None
+    from coordinator_core.hooks.support.turn_intent import headless_session
+
+    if headless_session(payload):
+        return None
     if _is_group_em_holder(root, sid):
         return None
     path = epw.state_path(root, sid)

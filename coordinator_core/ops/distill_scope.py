@@ -352,7 +352,7 @@ PM_RULING_2026_08_06_COHORT_SPECS: tuple[CohortSpec, ...] = (
 # No handoffs row (excluded from every cohort, DoE phase-0-scoping.md) and no
 # week_changelog row (its source is not in the target set yet).
 
-#: The daily and weekly logs: the first admission target, and the source of every plan citation
+#: The daily and weekly logs: triage-only, never a candidate; the source of every plan citation
 #: that admits a plan. Undebted members only; `HEADER*` files are not entries.
 LOGS_COHORT = "logs"
 LOGS_COHORT_SPECS: tuple[CohortSpec, ...] = (
@@ -1117,12 +1117,15 @@ def _split_scannable(
     cache: _ScopeCache, gathered: _Cohorts
 ) -> tuple[set[str], list[dict[str, str]], dict[str, str]]:
     """(scannable paths, mechanical rows, cohort of every candidate): the harvest-mode cohort
-    union, minus the rows whose fate frontmatter settles without a reading agent."""
+    union, minus the rows whose fate frontmatter settles without a reading agent. The logs cohort
+    is read for citations only (``_admit``) and is never a candidate."""
     scannable_set = set(gathered.harvest) | set(gathered.plans)
     cohort_of: dict[str, str] = {p: "harvest" for p in gathered.harvest}
     for p in gathered.plans:
         cohort_of.setdefault(p, PLANS_COHORT)
     for name in gathered.harvest_mode_names:
+        if name == LOGS_COHORT:
+            continue
         scannable_set |= set(gathered.data_driven[name])
         for p in gathered.data_driven[name]:
             cohort_of.setdefault(p, name)
@@ -1137,7 +1140,7 @@ def _split_scannable(
 
 @dataclass(frozen=True)
 class _Admitted:
-    #: Admitted paths in admission order: logs newest first, cited plans by citation count, the rest by date.
+    #: Admitted paths in admission order: cited plans by citation count, the rest by date.
     ranked: list[str]
     not_admitted: list[dict[str, str]]
     #: Plans, specs and completed files an unharvested log cites, before the weight and capture filters.
@@ -1175,21 +1178,18 @@ def _admit(
 ) -> _Admitted:
     """Settle which candidates earn a reading agent. A gated file (spec, plan, completed) needs an
     unharvested log citing it and PLAN_ADMISSION_MIN_BYTES of weight; any non-log file a guide or
-    decision already cites is captured. Logs are always admitted: they are the first target."""
+    decision already cites is captured. Logs are never candidates: they are read here for the
+    citations they hold and nothing else."""
     cite_counts: dict[str, int] = {}
     for rel in gathered.data_driven.get(LOGS_COHORT, []):
         for key in _cites_fact(cache, rel, gathered.entries[rel]):
             cite_counts[key] = cite_counts.get(key, 0) + 1
-    logs: list[str] = []
     cited: list[tuple[int, int, tuple[str, str], str]] = []
     others: list[str] = []
     not_admitted: list[dict[str, str]] = []
     log_cited = 0
     for rel in sorted(scannable_set):
         cohort = cohort_of[rel]
-        if cohort == LOGS_COHORT:
-            logs.append(rel)
-            continue
         stat = _stat_key(gathered.entries[rel])
         size = stat[1] if stat is not None else 0
         stem = slugify_stem(rel.rsplit("/", 1)[-1].removesuffix(".md"))
@@ -1209,11 +1209,7 @@ def _admit(
             cited.append((-count, -size, _date_sort_key(rel), rel))
         else:
             others.append(rel)
-    ranked = (
-        sorted(logs, key=_date_sort_key, reverse=True)
-        + [row[3] for row in sorted(cited)]
-        + sorted(others, key=_date_sort_key)
-    )
+    ranked = [row[3] for row in sorted(cited)] + sorted(others, key=_date_sort_key)
     return _Admitted(ranked=ranked, not_admitted=not_admitted, log_cited_count=log_cited)
 
 
@@ -1233,7 +1229,7 @@ def _cohort_excluded_count(
 
 def _with_logs(specs: list[CohortSpec] | None) -> list[CohortSpec]:
     """The cohort set an admitting run scans: ``specs`` (the PM-ruling set when omitted) with the
-    logs cohort first, as every plan citation comes from it."""
+    logs cohort first, as every plan citation comes from it. Logs are scanned, never harvested."""
     base = list(PM_RULING_2026_08_06_COHORT_SPECS) if specs is None else list(specs)
     if any(spec.name == LOGS_COHORT for spec in base):
         return base
@@ -1372,7 +1368,7 @@ def scannable_count(
 ) -> int:
     """How many files an admitting distill.scope run owes a reading agent: scanned plus deferred,
     before the batch budget. ``cohort_specs`` omitted means PM_RULING_2026_08_06_COHORT_SPECS; the
-    logs cohort is always scanned first. Equals ``compute_scope(..., admit=True)`` ``counts["scannable"]
+    logs cohort is always scanned, for citations only. Equals ``compute_scope(..., admit=True)`` ``counts["scannable"]
     + counts["deferred"]`` on the same tree. ``cap`` clamps the result.
     An absent ``log_path`` counts as an empty baseline, as compute_scope does."""
     cache = _ScopeCache(worktree_root)

@@ -192,6 +192,39 @@ def announces_unexecuted_work(text: str) -> bool:
     return "?" not in last and _ANNOUNCE_RE.search(last) is not None
 
 
+_HEAD_READ_CAP = 65536
+
+
+def headless_session(payload: dict) -> bool:
+    """True when the session is a non-interactive SDK run (`claude -p`: entrypoint `sdk-*`).
+
+    Reads the forwarded `CLAUDE_CODE_ENTRYPOINT` env, else the first `entrypoint` in the
+    transcript head (one bounded read). Unknown or unreadable is False: the EM nags stay armed.
+    The daemon's own environ is never consulted: it is not the session's."""
+    env = payload.get("env")
+    value = env.get("CLAUDE_CODE_ENTRYPOINT") if isinstance(env, dict) else None
+    if not value:
+        path = payload.get("transcript_path")
+        if not path:
+            return False
+        try:
+            with open(path, "rb") as fh:
+                head = fh.read(_HEAD_READ_CAP)
+        except OSError:
+            return False
+        for line in head.split(b"\n"):
+            if b'"entrypoint"' not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and rec.get("entrypoint"):
+                value = rec["entrypoint"]
+                break
+    return isinstance(value, str) and value.startswith("sdk")
+
+
 def decide(
     text: str,
     blocks_so_far: int,

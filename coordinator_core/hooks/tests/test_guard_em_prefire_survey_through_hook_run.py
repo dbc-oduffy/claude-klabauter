@@ -129,6 +129,7 @@ def door_env(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_DOOR_STDIN_MODE", "hook")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
     monkeypatch.delenv("COORDINATOR_HOOK_EM_PREFIRE_SURVEY_DISABLED", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
     monkeypatch.setenv("COORDINATOR_HOOK_CONTEXT", "1")
     monkeypatch.setattr(machine_profile, "guard_level", lambda name: "strict")
     monkeypatch.setattr(ers, "session_route_phase", lambda *a, **k: ers.RoutePhase(ers.PHASE_UNFIRED))

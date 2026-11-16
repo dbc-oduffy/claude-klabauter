@@ -151,6 +151,10 @@ def _advisory(params: dict) -> str:
     root = _repo_root(payload)
     if root is None:
         return ""
+    from coordinator_core.hooks.support.turn_intent import headless_session
+
+    if headless_session(payload):
+        return ""
     path = etc.state_path(root, sid)
     before = etc.load_state(path, transcript)
     state = etc.advance(transcript, before)
