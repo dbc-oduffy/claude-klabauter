@@ -1675,10 +1675,11 @@ def test_default_admission_takes_a_backlog_that_fits_the_whole_backlog_bar_whole
     from coordinator_core.contract import run_budget
 
     root = _watermarked_repo(tmp_path, monkeypatch)
+    cap = run_budget.RunBudget(10, 30_000, 15)
+    monkeypatch.setattr(ds._run_budget, "load", lambda _c, path=None: cap)
     scope = _admit_scope(root)
-    cap = run_budget.load("distill")
     block = scope.manifest["budget"]
-    # five files exceed the 200K slice token cap at the measured constants but fit the 1M bar: not cut
+    # five files exceed the narrowed slice token cap but fit the 1M bar: not cut
     assert block["projected"]["tokens"] > cap.tokens
     assert len(_batched(scope)) == len(_LOG_DAYS) and scope.counts["deferred"] == 0
     assert block["cap"]["tokens"] == run_budget.whole_backlog_bar()
@@ -1691,18 +1692,23 @@ def _files_for_topics(topics: int) -> int:
 
 
 def test_synthesis_is_priced_per_topic_and_files_open_topics_at_the_corpus_ratio():
+    per = ds._schema.SYNTHESIS_TOPICS_PER_AGENT
     one = ds.synthesis_cost(1)
     assert (one.agents, one.tokens, one.minutes) == (
-        ds._schema.SYNTHESIS_PER_TOPIC_AGENTS,
+        1,
         ds._schema.SYNTHESIS_PER_TOPIC_TOKENS,
-        ds._schema.SYNTHESIS_PER_TOPIC_MINUTES,
+        ds._schema.SYNTHESIS_PER_CALL_MINUTES,
     )
     assert ds.synthesis_cost(7).tokens == 7 * one.tokens
+    # agents and minutes follow synth calls of SYNTHESIS_TOPICS_PER_AGENT topics, never one per topic
+    assert ds.synthesis_cost(0).agents == 0
+    assert ds.synthesis_cost(per).agents == 1 and ds.synthesis_cost(per + 1).agents == 2
+    assert ds.synthesis_cost(per + 1).minutes == 2 * ds._schema.SYNTHESIS_PER_CALL_MINUTES
     assert ds.projected_topics(0) == 0 and ds.projected_topics(1) == 1
     for topics in (1, 3, 4, 10):
         fits = _files_for_topics(topics)
         assert ds.projected_topics(fits) == topics and ds.projected_topics(fits + 1) == topics + 1
-    assert _files_for_topics(4) > 4
+    assert _files_for_topics(10) > 10
 
 
 def test_budget_block_projection_is_the_one_shared_projection():
@@ -1764,15 +1770,15 @@ def test_default_admission_narrows_on_the_agents_axis_and_still_meets_the_bar(tm
     from coordinator_core.contract.run_budget import RunBudget
 
     root = _watermarked_repo(tmp_path, monkeypatch)
-    cap = RunBudget(_slice_cost(2).agents, 100_000_000, 10_000)
+    cap = RunBudget(_slice_cost(2, batches=2).agents, 100_000_000, 10_000)
     monkeypatch.setattr(ds._run_budget, "load", lambda _c, path=None: cap)
-    scope = _admit_scope(root, batch_size=100)
+    scope = _admit_scope(root, batch_size=1)
     block = scope.manifest["budget"]
     assert len(_batched(scope)) == _files_for_topics(2) < len(_LOG_DAYS)
     assert all(block["within"].values()) and block["projected"]["agents"] == cap.agents
 
 
-def test_default_admission_at_default_args_floors_at_one_file_on_a_large_backlog(tmp_path, monkeypatch):
+def test_default_admission_at_default_args_takes_a_large_backlog_whole_with_the_bar_met(tmp_path, monkeypatch):
     from coordinator_core.contract import run_budget
 
     monkeypatch.setattr(ds, "registry_get", lambda _key: None)
@@ -1780,19 +1786,27 @@ def test_default_admission_at_default_args_floors_at_one_file_on_a_large_backlog
     cap = run_budget.load("distill")
     scope = _admit_scope(root)
     block = scope.manifest["budget"]
-    admitted = len(_batched(scope))
-    assert admitted == 1 and scope.counts["deferred"] == 28 - admitted
-    assert block["within"]["agents"] and block["within"]["minutes"] and block["cap"]["agents"] == cap.agents
-    # the largest slice the shared projection allows: one more file breaks an axis
-    more = ds.projected_cost(
-        ds.run_fixed_cost({}),
-        topics=ds.projected_topics(admitted + 1),
-        batches=len(scope.manifest["batches"]),
-        scan_bytes=ds.scan_bytes_bound(10_000, len(scope.manifest["batches"])),
-    )
-    assert not _meets_every_axis(more, cap)
-    # the cut backlog is over the bar, so tokens keep the slice cap
-    assert block["cap"]["tokens"] == cap.tokens
+    assert len(_batched(scope)) == 28 and scope.counts["deferred"] == 0
+    assert len(_batched(scope)) + scope.counts["deferred"] == ds.scannable_count(root)
+    assert all(block["within"].values()) and block["cap"]["agents"] == cap.agents
+
+
+def test_default_slice_admits_about_54_files_and_meets_every_axis_at_default_args():
+    from coordinator_core.contract import run_budget
+
+    fixed = ds.run_fixed_cost({})
+    cap = run_budget.load("distill")
+    size = 1_000
+    admitted = ds.fit_files(fixed, _paths(2000), lambda _p: size)
+    assert 50 <= admitted <= 60
+
+    def cost_of(n: int):
+        batches = len(ds.pack_batches(_paths(n), size_of=lambda _p: size, byte_budget=ds.SCAN_BATCH_BYTE_BUDGET, max_files=ds.DEFAULT_BATCH_MAX_FILES))
+        return ds.projected_cost(
+            fixed, topics=ds.projected_topics(n), batches=batches, scan_bytes=ds.scan_bytes_bound(n * size, batches)
+        )
+
+    assert _meets_every_axis(cost_of(admitted), cap) and not _meets_every_axis(cost_of(admitted + 1), cap)
 
 
 def test_a_backlog_over_the_whole_backlog_bar_is_still_cut():
@@ -1801,9 +1815,9 @@ def test_a_backlog_over_the_whole_backlog_bar_is_still_cut():
     fixed = ds.run_fixed_cost({})
     fits = ds.fit_files(fixed, _paths(2000), lambda _p: 1_000)
     assert 0 < fits < 2000
-    whole = ds.fit_files(fixed, _paths(3), lambda _p: 1_000)
-    assert whole == 3
-    cost = ds.projected_cost(fixed, topics=ds.projected_topics(3), batches=1, scan_bytes=3_000)
+    whole = ds.fit_files(fixed, _paths(30), lambda _p: 14_000)
+    assert whole == 30
+    cost = ds.projected_cost(fixed, topics=ds.projected_topics(30), batches=1, scan_bytes=ds.scan_bytes_bound(420_000, 1))
     assert run_budget.load("distill").tokens < cost.tokens <= run_budget.whole_backlog_bar()
 
 
@@ -1830,10 +1844,9 @@ def test_default_admission_covers_a_backlog_under_the_whole_backlog_bar(tmp_path
     assert _meets_every_axis(slice_cost(len(_LOG_DAYS)), cap)
     assert _admit_scope(root, batch_size=1).counts["deferred"] == 0
     assert ds.fit_files(fixed, _paths(7), lambda _p: size) == 7
-    # a larger backlog is cut to the largest slice meeting every axis and covered by several runs; at the
-    # measured synthesis constants their summed tokens pass the whole-backlog bar, which the backlog-pass
-    # ledger reports rather than guarantees
-    big = 40
+    # a larger backlog is cut to the largest slice meeting every axis and covered by several runs; their
+    # summed tokens may pass the whole-backlog bar, which the backlog-pass ledger reports rather than guarantees
+    big = 500
     admitted = ds.fit_files(fixed, _paths(big), lambda _p: size)
     assert 0 < admitted < big
     assert _meets_every_axis(slice_cost(admitted), cap) and not _meets_every_axis(slice_cost(admitted + 1), cap)

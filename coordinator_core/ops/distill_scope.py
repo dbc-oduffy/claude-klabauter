@@ -490,11 +490,13 @@ def projected_topics(files: int) -> int:
 
 
 def synthesis_cost(topics: int) -> _run_budget.UnitCost:
-    """Post-scan synthesis cost of ``topics`` topics (the one harvest relay is in ``run_fixed_cost``)."""
+    """Post-scan synthesis cost of ``topics`` topics: ``SYNTHESIS_TOPICS_PER_AGENT`` topics per synth
+    call."""
+    calls = -(-topics // _schema.SYNTHESIS_TOPICS_PER_AGENT)
     return _run_budget.UnitCost(
-        agents=topics * _schema.SYNTHESIS_PER_TOPIC_AGENTS,
+        agents=calls,
         tokens=topics * _schema.SYNTHESIS_PER_TOPIC_TOKENS,
-        minutes=topics * _schema.SYNTHESIS_PER_TOPIC_MINUTES,
+        minutes=calls * _schema.SYNTHESIS_PER_CALL_MINUTES,
     )
 
 
@@ -1589,6 +1591,7 @@ def compute_scope(
                 fit_sizes[rel] = key[1] if key is not None else 0
             fit_size_of = size_of if size_of is not None else fit_sizes.__getitem__
             digest_dir = f"{RUN_DIR_REL}/{run_id}/{_scan_digest.DIGEST_DIRNAME}"
+
             def fit_entry_cost(rel: str) -> int:
                 digest = len(rel) + len(digest_dir) + len(_scan_digest.digest_name(rel)) + 9 if write_digests else 0
                 return len(rel) + 4 + digest

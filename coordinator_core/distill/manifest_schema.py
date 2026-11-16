@@ -60,9 +60,9 @@ __all__ = [
     "SYNTHESIS_FIXED_AGENTS",
     "SYNTHESIS_FIXED_TOKENS",
     "SYNTHESIS_FIXED_MINUTES",
-    "SYNTHESIS_PER_TOPIC_AGENTS",
+    "SYNTHESIS_TOPICS_PER_AGENT",
     "SYNTHESIS_PER_TOPIC_TOKENS",
-    "SYNTHESIS_PER_TOPIC_MINUTES",
+    "SYNTHESIS_PER_CALL_MINUTES",
     "SYNTHESIS_CORPUS_FILES",
     "SYNTHESIS_CORPUS_TOPICS",
     "PLAN_ADMISSION_MIN_BYTES",
@@ -118,26 +118,28 @@ SCAN_BATCH_AGENTS: int = 2
 SCAN_BATCH_TOKENS: int = 115_000
 SCAN_BATCH_MINUTES: int = 3
 
-#: Post-scan synthesis, priced as one fixed harvest relay over the whole slice plus one synth per
-#: topic. Tokens are total-class, measured by run wf_91f5af15-174 of the rebuilt harvest (DoE
-#: beecfce63b, 3 files, 17 topics, 3 agents, 1_686_940 tokens): SYNTHESIS_FIXED_TOKENS 128_536 is its
-#: fixed digest/scan agent; SYNTHESIS_PER_TOPIC_TOKENS 91_671 = ceil(1_558_404 / 17), its synth agents'
-#: tokens per topic. The fixed figure includes the digest/scan read, so it overlaps SCAN_BATCH_TOKENS
-#: (an over-count, never an under-count). Agents and minutes are not measured per topic. Topics exist only after
-#: clustering, so scope projects them as ceil(files * SYNTHESIS_CORPUS_TOPICS / SYNTHESIS_CORPUS_FILES).
-#: The corpus ratio is 109 topics per 143 artifacts opened, kept as the pair (never floored to 1, which
-#: priced every file as its own topic) from the
-#: model-free `backlog.cluster` run of benchmarks/backlog_first_pass_tokens.py over the DoE corpus
-#: (plan row C0 evidence). Per-topic minutes keep the minutes axis from binding before tokens.
-#: Not `backlog_first_pass_tokens.SYNTHESIS_OVERHEAD_TOKENS_PER_TOPIC` (1_500), a digest-only pass.
-SYNTHESIS_FIXED_AGENTS: int = 1
-SYNTHESIS_FIXED_TOKENS: int = 128_536
-SYNTHESIS_FIXED_MINUTES: int = 2
-SYNTHESIS_PER_TOPIC_AGENTS: int = 1
-SYNTHESIS_PER_TOPIC_TOKENS: int = 91_671
-SYNTHESIS_PER_TOPIC_MINUTES: int = 1
-SYNTHESIS_CORPUS_FILES: int = 143
-SYNTHESIS_CORPUS_TOPICS: int = 109
+#: Post-scan synthesis, priced as synth calls that each batch SYNTHESIS_TOPICS_PER_AGENT topics.
+#: Tokens are total-class, measured by run wf_5a4c799e-a90 (coordinator-content-repo-9f r3, DoE 676f68b457,
+#: klabauter 53c20b60b; 30 files, 3 agents, 121_531 tokens): SYNTHESIS_PER_TOPIC_TOKENS
+#: 3_604 = 93_713 // 26, its 2 synth calls' tokens per topic. The default path carries no fixed term:
+#: the judgment-corpus writer (27_818 tokens, 1 agent in r3) runs only when DoE prepare's mechanical
+#: judgment_precheck finds a possible cluster (DoE 016d51a57e). Scope runs before prepare and cannot
+#: see that verdict, so it charges the writer to no slice. Trap: a fixed term charged here was most
+#: of the 243_966-token projection for a 1-file slice. Synth agents are priced
+#: ceil(topics / SYNTHESIS_TOPICS_PER_AGENT), never 1 per topic; minutes per call are an estimate, not
+#: telemetry. Topics exist only after clustering, so scope projects them as
+#: ceil(files * SYNTHESIS_CORPUS_TOPICS / SYNTHESIS_CORPUS_FILES) (26 topics over 30 files). Topics
+#: saturate (cumulative 2/6/9 per batch), so the linear ratio over-counts large slices: an over-count,
+#: never an under-count. Not
+#: `backlog_first_pass_tokens.SYNTHESIS_OVERHEAD_TOKENS_PER_TOPIC` (1_500), a digest-only pass.
+SYNTHESIS_FIXED_AGENTS: int = 0
+SYNTHESIS_FIXED_TOKENS: int = 0
+SYNTHESIS_FIXED_MINUTES: int = 0
+SYNTHESIS_TOPICS_PER_AGENT: int = 13
+SYNTHESIS_PER_TOPIC_TOKENS: int = 93_713 // 26
+SYNTHESIS_PER_CALL_MINUTES: int = 2
+SYNTHESIS_CORPUS_FILES: int = 30
+SYNTHESIS_CORPUS_TOPICS: int = 26
 
 #: A plan/spec smaller than this is not admitted as a distill target.
 PLAN_ADMISSION_MIN_BYTES: int = 12_000

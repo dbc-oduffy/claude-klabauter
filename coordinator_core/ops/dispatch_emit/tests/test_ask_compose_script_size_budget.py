@@ -19,7 +19,15 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_raw_script_under_
 
 _CAP = emit._WORKFLOW_SCRIPT_BYTE_CAP
 _BUDGET = 460800
-_BASE_MARGIN = 270000
+#: Headroom ratchet, not a consumer limit: _BUDGET binds the full script. Re-pinned 2026-11-16 from 270000
+#: to the measured 303_962 (bare relayed, stage prompts stubbed) plus ~2%, after two cut attempts failed:
+#: 55df77d7cf (prose dedupe, -4K) and 0021f1ae6a (moving logic into an op was falsified: the weight is
+#: inline agent prompt prose). APM ruling: state/apm-rulings/2026-11-16-ask-script-base-margin-repin.md.
+#: Trap: a one-time re-pin. The next red needs a fresh ruling, with moving prompts out of the script the
+#: default option; never raise this number again by reflex.
+_BASE_MARGIN = 310000
+#: The largest real stage-prompt pair measured 2026-11-16: the refire shape, 424_123 full minus 280_081 base.
+_LARGEST_STAGE_PAIR = 144_042
 _SIZING_REL = "state/sizings/2026-10-26-budget-probe.yaml"
 _RUN_ID = "ask-20261026T000000-aaaaaa"
 _CHILDREN_PREFIX = "const CHILDREN = "
@@ -127,6 +135,13 @@ def test_composed_script_fits_the_byte_ceiling(shape, tmp_path, monkeypatch, _pr
 def test_bare_relayed_script_weight_over_stage_prompt_baseline_is_pinned(tmp_path, monkeypatch, _production_inputs):
     base = _base_bytes(tmp_path, "bare_relayed", monkeypatch)
     assert base <= _BASE_MARGIN, f"bare relayed script minus both stage prompts is {base} bytes (margin {_BASE_MARGIN})"
+
+
+def test_base_margin_leaves_room_for_the_largest_stage_prompt_pair():
+    assert _BUDGET - _BASE_MARGIN >= _LARGEST_STAGE_PAIR, (
+        f"margin {_BASE_MARGIN} leaves {_BUDGET - _BASE_MARGIN} bytes under the {_BUDGET} budget, less than the "
+        f"{_LARGEST_STAGE_PAIR}-byte largest stage-prompt pair: the margin no longer protects stage-prompt room"
+    )
 
 
 _SCHEMA = '{"properties": {"alpha": {"type": "string"}, "beta": {"type": "number"}}, "required": ["alpha"], "type": "object"}'

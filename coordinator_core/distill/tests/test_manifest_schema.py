@@ -310,12 +310,13 @@ def test_admission_constants_price_a_batch_and_synthesis_against_the_run_budget(
     # a scan batch: byte budget + guide budget + the 12_000-byte relay, bytes/4
     assert s.SCAN_BATCH_TOKENS == (SCAN_BATCH_BYTE_BUDGET + s.GUIDE_BYTE_BUDGET + 12_000) // 4
     assert not [n for n in dir(s) if n.startswith("SYNTHESIS_PER_FILE")]
-    # measured by run wf_91f5af15-174 (DoE beecfce63b): fixed digest/scan 128_536; synth 1_558_404
-    # over 17 topics, priced rounded up so 17 topics never cost less than the run's synth total
-    assert s.SYNTHESIS_FIXED_TOKENS == 128_536
-    assert s.SYNTHESIS_PER_TOPIC_TOKENS == -(-1_558_404 // 17) == 91_671
-    assert 17 * s.SYNTHESIS_PER_TOPIC_TOKENS >= 1_558_404
-    assert s.SYNTHESIS_CORPUS_FILES >= s.SYNTHESIS_CORPUS_TOPICS >= 1
+    # measured by run wf_5a4c799e-a90 (DoE 676f68b457): synth 93_713 over 26 topics; the judgment-corpus
+    # writer is off the default path (DoE 016d51a57e), so the default slice carries no fixed synth term
+    assert s.SYNTHESIS_FIXED_TOKENS == 0 and s.SYNTHESIS_FIXED_AGENTS == 0
+    assert s.SYNTHESIS_PER_TOPIC_TOKENS == 93_713 // 26 == 3_604
+    assert s.SYNTHESIS_TOPICS_PER_AGENT == 13
+    assert (s.SYNTHESIS_CORPUS_FILES, s.SYNTHESIS_CORPUS_TOPICS) == (30, 26)
+    assert not hasattr(s, "SYNTHESIS_PER_TOPIC_AGENTS") and not hasattr(s, "SYNTHESIS_PER_TOPIC_MINUTES")
     cap = run_budget.load("distill")
     fixed = run_budget.UnitCost(
         s.LOAD_RELAY_AGENTS + s.SYNTHESIS_FIXED_AGENTS,
@@ -323,19 +324,14 @@ def test_admission_constants_price_a_batch_and_synthesis_against_the_run_budget(
         s.LOAD_RELAY_MINUTES + s.SYNTHESIS_FIXED_MINUTES,
     )
     one = run_budget.UnitCost(s.SCAN_BATCH_AGENTS, s.SCAN_BATCH_TOKENS, s.SCAN_BATCH_MINUTES)
-    topic = run_budget.UnitCost(
-        0, s.SYNTHESIS_PER_TOPIC_TOKENS, s.SYNTHESIS_PER_TOPIC_MINUTES
-    )
-    # the fixed relay (and one slug shard) fits every cap; at the measured constants one topic on top
-    # of it exceeds the token cap, so the fit keeps its one-unit floor rather than refusing
+    topic = run_budget.UnitCost(0, s.SYNTHESIS_PER_TOPIC_TOKENS, 0)
+    # the fixed relay, one slug shard and a full synth call fit every cap
     assert fixed.tokens <= cap.tokens
-    assert fixed.agents + 1 + s.SYNTHESIS_PER_TOPIC_AGENTS <= cap.agents
-    assert fixed.minutes + topic.minutes <= cap.minutes
-    # the minutes axis admits at least as many topics as the token axis, so it never starves the slice
+    assert fixed.agents + 1 + 1 <= cap.agents
+    assert fixed.minutes + s.SYNTHESIS_PER_CALL_MINUTES <= cap.minutes
     by_tokens = (cap.tokens - fixed.tokens) // topic.tokens
-    by_minutes = (cap.minutes - fixed.minutes) // topic.minutes
-    assert by_minutes >= by_tokens >= 0
-    assert run_budget.fit_units(cap, fixed, topic, 100) == max(1, by_tokens)
+    assert by_tokens >= s.SYNTHESIS_TOPICS_PER_AGENT
+    assert run_budget.fit_units(cap, fixed, topic, 1000) == by_tokens
     assert run_budget.fit_units(cap, fixed, one, 100) >= 1
 
 

@@ -152,8 +152,11 @@ def test_bench_bar_counts_synthesis_tokens_and_minutes(tmp_path, monkeypatch):
     assert report["dispatches_by_phase"]["synthesis"] > 0
     assert report["input_tokens_est_total"] >= report["synthesis_tokens"] > 0
     assert report["minutes_total"] > bench.modeled_minutes(1)
-    assert report["bar"]["met"] is False
+    assert report["bar"]["met"] is True
     assert report["bar"]["projected"]["agents"] == report["dispatches_total"]
+
+    monkeypatch.setattr(bench, "load_workflow_input", lambda repo, path: _payload([[f"f{i}.md" for i in range(400)]], {}))
+    assert bench.measure(tmp_path)["bar"]["met"] is False
 
 
 def test_missing_file_is_listed_not_silently_zero(tmp_path):
