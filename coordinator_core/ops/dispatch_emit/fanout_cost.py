@@ -104,7 +104,7 @@ class FanoutCost:
     basis: str
     startup_tokens_per_agent: int = STARTUP_TOKENS_PER_AGENT
     groups: tuple[tuple[str, ...], ...] = ()
-    row_output_tokens: int | None = None
+    row_total_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if self.basis not in BASES:
@@ -122,8 +122,8 @@ class FanoutCost:
             "startupTokensPerAgent": self.startup_tokens_per_agent,
             "startupTokensTotal": self.startup_tokens_total,
         }
-        if self.row_output_tokens is not None:
-            out["rowOutputTokensTotal"] = self.row_output_tokens
+        if self.row_total_tokens is not None:
+            out["rowTotalTokensTotal"] = self.row_total_tokens
         if self.groups:
             out["groups"] = [list(g) for g in self.groups]
         return out

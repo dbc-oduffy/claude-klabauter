@@ -28,6 +28,7 @@ import subprocess
 import pytest
 
 from coordinator_core.contract.grind_vocab import OP_RUNNER_AGENT_TYPE
+from coordinator_core.ops.dispatch_emit.grind_admission import TOTAL_PER_OUTPUT_CENTI
 from coordinator_core.ops.dispatch_emit import grind_stages
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import RELAY_SHA256_JS, relay_digest
 from pathlib import Path
@@ -1545,6 +1546,7 @@ def test_checkpoint_js_runs_once_per_threshold_under_node() -> None:
         "const RUN_ID = 'r1'; const QUEUE_GRIND_MANIFEST = { entries: [1,2,3,4] };\n"
         "const BUDGET_TOKENS = null; const budget = { spent: () => 0 }; const _startSpent = 0;\n"
         "const _handedBack = []; const _settled = [];\n"
+        + grind_stages.compose_spent_total_js()
         + grind_stages.compose_checkpoint_js()
         + "\n_handedBack.push(1); _checkpoint(); _checkpoint();\n"
         "_settled.push(2); _settled.push(3); _checkpoint(); _checkpoint();\n"
@@ -1566,13 +1568,27 @@ def test_checkpoint_js_fires_on_budget_spent_before_rows_and_reports_the_run_cou
         "const budget = { spent: () => _spendNow }; const _startSpent = 0;\n"
         "const QUEUE_GRIND_MANIFEST = { entries: [1,2,3,4], triaged: [{ closed: true }, { closed: false }] };\n"
         "const _handedBack = []; const _settled = [];\n"
+        + grind_stages.compose_spent_total_js()
         + grind_stages.compose_checkpoint_js()
-        + "\n_checkpoint(); _spendNow = 260; _checkpoint();\n"
+        + "\n_checkpoint(); _spendNow = 15; _checkpoint();\n"
         "_settled.push({ outcome: 'committed' }); _checkpoint();\n"
-        "console.log(JSON.stringify(_checkpointsReported));\n"
+        "console.log(JSON.stringify({ r: _checkpointsReported, total: _spentTotal() }));\n"
     )
     out = subprocess.run([node, "-e", harness], capture_output=True, text=True, check=True).stdout
-    reported = json.loads(out.strip().splitlines()[-1])
+    seen = json.loads(out.strip().splitlines()[-1])
+    reported = seen["r"]
     assert [(c["percent"], c["trigger"]) for c in reported] == [(25, "budget")]
     assert reported[0]["by_script"] == 1 and reported[0]["total"] == 4
-    assert reported[0]["spent"] == 260 and reported[0]["handed_back"] == 0 and reported[0]["committed"] == 0
+    # 15 output tokens is under 25% of 1000 until the total-per-output ratio applies
+    assert reported[0]["spent"] == seen["total"] == -(-15 * TOTAL_PER_OUTPUT_CENTI // 100)
+    assert reported[0]["handed_back"] == 0 and reported[0]["committed"] == 0
+
+
+def test_spent_total_js_is_one_function_pricing_output_by_the_admission_ratio() -> None:
+    from coordinator_core.ops.dispatch_emit import grind_stages
+
+    js = grind_stages.compose_spent_total_js()
+    assert f"const TOTAL_PER_OUTPUT_CENTI = {TOTAL_PER_OUTPUT_CENTI};" in js
+    assert js.count("function _spentTotal()") == 1
+    assert "budget.spent() - _startSpent" in js
+    assert "budget.spent()" not in grind_stages.compose_checkpoint_js()

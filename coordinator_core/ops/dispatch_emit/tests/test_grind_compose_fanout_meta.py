@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from coordinator_core.ops import _workflow_contract as wc
-from coordinator_core.ops.dispatch_emit.grind_admission import ROW_OUTPUT_TOKENS
+from coordinator_core.ops.dispatch_emit.grind_admission import ROW_TOTAL_TOKENS
 from coordinator_core.ops.dispatch_emit import fanout_cost
 from coordinator_core.ops.dispatch_emit import grind_compose as gc
 from coordinator_core.ops.dispatch_emit import grind_profile as gp
@@ -52,7 +52,7 @@ def test_six_entries_compose_fewer_batches_than_entries_and_meta_reports_it():
     assert fanout["expectedAgents"] > len(fanout["groups"]) + _FIXED_LEGS
     assert fanout["startupTokensPerAgent"] == fanout_cost.STARTUP_TOKENS_PER_AGENT
     assert fanout["startupTokensTotal"] == fanout["expectedAgents"] * fanout["startupTokensPerAgent"]
-    assert fanout["rowOutputTokensTotal"] == ROW_OUTPUT_TOKENS * 6
+    assert fanout["rowTotalTokensTotal"] == ROW_TOTAL_TOKENS * 6
 
 
 def test_agents_cover_per_batch_per_row_and_once_per_run_legs():
@@ -72,7 +72,7 @@ def test_agent_mode_verify_adds_one_leg_per_row():
 def test_per_row_legs_scale_with_entry_count():
     small, large = fanout_cost.read_fanout(_compose(2)), fanout_cost.read_fanout(_compose(9))
     assert large["expectedAgents"] - small["expectedAgents"] == (9 - 2) + 2 * (3 - 1)
-    assert large["rowOutputTokensTotal"] > small["rowOutputTokensTotal"]
+    assert large["rowTotalTokensTotal"] > small["rowTotalTokensTotal"]
 
 
 def test_a_named_budget_renders_the_ceiling_const_and_none_renders_null():

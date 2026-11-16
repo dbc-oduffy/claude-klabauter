@@ -61,15 +61,15 @@ class CheckpointEvent:
 def default_budget(row_count: int) -> int:
     """Token budget for a run of `row_count` rows when the caller passes none.
 
-    Scaled so admission's `budget_tokens // ROW_OUTPUT_TOKENS` covers every row, plus the fixed
+    Scaled so admission's `budget_tokens // ROW_TOTAL_TOKENS` covers every row, plus the fixed
     run reserve (RUN_FIXED_AGENT_CALLS rows' worth). Raises ValueError on a negative count.
     """
     if row_count < 0:
         raise ValueError(f"row_count must be non-negative, got {row_count}")
     # Function-level import: grind_admission imports this module to apply the default.
     from coordinator_core.ops.dispatch_emit.grind_admission import (
-        ROW_OUTPUT_TOKENS,
+        ROW_TOTAL_TOKENS,
         RUN_FIXED_AGENT_CALLS,
     )
 
-    return (row_count + RUN_FIXED_AGENT_CALLS) * ROW_OUTPUT_TOKENS
+    return (row_count + RUN_FIXED_AGENT_CALLS) * ROW_TOTAL_TOKENS

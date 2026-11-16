@@ -168,6 +168,31 @@ def test_prepared_path_inlines_prepared_json_as_args_prepared(tmp_path):
     assert json.loads(Path(out["path"]).read_text(encoding="utf-8"))["prepared"] == prepared
 
 
+def _write_prepared(tmp_path, prepared):
+    target = tmp_path / PREPARED_REL
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(prepared), encoding="utf-8")
+
+
+def test_prepared_with_packed_slugs_drops_top_level_wikislugs(tmp_path):
+    prepared = {"wikiSlugsPacked": "packed-index", "synth": {}}
+    _write_prepared(tmp_path, prepared)
+    out = dla._handler(_params(tmp_path, prepared_path=PREPARED_REL))
+    assert "wikiSlugs" not in out["args"]
+    assert out["args"][dla.PREPARED_KEY]["wikiSlugsPacked"] == "packed-index"
+    assert "wikiSlugs" not in json.loads(Path(out["path"]).read_text(encoding="utf-8"))
+
+
+def test_prepared_without_packed_slugs_keeps_top_level_wikislugs(tmp_path):
+    _write_prepared(tmp_path, {"synth": {}})
+    out = dla._handler(_params(tmp_path, prepared_path=PREPARED_REL))
+    assert out["args"]["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
+
+
+def test_no_prepared_path_keeps_top_level_wikislugs(tmp_path):
+    assert dla._handler(_params(tmp_path))["args"]["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
+
+
 def test_no_prepared_path_adds_no_prepared_key(tmp_path):
     assert dla.PREPARED_KEY not in dla._handler(_params(tmp_path))["args"]
 

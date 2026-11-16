@@ -25,7 +25,8 @@ A curated file that is not a JSON object with a ``verdicts`` list raises ValueEr
 
     prepared_path (str, optional) — repo-relative, confined to ``state/scratch/``: the ``prepared.json``
         that ``distill_mechanical.py prepare`` wrote. Its object is inlined as ``args.prepared``, the input
-        distill-harvest reads; a missing file or one that is not a JSON object raises ValueError naming it.
+        distill-harvest reads; when it carries ``wikiSlugsPacked`` the top-level ``wikiSlugs`` is dropped
+        (one slug index in the args); a missing file or one that is not a JSON object raises ValueError naming it.
 
 Leg 2 (``leg: 2``, the resume after ``distill_mechanical.py finalize``): params ``run_id`` (REQUIRED),
 ``repo_root``, ``promoted_path`` and ``splice_report_path`` (both REQUIRED, confined to ``state/scratch/``:
@@ -53,6 +54,7 @@ __all__ = ["CURATED_TAGS_KEY", "PREPARED_KEY", "curated_default_rel"]
 
 CURATED_TAGS_KEY = "curatedTags"
 PREPARED_KEY = "prepared"
+PACKED_SLUGS_KEY = "wikiSlugsPacked"
 LEG2_FILE_NAME = "launch-args-leg2.json"
 _PASSTHROUGH_KEYS = (
     "threshold_applied",
@@ -108,7 +110,10 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
         payload = {**payload, **_curated_args(curated, curated_rel)}
     prepared_rel = params.get("prepared_path")
     if prepared_rel is not None:
-        payload = {**payload, PREPARED_KEY: _prepared(root, prepared_rel)}
+        prepared = _prepared(root, prepared_rel)
+        if PACKED_SLUGS_KEY in prepared:
+            payload = {k: v for k, v in payload.items() if k != "wikiSlugs"}
+        payload = {**payload, PREPARED_KEY: prepared}
     return build(payload)
 
 

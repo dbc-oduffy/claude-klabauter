@@ -141,6 +141,83 @@ def _bt_blanket_add_dash_c_cwd(cmd: str) -> str:
     return os.path.normpath(os.path.join(os.getcwd(), dash_c_val))
 
 
+_BT_PAREN_CD_SEGMENT_RE = re.compile(r"^\s*\(*\s*cd\s")
+
+
+def _blanket_add_candidate_cwds(cmd: str) -> List[str]:
+    """The effective cwd of each ``git add`` segment in ``cmd``, in order,
+    de-duplicated: ``git -C`` (resolved against any preceding cd), else the
+    cd chain preceding the segment (a subshell ``(`` / ``)`` is stripped
+    from each segment first), else a leading ``cd`` after ``VAR=`` hops,
+    else the guard process's cwd. An unresolvable cd target (glob,
+    ``$VAR``) poisons the chain and the segment falls back to
+    ``os.getcwd()`` -- never a guess.
+    """
+    masked, inners = _mask_command_substitutions(cmd)
+    outer = list(_awk_quote_aware_split(masked))
+    cleaned = [s.strip().lstrip("(").rstrip(")").strip() for s in outer]
+    # A subshell's cd never leaks past its closing paren: each paren group
+    # gets its own chain seeded from the outer chain at the group's start.
+    chain: List[Optional[str]] = [None] * len(cleaned)
+    outer_idx: List[int] = []
+    group: List[int] = []
+    for i, seg in enumerate(outer):
+        opens = seg.lstrip().startswith("(")
+        if opens and not group:
+            group = [i]
+        elif group:
+            group.append(i)
+        else:
+            outer_idx.append(i)
+        if group and seg.rstrip().endswith(")"):
+            seed = _dc_git_shared._bt_cd_chain_cwds_by_segment(
+                [cleaned[j] for j in outer_idx] + ["true"], None
+            )[-1]
+            sub = _dc_git_shared._bt_cd_chain_cwds_by_segment([cleaned[j] for j in group], seed)
+            for j, v in zip(group, sub):
+                chain[j] = v if v is not None else seed
+            group = []
+    if group:
+        sub = _dc_git_shared._bt_cd_chain_cwds_by_segment([cleaned[j] for j in group], None)
+        for j, v in zip(group, sub):
+            chain[j] = v
+    outer_chain = _dc_git_shared._bt_cd_chain_cwds_by_segment([cleaned[j] for j in outer_idx], None)
+    for j, v in zip(outer_idx, outer_chain):
+        chain[j] = v
+    stripped_cmd = cmd.lstrip()
+    if stripped_cmd.startswith("("):
+        stripped_cmd = stripped_cmd.lstrip("( \t")
+    leading = _dc_git_shared._bt_leading_cd_prefix_cwd(stripped_cmd, None)
+
+    cwds: List[str] = []
+    walked = [(seg, i) for i, seg in enumerate(cleaned)] + [(s, -1) for s in inners]
+    for seg, idx in walked:
+        if not _GIT_ADD_GATE_RE.search(seg):
+            continue
+        base: Optional[str] = None
+        if idx >= 0:
+            base = chain[idx]
+            if base is None and leading is not None:
+                cd_count = sum(
+                    1 for s in outer[: idx + 1] if _BT_PAREN_CD_SEGMENT_RE.match(s + " ")
+                )
+                closed = any(s.rstrip().endswith(")") for s in outer[:idx])
+                if cd_count == 1 and not closed:
+                    base = leading
+        dash_c: Optional[str] = None
+        for opts_blob in _GIT_ADD_INVOCATION_OPTS_RE.findall(seg):
+            found = _GIT_ADD_DASH_C_VALUE_RE.findall(opts_blob)
+            if found:
+                dash_c = found[-1]
+        cwd = base or os.getcwd()
+        if dash_c:
+            dash_c = dash_c.strip("'\"")
+            cwd = dash_c if os.path.isabs(dash_c) else os.path.normpath(os.path.join(cwd, dash_c))
+        if cwd not in cwds:
+            cwds.append(cwd)
+    return cwds
+
+
 def _add_has_narrowing_pathspec(after: str) -> bool:
     """Whether a `git add` argv restricts itself to named paths.
 
@@ -305,9 +382,19 @@ def check_blanket_git_add(
     ):
         return None
 
-    _ga_dash_c_cwd = _bt_blanket_add_dash_c_cwd(cmd)
-    rc, out = _dc_git_probe._run_git(["rev-parse", "--show-toplevel"], cwd=_ga_dash_c_cwd)
-    git_root = out.strip() if rc == 0 else ""
+    _ga_candidates = _blanket_add_candidate_cwds(cmd) or [_bt_blanket_add_dash_c_cwd(cmd)]
+    _ga_dash_c_cwd = _ga_candidates[0]
+    git_root = ""
+    for _cand in _ga_candidates:
+        rc, out = _dc_git_probe._run_git(["rev-parse", "--show-toplevel"], cwd=_cand)
+        _root = out.strip() if rc == 0 else ""
+        if not _root:
+            continue
+        if not git_root:
+            git_root, _ga_dash_c_cwd = _root, _cand
+        if _dc_git_shared._is_hazard_repo(_root):
+            git_root, _ga_dash_c_cwd = _root, _cand
+            break
     if not git_root:
         return None
 

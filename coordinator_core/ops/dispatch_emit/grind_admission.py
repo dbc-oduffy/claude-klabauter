@@ -7,6 +7,15 @@ Calibrated on claude-klabauter 20261114T173532Z (batch 40, verify-routing batche
 17 calls = run 2 (commit, ledger-sweep) + batch 6 (triage 1, verify-routing 4, close 1; adjudicate
 reserved, +1) + row 9 (fix 3, verify-agent 2, review 4), 795k subagent tokens, 9 rows landed.
 The unbatched receipts (20261114T165441Z: 23 verify calls for 10 rows) predate b2ed825d22.
+
+Tokens are TOTAL (input + output + cache): `budget.spent()` counts output only, so the in-run
+total is output * TOTAL_PER_OUTPUT_CENTI / 100 and a row is priced in that one unit.
+TOTAL_PER_OUTPUT_CENTI = 1782 is the worst measured total-per-output: DoE /learn-lessons grind,
+783,824 total tokens against 44,000 output (17.814, rounded up; the 44,000 is as relayed in the
+memo, not re-read from a DoE receipt here). ROW_TOTAL_TOKENS = ceil(max per-row output x ratio / 100)
+= ceil(66,725 / 2 x 17.82) = 594,520, where 66,725 / 2 is the worst per-row output over the cited
+receipts (claude-klabauter 20261116T191317Z: 66,725 output, 251,424 subagent total over 2 rows). DoE's own
+per-row total, 783,824 / 3 = 261,275, is below it, so one constant clears both receipts.
 """
 
 from __future__ import annotations
@@ -19,7 +28,8 @@ ROW_AGENT_CALLS_CENTI = 90
 BATCH_AGENT_CALLS = 7
 RUN_FIXED_AGENT_CALLS = 2
 DEFAULT_BATCH_SIZE = 4
-ROW_OUTPUT_TOKENS = 140076
+TOTAL_PER_OUTPUT_CENTI = 1782
+ROW_TOTAL_TOKENS = 594520
 NOT_ADMITTED_EXTRA_KEY = "not_admitted"
 
 
@@ -51,7 +61,7 @@ def admit(
     budget_source = "explicit" if budget_tokens is not None else "default"
     if budget_tokens is None:
         budget_tokens = default_budget(len(rows))
-    by_tokens = budget_tokens // ROW_OUTPUT_TOKENS
+    by_tokens = budget_tokens // ROW_TOTAL_TOKENS
     count = len(rows)
     for bound in (by_calls, by_tokens):
         if bound is not None:
@@ -67,7 +77,7 @@ def admit(
             "run_fixed_agent_calls": RUN_FIXED_AGENT_CALLS,
             "batch_agent_calls": BATCH_AGENT_CALLS,
             "batch_size": batch_size,
-            "row_output_tokens": ROW_OUTPUT_TOKENS,
+            "row_total_tokens": ROW_TOTAL_TOKENS,
             "bound_by_calls": by_calls,
             "bound_by_tokens": by_tokens,
             "admitted_count": count,

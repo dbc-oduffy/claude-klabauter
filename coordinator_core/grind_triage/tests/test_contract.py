@@ -7,7 +7,7 @@ import dataclasses
 import pytest
 
 from coordinator_core.grind_triage import contract
-from coordinator_core.ops.dispatch_emit.grind_admission import ROW_OUTPUT_TOKENS, admit
+from coordinator_core.ops.dispatch_emit.grind_admission import ROW_TOTAL_TOKENS, admit
 
 
 @pytest.mark.parametrize(
@@ -38,11 +38,17 @@ def test_default_budget_admits_every_row(n) -> None:
 
 
 def test_default_budget_scales_with_rows_and_is_bounded() -> None:
-    assert contract.default_budget(10) > contract.default_budget(5) >= 5 * ROW_OUTPUT_TOKENS
+    assert contract.default_budget(10) > contract.default_budget(5) >= 5 * ROW_TOTAL_TOKENS
     assert contract.default_budget(0) > 0
     # Bounded: one fewer row's worth of budget no longer covers all rows.
-    short = contract.default_budget(10) - 3 * ROW_OUTPUT_TOKENS
+    short = contract.default_budget(10) - 3 * ROW_TOTAL_TOKENS
     assert admit([str(i) for i in range(10)], max_agent_calls=None, budget_tokens=short).not_admitted
+
+
+def test_default_budget_is_rows_plus_fixed_reserve_in_total_tokens() -> None:
+    from coordinator_core.ops.dispatch_emit.grind_admission import RUN_FIXED_AGENT_CALLS
+
+    assert contract.default_budget(3) == (3 + RUN_FIXED_AGENT_CALLS) * ROW_TOTAL_TOKENS
 
 
 def test_default_budget_rejects_negative() -> None:

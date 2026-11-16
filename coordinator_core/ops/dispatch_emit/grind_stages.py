@@ -99,6 +99,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
 )
 from coordinator_core.backlog_grind_assemble.grind_rows import evidence_rel
 from coordinator_core.grind_triage.contract import CHECKPOINT_PERCENTS
+from coordinator_core.ops.dispatch_emit.grind_admission import TOTAL_PER_OUTPUT_CENTI
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME, RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.agent_sidecar import sidecar_clause, sidecar_dir
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -1942,6 +1943,19 @@ def _undo_fold_clause(
     return ("expr", f"({final_js}) ? {clause} : ''")
 
 
+def compose_spent_total_js() -> str:
+    """The one run-spend reading: ``budget.spent()`` counts output only, so total (input + output) tokens
+    are the output delta times ``TOTAL_PER_OUTPUT_CENTI`` / 100, rounded up. The in-run stop, the
+    checkpoint ledger and ``_spend()`` all read it, so BUDGET_TOKENS is charged in admission's unit.
+    Needs ``budget`` and ``_startSpent`` in scope when called."""
+    return (
+        f"const TOTAL_PER_OUTPUT_CENTI = {TOTAL_PER_OUTPUT_CENTI};\n"
+        "function _spentTotal() {\n"
+        "  return Math.ceil((budget.spent() - _startSpent) * TOTAL_PER_OUTPUT_CENTI / 100);\n"
+        "}"
+    )
+
+
 def compose_checkpoint_js() -> str:
     """Top-level JS defining ``_checkpoint()``: logs one report per 25/50/75% mark, fired by whichever of rows
     settled (handed back or queued to commit) or budget spent crosses it first, and records it in
@@ -1952,14 +1966,14 @@ def compose_checkpoint_js() -> str:
     the survivors), rows committed, rows handed back and spend so far. It is a ``log`` line plus the hand-back's ``checkpoints`` list, never a session
     wake and never a ``progress.jsonl`` write: the composed script has no engine channel but its agents.
     Needs ``QUEUE_GRIND_MANIFEST``, ``RUN_ID``, ``_handedBack`` and ``_settled`` in scope when called;
-    ``budget``, ``_startSpent`` and ``BUDGET_TOKENS`` too."""
+    ``_spentTotal`` (``compose_spent_total_js``) and ``BUDGET_TOKENS`` too."""
     return (
         f"const CHECKPOINT_PERCENTS = {json.dumps(list(CHECKPOINT_PERCENTS))};\n"
         "const _checkpointsReported = [];\n"
         "function _checkpoint() {\n"
         "  const total = QUEUE_GRIND_MANIFEST.entries.length;\n"
         "  const settled = _handedBack.length + _settled.length;\n"
-        "  const spent = budget.spent() - _startSpent;\n"
+        "  const spent = _spentTotal();\n"
         "  for (const [i, percent] of CHECKPOINT_PERCENTS.entries()) {\n"
         "    const byRows = settled * 100 >= percent * total;\n"
         "    if (!byRows && !(BUDGET_TOKENS > 0 && spent * 100 >= percent * BUDGET_TOKENS)) continue;\n"

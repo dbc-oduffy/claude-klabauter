@@ -134,7 +134,7 @@ from coordinator_core.ops.review_mint.execute_review import compose_execute_revi
 from coordinator_core.ops.review_mint.roster import parse_execute_review
 from coordinator_core.ops._workflow_contract import scrub
 from coordinator_core.ops.dispatch_emit.fanout_cost import AGENT_CALL_RE, FanoutCost, with_fanout
-from coordinator_core.ops.dispatch_emit.grind_admission import ROW_OUTPUT_TOKENS
+from coordinator_core.ops.dispatch_emit.grind_admission import ROW_TOTAL_TOKENS, TOTAL_PER_OUTPUT_CENTI
 from coordinator_core.ops.dispatch_emit.grind_profile import Profile
 from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEntry
 from coordinator_core.session.output_tree_layout import write_rel
@@ -170,6 +170,12 @@ STAGE_OUTPUT_TOKENS: dict[str, int] = {
     "close": 8,
     "fix": 4,
 }
+
+
+def total_tokens(output_tokens: int) -> int:
+    """Total (input + output) tokens implied by ``output_tokens``; twin of the emitted ``_spentTotal()``."""
+    return -(-output_tokens * TOTAL_PER_OUTPUT_CENTI // 100)
+
 
 def batch_reserve(batch_size: int) -> int:
     """The fixed per-batch output-token reserve at ``batch_size``.
@@ -1263,7 +1269,7 @@ def run_admission(
             # BUDGET_TOKENS ceiling (a caller-supplied hard cap, distinct from
             # budget.total/remaining() below): halts admission once the next
             # batch's reserve would carry cumulative spend past it.
-            if budget_tokens is not None and (budget.spent() - start_spent) + reserve > budget_tokens:
+            if budget_tokens is not None and total_tokens(budget.spent() - start_spent) + total_tokens(reserve) > budget_tokens:
                 exhausted = True
                 break
             if budget.total is not None and (budget.remaining() or 0) <= reserve:
@@ -1319,6 +1325,8 @@ def run_admission(
             "counts": {"by_type": by_type, "by_outcome": {"committed": len(settled)} if settled else {}},
             "spend": {
                 "output_tokens": budget.spent() - start_spent,
+                "total_tokens": total_tokens(budget.spent() - start_spent),
+                "total_basis": "output*ratio",
                 "agent_calls_total": len(call_log),
                 "agent_calls_by_stage_kind": dict(calls_by_kind),
             },
@@ -1837,7 +1845,7 @@ _PREVET_JS = (
     "  for (const b of BATCHES) { for (const r of b.rows) { if (!_rows[r].pmRuling) ids.push(r); } }\n"
     "  for (let i = 0; i < ids.length; i += PREVET_BATCH_SIZE) {\n"
     "    if (MAX_AGENT_CALLS !== null && _callCount + 2 > MAX_AGENT_CALLS) break;\n"
-    "    if (BUDGET_TOKENS !== null && budget.spent() - _startSpent + RESERVE > BUDGET_TOKENS) break;\n"
+    "    if (BUDGET_TOKENS !== null && _spentTotal() + RESERVE > BUDGET_TOKENS) break;\n"
     "    try { await _prevetBatch(ids.slice(i, i + PREVET_BATCH_SIZE)); } catch (err) { continue; }\n"
     "  }\n"
     "}"
@@ -2009,9 +2017,8 @@ _ISSUE_GATE_JS = (
     "  while (_grindOpen && _queue.length && Object.keys(_admitted).length < WINDOW && !_anyAdmittedHasPendingDownstream()) {\n"
     "    if (MAX_AGENT_CALLS !== null && _callCount >= MAX_AGENT_CALLS) { _exhausted = true; }\n"
     "    else {\n"
-    "      const _spentDelta = budget.spent() - _startSpent;\n"
-    "      if (BUDGET_TOKENS !== null && _spentDelta + RESERVE > BUDGET_TOKENS) { _exhausted = true; }\n"
-    "      else if (budget.total !== undefined && budget.total !== null && (budget.remaining() ?? 0) <= RESERVE) { _exhausted = true; }\n"
+    "      if (BUDGET_TOKENS !== null && _spentTotal() + RESERVE > BUDGET_TOKENS) { _exhausted = true; }\n"
+    "      else if (budget.total !== undefined && budget.total !== null && (budget.remaining() ?? 0) <= RESERVE_OUT) { _exhausted = true; }\n"
     "    }\n"
     "    if (_exhausted) break;\n"
     "    const bid = _queue.shift();\n"
@@ -2573,7 +2580,8 @@ def compose_grind_script(
     lines.append(_ROUTING_HELPERS)
 
     lines.append(f"const WINDOW = {window};")
-    lines.append(f"const RESERVE = {batch_reserve(reserve_batch_size)};")
+    lines.append(f"const RESERVE = {total_tokens(batch_reserve(reserve_batch_size))};")
+    lines.append(f"const RESERVE_OUT = {batch_reserve(reserve_batch_size)};")
     lines.append(f"const MAX_AGENT_CALLS = {json.dumps(max_agent_calls)};")
     lines.append(f"const BUDGET_TOKENS = {json.dumps(budget_tokens)};")
     # the guard MUST run before any `const ... = args.*` read below --
@@ -2637,6 +2645,7 @@ def compose_grind_script(
         "_agentCallsByStageKind[kind] = (_agentCallsByStageKind[kind] || 0) + 1; }"
     )
     lines.append("const _startSpent = budget.spent();")
+    lines.append(stages.compose_spent_total_js())
     lines.append("let _exhausted = false;")
     lines.append("const _handedBack = [];")
     lines.append("const _settled = [];")
@@ -2959,7 +2968,7 @@ def compose_grind_script(
     lines.append(terminal_commit_text)
 
     lines.append(
-        "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin, by_triage_check: _byTriageCheck };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nlet _reviewState = 'not-run';\nlet _reviewVerdictsRecord = null;\nfunction _runCostRecord() {\n  return { review_state: _reviewState, review_verdicts: _reviewVerdictsRecord, profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, " + stage_models_field + "manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend(), handed_back: _handedBack, halted: _haltReason() !== null, halted_reason: _haltReason(), terminal_commit_dropped: _terminalCommitDropped };\n}\nfunction _declaredWrites() {\n  const out = [];\n  for (const r of Object.keys(_rows)) { if (_rows[r].origin) out.push(_rows[r].path); if (_rows[r].sizingPath) out.push(_rows[r].sizingPath); }\n  return Array.from(new Set(out));\n}"
+        "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin, by_triage_check: _byTriageCheck };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, total_tokens: _spentTotal(), total_basis: 'output*ratio', agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nlet _reviewState = 'not-run';\nlet _reviewVerdictsRecord = null;\nfunction _runCostRecord() {\n  return { review_state: _reviewState, review_verdicts: _reviewVerdictsRecord, profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, " + stage_models_field + "manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend(), handed_back: _handedBack, halted: _haltReason() !== null, halted_reason: _haltReason(), terminal_commit_dropped: _terminalCommitDropped };\n}\nfunction _declaredWrites() {\n  const out = [];\n  for (const r of Object.keys(_rows)) { if (_rows[r].origin) out.push(_rows[r].path); if (_rows[r].sizingPath) out.push(_rows[r].sizingPath); }\n  return Array.from(new Set(out));\n}"
     )
     lines.append(
         "const _rows = {};\n"
@@ -3478,7 +3487,7 @@ def compose_grind_script(
             + sum(len(AGENT_CALL_RE.findall(scrub(leg))) for leg in once_per_run_legs),
             basis="expected",
             groups=tuple(tuple(e.row_id for e in entries) for _, entries in grouped),
-            row_output_tokens=ROW_OUTPUT_TOKENS * len(manifest.entries),
+            row_total_tokens=ROW_TOTAL_TOKENS * len(manifest.entries),
         ),
     )
     return "\n\n".join(lines) + "\n"

@@ -1341,6 +1341,63 @@ def _reverify_phase(
     return REVERIFY_PHASE, block
 
 
+_HEAD_TAIL_VAR = "_reviewHeadTail"
+_HEAD_KEEP = 60
+
+
+def _unescaped_quote(text: str, at: int, step: int) -> int:
+    """Index of the nearest single quote from ``at`` going ``step`` that no odd run of backslashes escapes; -1 if none."""
+    i = at
+    while 0 <= i < len(text):
+        if text[i] == "'":
+            slashes = 0
+            while i - slashes - 1 >= 0 and text[i - slashes - 1] == "\\":
+                slashes += 1
+            if slashes % 2 == 0:
+                return i
+        i += step
+    return -1
+
+
+def _share_prompt_head(phases: List[Tuple[str, str]], prompt_head: str) -> List[Tuple[str, str]]:
+    """Cut every copy of ``prompt_head`` past its first ``_HEAD_KEEP`` characters to one template const, declared at the top of the first phase that uses it.
+
+    Trap: the phases must share one JS scope (the first phase's const is read by the later ones). Fewer than two copies, or a head whose tail carries a backtick, `${` or a split escape, is left as it was.
+    """
+    text = _js_string_literal(prompt_head)[1:-1]
+    head, tail = text[:_HEAD_KEEP], text[_HEAD_KEEP:]
+    if not prompt_head or "`" in tail or "${" in tail or head.endswith("\\"):
+        return phases
+    if sum(block.count(text) for _, block in phases) < 2:
+        return phases
+    out: List[Tuple[str, str]] = []
+    declared = False
+    for title, block in phases:
+        parts: List[str] = []
+        last = 0
+        at = block.find(text)
+        while at != -1:
+            start = _unescaped_quote(block, at - 1, -1)
+            end = _unescaped_quote(block, at + len(text), 1)
+            if start < 0 or end < 0:
+                break
+            lit = "'" + block[start + 1 : end].replace(text, f"{head}' + {_HEAD_TAIL_VAR} + '") + "'"
+            lit = lit.removesuffix(" + ''")
+            if block[end + 1 : end + 4].lstrip()[:1] in (".", "[", "(") or block[end + 1 : end + 4].lstrip()[:2] == "?.":
+                lit = f"({lit})"
+            parts.append(block[last:start])
+            parts.append(lit)
+            last = end + 1
+            at = block.find(text, last)
+        parts.append(block[last:])
+        block = "".join(parts)
+        if not declared and _HEAD_TAIL_VAR in block:
+            block = f"  const {_HEAD_TAIL_VAR} = `{tail}`;\n" + block
+            declared = True
+        out.append((title, block))
+    return out
+
+
 def compose_execute_review(
     review: ExecuteReview,
     *,
@@ -1376,6 +1433,7 @@ def compose_execute_review(
     slice_filter_js: Optional[str] = None,
     owned_red_path: str = "",
     prep_run_id: Optional[str] = None,
+    share_prompt_head: Optional[bool] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -2338,6 +2396,11 @@ def compose_execute_review(
             "' + String(" + slice_key_js + ").replace(/[^A-Za-z0-9_.-]/g, '-') + '"
         )
         phases = [(title, block.replace(_SLICE_KEY_SENTINEL, spliced)) for title, block in phases]
+    if share_prompt_head is None:
+        # The grind composer's shape (runtime row count, own prep phase); other routes' goldens pin the unshared bytes.
+        share_prompt_head = executor_rows_js is not None and not prep_in_wave
+    if share_prompt_head:
+        phases = _share_prompt_head(phases, prompt_head)
     return phases
 
 

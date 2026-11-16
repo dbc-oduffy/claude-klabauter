@@ -146,7 +146,7 @@ def test_repomap_gate_stale_generates_with_fallback_note(tmp_path, capsys):
     rc = _mod._cmd_repomap_gate(args)
     assert rc == 0
     out = capsys.readouterr().out
-    assert "repomap regeneration started detached (rag_state=stale, fallback)" in out
+    assert "repomap generated (rag_state=stale, fallback)" in out
 
 
 def test_repomap_gate_missing_generator_exits_2(tmp_path, capsys):
@@ -178,10 +178,7 @@ def test_repomap_gate_unspawnable_generator_exits_2(tmp_path, capsys, monkeypatc
     assert "spawn error: exec format error" in capsys.readouterr().err
 
 
-def test_repomap_gate_generator_failure_is_a_detached_job_not_an_exit_code(tmp_path, monkeypatch):
-    from coordinator_core.ops.ceremony import detached_spawn
-
-    monkeypatch.setattr(detached_spawn, "spawn_detached", lambda *a, **k: True)
+def test_repomap_gate_generator_failure_is_a_finding_exit_1(tmp_path, capsys):
     generator = tmp_path / "fake-generate-repomap.py"
     generator.write_text("import sys\nsys.exit(1)\n", encoding="utf-8")
     args = _ns(
@@ -190,7 +187,8 @@ def test_repomap_gate_generator_failure_is_a_detached_job_not_an_exit_code(tmp_p
         check_rag_state_cli=None,
         generate_repomap_cli=str(generator),
     )
-    assert _mod._cmd_repomap_gate(args) == 0
+    assert _mod._cmd_repomap_gate(args) == 1
+    assert "repomap regeneration failed (exit 1)" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

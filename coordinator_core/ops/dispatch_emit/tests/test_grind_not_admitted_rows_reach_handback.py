@@ -6,7 +6,7 @@ returned in the grind HANDBACK with a reason naming the cap, so a budget-cut row
 """
 from __future__ import annotations
 
-from coordinator_core.ops.dispatch_emit.grind_admission import admit, not_admitted_entries
+from coordinator_core.ops.dispatch_emit.grind_admission import ROW_TOTAL_TOKENS, admit, not_admitted_entries
 
 from .test_grind_compose import _compose
 
@@ -16,18 +16,18 @@ def _manifest_literal(script):
 
 
 def test_budget_cut_rows_carry_a_reason_naming_the_cap():
-    admission = admit(["a", "b", "c"], max_agent_calls=None, budget_tokens=140076 * 2)
+    admission = admit(["a", "b", "c"], max_agent_calls=None, budget_tokens=ROW_TOTAL_TOKENS * 2)
     entries = not_admitted_entries(admission)
     assert [e["row_id"] for e in entries] == ["c"]
-    assert "budget_tokens=280152" in entries[0]["reason"]
+    assert f"budget_tokens={ROW_TOTAL_TOKENS * 2}" in entries[0]["reason"]
 
 
 def test_not_admitted_rows_reach_manifest_and_handback():
-    admission = admit(["a", "b", "c"], max_agent_calls=None, budget_tokens=140076)
+    admission = admit(["a", "b", "c"], max_agent_calls=None, budget_tokens=ROW_TOTAL_TOKENS)
     script = _compose(not_admitted=not_admitted_entries(admission))
     literal = _manifest_literal(script)
     assert '"row_id": "b"' in literal and '"row_id": "c"' in literal
-    assert "budget_tokens=140076" in literal
+    assert f"budget_tokens={ROW_TOTAL_TOKENS}" in literal
     assert "not_admitted: QUEUE_GRIND_MANIFEST.not_admitted," in script[script.index("const HANDBACK = {"):]
 
 

@@ -72,7 +72,7 @@ def _compose(**overrides) -> str:
     manifest = overrides.pop("manifest", None) or _fixture_manifest()
     knobs = gp.resolve_appetite(profile, appetite)
     knobs.update(overrides)
-    return gc.compose_grind_script(
+    script = gc.compose_grind_script(
         manifest,
         profile,
         knobs,
@@ -84,6 +84,16 @@ def _compose(**overrides) -> str:
         targeted_runner=targeted_runner,
         **REVIEW_KW,
     )
+    return _without_engine_interpreter(script)
+
+
+def _without_engine_interpreter(script: str) -> str:
+    """The emitted clean-export rerun names this box's engine root and interpreter; swap them for a token so the golden is the same bytes on every machine."""
+    from coordinator_core.ops.dispatch_emit import ask_compose
+
+    module = ask_compose._OVERLAY_VERIFY_MODULE
+    command = ask_compose.engine_module_command(module, ".")
+    return script.replace(command.removesuffix(f" -m {module}"), "<ENGINE_PYTHON>")
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +433,40 @@ def test_agent_call_site_count_independent_of_row_count() -> None:
     large_count, large_bytes = _agent_count(300)
     assert small_count == large_count
     assert large_bytes < 184 * 1024
+
+
+def test_prep_empty_retry_loop_is_bounded_by_the_attempt_cap() -> None:
+    """The `_prepEmptyAttempts < N` marker names a real bound: N is the attempt cap."""
+    from coordinator_core.ops.review_mint import execute_review as er
+
+    loops = [ln for ln in _compose().splitlines() if "while (_prepEmptyNullError(" in ln]
+    assert len(loops) == 1
+    assert f"_prepEmptyAttempts < {er._PREP_EMPTY_ATTEMPTS}" in loops[0]
+    assert "_prepEmptyAttempts++" in loops[0]
+
+
+def test_review_prompt_head_is_shared_across_review_prompts_in_the_grind_script() -> None:
+    """Every review-phase prompt keeps only the head of the brief-precedence clause inline; one const holds its tail."""
+    script = _compose()
+    clause = gc._BRIEF_PRECEDENCE_CLAUSE
+    full = clause.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+    assert full not in script
+    assert script.count("const _reviewHeadTail = `") == 1
+    assert script.count("' + _reviewHeadTail + '") >= 2
+
+
+def test_share_prompt_head_leaves_a_single_copy_alone() -> None:
+    from coordinator_core.ops.review_mint import execute_review as er
+
+    head = "H" * 70
+    one = [("p", f"  const a = agent('{head}\\n\\nrole');")]
+    assert er._share_prompt_head(one, head) == one
+    two = one + [("q", f"  const b = ('{head}\\n\\nother').length;")]
+    shared = er._share_prompt_head(two, head)
+    assert shared[0][1].startswith("  const _reviewHeadTail = `")
+    assert "'" + "H" * 60 + "' + _reviewHeadTail + '" in shared[0][1]
+    assert "('" + "H" * 60 + "' + _reviewHeadTail + '\\n\\nother')" in shared[1][1]
+    assert head not in shared[1][1]
 
 
 def test_triage_declared_files_never_overwrites_touched_files() -> None:
@@ -1321,7 +1365,7 @@ def test_every_while_loop_has_a_progress_guarantee_reference() -> None:
     while_lines = [i for i, line in enumerate(script.splitlines()) if re.search(r"\bwhile\s*\(", line)]
     assert while_lines
     lines = script.splitlines()
-    progress_markers = ("_pendingRow", "_queue.length", "workers.length")
+    progress_markers = ("_pendingRow", "_queue.length", "workers.length", "_prepEmptyAttempts < ")
     for idx in while_lines:
         window = "\n".join(lines[max(0, idx - 2): idx + 2])
         assert any(marker in window for marker in progress_markers), lines[idx]
@@ -3518,3 +3562,108 @@ def test_compose_triages_unless_isolation_triage_is_skipped(tmp_path: Path, monk
 def test_compose_without_repo_root_never_triages(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gc, "triage_manifest", lambda *a, **k: pytest.fail("triage ran without a repo_root"))
     assert "const _checkpointsReported" in _compose()
+
+
+# ---------------------------------------------------------------------------
+# Total-token spend: one _spentTotal() drives the stop, the checkpoint and _spend()
+# ---------------------------------------------------------------------------
+
+_SPEND_HARNESS_JS = r"""
+import fs from 'node:fs';
+const [,, scriptPath, fixOutput] = process.argv;
+const src = fs.readFileSync(scriptPath, 'utf8').replace(/\r\n/g, '\n').replace(/export const meta = \{[\s\S]*?\n\};\n/, '');
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const rowNo = (prompt) => { const m = /row(\d+)/.exec(prompt); return m ? Number(m[1]) : 0; };
+let _spent = 0;
+let ledgerPrompt = '';
+const checkpoints = [];
+const reply = (opts, prompt) => {
+  const label = opts.label || '';
+  const rows = [...new Set([...prompt.matchAll(/"row_id":"(row\d+)"/g)].map((m) => m[1]))];
+  if (label === 'triage') return { rows: rows.map((r) => ({ row: r, verdict: 'confirmed-bug', tshirt_size: 'S', has_tradeoff: false, evidence: 'e', fix_plan: 'p' })), stale: [] };
+  if (label === 'fix') { _spent += Number(fixOutput); return { outcome: 'done', touched_files: ['f' + rowNo(prompt) + '.py'] }; }
+  if (label.startsWith('verify')) return { outcome: 'pass', exit_code: 0, output: {} };
+  if (label === 'commit') {
+    return { committed: true, sha: 'abc123', rows: rows.map((r) => ({ row_id: r, outcome: 'settled', sha: 'abc123' })), unlanded: [] };
+  }
+  return {};
+};
+const agent = (prompt, opts = {}) => {
+  if ((opts.label || '').startsWith('ledger-sweep')) ledgerPrompt = prompt;
+  return new Promise((res) => setTimeout(() => res(reply(opts, prompt)), 1));
+};
+const log = (m) => { if (m.startsWith('grind checkpoint ')) checkpoints.push(JSON.parse(m.slice('grind checkpoint '.length))); };
+const budget = { spent: () => _spent, remaining: () => null, total: null };
+const fn = new AsyncFunction('args', 'agent', 'phase', 'log', 'budget', 'parallel', src);
+await fn(
+  { run_stamp: '20261017T000000Z', script_path: 'x.mjs', profile_dir: 'pd', repo_root: '/r', run_token: 'tok' },
+  agent, () => {}, log, budget, async (xs) => Promise.all(xs),
+);
+const record = JSON.parse(decodeURIComponent(/RUNREC-OPEN-\S+\n\d+ [0-9a-f]{64}\n(\S+)\nRUNREC-CLOSE-/.exec(ledgerPrompt)[1]));
+console.log(JSON.stringify({
+  exhausted: record.handed_back.filter((h) => h.type === 'budget-exhausted').length,
+  settled: Object.values(record.counts.by_outcome).reduce((a, b) => a + b, 0),
+  spend: record.spend,
+  checkpoints,
+  output: _spent,
+}));
+"""
+
+
+def _run_spend_harness(tmp_path: Path, fix_output: int) -> dict:
+    from coordinator_core.grind_triage.contract import default_budget
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node absent")
+    script = tmp_path / "grind.mjs"
+    script.write_bytes(_compose(budget_tokens=default_budget(7), window=1).encode("utf-8"))
+    harness = tmp_path / "harness.mjs"
+    harness.write_text(_SPEND_HARNESS_JS, encoding="utf-8")
+    out = subprocess.run(
+        [node, str(harness), str(script), str(fix_output)], capture_output=True, text=True, check=False, timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_total_tokens_prices_output_by_the_admission_ratio_rounding_up() -> None:
+    from coordinator_core.ops.dispatch_emit.grind_admission import TOTAL_PER_OUTPUT_CENTI
+
+    assert gc.total_tokens(0) == 0
+    assert gc.total_tokens(100) == TOTAL_PER_OUTPUT_CENTI
+    assert gc.total_tokens(1) == -(-TOTAL_PER_OUTPUT_CENTI // 100)
+
+
+def test_every_stop_read_and_the_ledger_route_through_the_one_spent_total() -> None:
+    script = _compose()
+    assert script.count("function _spentTotal()") == 1
+    assert "if (BUDGET_TOKENS !== null && _spentTotal() + RESERVE > BUDGET_TOKENS) { _exhausted = true; }" in script
+    assert "budget.spent() - _startSpent + RESERVE" not in script
+    assert "const spent = _spentTotal();" in script
+    assert "total_tokens: _spentTotal()" in script
+    assert f"const RESERVE = {gc.total_tokens(gc.batch_reserve(4))};" in script
+    assert f"const RESERVE_OUT = {gc.batch_reserve(4)};" in script
+    assert "(budget.remaining() ?? 0) <= RESERVE_OUT" in script
+    assert "(budget.remaining() ?? 0) <= RESERVE)" not in script
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_default_run_at_the_claude_klabauter_receipt_row_output_settles_every_admitted_row(tmp_path: Path) -> None:
+    seen = _run_spend_harness(tmp_path, 33_363)
+    assert seen["exhausted"] == 0 and seen["settled"] == 7
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_the_run_stops_once_total_spend_passes_budget_and_the_ledger_reports_that_spend(tmp_path: Path) -> None:
+    seen = _run_spend_harness(tmp_path, 120_000)
+    assert seen["exhausted"] > 0 and seen["settled"] < 7
+    spend = seen["spend"]
+    assert spend["output_tokens"] == seen["output"]
+    assert spend["total_tokens"] == gc.total_tokens(seen["output"])
+    assert spend["total_basis"] == "output*ratio"
+    assert seen["checkpoints"] and all(c["spent"] <= spend["total_tokens"] for c in seen["checkpoints"])
+    assert any(c["trigger"] == "budget" or c["spent"] > seen["output"] for c in seen["checkpoints"])

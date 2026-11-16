@@ -85,10 +85,11 @@ def test_expected_basis_is_accepted_and_rendered():
         f.FanoutCost(4, 9, "estimated")
 
 
-def test_row_output_tokens_emitted_only_when_set():
-    assert "rowOutputTokensTotal" not in f.FanoutCost(4, 9, "expected").meta_dict()
-    assert f.FanoutCost(4, 9, "expected", row_output_tokens=120).meta_dict()["rowOutputTokensTotal"] == 120
-    assert f.FanoutCost(4, 9, "expected", row_output_tokens=0).meta_dict()["rowOutputTokensTotal"] == 0
+def test_row_total_tokens_emitted_only_when_set():
+    assert "rowTotalTokensTotal" not in f.FanoutCost(4, 9, "expected").meta_dict()
+    assert f.FanoutCost(4, 9, "expected", row_total_tokens=120).meta_dict()["rowTotalTokensTotal"] == 120
+    assert f.FanoutCost(4, 9, "expected", row_total_tokens=0).meta_dict()["rowTotalTokensTotal"] == 0
+    assert "rowOutputTokensTotal" not in f.FanoutCost(4, 9, "expected", row_total_tokens=1).meta_dict()
 
 
 def test_grind_vocab_carries_no_default_token_ceiling():
