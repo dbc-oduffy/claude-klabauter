@@ -107,3 +107,32 @@ def test_unchanged_without_record(tmp_path, monkeypatch):
     run_dir.mkdir(parents=True)
     refusal, _, _ = _gate(tmp_path, monkeypatch, run_dir)
     assert refusal is None
+
+
+def _worlds(tmp_path, predecessor, current):
+    for run_id in (predecessor, current):
+        d = tmp_path / "state" / "warp" / run_id
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/2026-11/s-4a48ae.yaml"}), encoding="utf-8")
+
+
+def _drift_of(tmp_path, monkeypatch, own, note):
+    monkeypatch.setattr(land_run, "_head_entries", lambda root, paths: {})
+    record = {"blobs": {"a.py": "m1", note: "m2"}, "removed": []}
+    settled = {"a.py": "m1", note: "edited-after-measure", "shared/x.py": "late"}
+    return land_run._measured_mismatch(tmp_path, record, ["a.py", note, "shared/x.py"], [], settled, own=own)
+
+
+def test_resumed_run_editing_its_predecessors_note_still_lands(tmp_path, monkeypatch):
+    prev, cur = "ask-20261116T110000-4a48ae", "ask-20261116T120000-4a48ae"
+    _worlds(tmp_path, prev, cur)
+    own = land_run._run_owned(tmp_path, cur)
+    for note in (f"docs/delivery/2026-11/{prev}.md", f"docs/delivery/{prev}.md"):
+        assert _drift_of(tmp_path, monkeypatch, own, note) == ["shared/x.py"]
+
+
+def test_sibling_id_note_is_own_only_when_the_firing_names_it(tmp_path, monkeypatch):
+    cur, sibling = "ask-20261116T120000-4a48ae", "ask-20261116T130000-bbbbbb"
+    note = f"docs/delivery/2026-11/{sibling}.md"
+    assert _drift_of(tmp_path, monkeypatch, land_run._run_owned(tmp_path, cur, sibling), note) == ["shared/x.py"]
+    assert note in _drift_of(tmp_path, monkeypatch, land_run._run_owned(tmp_path, cur), note)

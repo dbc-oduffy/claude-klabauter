@@ -45,17 +45,20 @@ class OwnArtifacts:
     plan_docs: frozenset[str] = frozenset()
     # Earlier runs bound to the same sizing: their kept blobs are this run's own work (`hunk_provenance`).
     predecessors: tuple[str, ...] = ()
+    # Other run ids whose delivery note this run writes (the firing's own id when it differs from the record dir's).
+    note_ids: tuple[str, ...] = ()
 
     def _is_note(self, rel: str) -> bool:
-        """The run's note at its located path, or at the other of its flat and `<YYYY-MM>` shard homes."""
-        if rel == self.delivery_note:
-            return True
+        """A note of this run, a same-sizing predecessor or a `note_ids` run, at its flat or `<YYYY-MM>` shard home."""
         parts = rel.split("/")
-        mine = self.delivery_note.split("/")
-        return (
-            parts[:2] == mine[:2] == ["docs", "delivery"] and parts[-1] == mine[-1]
-            and (len(parts) == 3 or (len(parts) == 4 and _SHARD_DIR.match(parts[2]) is not None))
-        )
+        if parts[:2] != ["docs", "delivery"] or not (
+            len(parts) == 3 or (len(parts) == 4 and _SHARD_DIR.match(parts[2]) is not None)
+        ):
+            return False
+        names = {f"{i}.md" for i in (*self.predecessors, *self.note_ids)}
+        if self.delivery_note:
+            names.add(self.delivery_note.rsplit("/", 1)[-1])
+        return rel == self.delivery_note or parts[-1] in names
 
     def covers(self, rel: str) -> bool:
         """True for the run's sizings, plan evidence, minted plan doc, delivery note, or anything under its record dir."""
@@ -63,7 +66,7 @@ class OwnArtifacts:
             return False
         if rel in self.sizings or rel in self.plan_evidence or rel in self.plan_docs:
             return True
-        if self.delivery_note and self._is_note(rel):
+        if self._is_note(rel):
             return True
         return bool(self.record_prefix) and rel.startswith(self.record_prefix)
 
@@ -220,8 +223,11 @@ def _same_sizing_predecessors(root: Path, run_id: str, sizings: set[str]) -> tup
     return tuple(kept)
 
 
-def own_artifact_paths(root: Path, run_id: str) -> OwnArtifacts:
-    """The sizing(s), plan evidence, record prefix and delivery note *run_id* owns; empty for an unsafe id."""
+def own_artifact_paths(root: Path, run_id: str, note_ids: tuple[str, ...] = ()) -> OwnArtifacts:
+    """The sizing(s), plan evidence, record prefix and delivery note *run_id* owns; empty for an unsafe id.
+
+    *note_ids* names other run ids whose delivery note the firing writes; unsafe ids are dropped.
+    """
     if not isinstance(run_id, str) or not safe_id(run_id):
         return OwnArtifacts()
     root = Path(root)
@@ -236,6 +242,7 @@ def own_artifact_paths(root: Path, run_id: str) -> OwnArtifacts:
         plan_evidence=_plan_evidence(root, run_id, sizings),
         plan_docs=frozenset(plans),
         predecessors=predecessors,
+        note_ids=tuple(i for i in note_ids if isinstance(i, str) and i != run_id and safe_id(i)),
         corrupt_parents=corrupt,
         record_prefix=f"{_warp_home()}/{run_id}/",
         delivery_note=delivery_note_locate(root, run_id),

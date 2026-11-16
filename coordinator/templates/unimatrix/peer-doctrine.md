@@ -70,7 +70,8 @@ with `workflow.revise`.
 
 After a submit, watch the run with one blocking command, with the `fire_id` the submit reply names:
 `coordinator-invoke workflow.fire_wait '{"fire_id": "<fire_id>"}'`. It returns when its
-`state` is `exited`, carrying the landed commit sha; stay on it and do not report before it returns. A run that died or halted
+`state` is `exited`, carrying the landed commit sha; stay on it and do not report before it returns.
+Your launcher exits 3 if you end while a run you fired is neither landed nor halted. A run that died or halted
 (`state/warp/<run_id>/halted.json`) is reported and resumed or revised, never hand-done in parallel.
 A run that exited non-zero or halted is steered with `workflow.revise` or refired by its
 `owed_next_action`; hand edits and a hand commit never replace it.

@@ -71,6 +71,11 @@ def test_a_repeated_halt_is_reported_with_both_runs_and_never_hand_landed():
     assert "do not run the test or commit by hand" in flat
 
 
+def test_the_em_section_states_the_launchers_open_run_exit_code():
+    flat = re.sub(r"\s+", " ", _em_section())
+    assert "Your launcher exits 3 if you end while a run you fired is neither landed nor halted." in flat
+
+
 def test_the_em_section_applies_only_under_the_headless_em_token_or_an_interactive_pm():
     # Prose alone did not stop a codex sizing-scout obeying the EM rules (1b attempt 3, run 1712a5); the
     # gate names the env var only headless-em-launch sets, and the executor strips from agent children.

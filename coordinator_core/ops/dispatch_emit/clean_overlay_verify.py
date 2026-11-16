@@ -314,9 +314,20 @@ def collection_error(returncode: int, output: str) -> bool:
 _FAILED_ID_RE = re.compile(r"^(?:FAILED|ERROR) (.+?)(?: - |$)", re.MULTILINE)
 
 
+_NODE_FILE_RE = re.compile(r"^[\w@./+:\\-]+\.\w+$")
+
+
+def _node_id_shaped(entry: str) -> bool:
+    """True when ``entry`` leads with a test file path (``a/test_x.py``, ``a/test_x.py::t[p q]``); a count line
+    such as ``all 13 failed + 1 setup error`` has no file part."""
+    return _NODE_FILE_RE.match(re.split(r"::| > ", entry, maxsplit=1)[0].strip()) is not None
+
+
 def failing_ids(output: str) -> tuple:
-    """The node ids a pytest short summary reports as FAILED or ERROR, in order, without duplicates."""
-    return tuple(dict.fromkeys(m.strip() for m in _FAILED_ID_RE.findall(output)))
+    """The node ids a pytest short summary reports as FAILED or ERROR, in order, without duplicates; a
+    FAILED/ERROR line whose remainder is not node-id-shaped (a summary or count line) yields none."""
+    found = (m.strip() for m in _FAILED_ID_RE.findall(output))
+    return tuple(dict.fromkeys(i for i in found if _node_id_shaped(i)))
 
 
 LegHook = Callable[[str], ContextManager]

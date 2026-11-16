@@ -53,6 +53,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 from coordinator_core.ops.dispatch_emit import bug_close, external_original, review_floor, run_token
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
+from coordinator_core.ops.corpus_fallback import fallback_refusal
 from coordinator_core.ops.sizing_intake_contract import EM_CONTEXT_MARKER, read_em_brief, read_em_context_paths
 from coordinator_core.session.declared_writes import declare_write
 
@@ -2509,6 +2510,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     refusal = validate_params("workflow.revise", params, _PARAMS, strict=True)
     if refusal is not None:
         return refusal
+    for field in ("note", "verbatim"):
+        text = params.get(field)
+        reason = fallback_refusal(text) if isinstance(text, str) else None
+        if reason is not None:
+            return {"error": f"workflow.revise {field}: {reason}"}
     root = main_worktree_root(Path(repo_root))
     outcome: dict = {}
     try:

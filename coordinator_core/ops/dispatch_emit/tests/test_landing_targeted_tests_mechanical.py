@@ -159,3 +159,44 @@ def test_scope_clause_carries_the_tier_markers_only_when_it_runs_tests():
     clause = rd._scope_clause(["coordinator_core/tests/test_a.py"], "", "abc")
     assert '-m "not pending_fix and not designed_red"' in clause
     assert "pending_fix" not in rd._scope_clause([], "", "abc")
+
+
+_SUMMARY = "all 13 failed + 1 setup error"
+_PYTEST_OUT = (
+    "=========== short test summary info ===========\n"
+    "FAILED t/test_reader.py::test_reads_data - assert 'x' == 'ok'\n"
+    "ERROR t/test_broken.py\n"
+    f"FAILED {_SUMMARY}\n"
+    f"ERROR {_SUMMARY} - boom\n"
+    "FAILED t/test_p.py::test_param[a b] - AssertionError\n"
+)
+
+
+def test_failing_ids_drop_a_summary_line_and_keep_node_ids_and_collection_errors():
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    assert cov.failing_ids(_PYTEST_OUT) == (
+        "t/test_reader.py::test_reads_data", "t/test_broken.py", "t/test_p.py::test_param[a b]",
+    )
+    assert cov.failing_ids(f"FAILED {_SUMMARY}\n") == ()
+
+
+@pytest.mark.spawns_process
+def test_landing_overlay_verdict_never_names_a_summary_line_as_a_failing_id(tmp_path, monkeypatch):
+    import subprocess
+
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+    from coordinator_core.ops.dispatch_emit.tests.test_land_run_clean_overlay_verify import READER, _repo
+
+    root, head = _repo(tmp_path)
+    real = cov._run
+
+    def fake(argv, cwd, timeout, **kw):
+        if "pytest" in argv:
+            return subprocess.CompletedProcess(argv, 1, f"FAILED {_SUMMARY}\n", "")
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", fake)
+    out = cov.verify(root, "run1", head, [READER])
+
+    assert not out.failing and f"--tests {_SUMMARY}" not in out.detail, out

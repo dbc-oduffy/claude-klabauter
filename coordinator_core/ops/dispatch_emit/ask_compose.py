@@ -581,8 +581,9 @@ _MECHANICAL_EFFORT = "low"
 _MECHANICAL_AGENT_TYPE = "general-purpose"
 _MECHANICAL_MODEL = "haiku"
 #: Invariant: the gate leg must hold a shell (Bash in the definition's pinned `tools:`); general-purpose pins none.
-#: Its model must equal `emit._AGENT_MODELS` for this type (haiku).
-_GATE_AGENT_TYPE = _emit._TEST_AGENT_TYPE
+#: Its model must equal `emit._AGENT_MODELS` for this type (haiku). It is never `_TEST_AGENT_TYPE`: that
+#: charter is running tests, so it refuses the gate/stage brief as off-role. First fire and refire share it.
+_GATE_AGENT_TYPE = "coordinator:queue-grind-op-runner"
 #: A floor leg whose whole prompt is one shell command and a relay: a Bash-only type with no Read or Write.
 _OP_RELAY_AGENT_TYPE = "coordinator:op-relay"
 _PLAN_AUTHOR_AGENT_TYPE = "coordinator:plan-author"

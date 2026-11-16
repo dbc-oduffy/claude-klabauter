@@ -4,10 +4,12 @@ and the new run's terminal commit lands the residual reviewer edit and codes the
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 import yaml
 
+from coordinator_core.ops.dispatch_emit import ask_compose, emit, halt_resume_build
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import review_edits, run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -162,3 +164,20 @@ def test_a_closed_run_does_not_resume_again(halted, monkeypatch):
     # `sizing_fire.collect_fire_refusals`; the closed-plan "already ran" refusal is pinned by test_ask_gate_resume.py.
     assert later.arm is None and later.resume_ledger is None
     assert later.halt["kind"] == "refusal" and "'shipped'" in later.halt["reason"]
+
+
+_GATE_AGENT = re.compile(r"label: 'gate[^']*', phase: '[^']*', agentType: '([^']*)'")
+
+
+def test_the_refired_commit_halted_runs_gate_leg_is_not_the_test_runner(halted, monkeypatch):
+    """The refire script is `halt_resume_build.build`'s `compose_ask_script` output, the same source a first fire uses."""
+    monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n")
+    record = halt_resume_build.build(halted, RUN)
+    assert record is not None and record["composed_script_rel"], record
+    script = (halted / record["composed_script_rel"]).read_text(encoding="utf-8")
+    gates = _GATE_AGENT.findall(script)
+    assert gates, "the refire script emits no gate leg"
+    for agent_type in gates:
+        assert agent_type == ask_compose._GATE_AGENT_TYPE
+        assert agent_type != emit._TEST_AGENT_TYPE
+        assert agent_type in emit._AGENT_MODELS

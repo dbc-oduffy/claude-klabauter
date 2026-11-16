@@ -189,3 +189,37 @@ def test_delivery_note_follows_flat_or_shard(tmp_path):
     (tmp_path / "docs/delivery").mkdir(parents=True)
     (tmp_path / f"docs/delivery/{A}.md").write_text("x", encoding="utf-8")
     assert own.own_artifact_paths(tmp_path, A).delivery_note == f"docs/delivery/{A}.md"
+
+
+def _note(run_id, shard=True):
+    return f"docs/delivery/2026-11/{run_id}.md" if shard else f"docs/delivery/{run_id}.md"
+
+
+def test_predecessor_note_is_own_at_flat_and_shard_homes(tmp_path):
+    _remint_world(tmp_path)
+    _run_bound(tmp_path, PARKED)
+    _run_bound(tmp_path, REMINTED)
+    got = own.own_artifact_paths(tmp_path, REMINTED)
+    assert got.covers(_note(PARKED)) and got.covers(_note(PARKED, shard=False))
+    assert got.covers(_note(REMINTED))
+
+
+def test_foreign_and_later_notes_stay_foreign(tmp_path):
+    _remint_world(tmp_path)
+    _run_bound(tmp_path, PARKED)
+    _run_bound(tmp_path, REMINTED)
+    _run_bound(tmp_path, LATER)
+    got = own.own_artifact_paths(tmp_path, REMINTED)
+    assert not got.covers(_note(LATER))
+    assert not got.covers(_note("ask-20261113T000000-abcdef"))
+    assert not got.covers("docs/delivery/2026-11/extra/" + f"{PARKED}.md")
+    assert not got.covers(f"docs/other/{PARKED}.md")
+    assert not got.covers("docs/delivery/" + f"{PARKED}.yaml")
+
+
+def test_note_ids_cover_the_firings_other_run_id(tmp_path):
+    other = "ask-20261113T180000-aaaaaa"
+    got = own.own_artifact_paths(tmp_path, A, note_ids=(other, "../bad", A))
+    assert got.covers(_note(other)) and got.covers(_note(A))
+    assert got.note_ids == (other,)
+    assert not own.own_artifact_paths(tmp_path, A).covers(_note(other))

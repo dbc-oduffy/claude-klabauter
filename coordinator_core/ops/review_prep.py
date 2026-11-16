@@ -1297,9 +1297,25 @@ def _without_foreign_claimed(
             claimants = table.get(path, [])
             return [s for s in claimants if touch_record.kind_blocks_a_peer_commit(kinds.get(path, {}).get(s))]
 
-        return [path for path in found if any(s in selves for s in writers(path))]
+        claimed = [path for path in found if any(s in selves for s in writers(path))]
+        sibling = _sibling_declared(repo_root, claimed, run_id)
+        return [path for path in claimed if path not in sibling]
     except Exception:  # noqa: BLE001 -- no witness is foreign: a failing attribution drops every candidate
         return []
+
+
+def _sibling_declared(repo_root: Path, paths: Sequence[str], run_id: str) -> set:
+    """Those of ``paths`` another live run declares by exact path, a sibling fired from this run's own
+    session included: a session claim cannot tell sibling runs apart, a run's declaration can. A bare
+    prefix declaration never counts, so it cannot swallow this run's genuine undeclared write. Raises
+    when the live-run view is unknowable."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    view = wrd._peer_view(repo_root, "", None, None, run_id)
+    if view is None:
+        raise ValueError("live sibling declarations unreadable")
+    wanted = {wrd._norm(p) for p in paths}
+    return {p for _, _, _, declared, _, withheld in view for p in wanted & declared - withheld}
 
 
 @register_op("review.prep")

@@ -36,11 +36,20 @@ def home(tmp_path, monkeypatch):
 
 
 def _run(family="codex", env=None, **kw):
+    """Launch with a recording spawn; returns (rc, [(cli, argv)], the child's env, else the caller's env)."""
     calls, env = [], {} if env is None else env
+    seen = {}
+
+    def spawn(cmd, child_env):
+        calls.append((cmd[0], cmd))
+        seen.update(child_env)
+        return code
+
+    code = kw.pop("code", 0)
+    kw.setdefault("open_runs", lambda root, sid: [])
     rc = hel.launch(family, list(kw.pop("extra", ())), which=lambda n: f"/bin/{n}",
-                    execv=lambda p, c: calls.append((p, c)), environ=env,
-                    **{"platform": "linux", **kw})
-    return rc, calls, env
+                    spawn=spawn, environ=env, **{"platform": "linux", **kw})
+    return rc, calls, (dict(seen) if calls else env)
 
 
 def _fire(monkeypatch, child_env):
@@ -96,7 +105,7 @@ def test_worker_marker_in_child_env_still_refuses_fire(monkeypatch):
 
 def test_missing_cli_exits_127_and_writes_no_grant(home):
     calls, env = [], {}
-    rc = hel.launch("codex", [], which=lambda n: None, execv=lambda *a: calls.append(a), environ=env,
+    rc = hel.launch("codex", [], which=lambda n: None, spawn=lambda *a: calls.append(a), environ=env,
                     platform="linux")
     assert rc == 127 and not calls and not (home / "state").exists()
 
@@ -113,7 +122,7 @@ def test_windows_exec_refused_without_grant(home):
 
 def test_windows_prepare_emits_token_without_executing(capsys):
     calls, env = [], {}
-    rc = hel.launch("codex", [], which=lambda n: None, execv=lambda *a: calls.append(a), environ=env,
+    rc = hel.launch("codex", [], which=lambda n: None, spawn=lambda *a: calls.append(a), environ=env,
                     platform="win32", prepare_only=True, native_executable="codex.exe")
     plan = json.loads(capsys.readouterr().out)
     assert rc == 0 and not calls and not env
@@ -122,7 +131,7 @@ def test_windows_prepare_emits_token_without_executing(capsys):
 
 
 def _win_prepare(family, which, capsys, **kw):
-    rc = hel.launch(family, [], which=which, execv=lambda *a: None, environ={}, platform="win32",
+    rc = hel.launch(family, [], which=which, spawn=lambda *a: 0, environ={}, platform="win32",
                     prepare_only=True, **kw)
     return rc, capsys.readouterr()
 
@@ -190,7 +199,7 @@ def _pwsh_env(tmp_path, *, real=True, path_key="Path"):
 
 
 def _prepare(env, capsys, family="codex", platform="win32"):
-    rc = hel.launch(family, [], which=lambda n: None, execv=lambda *a: None, environ=env, platform=platform,
+    rc = hel.launch(family, [], which=lambda n: None, spawn=lambda *a: 0, environ=env, platform=platform,
                     prepare_only=True, native_executable=f"{family}.exe")
     assert rc == 0
     return json.loads(capsys.readouterr().out)["environment"]
@@ -309,7 +318,7 @@ def _bg(platform, capsys, stdout="started 1a2b3c4d\n", returncode=0, **kw):
 
     execs = []
     rc = hel.launch("claude", [], which=lambda n: "claude.exe" if platform == "win32" else "/bin/claude",
-                    execv=lambda *a: execs.append(a), environ={}, platform=platform, runner=runner,
+                    spawn=lambda *a: execs.append(a), environ={}, platform=platform, runner=runner,
                     cwd="/repo", **kw)
     out = capsys.readouterr()
     assert not execs
@@ -368,3 +377,83 @@ def test_main_forwards_name_resume_cwd(monkeypatch):
     assert hel.main(["claude", "--name", "n1", "--cwd", "/r"]) == 0
     assert seen["name"] == "n1" and seen["cwd"] == "/r" and seen["resume"] is None
     assert hel.main(["claude", "--resume", "abc123"]) == 0 and seen["resume"] == "abc123"
+
+
+_OPEN = [{"fire_id": "fire-1", "run_id": "run-1", "stage": "staged", "fire_state": "running"}]
+
+
+@pytest.mark.parametrize("family", EXEC_FAMILIES)
+def test_open_run_makes_a_clean_child_exit_return_3_naming_the_run_and_its_wait(family, capsys):
+    asked = []
+    rc, calls, env = _run(family, open_runs=lambda root, sid: asked.append(sid) or _OPEN)
+    assert rc == hel.EXIT_OPEN_RUNS == 3 and calls
+    assert asked == [env[hel.SESSION_ENV]]
+    assert capsys.readouterr().err.strip() == (
+        "headless-em-launch: run run-1 is staged; wait: coordinator-invoke "
+        "workflow.fire_wait '{\"fire_id\": \"fire-1\"}'")
+
+
+def test_open_run_with_nonzero_child_returns_the_child_code_and_still_reports(capsys):
+    rc, *_ = _run(code=7, open_runs=lambda root, sid: _OPEN)
+    assert rc == 7 and "run run-1 is staged" in capsys.readouterr().err
+
+
+def test_open_run_clean_case_returns_the_childs_zero(capsys):
+    rc, *_ = _run(open_runs=lambda root, sid: [])
+    assert rc == 0 and capsys.readouterr().err == ""
+
+
+def test_open_run_check_failure_is_not_a_clean_exit(capsys):
+    def boom(root, sid):
+        raise RuntimeError("not inside a git repository")
+
+    rc, *_ = _run(open_runs=boom)
+    assert rc == hel.EXIT_OPEN_RUNS and "exit check failed" in capsys.readouterr().err
+
+
+def test_open_run_gate_reads_real_fire_records_for_the_launched_session(tmp_path, monkeypatch, capsys):
+    import json as _json
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import write_run_stage
+    from coordinator_core.ops.workflow_fire import fire
+
+    reg = tmp_path / "fires"
+    reg.mkdir()
+    monkeypatch.setattr(fire, "_registry_dir", lambda *a: reg)
+    (reg / "fire-1.json").write_text(_json.dumps(
+        {"fire_id": "fire-1", "state": "exited", "run_id": "run-1", "caller_session_id": "sess-x"}))
+    write_run_stage(tmp_path, "run-1", "staged")
+    rc, *_ = _run(session_id="sess-x", cwd=str(tmp_path), open_runs=None)
+    assert rc == 3 and "run run-1 is staged" in capsys.readouterr().err
+    write_run_stage(tmp_path, "run-1", "landed")
+    rc, *_ = _run(session_id="sess-x", cwd=str(tmp_path), open_runs=None)
+    assert rc == 0
+
+
+def test_spawn_maps_a_signal_death_to_128_plus_signum():
+    import sys
+    code = hel._spawn([sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"],
+                      dict(os.environ))
+    assert code == 128 + 15
+
+
+def test_exit_check_flag_runs_only_the_check_without_a_family(capsys):
+    assert hel.main(["--exit-check", "--session-id", "s1"], open_runs=lambda r, s: _OPEN) == 3
+    assert "run run-1 is staged" in capsys.readouterr().err
+    assert hel.main(["--exit-check", "--session-id", "s1"], open_runs=lambda r, s: []) == 0
+
+
+def test_exit_check_flag_requires_a_session_id(capsys):
+    assert hel.main(["--exit-check"]) == hel.REFUSED
+    assert "--session-id" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("family", ["codex", "agy", "grok"])
+def test_prepare_only_json_names_the_exit_check_argv(family, capsys):
+    import sys
+    rc = hel.launch(family, [], which=lambda n: None, environ={}, platform="win32", prepare_only=True,
+                    native_executable=f"{family}.exe", session_id="s9")
+    plan = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert plan["exit_check"] == [sys.executable, str(Path(hel.__file__).resolve()),
+                                  "--exit-check", "--session-id", "s9"]

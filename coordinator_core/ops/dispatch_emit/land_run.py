@@ -2145,10 +2145,13 @@ def _is_delivered(text: str) -> bool:
 
 def _reviewed_files(inline_review: dict, *, need_pass: bool) -> Optional[set]:
     """``prep.slice_files`` when the review has no unresolved finding or confinement violation (and,
-    with ``need_pass``, a PASS delivery verdict); None otherwise. Absent evidence is not a pass."""
+    with ``need_pass``, a PASS delivery verdict); None otherwise. Delivery PASS covers a roster
+    without an integration leg; an explicit integration finding still bars credit."""
     prep = inline_review.get("prep")
     delivery = inline_review.get("delivery")
     integration = inline_review.get("integration")
+    if integration is None and isinstance(delivery, dict) and delivery.get("verdict") == "PASS":
+        integration = {}
     unrostered = need_pass and _delivery_not_rostered(inline_review)
     if not (isinstance(prep, dict) and isinstance(integration, dict)):
         return None
@@ -2205,7 +2208,7 @@ def _grade(
         ):
             out[chunk.id] = "reverify-covered: tests not run by the executor"[:_UNDONE_CAP]
             continue
-        if ledger is None or (text is not None and _is_delivered(text)):
+        if ledger is None:
             continue
         ledger_ids.append(chunk.id)
         if text is None or prefix_files is None:
@@ -3233,12 +3236,14 @@ def _measured_strs(record: Optional[dict], key: str) -> list:
     return [p for p in value if isinstance(p, str)] if isinstance(value, list) else []
 
 
-def _run_owned(root: Path, run_id: Optional[str]):
+def _run_owned(root: Path, run_id: Optional[str], *note_ids: Optional[str]):
     """The run's own artifacts (delivery note, sizings, record dir); written after the measured-rev
-    record, so never evidence of landing-tree drift."""
+    record, so never evidence of landing-tree drift. *note_ids* are other run ids whose note the firing writes."""
     from coordinator_core.ops.dispatch_emit import run_artifact_ownership
 
-    return run_artifact_ownership.own_artifact_paths(root, run_id) if run_id else run_artifact_ownership.OwnArtifacts()
+    if not run_id:
+        return run_artifact_ownership.OwnArtifacts()
+    return run_artifact_ownership.own_artifact_paths(root, run_id, tuple(i for i in note_ids if i))
 
 
 def _hunk_blocks(base: list, new: list) -> "collections.Counter":
@@ -4246,7 +4251,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     paths = [p for p in paths if p not in deleted]
     run_baseline = manifest.write_baseline if manifest is not None else {}
     if unmeasured:
-        own_covers = _run_owned(root, art_run_id).covers
+        own_covers = _run_owned(root, art_run_id, sibling_run_id).covers
         unmeasured = [p for p in unmeasured if not own_covers(p)]
         if unmeasured:
             own_now = set(_own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review)(unmeasured))
@@ -4838,7 +4843,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             row_writes = {w for row in (manifest.rows if manifest is not None else ()) for w in row.writes}
             excluded_unmeasured = [p for p in excluded_unmeasured if p not in row_writes]
         if excluded_unmeasured:
-            own_covers = _run_owned(root, art_run_id).covers
+            own_covers = _run_owned(root, art_run_id, sibling_run_id).covers
             excluded_unmeasured = [p for p in excluded_unmeasured if not own_covers(p)]
         if excluded_unmeasured:
             own_now = set(_own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review)(excluded_unmeasured))
@@ -4951,7 +4956,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             ["measured-rev.json (unreadable)"] if measured.get("unreadable") else _measured_mismatch(
                 root, measured, [p for p in commit_set if p not in non_product],
                 [p for p in commit_deleted if p not in set(art_deleted)], settled_blobs,
-                own=_run_owned(root, art_run_id),
+                own=_run_owned(root, art_run_id, sibling_run_id),
                 baseline=manifest.write_baseline if manifest is not None else None,
                 owned_now=_own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review),
                 no_change=_run_made_no_change(

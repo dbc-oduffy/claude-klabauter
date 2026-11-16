@@ -38,9 +38,13 @@ def _home(tmp_path: Path, names_current=("a.md", "b.md"), names_legacy=("c.md",)
     return home
 
 
+LIVE = "work/machine-a/2026-10-20"
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     receiver = _make_receiver_git_repo(tmp_path)
+    _git(receiver, "checkout", "-q", "-b", LIVE)
     home = _home(tmp_path)
     monkeypatch.setattr(gem_home, "resolve_home", lambda: home)
     monkeypatch.setattr(
@@ -209,6 +213,46 @@ def test_delivery_path_spawns_no_hook_bearing_git(env, monkeypatch):
     assert result["exit_code"] == 0
     flat = [" ".join(map(str, s)) if isinstance(s, (list, tuple)) else str(s) for s in seen]
     assert not [s for s in flat if " commit " in f" {s} "], flat
+
+
+def test_remote_only_live_branch_is_minted_and_delivered_ref_direct(env):
+    home, receiver = env
+    _git(receiver, "push", "-q", "origin", LIVE)
+    _git(receiver, "checkout", "-q", "main")
+    _git(receiver, "branch", "-q", "-D", LIVE)
+    tip = _out(_git(receiver, "rev-parse", f"refs/remotes/origin/{LIVE}"))
+    head_before = _out(_git(receiver, "rev-parse", "HEAD"))
+
+    result = migrate_group_em_inbox()
+
+    assert result["exit_code"] == 0, result
+    assert sorted(a["id"] for a in result["acted"]) == ["a.md", "b.md", "c.md"]
+    assert _out(_git(receiver, "symbolic-ref", "HEAD")) == "refs/heads/main"
+    assert _out(_git(receiver, "rev-parse", "HEAD")) == head_before
+    assert _out(_git(receiver, "rev-list", "--count", f"{tip}..refs/heads/{LIVE}")) == "3"
+    assert _out(_git(receiver, "rev-parse", f"refs/heads/{LIVE}~3")) == tip
+    assert not (receiver / "cross-repo" / "inbox" / "a.md").exists()
+    assert "a.md" in _out(_git(receiver, "ls-tree", "--name-only", f"refs/heads/{LIVE}:cross-repo/inbox"))
+    assert not list(home.rglob("*.md"))
+
+
+def test_receiver_without_a_work_branch_refuses_and_moves_nothing(tmp_path, monkeypatch):
+    receiver = _make_receiver_git_repo(tmp_path)
+    home = _home(tmp_path)
+    monkeypatch.setattr(gem_home, "resolve_home", lambda: home)
+    monkeypatch.setattr(
+        mod, "resolve_receiver_inbox",
+        lambda rid: (receiver / "cross-repo" / "inbox", receiver, {}),
+    )
+    before = _receiver_commit_count(receiver)
+
+    result = migrate_group_em_inbox()
+
+    assert result["acted"] == []
+    assert sorted(f["id"] for f in result["failed"]) == ["a.md", "b.md", "c.md"]
+    assert all("no live work branch" in f["reason"] for f in result["failed"])
+    assert _receiver_commit_count(receiver) == before
+    assert len(list(home.rglob("*.md"))) == 3
 
 
 def test_tracked_home_copy_removal_is_committed(env):

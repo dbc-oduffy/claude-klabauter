@@ -268,7 +268,7 @@ def _trailer_tail(claims: Optional[dict]) -> str:
 
 def _commit_records(
     root: Path, run_id: str, record_dir: Path, sha: str, verified: bool = False, allow_empty: bool = False,
-    claims: Optional[dict] = None,
+    claims: Optional[dict] = None, covered: Optional[set] = None,
 ) -> dict:
     """Commit the landed flip's record files (halted.json, run-stage.json) plus every other changed or untracked path in the run's record dir (prompts/, resume.json) in one scoped commit naming *run_id*, via ``commit_close_records``.
 
@@ -283,7 +283,7 @@ def _commit_records(
 
     return commit_close_records(
         root, run_id, record_dir, f"dispatch.record_halted_run_landed: {run_id} landed at {sha[:12]}",
-        closed=verified, allow_empty=allow_empty, extra_trailers=_trailer_tail(claims),
+        closed=verified, allow_empty=allow_empty, extra_trailers=_trailer_tail(claims), covered=covered,
     )
 
 
@@ -1452,7 +1452,7 @@ def _close_checkpointed(root: Path, run_id: str, shas: list, session_id: Optiona
         )
     from coordinator_core.ops.dispatch_emit import ask_contract
 
-    records = _commit_records(root, run_id, ask_contract.record_dir(root, run_id), sha, verified=True, allow_empty=True)
+    records = _commit_records(root, run_id, ask_contract.record_dir(root, run_id), sha, verified=True, allow_empty=True, covered=carried)
     if "records_commit" not in records:
         return _refuse(f"{run_id} checkpoint close commit refused: {records.get('records_commit_error', 'no commit')}")
     return {

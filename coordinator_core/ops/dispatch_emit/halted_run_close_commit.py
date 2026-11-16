@@ -17,16 +17,28 @@ def _landed_paths(root: Path, marker: dict):
     return done.stdout.split("\n") if done.returncode == 0 else None
 
 
-def _closed_trailers(root: Path, run_id: str, record_dir: Path) -> str:
-    """A blank line then one ``Checkpoint-Run-Closed:`` line per own checkpoint base, plus each open same-plan checkpoint whose withheld paths the run's own landing commit covers; ``""`` when none resolve."""
+def _closed_trailers(root: Path, run_id: str, record_dir: Path, covered=None) -> str:
+    """A blank line then one ``Checkpoint-Run-Closed:`` line per own checkpoint base, plus each open same-plan checkpoint whose withheld paths the run's own landing commit (or *covered*, the paths a verified landing carries) covers, or every open same-plan checkpoint for a superseded marker; ``""`` when none resolve.
+
+    The plan name is the halt marker's ``plan``, else the run's sizing plan, else ``resume.json``'s."""
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_closed_trailer_lines
     from coordinator_core.ops.dispatch_emit.landing_integrity import closing_bases
 
     marker = halted_run._read(record_dir) or {}
+    params = {"run_base_sha": marker.get("run_base_sha")}
+    plan = marker.get("plan")
+    if marker and not (isinstance(plan, str) and plan):
+        from coordinator_core.ops.dispatch_emit.halted_run_landed import _sizing_plan
+
+        plan = _sizing_plan(root, run_id, marker)
+    if isinstance(plan, str) and plan:
+        params["plan_path"] = plan
+    landed = covered if covered is not None else _landed_paths(root, marker)
     lines = run_closed_trailer_lines(
         closing_bases(
-            root, run_id, {"run_base_sha": marker.get("run_base_sha")}, landed_paths=_landed_paths(root, marker),
+            root, run_id, params, landed_paths=landed,
+            plan_wide=landed is None and marker.get("status") == halted_run.STATUS_SUPERSEDED,
         )
     )
     return "\n\n" + "\n".join(lines) if lines else ""
@@ -34,13 +46,14 @@ def _closed_trailers(root: Path, run_id: str, record_dir: Path) -> str:
 
 def commit_close_records(
     root: Path, run_id: str, record_dir: Path, subject: str, *,
-    closed: bool = True, allow_empty: bool = False, extra_trailers: str = "",
+    closed: bool = True, allow_empty: bool = False, extra_trailers: str = "", covered=None,
 ) -> dict:
     """Commit the run's record files (halted.json, run-stage.json) plus every other changed or untracked path in *record_dir* (prompts/, resume.json) in one scoped commit headed by *subject*.
 
     *closed* appends ``Checkpoint-Run-Closed:`` trailers for the run's bases, then *extra_trailers*
     (newline-joined trailer lines, or ``""``). ``allow_empty`` anchors the commit on the run's
     ``manifest.json`` and lets it carry no diff, so the closure lands for a run with no record file to flip.
+    *covered* (paths a verified landing carries) stands in for the marker landing's paths when a run has no landed marker.
 
     Returns ``{"records_commit": sha}``; ``{}`` when nothing changed or the record dir is untracked
     scratch; ``{"records_commit_error": ...}`` on a refusal, which never fails the caller's marker write.
@@ -63,7 +76,7 @@ def commit_close_records(
     elif not fixed or not fixed[0].startswith("state/"):
         return {}
     rels = sorted(set(fixed) | set(record_dir_residue(root, run_id)))
-    tail = _closed_trailers(root, run_id, record_dir) if closed else ""
+    tail = _closed_trailers(root, run_id, record_dir, covered) if closed else ""
     if extra_trailers:
         tail += ("\n" if tail else "\n\n") + extra_trailers
     try:

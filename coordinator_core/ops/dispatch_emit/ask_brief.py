@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from coordinator_core.ops.corpus_fallback import fallback_refusal
 from coordinator_core.ops.sizing_intake_contract import SCRATCHPAD_TOKEN
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
@@ -109,6 +110,10 @@ def load_em_brief(
             raise EmBriefRefused(f"--brief-file {brief_file}: empty")
     else:
         text, source = brief or "", "inline"
+
+    reason = fallback_refusal(text)
+    if reason is not None:
+        raise EmBriefRefused(reason)
 
     advisories: list[str] = []
     spill_rel: str | None = None

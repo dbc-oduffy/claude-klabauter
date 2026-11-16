@@ -10,8 +10,9 @@ Negative-spec:
     - No receiver HEAD, branch ref, index or worktree is written. The only
       receiver writes are loose objects and the `refs/coordinator/inbox/`
       anchor (the commit is reachable only through it until pushed).
-    - `resolve_receiver_landing` only decides the branch name;
-      `apply_receiver_landing` is never called.
+    - `resolve_receiver_landing` only decides the branch name (the receiver
+      repo's live work branch, never one named for the sender); a receiver
+      with none is `STATUS_NO_BASE`. `apply_receiver_landing` is never called.
     - No push, no fetch: the push-pending record is the hand-off to the warm
       engine sweep.
     - A path already in the base tree is a `collision` outcome, never an
@@ -70,7 +71,10 @@ def _fail(status: str, error: str, **kw) -> UpstreamDelivery:
 
 
 def resolve_base(common_dir: Path, remote: str, branch: str) -> Optional[str]:
-    """Tracking tip, else the local branch tip, else the `main`/`master` tip; `None` if none exist."""
+    """Tracking tip, else the local branch tip, else the `main`/`master` tip; `None` if none exist
+    or `branch` is empty (a receiver with no live work branch)."""
+    if not branch:
+        return None
     for ref in (
         f"refs/remotes/{remote}/{branch}",
         f"{_HEADS}{branch}",
@@ -170,6 +174,8 @@ def deliver_onto_upstream(
     """
     receiver_root = Path(receiver_root)
     landing = _receiver_landing.resolve_receiver_landing(receiver_root)
+    if landing.mode == _receiver_landing.MODE_NONE:
+        return _fail(STATUS_NO_BASE, "no live work branch in the receiver repo (no work/* ref)")
     branch = landing.ref_relpath[len(_HEADS):]
     remote = resolve_push_remote(receiver_root, branch)
     if remote is None:

@@ -339,6 +339,7 @@ def unparseable_py_at(worktree_root: Path, rev: str, paths: Sequence[str]) -> li
 
 def closing_bases(
     worktree_root: Path, run_id: Optional[str], params: Mapping, landed_paths: Optional[Iterable[str]] = None,
+    plan_wide: bool = False,
 ) -> tuple:
     """The 40-hex bases a run's closing or halt trailer names, deduplicated, in order: the stage
     manifest ``head_sha``, then ``run_base_for``, then ``params["review_run_base"]``.
@@ -346,7 +347,9 @@ def closing_bases(
     ``landed_paths`` (``None`` = off; any iterable, even empty, = on) appends the base of every other
     open run-open checkpoint of the run's plan (matched by plan file name, so a moved plan still
     matches) whose ``Checkpoint-Withheld`` paths are all in ``landed_paths``
-    (``_open_sibling_bases``; one git spawn).
+    (``_open_sibling_bases``; one git spawn). ``plan_wide`` turns the sibling scan on with no coverage
+    gate: every open run-open checkpoint of the run's plan, whatever its withheld paths (a supersession
+    close, which has no landing to cover them).
 
     The manifest comes first because the ask route's checkpoints carry it as ``Checkpoint-Base``
     (``emit._checkpoint_trailer_js`` stamps ``_RUN_BASE_VAR`` from the emit sha), and it differs
@@ -360,9 +363,9 @@ def closing_bases(
     for prev in _resumed_chain(worktree_root, rid):
         found.extend(_own_bases(worktree_root, prev, {}))
     own = tuple(dict.fromkeys(b for b in found if isinstance(b, str) and re.fullmatch(r"[0-9a-f]{40}", b)))
-    if landed_paths is None:
+    if landed_paths is None and not plan_wide:
         return own
-    siblings = _open_sibling_bases(worktree_root, rid, params, set(own), landed_paths)
+    siblings = _open_sibling_bases(worktree_root, rid, params, own, landed_paths or (), plan_wide)
     return tuple(dict.fromkeys((*own, *siblings)))
 
 
@@ -385,13 +388,18 @@ def _run_plan_names(worktree_root: Path, rid: Optional[str], params: Mapping) ->
 
 
 def _open_sibling_bases(
-    worktree_root: Path, rid: Optional[str], params: Mapping, known: set, landed_paths: Iterable[str],
+    worktree_root: Path, rid: Optional[str], params: Mapping, known: Sequence, landed_paths: Iterable[str],
+    plan_wide: bool = False,
 ) -> list:
     """Bases of open run-open checkpoints, not in ``known``, of the run's plan whose withheld paths are all covered.
 
     Covered: every withheld path is named in ``landed_paths`` (the run's own landing; a later commit
-    by another run never counts). Open: no ``Checkpoint-Run-Closed`` in the log names the base. One
-    ``git log`` capped at ``_SIBLING_LOG_CAP`` commits (an older checkpoint stays open, logged as a warning); a checkpoint with no withheld paths never closes here; empty when it fails."""
+    by another run never counts). Open: no ``Checkpoint-Run-Closed`` in the log names the base.
+    ``known`` is the run's bases, resumed-chain predecessors last. One ``git log`` over the run's base
+    range (``<oldest known base>^@..HEAD``), so depth never hides a checkpoint; with no base the log is
+    capped at ``_SIBLING_LOG_CAP`` commits. What the scan could not reach is logged as a warning: known
+    bases the range did not contain, or the commit the capped scan stopped at. A checkpoint with no
+    withheld paths never closes here; empty when the log fails."""
     plans = _run_plan_names(worktree_root, rid, params)
     if not plans:
         return []
@@ -403,35 +411,50 @@ def _open_sibling_bases(
         run_closed_bases,
     )
 
-    done = run_git(
-        ["-c", "core.quotepath=off", "log", f"-n{_SIBLING_LOG_CAP}", "--format=%x1e%H%x1d%B%x1f"],
-        cwd=str(worktree_root),
-    )
+    base_args = ["-c", "core.quotepath=off", "log", "--format=%x1e%H%x1d%B%x1f"]
+    ranged = bool(known)
+    if ranged:
+        done = run_git([*base_args, "HEAD", "--not", f"{known[-1]}^@"], cwd=str(worktree_root))
+        if done.returncode != 0:
+            ranged = False
+    if not ranged:
+        done = run_git([*base_args, f"-n{_SIBLING_LOG_CAP}"], cwd=str(worktree_root))
     if done.returncode != 0:
         return []
     covered = {_forward(p).casefold() for p in landed_paths if isinstance(p, str)}
     closed: set = set()
     candidates: list = []
-    scanned = 0
+    seen: set = set()
+    last = ""
     for record in done.stdout.split("\x1e"):
         head, sep, _ = record.partition("\x1f")
-        _, _, message = head.partition("\x1d")
+        last, _, message = head.partition("\x1d")
         if not sep:
             continue
-        scanned += 1
+        seen.add(last)
         closed |= run_closed_bases(message)
         cp = parse_checkpoint(message)
         if cp is not None and cp.not_landed and cp.base and cp.plan_rel.rsplit("/", 1)[-1] in plans:
             need = {_forward(p).casefold() for p in checkpoint_withheld(message)}
-            if need and need <= covered:
+            if plan_wide or (need and need <= covered):
                 candidates.append(cp.base)
-    if scanned >= _SIBLING_LOG_CAP and _SIBLING_LOG_CAP not in _CAP_WARNED:
-        # Any repo deeper than the cap hits it on every call; once per process per cap keeps it a signal.
+    log = logging.getLogger(__name__)
+    if ranged:
+        missed = [b for b in known if b not in seen]
+        if missed:
+            log.warning(
+                "sibling checkpoint scan range did not contain base(s) %s; run-open checkpoints older than them were not scanned",
+                ", ".join(m[:12] for m in missed),
+            )
+    elif len(seen) >= _SIBLING_LOG_CAP and _SIBLING_LOG_CAP not in _CAP_WARNED:
+        # No base to bound by: any repo deeper than the cap hits it on every call; once per process per cap keeps it a signal.
         _CAP_WARNED.add(_SIBLING_LOG_CAP)
-        logging.getLogger(__name__).warning(
-            "sibling checkpoint scan hit the %d-commit cap; older run-open checkpoints stay open", _SIBLING_LOG_CAP,
+        log.warning(
+            "sibling checkpoint scan hit the %d-commit cap with no run base to bound it; checkpoints older than %s were not scanned",
+            _SIBLING_LOG_CAP, last[:12],
         )
-    return [b for b in candidates if b not in known and b not in closed]
+    skip = set(known)
+    return [b for b in candidates if b not in skip and b not in closed]
 
 
 def _own_bases(worktree_root: Path, rid: Optional[str], params: Mapping) -> list:

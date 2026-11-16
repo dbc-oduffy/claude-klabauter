@@ -1,8 +1,8 @@
-"""memo.send delivers onto the receiver's upstream tip for its day branch (DR-214 A3).
+"""memo.send delivers onto the receiver's upstream tip for its live work branch (DR-214 A3).
 
 Receivers are real tmp_path git repos on `main` with a bare origin; the delivery never moves the
 receiver's HEAD or refs, and the push is driven through `push_cadence.on_idle_tick` from the
-sender's push-pending record, never inline.
+sender's push-pending record, never inline. The live branch is named for no box in play.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core import daily_day, machine_resolver
 from coordinator_core.ops.fleet.memo_send import _memo_send
 from coordinator_core.ops.fleet.tests.test_memo_send import (
     _git as _run_git,
@@ -40,8 +39,19 @@ def _cadence(monkeypatch):
     push_cadence.reset_cadence_for_test()
 
 
+LIVE = "work/machine-a/2026-10-20"
+
+
 def _day_branch(root: Path) -> str:
-    return f"work/{machine_resolver.compute_machine()}/{daily_day.local_day(str(root))}"
+    return LIVE
+
+
+def _cut_remote_only(root: Path) -> None:
+    """The receiver's live branch exists on origin and as a tracking ref, with no local branch."""
+    _git(root, "checkout", "-q", "-b", LIVE)
+    _git(root, "push", "-q", "origin", LIVE)
+    _git(root, "checkout", "-q", "main")
+    _git(root, "branch", "-q", "-D", LIVE)
 
 
 def _origin_of(root: Path) -> Path:
@@ -71,8 +81,9 @@ def _checkout_state(root: Path) -> tuple:
     )
 
 
-def test_main_without_day_branch_neither_mints_nor_switches_and_pushes(tmp_path, monkeypatch):
+def test_main_with_remote_only_live_branch_neither_mints_nor_switches_and_pushes(tmp_path, monkeypatch):
     sender, receiver, bare = _setup(tmp_path, monkeypatch)
+    _cut_remote_only(receiver)
     main_before = _git(receiver, "rev-parse", "refs/heads/main")
     state_before = _checkout_state(receiver)
     _write_draft(sender, "t-a")
@@ -83,7 +94,7 @@ def test_main_without_day_branch_neither_mints_nor_switches_and_pushes(tmp_path,
     day = _day_branch(receiver)
     sha = result["acted"][0]["delivery_commit_sha"]
     assert _checkout_state(receiver) == state_before
-    assert _git(receiver, "branch", "--list", day) == ""
+    assert _git(receiver, "branch", "--list", "work/*") == ""
     assert _git(receiver, "rev-parse", "refs/heads/main") == main_before
     assert _git(receiver, "rev-parse", f"{sha}^") == main_before
     assert not list((receiver / "cross-repo" / "inbox").glob("*t-a.md"))
@@ -169,6 +180,7 @@ def test_collision_is_refused_against_the_base_tree(tmp_path, monkeypatch):
 
 def test_dry_run_reports_the_upstream_tip_without_minting_or_switching(tmp_path, monkeypatch):
     sender, receiver, _bare = _setup(tmp_path, monkeypatch)
+    _cut_remote_only(receiver)
     _write_draft(sender, "t-e")
 
     result = _memo_send({"dry_run": True, "topic": "t-e"}, repo_root=sender)
@@ -177,14 +189,30 @@ def test_dry_run_reports_the_upstream_tip_without_minting_or_switching(tmp_path,
     row = result["candidates"][0]
     assert row["landing_mode"] == "upstream-tip"
     assert row["landing_ref"] == f"refs/heads/{_day_branch(receiver)}"
-    assert row["landing_base"] == _git(receiver, "rev-parse", "refs/heads/main")
+    assert row["landing_base"] == _git(receiver, "rev-parse", f"refs/remotes/origin/{LIVE}")
     assert _git(receiver, "rev-parse", "--abbrev-ref", "HEAD") == "main"
-    assert _git(receiver, "branch", "--list", _day_branch(receiver)) == ""
+    assert _git(receiver, "branch", "--list", "work/*") == ""
+    assert _pending_records(sender) == []
+
+
+def test_a_receiver_without_a_work_branch_is_refused_and_owes_no_push(tmp_path, monkeypatch):
+    sender, receiver, _bare = _setup(tmp_path, monkeypatch)
+    state_before = _checkout_state(receiver)
+    _write_draft(sender, "t-nw")
+
+    result = _memo_send({"dry_run": False, "topic": "t-nw"}, repo_root=sender)
+
+    assert result["exit_code"] != 0
+    assert result["acted"] == []
+    assert "no live work branch" in str(result)
+    assert _git(receiver, "branch", "--list", "work/*") == ""
+    assert _checkout_state(receiver) == state_before
     assert _pending_records(sender) == []
 
 
 def test_a_receiver_without_a_push_remote_is_refused_and_owes_no_push(tmp_path, monkeypatch):
     sender, receiver, _bare = _setup(tmp_path, monkeypatch)
+    _git(receiver, "branch", LIVE)
     _git(receiver, "remote", "remove", "origin")
     _write_draft(sender, "t-nr")
 
@@ -206,6 +234,8 @@ def test_cc_arm_delivers_onto_the_cc_receivers_tip(tmp_path, monkeypatch):
         "CLAUDE_HOME",
         str(_make_claude_home(tmp_path, {"project_rag": to_repo, "example_cockpit_repo": cc_repo})),
     )
+    _cut_remote_only(to_repo)
+    _cut_remote_only(cc_repo)
     main_before = _git(cc_repo, "rev-parse", "main")
     state_before = _checkout_state(cc_repo)
     _write_draft_with_cc(sender, "t-f", to="example-retrieval-repo-em", cc="example-cockpit-repo-em")
